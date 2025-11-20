@@ -1,0 +1,4 @@
+bin/wb-python-service-template /usr/bin
+wb-python-service-template.schema.json /usr/share/wb-mqtt-confed/schemas
+wb-python-service-template.conf /etc
+10wb-python-service-template /etc/wb-configs.d

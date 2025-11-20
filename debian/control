@@ -1,0 +1,14 @@
+Source: wb-python-service-template
+Maintainer: Wiren Board team <info@wirenboard.com>
+Section: misc
+Priority: optional
+Build-Depends: python3-all, dh-python, python3-jsonschema, python3-wb-common (>= 2.1.0~~)
+Homepage: https://github.com/wirenboard/wb-python-service-template
+
+Package: wb-python-service-template
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, python3-jsonschema, python3-wb-common (>= 2.1.0~~)
+Description: Template of a Python service for Wiren Board
+ This package provides an template of a Python service for Wiren Board devices.
+ It demonstrates how to create a service that interacts with the system and
+ can be managed using standard tools.

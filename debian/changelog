@@ -1,5 +1,11 @@
-wb-python-service-template (1.0.0) stable; urgency=medium
+wb-mqtt-dali (1.0.1) stable; urgency=medium
 
-  * Initial release.
+  * Add service base
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 20 Nov 2025 13:12:25 +0500
+
+wb-mqtt-dali (1.0.0) stable; urgency=medium
+
+  * Initial release from Python service template
 
  -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Thu, 23 Oct 2025 10:32:51 +0000

@@ -3,6 +3,6 @@
 
 import sys
 
-from wb_python_service_template.main import main
+from wb.mqtt_dali.main import main
 
 sys.exit(main(sys.argv))

@@ -1,0 +1,4 @@
+websockets>=11.0.0
+aiomqtt>=1.0.0
+minimalmodbus>=2.0.0
+python-dali>=0.11

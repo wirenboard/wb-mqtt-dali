@@ -1,14 +1,12 @@
-Source: wb-python-service-template
+Source: wb-mqtt-dali
 Maintainer: Wiren Board team <info@wirenboard.com>
 Section: misc
 Priority: optional
-Build-Depends: python3-all, dh-python, python3-jsonschema, python3-wb-common (>= 2.1.0~~)
-Homepage: https://github.com/wirenboard/wb-python-service-template
+Build-Depends: python3-all, dh-python, python3-jsonschema, python3-wb-common (>= 2.1.0~~), python3-dali
+Homepage: https://github.com/wirenboard/wb-mqtt-dali
 
-Package: wb-python-service-template
+Package: wb-mqtt-dali
 Architecture: all
-Depends: ${python3:Depends}, ${misc:Depends}, python3-jsonschema, python3-wb-common (>= 2.1.0~~)
-Description: Template of a Python service for Wiren Board
- This package provides an template of a Python service for Wiren Board devices.
- It demonstrates how to create a service that interacts with the system and
- can be managed using standard tools.
+Depends: ${python3:Depends}, ${misc:Depends}, python3-jsonschema, python3-wb-common (>= 2.1.0~~), python3-dali
+Description: MQTT DALI bridge for Wiren Board
+ This package provides an MQTT DALI bridge for Wiren Board devices.

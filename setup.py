@@ -7,12 +7,12 @@ def get_version():
 
 
 setup(
-    name="wb-python-service-template",
+    name="wb-mqtt-dali",
     version=get_version(),
     maintainer="Wiren Board Team",
     maintainer_email="info@wirenboard.com",
-    description="Wiren Board Python Service Template",
-    url="https://github.com/wirenboard/wb-python-service-template",
-    packages=["wb_python_service_template"],
+    description="Wiren Board MQTT DALI Bridge",
+    url="https://github.com/wirenboard/wb-mqtt-dali",
+    packages=["wb_mqtt_dali"],
     license="MIT",
 )

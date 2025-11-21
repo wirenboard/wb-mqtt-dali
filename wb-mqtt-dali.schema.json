@@ -1,0 +1,23 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "type": "object",
+    "properties": {
+        "debug": {
+            "type": "boolean",
+            "title": "Enable debug logging",
+            "default": false,
+            "format": "checkbox",
+            "propertyOrder": 1,
+            "options": {
+                "wb": {
+                    "show_editor": true
+                }
+            }
+        }
+    },
+    "translations": {
+        "ru": {
+            "Enable debug logging": "Включить отладочные сообщения"
+        }
+    }
+}

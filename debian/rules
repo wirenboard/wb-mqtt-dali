@@ -5,4 +5,4 @@
 
 
 override_dh_systemd_enable:
-	dh_systemd_enable --name=wb-python-service-template
+	dh_systemd_enable --name=wb-mqtt-dali

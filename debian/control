@@ -2,11 +2,11 @@ Source: wb-mqtt-dali
 Maintainer: Wiren Board team <info@wirenboard.com>
 Section: misc
 Priority: optional
-Build-Depends: python3-all, dh-python, python3-jsonschema, python3-wb-common (>= 2.1.0~~), python3-dali
+Build-Depends: python3-all, dh-python, python3-jsonschema, python3-wb-common (>= 2.1.0~~), python3-dali, python3-websockets
 Homepage: https://github.com/wirenboard/wb-mqtt-dali
 
 Package: wb-mqtt-dali
 Architecture: all
-Depends: ${python3:Depends}, ${misc:Depends}, python3-jsonschema, python3-wb-common (>= 2.1.0~~), python3-dali
+Depends: ${python3:Depends}, ${misc:Depends}, python3-jsonschema, python3-wb-common (>= 2.1.0~~), python3-dali, python3-websockets
 Description: MQTT DALI bridge for Wiren Board
  This package provides an MQTT DALI bridge for Wiren Board devices.

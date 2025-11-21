@@ -1,3 +1,4 @@
 buildDebSbuild defaultRunLintian: true,
                defaultRunPythonChecks: true,
-               defaultAngryPylint: true
+               defaultAngryPylint: true,
+               defaultRepoRelease: 'testing'

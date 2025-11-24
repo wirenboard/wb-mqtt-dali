@@ -5,6 +5,7 @@ import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 from dali.address import GearShort
 from dali.driver.base import DALIDriver
@@ -34,9 +35,9 @@ log = logging.getLogger("commissioning")
 class SearchAddress:
     """Represents a 24-bit DALI search address split into three 8-bit components."""
 
-    high: int | None = None
-    medium: int | None = None
-    low: int | None = None
+    high: Optional[int] = None
+    medium: Optional[int] = None
+    low: Optional[int] = None
 
     @classmethod
     def from_int(cls, addr: int) -> "SearchAddress":
@@ -53,7 +54,7 @@ class BinarySearchAddressFinder:
         self.compare = compare_callback
         self.set_search_addr = set_search_addr_callback
 
-    async def find_next_device(self, low: int, high: int) -> int | None:
+    async def find_next_device(self, low: int, high: int) -> Optional[int]:
         if not await self.compare(high):
             log.info("No device left to address, exiting")
             return None
@@ -77,7 +78,7 @@ class BinarySearchAddressFinder:
         return found_addr
 
 
-async def get_random_address(driver: DALIDriver, addr: int) -> int | None:
+async def get_random_address(driver: DALIDriver, addr: int) -> Optional[int]:
     responses = await asyncio.gather(
         driver.send(QueryRandomAddressH(addr)),
         driver.send(QueryRandomAddressM(addr)),
@@ -209,7 +210,7 @@ class Commissioning:
         )
         return r[-1].value is True
 
-    def _pick_new_short_address(self, found_addr: int) -> int | None:
+    def _pick_new_short_address(self, found_addr: int) -> Optional[int]:
         if self.available_addresses:
             # find found_addr in old_devices, and assign the same short address if possible
             for short, rand in self.old_devices.items():
@@ -225,7 +226,7 @@ class Commissioning:
 
             return self.available_addresses.pop(0)
 
-    async def _assign_short_address(self, found_addr: int) -> int | None:
+    async def _assign_short_address(self, found_addr: int) -> Optional[int]:
         new_addr = self._pick_new_short_address(found_addr)
         if new_addr is not None:
             logging.info(
@@ -262,10 +263,10 @@ class Commissioning:
             logging.warning("Device found but no short addresses available")
         return None
 
-    async def find_next_device(self, low: int, high: int) -> int | None:
+    async def find_next_device(self, low: int, high: int) -> Optional[int]:
         return await self.binary_search_finder.find_next_device(low, high)
 
-    async def _randomise_by_short(self, short_addr: int | None) -> None:
+    async def _randomise_by_short(self, short_addr: Optional[int]) -> None:
         """Randomise the devices with the given short address."""
         log.info(
             "Randomising devices with short address %s",

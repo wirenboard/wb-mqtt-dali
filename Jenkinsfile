@@ -1,3 +1,4 @@
 buildDebSbuild defaultRunLintian: true,
                defaultRepoRelease: 'testing',
-               defaultRunPythonChecks: true
+               defaultRunPythonChecks: true,
+               defaultWbdevTestingSets: 'dali'

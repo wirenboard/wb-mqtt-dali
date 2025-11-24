@@ -419,7 +419,7 @@ class TestCommissioning(unittest.TestCase):
         with open(self.temp_file_path, "w", encoding="utf-8") as f:
             json.dump(test_data, f)
 
-        with patch("commissioning.log") as mock_log:
+        with patch("wb.mqtt_dali.commissioning.log") as mock_log:
             commissioning = Commissioning(self.mock_driver, self.temp_file_path, load=False)
             commissioning._load_results()
 
@@ -430,7 +430,7 @@ class TestCommissioning(unittest.TestCase):
             "Loaded %d device entries (old devices) from %s", 3, self.temp_file_path
         )
 
-    @patch("commissioning.datetime")
+    @patch("wb.mqtt_dali.commissioning.datetime")
     def test_save_results(self, mock_datetime):
         """Test saving results to a JSON file."""
         mock_datetime.utcnow.return_value.isoformat.return_value = "2023-12-01T10:30:00"
@@ -439,7 +439,7 @@ class TestCommissioning(unittest.TestCase):
         commissioning.known_devices = {1: 0x123456, 3: 0xDEF123}
         commissioning.found_devices = {2: 0x789ABC}
 
-        with patch("commissioning.log") as mock_log:
+        with patch("wb.mqtt_dali.commissioning.log") as mock_log:
             commissioning._save_results()
 
         self.assertTrue(os.path.exists(self.temp_file_path))

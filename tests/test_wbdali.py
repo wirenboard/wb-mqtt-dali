@@ -3,9 +3,9 @@ import json
 import unittest
 
 try:
-    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 except ImportError:
-    from mock import AsyncMock, MagicMock, Mock, patch
+    from mock import AsyncMock, MagicMock, patch
 
 from dali.command import Command, Response
 from dali.frame import BackwardFrame, ForwardFrame
@@ -25,6 +25,7 @@ class _MockCommand(Command):
 
 class MockResponse(Response):
     def __init__(self, frame):
+        super().__init__(frame)
         self.frame = frame
         self.data = frame.as_integer if frame else None
 
@@ -38,8 +39,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             mqtt_port=1883,
         )
 
-    @patch("asyncio_mqtt.Client")
-    def test_encode_frame_for_modbus(self, mock_client):
+    def test_encode_frame_for_modbus(self):
         """Test encoding of DALI frames into Modbus frames."""
         driver = WBDALIDriver(self.config)
 

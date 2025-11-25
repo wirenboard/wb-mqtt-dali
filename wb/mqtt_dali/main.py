@@ -1,9 +1,19 @@
 import argparse
+import asyncio
 import json
 import os
 import sys
 
 import jsonschema
+from dali.address import DeviceBroadcast
+from dali.device.general import StartQuiescentMode, StopQuiescentMode
+
+from wb.mqtt_dali.commissioning import Commissioning
+from wb.mqtt_dali.wbdali import (
+    AsyncDeviceInstanceTypeMapper,
+    WBDALIConfig,
+    WBDALIDriver,
+)
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
@@ -12,7 +22,7 @@ EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
 
 
-def main(argv):
+async def main(argv):
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
         "-c",
@@ -38,8 +48,27 @@ def main(argv):
         except jsonschema.ValidationError as e:
             print(f"Configuration validation failed: {e.message}")
             return EXIT_NOTCONFIGURED
+
+    # todo
+    dev_inst_map = AsyncDeviceInstanceTypeMapper()
+    cfg = WBDALIConfig(
+        modbus_port_path="/dev/ttyRS485-1",
+        device_name="wb-mdali_1",
+        mqtt_host="localhost",
+        mqtt_port=1883,
+    )
+    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map)
+    await dev.connect()
+    await dev.connected.wait()
+    await asyncio.sleep(1)
+    await dev.send(StartQuiescentMode(DeviceBroadcast()))
+    obj = Commissioning(dev, None, load=False)
+    await obj.smart_extend()
+    await dev.send(StopQuiescentMode(DeviceBroadcast()))
+    dev.disconnect()
+
     return EXIT_SUCCESS
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(asyncio.run(main(sys.argv)))

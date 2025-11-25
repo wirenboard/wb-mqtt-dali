@@ -206,7 +206,7 @@ class FakeDALIBus:
         self.broadcast_initialized = False
         self.search_addr = [None, None, None]
 
-    async def send(self, cmd):
+    async def send(self, cmd):  # pylint: disable=R0911 disable=R0912 disable=R0915
         # Handle QueryControlGearPresent
         if isinstance(cmd, QueryControlGearPresent):
             short = cmd.destination.address
@@ -536,7 +536,7 @@ class TestCommissioning(unittest.TestCase):
             sent_commands = []
             original_send = fake_bus.send
 
-            async def mock_send_with_unaddressed(cmd):
+            async def mock_send_with_unaddressed(cmd):  # pylint: disable=R0911
                 sent_commands.append(cmd)
                 if isinstance(cmd, Compare):
                     if None not in fake_bus.search_addr:
@@ -984,7 +984,7 @@ class TestCommissioning(unittest.TestCase):
 
             original_send = fake_bus.send
 
-            async def mock_boundary_send(cmd):
+            async def mock_boundary_send(cmd):  # pylint: disable=R0911
                 if isinstance(cmd, Compare):
                     if None not in fake_bus.search_addr:
                         search = (

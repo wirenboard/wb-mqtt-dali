@@ -84,7 +84,7 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
             compare_calls.append(addr)
             return addr >= device_address
 
-        async def mock_set_search(addr):
+        async def mock_set_search(_addr):
             pass
 
         finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
@@ -112,10 +112,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
     async def test_no_device_found(self):
         """Test when no device responds in the search range."""
 
-        async def mock_compare(addr):
+        async def mock_compare(_addr):
             return False
 
-        async def mock_set_search(addr):
+        async def mock_set_search(_addr):
             pass
 
         finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
@@ -130,7 +130,7 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_compare(addr):
             return addr >= device_address
 
-        async def mock_set_search(addr):
+        async def mock_set_search(_addr):
             pass
 
         finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
@@ -147,7 +147,7 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
             compare_calls.append(addr)
             return addr >= device_address
 
-        async def mock_set_search(addr):
+        async def mock_set_search(_addr):
             pass
 
         finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
@@ -166,7 +166,7 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
             compare_calls.append(addr)
             return addr >= device_address
 
-        async def mock_set_search(addr):
+        async def mock_set_search(_addr):
             pass
 
         finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
@@ -183,7 +183,7 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_compare(addr):
             return addr >= device_address
 
-        async def mock_set_search(addr):
+        async def mock_set_search(_addr):
             pass
 
         finder = BinarySearchAddressFinder(mock_compare, mock_set_search)

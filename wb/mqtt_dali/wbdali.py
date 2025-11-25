@@ -84,7 +84,7 @@ class WBDALIDriver(DALIDriver):
         )
 
         # FIXME: I don't know the bette way
-        await asyncio.wait_for(self.mqtt_client._connected, timeout=5)
+        await asyncio.wait_for(self.mqtt_client._connected, timeout=5)  # pylint: disable=W0212
         self.rpc_id_counter += 1
         await self.mqtt_client.publish(
             "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response",
@@ -165,9 +165,11 @@ class WBDALIDriver(DALIDriver):
             await mqtt_client.subscribe(
                 f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward"
             )
-            async for message in mqtt_client.messages:
+            async for message in mqtt_client.unfiltered_messages:
                 self.logger.debug(
-                    "Received FF24 MQTT message: %s %s", message.topic, message.payload.decode()
+                    "Received FF24 MQTT message: %s %s",
+                    message.topic,
+                    message.payload.decode(),
                 )
 
                 if message.retain:
@@ -192,7 +194,7 @@ class WBDALIDriver(DALIDriver):
             self.connected.set()
 
             # Listen for messages
-            async for message in self.mqtt_client.messages:
+            async for message in self.mqtt_client.unfiltered_messages:
                 self.logger.debug("Received message: %s %s", message.topic, message.payload.decode())
 
                 if message.retain:

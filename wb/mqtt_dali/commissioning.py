@@ -202,7 +202,9 @@ class Commissioning:
         )
 
     async def compare(self, addr: int) -> bool:
-        """Perform a compare command with the given address, only sending cmd SEARCHADDR if the corresponding address part has changed."""
+        """Perform a compare command with the given address,
+        only sending cmd SEARCHADDR if the corresponding address part has changed.
+        """
 
         r = await asyncio.gather(
             *(self.driver.send(cmd) for cmd in self._set_search_addr(addr)),
@@ -280,7 +282,9 @@ class Commissioning:
         await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
 
     async def _process_found_device(self, found_addr: int, query_short_resp) -> set[int]:
-        "Returns empty set if no random address conflict, or set of short addresses that need to be randomised"
+        """Returns empty set if no random address conflict,
+        or set of short addresses that need to be randomised
+        """
 
         random_address_conflicts = set()
         log.info(
@@ -527,12 +531,14 @@ class Commissioning:
 
             if len(random_address_conflicts) == 0:  # it's O(1)!
                 log.info(
-                    "Addressing complete, no devices with random address conflict or unset random address found, exiting"
+                    "Addressing complete, no devices with random address conflict "
+                    "or unset random address found, exiting"
                 )
                 break
 
             log.info(
-                "Randomise the devices  with random address conflict or unset random address to generate new random addresses"
+                "Randomise the devices with random address conflict "
+                "or unset random address to generate new random addresses"
             )
             for short in random_address_conflicts:
                 await self._randomise_by_short(short)

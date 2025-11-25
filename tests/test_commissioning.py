@@ -339,9 +339,8 @@ class TestCommissioning(unittest.TestCase):
     def setUp(self):
         self.mock_driver = MagicMock()
 
-        self.temp_file = tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json")
-        self.temp_file_path = self.temp_file.name
-        self.temp_file.close()
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as self.temp_file:
+            self.temp_file_path = self.temp_file.name
 
     def tearDown(self):
         if os.path.exists(self.temp_file_path):
@@ -464,10 +463,10 @@ class TestCommissioning(unittest.TestCase):
 
     def test_set_search_addr(self):
         """Test setting search address."""
-        self.commissioning = Commissioning(self.mock_driver, None, load=False)
-        self.assertEqual(self.commissioning.last_search_addr, SearchAddress(None, None, None))
+        commissioning = Commissioning(self.mock_driver, None, load=False)
+        self.assertEqual(commissioning.last_search_addr, SearchAddress(None, None, None))
 
-        commands = list(self.commissioning._set_search_addr(0x123456))  # pylint: disable=W0212
+        commands = list(commissioning._set_search_addr(0x123456))  # pylint: disable=W0212
 
         self.assertEqual(len(commands), 3)
 
@@ -476,7 +475,7 @@ class TestCommissioning(unittest.TestCase):
         self.assertIsInstance(commands[2], SetSearchAddrL)
 
         expected_addr = SearchAddress(high=0x12, medium=0x34, low=0x56)
-        self.assertEqual(self.commissioning.last_search_addr, expected_addr)
+        self.assertEqual(commissioning.last_search_addr, expected_addr)
 
     def test_smart_extend_simple_case(self):
         """Test smart_extend with a simple case of two devices.

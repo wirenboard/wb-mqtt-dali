@@ -162,22 +162,23 @@ class WBDALIDriver(DALIDriver):
         self.logger.debug("Incoming FF task running...")
         async with self._create_mqtt_client() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
-            await mqtt_client.subscribe(
-                f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward"
-            )
-            async for message in mqtt_client.unfiltered_messages:
-                self.logger.debug(
-                    "Received FF24 MQTT message: %s %s",
-                    message.topic,
-                    message.payload.decode(),
+            async with mqtt_client.unfiltered_messages() as messages:
+                await mqtt_client.subscribe(
+                    f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward"
                 )
+                async for message in messages:
+                    self.logger.debug(
+                        "Received FF24 MQTT message: %s %s",
+                        message.topic,
+                        message.payload.decode(),
+                    )
 
-                if message.retain:
-                    continue
-                frame = ForwardFrame(24, int(message.payload) >> 8)
-                cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
-                self.logger.debug("Received FF24: %s", cmd)
-                self.bus_traffic._invoke(cmd, None, False)  # pylint: disable=W0212
+                    if message.retain:
+                        continue
+                    frame = ForwardFrame(24, int(message.payload) >> 8)
+                    cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
+                    self.logger.debug("Received FF24: %s", cmd)
+                    self.bus_traffic._invoke(cmd, None, False)  # pylint: disable=W0212
 
         # Subscribe to reply topics
 
@@ -185,57 +186,57 @@ class WBDALIDriver(DALIDriver):
         self.logger.debug("Read task running...")
         async with self.mqtt_client:
             self.logger.debug("Connected to MQTT broker")
-
-            # Subscribe to reply topics
-            for i in range(self.device_queue_size):
-                await self.mqtt_client.subscribe(
-                    f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
-                )
-            self.connected.set()
-
-            # Listen for messages
-            async for message in self.mqtt_client.unfiltered_messages:
-                self.logger.debug("Received message: %s %s", message.topic, message.payload.decode())
-
-                if message.retain:
-                    self.logger.debug("Received retained message, ignoring...")
-                    continue  # Ignore retained messages
-
-                resp = int(message.payload.decode())
-
-                # Process the message as needed
-                resp_pointer = int(
-                    str(message.topic)
-                    .rsplit("/", maxsplit=1)[-1]
-                    .replace(f"channel{self.config.channel}_reply", "")
-                )
-
-                if resp_pointer not in self.responses:
-                    self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
-                    continue
-                resp_future = self.responses[resp_pointer]
-
-                # порядок важен, потому что может быть framing error + timeout
-                if (
-                    ((resp & ERR_START_BIT) != 0)
-                    or ((resp & ERR_BIT_TIME) != 0)
-                    or ((resp & ERR_FRAME_LENGTH) != 0)
-                    or ((resp & ERR_STOP_BITS) != 0)
-                ):
-                    self.logger.error(
-                        "Received error in response: %x (%x)",
-                        resp,
-                        resp & ~ERR_STILL_SENDING,
+            async with self.mqtt_client.unfiltered_messages() as messages:
+                # Subscribe to reply topics
+                for i in range(self.device_queue_size):
+                    await self.mqtt_client.subscribe(
+                        f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
                     )
-                    resp_future.set_result(BackwardFrameError(0))
-                    continue
+                self.connected.set()
 
-                if (resp & ERR_TIMEOUT) != 0:
-                    self.logger.debug("Timeout waiting for response")
-                    resp_future.set_result(None)
-                    continue
+                # Listen for messages
+                async for message in messages:
+                    self.logger.debug("Received message: %s %s", message.topic, message.payload.decode())
 
-                resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
+                    if message.retain:
+                        self.logger.debug("Received retained message, ignoring...")
+                        continue  # Ignore retained messages
+
+                    resp = int(message.payload.decode())
+
+                    # Process the message as needed
+                    resp_pointer = int(
+                        str(message.topic)
+                        .rsplit("/", maxsplit=1)[-1]
+                        .replace(f"channel{self.config.channel}_reply", "")
+                    )
+
+                    if resp_pointer not in self.responses:
+                        self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
+                        continue
+                    resp_future = self.responses[resp_pointer]
+
+                    # порядок важен, потому что может быть framing error + timeout
+                    if (
+                        ((resp & ERR_START_BIT) != 0)
+                        or ((resp & ERR_BIT_TIME) != 0)
+                        or ((resp & ERR_FRAME_LENGTH) != 0)
+                        or ((resp & ERR_STOP_BITS) != 0)
+                    ):
+                        self.logger.error(
+                            "Received error in response: %x (%x)",
+                            resp,
+                            resp & ~ERR_STILL_SENDING,
+                        )
+                        resp_future.set_result(BackwardFrameError(0))
+                        continue
+
+                    if (resp & ERR_TIMEOUT) != 0:
+                        self.logger.debug("Timeout waiting for response")
+                        resp_future.set_result(None)
+                        continue
+
+                    resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
 
     def _create_mqtt_client(self) -> asyncio_mqtt.Client:
         """Create and configure MQTT client."""

@@ -6,7 +6,6 @@ import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-from dali.frame import BackwardFrame
 from dali.gear.general import (
     Compare,
     Initialise,
@@ -270,15 +269,15 @@ class FakeDALIBus:
 
             if len(matching_devices) == 0:
                 return MockResponse(value=None, raw_value=None)
-            elif len(matching_devices) == 1:
+            if len(matching_devices) == 1:
                 short = matching_devices[0]
                 raw_val = Mock()
                 raw_val.error = False
                 return MockResponse(value=(short << 1) | 1, raw_value=raw_val)
-            else:
-                raw_val = Mock()
-                raw_val.error = True
-                return MockResponse(value=None, raw_value=raw_val)
+
+            raw_val = Mock()
+            raw_val.error = True
+            return MockResponse(value=None, raw_value=raw_val)
 
         # Handle Withdraw
         if isinstance(cmd, Withdraw):
@@ -421,7 +420,7 @@ class TestCommissioning(unittest.TestCase):
 
         with patch("wb.mqtt_dali.commissioning.log") as mock_log:
             commissioning = Commissioning(self.mock_driver, self.temp_file_path, load=False)
-            commissioning._load_results()
+            commissioning._load_results()  # pylint: disable=W0212
 
         expected_devices = {1: 0x123456, 2: 0x789ABC, 5: 0xDEF123}
         self.assertEqual(commissioning.old_devices, expected_devices)
@@ -440,7 +439,7 @@ class TestCommissioning(unittest.TestCase):
         commissioning.found_devices = {2: 0x789ABC}
 
         with patch("wb.mqtt_dali.commissioning.log") as mock_log:
-            commissioning._save_results()
+            commissioning._save_results()  # pylint: disable=W0212
 
         self.assertTrue(os.path.exists(self.temp_file_path))
 
@@ -468,7 +467,7 @@ class TestCommissioning(unittest.TestCase):
         self.commissioning = Commissioning(self.mock_driver, None, load=False)
         self.assertEqual(self.commissioning.last_search_addr, SearchAddress(None, None, None))
 
-        commands = list(self.commissioning._set_search_addr(0x123456))
+        commands = list(self.commissioning._set_search_addr(0x123456))  # pylint: disable=W0212
 
         self.assertEqual(len(commands), 3)
 
@@ -551,7 +550,7 @@ class TestCommissioning(unittest.TestCase):
                         if test_random not in fake_bus.withdrawn and test_random <= search:
                             return MockResponse(value=True)
                     return MockResponse(value=False)
-                elif isinstance(cmd, QueryShortAddress):
+                if isinstance(cmd, QueryShortAddress):
                     if None not in fake_bus.search_addr:
                         search = (
                             (fake_bus.search_addr[0] << 16)
@@ -561,14 +560,14 @@ class TestCommissioning(unittest.TestCase):
                         if search == test_random and test_random not in fake_bus.withdrawn:
                             return MockResponse(value="MASK")
                     return MockResponse(value=None)
-                elif isinstance(cmd, ProgramShortAddress):
+                if isinstance(cmd, ProgramShortAddress):
                     if cmd.address != "MASK":
                         fake_bus.devices[cmd.address] = test_random
                     return MockResponse(value=None)
-                elif isinstance(cmd, VerifyShortAddress):
+                if isinstance(cmd, VerifyShortAddress):
                     return MockResponse(value=True)
-                else:
-                    return await original_send(cmd)
+
+                return await original_send(cmd)
 
             fake_bus.send = mock_send_with_unaddressed
 
@@ -784,7 +783,7 @@ class TestCommissioning(unittest.TestCase):
                 ],
             }
 
-            with open(self.temp_file_path, "w") as f:
+            with open(self.temp_file_path, "w", encoding="utf-8") as f:
                 json.dump(state_data, f)
 
             fake_bus = FakeDALIBus(devices={3: 0xAAAAAA, 7: 0xBBBBBB})
@@ -826,7 +825,7 @@ class TestCommissioning(unittest.TestCase):
                 ],
             }
 
-            with open(self.temp_file_path, "w") as f:
+            with open(self.temp_file_path, "w", encoding="utf-8") as f:
                 json.dump(state_data, f)
 
             fake_bus = FakeDALIBus(devices={10: 0xCCCCCC})
@@ -872,7 +871,7 @@ class TestCommissioning(unittest.TestCase):
                 ],
             }
 
-            with open(self.temp_file_path, "w") as f:
+            with open(self.temp_file_path, "w", encoding="utf-8") as f:
                 json.dump(state_data, f)
 
             fake_bus = FakeDALIBus(devices={1: 0x111111, 2: 0x333333})
@@ -943,7 +942,7 @@ class TestCommissioning(unittest.TestCase):
 
             self.assertTrue(os.path.exists(self.temp_file_path))
 
-            with open(self.temp_file_path, "r") as f:
+            with open(self.temp_file_path, "r", encoding="utf-8") as f:
                 saved_data = json.load(f)
 
             self.assertEqual(saved_data["version"], 1)
@@ -999,7 +998,7 @@ class TestCommissioning(unittest.TestCase):
                             if rand not in fake_bus.withdrawn and rand <= search:
                                 return MockResponse(value=True)
                     return MockResponse(value=False)
-                elif isinstance(cmd, QueryShortAddress):
+                if isinstance(cmd, QueryShortAddress):
                     if None not in fake_bus.search_addr:
                         search = (
                             (fake_bus.search_addr[0] << 16)
@@ -1012,7 +1011,7 @@ class TestCommissioning(unittest.TestCase):
                                 raw_val.error = False
                                 return MockResponse(value="MASK", raw_value=raw_val)
                     return MockResponse(value=None, raw_value=None)
-                elif isinstance(cmd, ProgramShortAddress):
+                if isinstance(cmd, ProgramShortAddress):
                     if cmd.address != "MASK":
                         if None not in fake_bus.search_addr:
                             search = (
@@ -1022,10 +1021,10 @@ class TestCommissioning(unittest.TestCase):
                             )
                             fake_bus.devices[cmd.address] = search
                     return MockResponse(value=None)
-                elif isinstance(cmd, VerifyShortAddress):
+                if isinstance(cmd, VerifyShortAddress):
                     return MockResponse(value=True)
-                else:
-                    return await original_send(cmd)
+
+                return await original_send(cmd)
 
             fake_bus.send = mock_boundary_send
 

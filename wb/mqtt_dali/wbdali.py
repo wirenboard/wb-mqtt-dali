@@ -76,7 +76,11 @@ class WBDALIDriver(DALIDriver):
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
         """Send a Modbus RPC command without expecting a response."""
         self.logger.debug(
-            f"Sending Modbus RPC command: function={function}, address={address}, count={count}, msg={msg}"
+            "Sending Modbus RPC command: function=%d, address=%d, count=%d, msg=%s",
+            function,
+            address,
+            count,
+            msg,
         )
 
         # FIXME: I don't know the bette way
@@ -162,14 +166,16 @@ class WBDALIDriver(DALIDriver):
                 f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward"
             )
             async for message in mqtt_client.messages:
-                self.logger.debug(f"Received FF24 MQTT message: {message.topic} {message.payload.decode()}")
+                self.logger.debug(
+                    "Received FF24 MQTT message: %s %s", message.topic, message.payload.decode()
+                )
 
                 if message.retain:
                     continue
                 frame = ForwardFrame(24, int(message.payload) >> 8)
                 cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
-                self.logger.debug(f"Received FF24: {cmd}")
-                self.bus_traffic._invoke(cmd, None, False)
+                self.logger.debug("Received FF24: %s", cmd)
+                self.bus_traffic._invoke(cmd, None, False)  # pylint: disable=W0212
 
         # Subscribe to reply topics
 
@@ -187,7 +193,7 @@ class WBDALIDriver(DALIDriver):
 
             # Listen for messages
             async for message in self.mqtt_client.messages:
-                self.logger.debug(f"Received message: {message.topic} {message.payload.decode()}")
+                self.logger.debug("Received message: %s %s", message.topic, message.payload.decode())
 
                 if message.retain:
                     self.logger.debug("Received retained message, ignoring...")
@@ -203,7 +209,7 @@ class WBDALIDriver(DALIDriver):
                 )
 
                 if resp_pointer not in self.responses:
-                    self.logger.warning(f"Received response for unknown pointer: {resp_pointer}")
+                    self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
                     continue
                 resp_future = self.responses[resp_pointer]
 
@@ -251,7 +257,7 @@ class WBDALIDriver(DALIDriver):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
         self.logger.debug(
-            "path=%s, reconnect_interval=%s, reconnect_limit=%s, dev_inst_map=%s",
+            "path=%s, reconnect_interval=%d, reconnect_limit=%d, dev_inst_map=%s",
             config.modbus_port_path,
             config.reconnect_interval,
             config.reconnect_limit,
@@ -453,7 +459,7 @@ class WBDALIDriver(DALIDriver):
                 resp_frame = await future
                 response = cmd.response(resp_frame)
 
-        self.bus_traffic._invoke(cmd, response, False)
+        self.bus_traffic._invoke(cmd, response, False)  # pylint: disable=W0212
         return response
 
     def receive(self) -> None:
@@ -498,7 +504,7 @@ class WBDALIDriver(DALIDriver):
         asyncio.create_task(self._read_task())
         asyncio.create_task(self._incoming_ff_task())
 
-        self.connection_status_callback._invoke("connected")
+        self.connection_status_callback._invoke("connected")  # pylint: disable=W0212
         return True
 
     async def _reconnect(self) -> None:
@@ -523,7 +529,7 @@ class WBDALIDriver(DALIDriver):
             os.close(self._f)
         self._f = None
         self.connected.clear()
-        self.connection_status_callback._invoke("disconnected")
+        self.connection_status_callback._invoke("disconnected")  # pylint: disable=W0212
         if reconnect:
             self._reconnect_task = asyncio.ensure_future(self._reconnect())
 

@@ -240,24 +240,24 @@ class Commissioning:
             if r.value is True:
                 logging.info("Short address %d programmed successfully", new_addr)
                 return new_addr
-            else:
-                logging.warning(
-                    "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
+
+            logging.warning(
+                "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
+                new_addr,
+            )
+            r = await self.driver.send(QueryShortAddress())
+            if r.value == (new_addr << 1) | 1:
+                logging.info(
+                    "Short address %d programmed successfully (QUERY SHORT ADDRESS)",
                     new_addr,
                 )
-                r = await self.driver.send(QueryShortAddress())
-                if r.value == (new_addr << 1) | 1:
-                    logging.info(
-                        "Short address %d programmed successfully (QUERY SHORT ADDRESS)",
-                        new_addr,
-                    )
-                    return new_addr
-                else:
-                    logging.error(
-                        "Failed to program short address %d for device at 0x%06x",
-                        new_addr,
-                        found_addr,
-                    )
+                return new_addr
+
+            logging.error(
+                "Failed to program short address %d for device at 0x%06x",
+                new_addr,
+                found_addr,
+            )
 
         else:
             logging.warning("Device found but no short addresses available")

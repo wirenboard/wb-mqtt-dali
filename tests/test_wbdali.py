@@ -58,12 +58,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         frame_invalid = MagicMock()
         frame_invalid.__len__.return_value = 32
 
-        assert driver._encode_frame_for_modbus(frame_16) == 0x12340000
-        assert driver._encode_frame_for_modbus(frame_24) == 0x12345601
-        assert driver._encode_frame_for_modbus(frame_25) == 0x123453382
+        assert driver._encode_frame_for_modbus(frame_16) == 0x12340000  # pylint: disable=W0212
+        assert driver._encode_frame_for_modbus(frame_24) == 0x12345601  # pylint: disable=W0212
+        assert driver._encode_frame_for_modbus(frame_25) == 0x123453382  # pylint: disable=W0212
 
         with self.assertRaises(ValueError):
-            driver._encode_frame_for_modbus(frame_invalid)
+            driver._encode_frame_for_modbus(frame_invalid)  # pylint: disable=W0212
 
     @patch("asyncio_mqtt.Client")
     async def test_send_command_without_response(self, mock_mqtt_client_class):
@@ -71,12 +71,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
         driver = WBDALIDriver(self.config)
-        driver.bus_traffic._invoke = MagicMock()
+        driver.bus_traffic._invoke = MagicMock()  # pylint: disable=W0212
 
         driver.send_barrier = AsyncMock()
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(0, 0x12340000)]))
@@ -91,7 +91,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 result = await driver.send(cmd)
                 self.assertIsNone(result)
                 mock_add_cmd.assert_called_once()
-                driver.bus_traffic._invoke.assert_called_once_with(cmd, None, False)
+                driver.bus_traffic._invoke.assert_called_once_with(cmd, None, False)  # pylint: disable=W0212
 
     @patch("asyncio_mqtt.Client")
     async def test_send_command_with_response(self, mock_mqtt_client_class):
@@ -99,12 +99,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
         driver = WBDALIDriver(self.config)
-        driver.bus_traffic._invoke = MagicMock()
+        driver.bus_traffic._invoke = MagicMock()  # pylint: disable=W0212
 
         driver.send_barrier = AsyncMock()
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(0, 0x12340000)]))
@@ -123,7 +123,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(result, MockResponse)
                 self.assertEqual(result.data, 0x56)
                 mock_add_cmd.assert_called_once()
-                driver.bus_traffic._invoke.assert_called_once_with(cmd, result, False)
+                driver.bus_traffic._invoke.assert_called_once_with(cmd, result, False)  # pylint: disable=W0212
 
     @patch("asyncio_mqtt.Client")
     async def test_send_command_sendtwice_with_response_raises_error(self, mock_mqtt_client_class):
@@ -146,12 +146,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
         driver = WBDALIDriver(self.config)
-        driver.bus_traffic._invoke = MagicMock()
+        driver.bus_traffic._invoke = MagicMock()  # pylint: disable=W0212
 
         cmd = _MockCommand(sendtwice=True, response_class=None)
 
@@ -164,7 +164,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 result = await driver.send(cmd)
                 self.assertIsNone(result)
                 self.assertEqual(mock_add_cmd.call_count, 2)
-                driver.bus_traffic._invoke.assert_called_once_with(cmd, None, False)
+                driver.bus_traffic._invoke.assert_called_once_with(cmd, None, False)  # pylint: disable=W0212
 
     @patch("asyncio_mqtt.Client")
     async def test_add_cmd_to_send_buffer_single_command(self, mock_mqtt_client_class):
@@ -172,7 +172,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -182,7 +182,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.send_barrier = AsyncMock()
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(5, 0x12340000)]))
 
-        await driver._add_cmd_to_send_buffer(5, 0x12340000)
+        await driver._add_cmd_to_send_buffer(5, 0x12340000)  # pylint: disable=W0212
 
         mock_mqtt_client.publish.assert_called_once()
 
@@ -205,7 +205,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -217,11 +217,11 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             return_value=(0, [(5, 0x12340000), (6, 0x56780000), (7, 0x9ABC0000)])
         )
 
-        await driver._add_cmd_to_send_buffer(5, 0x12340000)
+        await driver._add_cmd_to_send_buffer(5, 0x12340000)  # pylint: disable=W0212
         mock_mqtt_client.publish.assert_called_once()
 
         call_args = mock_mqtt_client.publish.call_args
-        topic, payload = call_args[0]
+        _, payload = call_args[0]
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["address"], 1920 + 5 * 2)
         self.assertEqual(payload_data["params"]["count"], 6)
@@ -233,7 +233,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -249,7 +249,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch.object(driver, "send_modbus_rpc_no_response", new_callable=AsyncMock) as mock_send_modbus:
-            await driver._add_cmd_to_send_buffer(5, 0x12340000)
+            await driver._add_cmd_to_send_buffer(5, 0x12340000)  # pylint: disable=W0212
             self.assertEqual(mock_send_modbus.call_count, 2)
 
             first_call = mock_send_modbus.call_args_list[0]
@@ -268,7 +268,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -314,7 +314,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_exception(asyncio.TimeoutError())
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
         driver = WBDALIDriver(self.config)
@@ -330,7 +330,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -409,7 +409,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         pending_future.set_result(None)
 
-        pointer, future = await task
+        pointer, _ = await task
         self.assertEqual(pointer, 3)
 
     @patch("asyncio_mqtt.Client")
@@ -418,7 +418,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 
@@ -428,7 +428,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.send_barrier.wait = AsyncMock(side_effect=asyncio.TimeoutError())
 
         with self.assertRaises(asyncio.TimeoutError):
-            await driver._add_cmd_to_send_buffer(5, 0x12340000)
+            await driver._add_cmd_to_send_buffer(5, 0x12340000)  # pylint: disable=W0212
 
     @patch("asyncio_mqtt.Client")
     async def test_send_modbus_rpc_increments_counter(self, mock_mqtt_client_class):
@@ -436,7 +436,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         mock_mqtt_client = AsyncMock()
         connected_future = asyncio.Future()
         connected_future.set_result(None)
-        mock_mqtt_client._connected = connected_future
+        mock_mqtt_client._connected = connected_future  # pylint: disable=W0212
         mock_mqtt_client.publish = AsyncMock()
         mock_mqtt_client_class.return_value = mock_mqtt_client
 

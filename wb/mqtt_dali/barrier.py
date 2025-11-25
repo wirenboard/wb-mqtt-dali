@@ -1,5 +1,6 @@
 import asyncio
 import enum
+import logging
 import threading
 
 _global_lock = threading.Lock()
@@ -9,7 +10,7 @@ class _LoopBoundMixin:
     _loop = None
 
     def _get_loop(self):
-        loop = asyncio.events._get_running_loop()
+        loop = asyncio.events._get_running_loop()  # pylint: disable=W0212
 
         if self._loop is None:
             with _global_lock:

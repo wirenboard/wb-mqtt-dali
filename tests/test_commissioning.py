@@ -3,8 +3,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from dali.gear.general import (
     Compare,
@@ -42,7 +41,7 @@ def search_sequence(cmd_cls, values):
     return seq
 
 
-class MockResponse:
+class MockResponse:  # pylint: disable=R0903
     def __init__(self, value=None, raw_value=None, error=False):
         self.value = value
         if raw_value is not None:

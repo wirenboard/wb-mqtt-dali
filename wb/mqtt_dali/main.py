@@ -33,7 +33,7 @@ def main(argv):
         schema = json.load(schema_file)
         try:
             jsonschema.validate(
-                instance=config, schema=schema, format_checker=jsonschema.Draft4Validator.FORMAT_CHECKER
+                instance=config, schema=schema, format_checker=jsonschema.draft4_format_checker
             )
         except jsonschema.ValidationError as e:
             print(f"Configuration validation failed: {e.message}")

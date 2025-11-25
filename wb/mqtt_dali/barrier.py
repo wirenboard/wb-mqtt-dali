@@ -6,7 +6,7 @@ import threading
 _global_lock = threading.Lock()
 
 
-class _LoopBoundMixin:
+class _LoopBoundMixin:  # pylint: disable=R0903
     _loop = None
 
     def _get_loop(self):

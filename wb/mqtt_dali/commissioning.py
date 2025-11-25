@@ -49,7 +49,7 @@ class SearchAddress:
         )
 
 
-class BinarySearchAddressFinder:
+class BinarySearchAddressFinder:  # pylint: disable=R0903
     def __init__(self, compare_callback: callable, set_search_addr_callback: callable):
         self.compare = compare_callback
         self.set_search_addr = set_search_addr_callback
@@ -299,12 +299,15 @@ class Commissioning:
 
         if query_short_resp.raw_value is None:
             log.error(
-                "No response while reading short address of device at 0x%06x. Maybe shitty device doesn't implement the QUERY SHORT ADDRESS command? Ask it to withdraw anyway",
+                "No response while reading short address of device at 0x%06x. "
+                "Maybe shitty device doesn't implement the QUERY SHORT ADDRESS command? "
+                "Ask it to withdraw anyway",
                 found_addr,
             )
         elif query_short_resp.raw_value.error:
             log.warning(
-                "Framing error while reading short address for device at random address 0x%06x. Multiple devices share the same random address!",
+                "Framing error while reading short address for device at random address 0x%06x. "
+                "Multiple devices share the same random address!",
                 found_addr,
             )
 
@@ -321,13 +324,15 @@ class Commissioning:
         elif query_short_resp.value == "MASK":
             if found_addr == 0xFFFFFF:
                 log.info(
-                    "Device with unset random address (0x%06x) and with unset short address. Mark it for readdressing (leave short address unset)",
+                    "Device with unset random address (0x%06x) and with unset short address. "
+                    "Mark it for readdressing (leave short address unset)",
                     found_addr,
                 )
                 random_address_conflicts.add(None)
             else:
                 log.warning(
-                    "Device found at 0x%06x, with unset short address. Assigning new short address from available addresses",
+                    "Device found at 0x%06x, with unset short address. "
+                    "Assigning new short address from available addresses",
                     found_addr,
                 )
                 await self.set_search_addr(found_addr)
@@ -340,7 +345,8 @@ class Commissioning:
                 await self.set_search_addr(found_addr)
                 if found_addr == 0xFFFFFF:
                     log.warning(
-                        "Device found with unset random address (0x%06x) and with short address %d, which is already assigned to another device.",
+                        "Device found with unset random address (0x%06x) and with short address %d, "
+                        "which is already assigned to another device.",
                         found_addr,
                         short_addr,
                     )
@@ -352,20 +358,24 @@ class Commissioning:
                     random_address_conflicts.add(None)
                 else:
                     log.warning(
-                        "Device found at 0x%06x with short address %d, which is already assigned to another device. Reassigning short address",
+                        "Device found at 0x%06x with short address %d, "
+                        "which is already assigned to another device. Reassigning short address",
                         found_addr,
                         short_addr,
                     )
 
-                    # устройство точно не получит адрес, который есть у устройств, которые ещё не были найдены, потому что
-                    # по результатам сканирования всех коротких адресов мы уже вычеркнули те короткие адреса, на которые кто-то отвечал
+                    # устройство точно не получит адрес, который есть у устройств, которые
+                    # ещё не были найдены, потому что по результатам сканирования всех коротких адресов
+                    # мы уже вычеркнули те короткие адреса, на которые кто-то отвечал
                     new_short_addr = await self._assign_short_address(found_addr)
                     self._add_device(new_short_addr, found_addr)
             else:
                 if found_addr == 0xFFFFFF:
-                    # тут надо понимать, что мы не можем точно различить два устройства с одним random address по ответу на QUERY SHORT ADDRESS,
-                    # потому что они могли ответить одновременно и frame error не было.
-                    # поэтому мы всё равно должны сделать RANDOMISE устройствам с пустым random address, потому что их может быть несколько с этим short address
+                    # тут надо понимать, что мы не можем точно различить два устройства
+                    # с одним random address по ответу на QUERY SHORT ADDRESS, потому что
+                    # они могли ответить одновременно и frame error не было.
+                    # поэтому мы всё равно должны сделать RANDOMISE устройствам с пустым random address,
+                    # потому что их может быть несколько с этим short address
                     log.info(
                         "Mark 0x%06x (short address %d) for readdressing (randomising)",
                         found_addr,
@@ -414,7 +424,8 @@ class Commissioning:
             freq = rand_addr_frequency.get(rand, 0)
             if freq > 1:
                 log.warning(
-                    "Multiple devices share the same random address 0x%06x (%d times) as device with short addr %d. Send Randomise",
+                    "Multiple devices share the same random address 0x%06x (%d times) "
+                    "as device with short addr %d. Send Randomise",
                     rand,
                     freq,
                     short,
@@ -461,14 +472,15 @@ class Commissioning:
                 )
 
         # now add random_address from old_devices (state file) to the list of known random addresses
-        # important! We must start iteration with actually found random addresses and only move to the old ones
-        # from the state file after, because those in front will preserve their short addresses
+        # important! We must start iteration with actually found random addresses and only move to the
+        # old ones from the state file after, because those in front will preserve their short addresses
         # Remember, our goal is to always preserve current state if it's correct and consistent
         _found_rand_addrs = {rand for (short, rand) in known_rand_addrs}
         for short, rand in self.old_devices.items():
             if rand not in _found_rand_addrs:
                 log.debug(
-                    "Adding old device with short %d and random 0x%06x to the end of known random addresses list",
+                    "Adding old device with short %d and random 0x%06x "
+                    "to the end of known random addresses list",
                     short,
                     rand,
                 )
@@ -493,15 +505,16 @@ class Commissioning:
             random_address_conflicts |= await self._process_found_device(rand_addr, resp)
 
         logging.info(
-            "After querying known random addresses found %d devices with random address conflict or unset random address",
+            "After querying known random addresses found %d devices "
+            "with random address conflict or unset random address",
             len(random_address_conflicts),
         )
         binary_search_counter = 0
         while True:
             binary_search_counter += 1
 
-            # оптимизацию на поиск сброшенный randomAddress не делаем, иначе устройства с unset random address получают короткие адреса быстрее,
-            # чем нормальные
+            # оптимизацию на поиск сброшенный randomAddress не делаем,
+            # иначе устройства с unset random address получают короткие адреса быстрее, чем нормальные
             #
             # logging.info("Probing whether there are devices with unset random address (0xffffff)")
             # cmds = [*self._set_search_addr(0xffffff), QueryShortAddress(), Withdraw()]
@@ -509,9 +522,11 @@ class Commissioning:
             # resp = resps[-2]    # QueryShortAddress response
             # if resp.raw_value is not None:
             #     random_address_conflict += await self._process_found_device(0xffffff, resp)
-            # # тут конечно мы всегда вызываем и QueryShortAddress и Compare на 0xffffff, самый частый случай - девайсов нет,
-            # # и хорошо бы в нём было экономить один вызов QueryShortAddress. Т.е. если первый Compare в бинарном поиске что-то вернул,
-            # # то останавливаться и делать QueryShortAddress, а потом продолжать уже искать дальше, если ответа не было. Но чот это довольно некрасиво получается,
+            # # тут конечно мы всегда вызываем и QueryShortAddress и Compare на 0xffffff,
+            # # самый частый случай - девайсов нет, и хорошо бы в нём было экономить один вызов
+            # # QueryShortAddress. Т.е. если первый Compare в бинарном поиске что-то вернул,
+            # # то останавливаться и делать QueryShortAddress, а потом продолжать уже искать дальше,
+            # # если ответа не было. Но чот это довольно некрасиво получается,
             # # и ради экономии одного запроса и 200мс не хочется делать
 
             logging.info("Start binary search (%d)", binary_search_counter)

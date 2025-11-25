@@ -396,7 +396,8 @@ class WBDALIDriver(DALIDriver):
             pointers = list(sorted(reg_val_at_pointer.keys()))
 
             # magic, credit: https://docs.python.org/2.6/library/itertools.html#examples
-            # [1, 4,5,6, 10, 15,16,17,18, 22, 25,26,27,28] => [1], [4,5,6], [10], [15,16,17,18], [22], [25,26,27,28]
+            # [1, 4,5,6, 10, 15,16,17,18, 22, 25,26,27,28]
+            # => [1], [4,5,6], [10], [15,16,17,18], [22], [25,26,27,28]
             for _, g in groupby(enumerate(pointers), lambda ix: ix[0] - ix[1]):
                 conseq_range = list((map(itemgetter(1), g)))
                 start_pointer = conseq_range[0]
@@ -468,13 +469,13 @@ class WBDALIDriver(DALIDriver):
     def receive(self) -> None:
         self.logger.debug("receive()")
 
-    def readFirmwareVersion(self) -> None:
+    def readFirmwareVersion(self) -> None:  # pylint: disable=C0103
         self.logger.debug("readFirmwareVersion()")
 
-    def enableSniffing(self) -> None:
+    def enableSniffing(self) -> None:  # pylint: disable=C0103
         self.logger.debug("enableSniffing()")
 
-    def disableSniffing(self):
+    def disableSniffing(self):  # pylint: disable=C0103
         self.logger.debug("disableSniffing()")
 
     async def connect(self) -> bool:
@@ -538,7 +539,9 @@ class WBDALIDriver(DALIDriver):
 
 
 class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
-    """A version of DeviceInstanceTypeMapper taking advantage of sending of multiple DALI commands in parallel"""
+    """A version of DeviceInstanceTypeMapper taking advantage of
+    sending of multiple DALI commands in parallel
+    """
 
     async def async_autodiscover(
         self, driver, addresses: int | tuple[int, int] | Iterable[int] = (0, 63)

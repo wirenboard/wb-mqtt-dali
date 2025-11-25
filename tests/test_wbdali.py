@@ -123,7 +123,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(result, MockResponse)
                 self.assertEqual(result.data, 0x56)
                 mock_add_cmd.assert_called_once()
-                driver.bus_traffic._invoke.assert_called_once_with(cmd, result, False)  # pylint: disable=W0212
+                driver.bus_traffic._invoke.assert_called_once_with(
+                    cmd, result, False
+                )  # pylint: disable=W0212
 
     @patch("asyncio_mqtt.Client")
     async def test_send_command_sendtwice_with_response_raises_error(self, mock_mqtt_client_class):

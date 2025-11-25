@@ -2,8 +2,10 @@ Source: wb-mqtt-dali
 Maintainer: Wiren Board team <info@wirenboard.com>
 Section: misc
 Priority: optional
-Build-Depends: python3-all,
+Standards-Version: 3.9.2
+Build-Depends: debhelper (>= 10),
                dh-python,
+               python3-all,
                python3-asyncio-mqtt,
                python3-jsonschema,
                python3-wb-common (>= 2.1.0~~),

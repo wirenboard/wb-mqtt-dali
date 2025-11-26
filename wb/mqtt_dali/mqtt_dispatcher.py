@@ -64,16 +64,11 @@ class MQTTDispatcher:
         async with self._lock:
             callbacks = self._subscriptions.get(topic, set()).copy()
 
-        if not callbacks:
-            return
-
-        tasks = []
         for callback in callbacks:
-            task = asyncio.create_task(callback(message))
-            tasks.append(task)
-
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await callback(message)
+            except Exception as e:
+                logging.error("Error in callback for topic %s: %s", topic, e)
 
     @property
     def is_running(self) -> bool:

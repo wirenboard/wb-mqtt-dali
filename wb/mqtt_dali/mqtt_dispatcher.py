@@ -1,0 +1,83 @@
+import asyncio
+import logging
+from typing import Awaitable, Callable, Dict, Set
+
+import asyncio_mqtt
+import paho.mqtt.client as mqtt
+
+MessageCallback = Callable[[mqtt.MQTTMessage], Awaitable[None]]
+
+
+class MQTTDispatcher:
+    def __init__(self, client: asyncio_mqtt.Client):
+        self.client = client
+        self._subscriptions: Dict[str, Set[MessageCallback]] = {}
+        self._running = False
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self, topic: str, callback: MessageCallback) -> None:
+        async with self._lock:
+            if topic not in self._subscriptions:
+                self._subscriptions[topic] = set()
+                await self.client.subscribe(topic)
+
+            self._subscriptions[topic].add(callback)
+
+    async def unsubscribe(self, topic: str, callback: MessageCallback = None) -> None:
+        async with self._lock:
+            if topic not in self._subscriptions:
+                return
+
+            if callback is None:
+                del self._subscriptions[topic]
+                await self.client.unsubscribe(topic)
+            else:
+                self._subscriptions[topic].discard(callback)
+
+                if not self._subscriptions[topic]:
+                    del self._subscriptions[topic]
+                    await self.client.unsubscribe(topic)
+
+    async def clear_subscriptions(self) -> None:
+        async with self._lock:
+            topics = list(self._subscriptions.keys())
+            for topic in topics:
+                await self.client.unsubscribe(topic)
+
+            self._subscriptions.clear()
+
+    async def run(self) -> None:
+        self._running = True
+        try:
+            async with self.client.unfiltered_messages() as messages:
+                async for message in messages:
+                    await self._dispatch_message(message)
+        except Exception as e:
+            logging.error(e)
+            raise
+        finally:
+            self._running = False
+
+    async def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
+        topic = str(message.topic)
+
+        async with self._lock:
+            callbacks = self._subscriptions.get(topic, set()).copy()
+
+        if not callbacks:
+            return
+
+        tasks = []
+        for callback in callbacks:
+            task = asyncio.create_task(callback(message))
+            tasks.append(task)
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def get_subscribed_topics(self) -> Set[str]:
+        return set(self._subscriptions.keys())

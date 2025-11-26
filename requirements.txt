@@ -1,2 +1,6 @@
-websockets>=11.0.0
-python-dali>=0.11
+asyncio-mqtt==0.10.0
+jsonschema==3.2.0
+paho-mqtt==1.5.1
+python-dali==0.11
+pyusb==1.0.2
+websockets==8.1

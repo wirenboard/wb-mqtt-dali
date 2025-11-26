@@ -1,2 +1,3 @@
 buildDebSbuild defaultRunLintian: true,
-               defaultRepoRelease: 'testing'
+               defaultRepoRelease: 'testing',
+               defaultRunPythonChecks: true

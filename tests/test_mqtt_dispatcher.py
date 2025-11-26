@@ -215,9 +215,7 @@ async def test_is_running(dispatcher, mock_client):
 async def test_concurrent_subscribe_unsubscribe(dispatcher):
     callbacks = [AsyncMock() for _ in range(10)]
 
-    await asyncio.gather(
-        *[dispatcher.subscribe(f"topic{i}", callbacks[i]) for i in range(10)]
-    )
+    await asyncio.gather(*[dispatcher.subscribe(f"topic{i}", callbacks[i]) for i in range(10)])
 
     assert len(dispatcher._subscriptions) == 10  # pylint: disable=W0212
 

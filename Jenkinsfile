@@ -1,3 +1,5 @@
 buildDebSbuild defaultRunLintian: true,
                defaultRepoRelease: 'testing',
-               defaultRunPythonChecks: true
+               defaultRunPythonChecks: true,
+               defaultRunCoverage: true,
+               defaultCoverageMin: "80"

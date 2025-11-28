@@ -54,6 +54,7 @@ async def wait_for_cancel():
 
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGINT, signal_handler)
+    loop.add_signal_handler(signal.SIGTERM, signal_handler)
     await cancel_event.wait()
     raise asyncio.CancelledError()
 
@@ -71,6 +72,7 @@ async def rpc(rpc_server: MQTTRPCServer):
         )
         await rpc_server.start()
     except asyncio.CancelledError:
+        # Allow graceful shutdown on cancellation; no cleanup needed here.
         pass
 
 
@@ -78,6 +80,7 @@ async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
     try:
         await mqtt_dispatcher.run()
     except asyncio.CancelledError:
+        # Allow graceful shutdown on cancellation; no cleanup needed here.
         pass
 
 

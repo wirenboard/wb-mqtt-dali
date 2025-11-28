@@ -51,7 +51,7 @@ class MQTTRPCServer:
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to delete RPC topic %s: %s", topic_str, e)
         finally:
-            del self._endpoints[topic_str]
+            self._endpoints.pop(topic_str, None)
 
     async def stop(self) -> None:
         logger.debug("Clearing all endpoints")
@@ -64,7 +64,7 @@ class MQTTRPCServer:
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to unsubscribe from RPC requests: %s", e)
 
-    def clear(self):
+    def clear(self) -> None:
         self._endpoints.clear()
 
     async def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
@@ -77,7 +77,7 @@ class MQTTRPCServer:
             logger.error("Invalid JSON-RPC request: %s", e)
             return MQTTRPC10Response(error=JSONRPCInvalidRequest()._data)  # pylint: disable=protected-access
         try:
-            topic_base, _ = mqtt_message.topic.rsplit("/", 2)
+            topic_base, _ = mqtt_message.topic.rsplit("/", 1)
             handler = self._endpoints.get(topic_base)
             if handler is None:
                 logger.error("No RPC endpoint for topic: %s", mqtt_message.topic)
@@ -103,6 +103,4 @@ class MQTTRPCServer:
                 mqtt_message.topic + "/reply", response.json, qos=2, retain=False
             )
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to publish RPC response: %s", e)
-            logger.error("Failed to publish RPC response: %s", e)
             logger.error("Failed to publish RPC response: %s", e)

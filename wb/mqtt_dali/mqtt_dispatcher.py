@@ -66,7 +66,7 @@ class MQTTDispatcher:
         callbacks = set()
         async with self._lock:
             for callback_topic, cbs in self._subscriptions.items():
-                if mqtt.topic_matches_sub(topic, callback_topic):
+                if mqtt.topic_matches_sub(callback_topic, topic):
                     callbacks.update(cbs)
 
         for callback in callbacks:

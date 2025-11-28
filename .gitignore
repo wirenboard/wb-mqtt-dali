@@ -179,3 +179,6 @@ config.local.*
 .coveragerc
 pyproject.toml
 .config
+
+# for pylint discovery
+wb/__init__.py

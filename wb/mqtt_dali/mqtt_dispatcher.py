@@ -56,13 +56,18 @@ class MQTTDispatcher:
             logging.error(e)
             raise
         finally:
+            async with self._lock:
+                self._subscriptions.clear()
             self._running = False
 
     async def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
         topic = str(message.topic)
 
+        callbacks = set()
         async with self._lock:
-            callbacks = self._subscriptions.get(topic, set()).copy()
+            for callback_topic, cbs in self._subscriptions.items():
+                if mqtt.topic_matches_sub(topic, callback_topic):
+                    callbacks.update(cbs)
 
         for callback in callbacks:
             try:

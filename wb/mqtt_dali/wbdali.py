@@ -45,13 +45,14 @@ ERR_STILL_SENDING = 0x8000
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
-    mqtt_host: str = "localhost"
-    mqtt_port: int = 1883
+    mqtt_host: str = "/var/run/mosquitto/mosquitto.sock"
+    mqtt_port: int = 0
+    mqtt_transport: str = "unix"
     mqtt_username: Optional[str] = None
     mqtt_password: Optional[str] = None
-    device_name: str = "wb-mdali_2"
+    device_name: str = "wb-mdali_1"
     channel: int = 1
-    modbus_slave_id: int = 2
+    modbus_slave_id: int = 1
     modbus_port_path: str = "/dev/ttyRS485-1"
     modbus_baud_rate: int = 115200
     modbus_parity: str = "N"
@@ -243,6 +244,7 @@ class WBDALIDriver(DALIDriver):
         client_kwargs = {
             "hostname": self.config.mqtt_host,
             "port": self.config.mqtt_port,
+            "transport": self.config.mqtt_transport,
         }
 
         if self.config.mqtt_username:
@@ -521,7 +523,7 @@ class WBDALIDriver(DALIDriver):
             return
         await asyncio.sleep(self.config.reconnect_interval)
         self._reconnect_task = None
-        self.connect()
+        await self.connect()
 
     def disconnect(self, reconnect: bool = False) -> None:
         self._log.debug("disconnecting")

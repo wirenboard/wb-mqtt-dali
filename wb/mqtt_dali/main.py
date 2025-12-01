@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 
@@ -36,9 +37,10 @@ async def main(argv):
         print(f"Configuration file not found: {args.config}")
         return EXIT_NOTCONFIGURED
 
-    with open(args.config, "r", encoding="utf-8") as config_file, open(
-        SCHEMA_FILEPATH, "r", encoding="utf-8"
-    ) as schema_file:
+    with (
+        open(args.config, "r", encoding="utf-8") as config_file,
+        open(SCHEMA_FILEPATH, "r", encoding="utf-8") as schema_file,
+    ):
         config = json.load(config_file)
         schema = json.load(schema_file)
         try:
@@ -49,13 +51,14 @@ async def main(argv):
             print(f"Configuration validation failed: {e.message}")
             return EXIT_NOTCONFIGURED
 
+    if config["debug"]:
+        logging.basicConfig(level=logging.DEBUG)
+
     # todo
     dev_inst_map = AsyncDeviceInstanceTypeMapper()
     cfg = WBDALIConfig(
         modbus_port_path="/dev/ttyRS485-1",
         device_name="wb-mdali_1",
-        mqtt_host="localhost",
-        mqtt_port=1883,
     )
     dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map)
     await dev.connect()

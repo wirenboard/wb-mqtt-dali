@@ -3,7 +3,8 @@
     "type": "object",
     "configFile": {
         "path": "/etc/wb-mqtt-dali.conf",
-        "service": "wb-mqtt-dali"
+        "service": "wb-mqtt-dali",
+        "editor": "dali"
     },
     "properties": {
         "debug": {

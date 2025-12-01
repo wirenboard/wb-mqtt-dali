@@ -1,6 +1,7 @@
 {
     "$schema": "http://json-schema.org/draft-04/schema#",
     "type": "object",
+    "title": "DALI gateway configuration",
     "configFile": {
         "path": "/etc/wb-mqtt-dali.conf",
         "service": "wb-mqtt-dali",
@@ -40,7 +41,8 @@
     },
     "translations": {
         "ru": {
-            "Enable debug logging": "Включить отладочные сообщения"
+            "Enable debug logging": "Включить отладочные сообщения",
+            "DALI gateway configuration": "Настройки шлюза DALI"
         }
     }
 }

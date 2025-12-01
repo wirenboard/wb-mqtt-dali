@@ -1,6 +1,10 @@
 {
     "$schema": "http://json-schema.org/draft-04/schema#",
     "type": "object",
+    "configFile": {
+        "path": "/etc/wb-mqtt-dali.conf",
+        "service": "wb-mqtt-dali"
+    },
     "properties": {
         "debug": {
             "type": "boolean",
@@ -12,6 +16,24 @@
                 "wb": {
                     "show_editor": true
                 }
+            }
+        },
+        "entries": {
+            "type": "array",
+            "title": "Device Entries",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "short": {
+                        "type": "integer",
+                        "title": "Short Address"
+                    },
+                    "random": {
+                        "type": "integer",
+                        "title": "Random Address"
+                    }
+                },
+                "required": ["short", "random"]
             }
         }
     },

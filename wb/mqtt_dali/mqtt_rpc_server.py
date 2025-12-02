@@ -65,6 +65,12 @@ class MQTTRPCServer:
             logger.error("Failed to unsubscribe from RPC requests: %s", e)
 
     def clear(self) -> None:
+        """
+        Clears the internal endpoint registry without performing any MQTT topic cleanup.
+        Use this method only if you want to reset the internal state without
+        affecting MQTT subscriptions or published topics.
+        For full cleanup including MQTT operations, use the `stop()` method instead.
+        """
         self._endpoints.clear()
 
     async def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:

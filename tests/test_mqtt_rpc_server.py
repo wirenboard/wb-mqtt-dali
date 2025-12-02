@@ -8,6 +8,7 @@ from jsonrpc.exceptions import (
     JSONRPCMethodNotFound,
 )
 from mqttrpc.protocol import MQTTRPC10Request
+
 from wb.mqtt_dali.mqtt_rpc_server import (
     MQTTRPCServer,
     get_request_topic_path,

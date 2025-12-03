@@ -9,7 +9,7 @@ from itertools import groupby
 from operator import itemgetter
 from typing import Any, Iterable, Optional
 
-import asyncio_mqtt
+import asyncio_mqtt as aiomqtt
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
 from dali.command import Command, Response, from_frame
 from dali.device.general import (
@@ -239,7 +239,7 @@ class WBDALIDriver(DALIDriver):
 
                     resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
 
-    def _create_mqtt_client(self) -> asyncio_mqtt.Client:
+    def _create_mqtt_client(self) -> aiomqtt.Client:
         """Create and configure MQTT client."""
         client_kwargs = {
             "hostname": self.config.mqtt_host,
@@ -252,7 +252,7 @@ class WBDALIDriver(DALIDriver):
         if self.config.mqtt_password:
             client_kwargs["password"] = self.config.mqtt_password
 
-        return asyncio_mqtt.Client(**client_kwargs)
+        return aiomqtt.Client(**client_kwargs)
 
     def __init__(
         self,
@@ -262,7 +262,7 @@ class WBDALIDriver(DALIDriver):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
         self.logger.debug(
-            "path=%s, reconnect_interval=%d, reconnect_limit=%d, dev_inst_map=%s",
+            "path=%s, reconnect_interval=%s, reconnect_limit=%s, dev_inst_map=%s",
             config.modbus_port_path,
             config.reconnect_interval,
             config.reconnect_limit,

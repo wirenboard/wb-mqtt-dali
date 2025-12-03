@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import sys
+from urllib.parse import urlparse
 
+import asyncio_mqtt as aiomqtt
 import jsonschema
 from dali.address import DeviceBroadcast
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
@@ -18,9 +20,34 @@ from wb.mqtt_dali.wbdali import (
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
+DEFAULT_BROKER_URL = "unix:///var/run/mosquitto/mosquitto.sock"
 
 EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
+
+
+def create_mqtt_client_factory(broker_url: str):
+    url = urlparse(broker_url)
+
+    if url.scheme == "unix":
+        hostname = url.path
+        port = 0
+    else:
+        hostname = url.hostname
+        port = url.port
+
+    auth = {}
+    if url.username:
+        auth["username"] = url.username
+    if url.password:
+        auth["password"] = url.password
+
+    return lambda: aiomqtt.Client(
+        hostname=hostname,
+        port=port,
+        transport="websockets" if url.scheme == "ws" else url.scheme,
+        **auth,
+    )
 
 
 async def main(argv):
@@ -45,7 +72,9 @@ async def main(argv):
         schema = json.load(schema_file)
         try:
             jsonschema.validate(
-                instance=config, schema=schema, format_checker=jsonschema.draft4_format_checker
+                instance=config,
+                schema=schema,
+                format_checker=jsonschema.draft4_format_checker,
             )
         except jsonschema.ValidationError as e:
             print(f"Configuration validation failed: {e.message}")
@@ -54,13 +83,15 @@ async def main(argv):
     if config["debug"]:
         logging.basicConfig(level=logging.DEBUG)
 
+    mqtt_client_factory = create_mqtt_client_factory(DEFAULT_BROKER_URL)
+
     # todo
     dev_inst_map = AsyncDeviceInstanceTypeMapper()
     cfg = WBDALIConfig(
         modbus_port_path="/dev/ttyRS485-1",
         device_name="wb-mdali_1",
     )
-    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map)
+    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map, mqtt_client_factory=mqtt_client_factory)
     await dev.connect()
     await dev.connected.wait()
     await asyncio.sleep(1)

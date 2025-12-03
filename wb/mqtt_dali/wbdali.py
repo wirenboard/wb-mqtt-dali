@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from itertools import groupby
 from operator import itemgetter
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import asyncio_mqtt as aiomqtt
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
@@ -45,11 +45,6 @@ ERR_STILL_SENDING = 0x8000
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
-    mqtt_host: str = "/var/run/mosquitto/mosquitto.sock"
-    mqtt_port: int = 0
-    mqtt_transport: str = "unix"
-    mqtt_username: Optional[str] = None
-    mqtt_password: Optional[str] = None
     device_name: str = "wb-mdali_1"
     channel: int = 1
     modbus_slave_id: int = 1
@@ -161,7 +156,7 @@ class WBDALIDriver(DALIDriver):
 
     async def _incoming_ff_task(self) -> None:
         self.logger.debug("Incoming FF task running...")
-        async with self._create_mqtt_client() as mqtt_client:
+        async with self.mqtt_client_factory() as mqtt_client:
             self.logger.debug("Connected to MQTT broker")
             async with mqtt_client.unfiltered_messages() as messages:
                 await mqtt_client.subscribe(
@@ -181,7 +176,7 @@ class WBDALIDriver(DALIDriver):
                     self.logger.debug("Received FF24: %s", cmd)
                     self.bus_traffic._invoke(cmd, None, False)  # pylint: disable=W0212
 
-        # Subscribe to reply topics
+    # Subscribe to reply topics
 
     async def _read_task(self) -> None:
         self.logger.debug("Read task running...")
@@ -239,28 +234,16 @@ class WBDALIDriver(DALIDriver):
 
                     resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
 
-    def _create_mqtt_client(self) -> aiomqtt.Client:
-        """Create and configure MQTT client."""
-        client_kwargs = {
-            "hostname": self.config.mqtt_host,
-            "port": self.config.mqtt_port,
-            "transport": self.config.mqtt_transport,
-        }
-
-        if self.config.mqtt_username:
-            client_kwargs["username"] = self.config.mqtt_username
-        if self.config.mqtt_password:
-            client_kwargs["password"] = self.config.mqtt_password
-
-        return aiomqtt.Client(**client_kwargs)
-
     def __init__(
         self,
         config: Optional[WBDALIConfig] = None,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
+        mqtt_client_factory: Optional[Callable[[], aiomqtt.Client]] = None,
     ):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
+        self.mqtt_client_factory = mqtt_client_factory
+
         self.logger.debug(
             "path=%s, reconnect_interval=%s, reconnect_limit=%s, dev_inst_map=%s",
             config.modbus_port_path,
@@ -320,7 +303,7 @@ class WBDALIDriver(DALIDriver):
         self.device_queue_size = 10
         self.next_pointer = 0
         self.next_pointer_lock = asyncio.Lock()
-        self.mqtt_client = self._create_mqtt_client()
+        self.mqtt_client = self.mqtt_client_factory()
         self.rpc_id_counter = 0
         self.cmd_counter = 0
         self.send_barrier = Barrier(

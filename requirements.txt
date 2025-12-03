@@ -1,4 +1,4 @@
-asyncio-mqtt==0.10.0
+asyncio-mqtt @ git+https://github.com/wirenboard/python-asyncio-mqtt@dev/v0.10.0
 jsonschema==3.2.0
 paho-mqtt==1.5.1
 python-dali==0.11

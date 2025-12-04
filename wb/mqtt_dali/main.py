@@ -7,7 +7,7 @@ import signal
 import sys
 from urllib.parse import urlparse
 
-import asyncio_mqtt
+import asyncio_mqtt as aiomqtt
 import jsonschema
 from dali.address import DeviceBroadcast
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
@@ -113,6 +113,32 @@ async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
         pass
 
 
+def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
+    urlparse_result = urlparse(broker_url)
+    if urlparse_result.scheme == "unix":
+        hostname = urlparse_result.path
+        port = 0
+    else:
+        if urlparse_result.hostname is None:
+            raise ValueError("No MQTT hostname specified")
+        if urlparse_result.port is None:
+            raise ValueError("No MQTT port specified")
+        hostname = urlparse_result.hostname
+        port = urlparse_result.port
+    auth = {}
+    if urlparse_result.username:
+        auth["username"] = urlparse_result.username
+    if urlparse_result.password:
+        auth["password"] = urlparse_result.password
+    client = aiomqtt.Client(
+        hostname=hostname,
+        port=port,
+        transport="websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
+        **auth,
+    )
+    return client
+
+
 def load_config(config_filepath: str) -> dict:
     schema_filepaths = [WB_SCHEMA_FILEPATH, DEV_SCHEMA_FILEPATH]
     schema = None
@@ -169,11 +195,7 @@ async def main(argv):
     logging.basicConfig(level=log_level)
     rpc_logger.setLevel(log_level)
 
-    urlparse_result = urlparse(args.broker_url)
-    if urlparse_result.scheme == "unix":
-        client = asyncio_mqtt.Client(hostname=urlparse_result.path, transport="unix")
-    else:
-        client = asyncio_mqtt.Client(hostname=urlparse_result.hostname, port=urlparse_result.port)
+    client = make_mqtt_client(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
     rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
@@ -199,7 +221,7 @@ async def main(argv):
                     await dispatcher_task
                     break
 
-        except asyncio_mqtt.MqttError as e:
+        except aiomqtt.MqttError as e:
             if is_first_connection:
                 is_first_connection = False
                 logging.error("%s. Reconnecting", str(e))

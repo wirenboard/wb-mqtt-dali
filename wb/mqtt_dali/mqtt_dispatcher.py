@@ -2,14 +2,14 @@ import asyncio
 import logging
 from typing import Awaitable, Callable, Dict, Set
 
-import asyncio_mqtt
+import asyncio_mqtt as aiomqtt
 import paho.mqtt.client as mqtt
 
 MessageCallback = Callable[[mqtt.MQTTMessage], Awaitable[None]]
 
 
 class MQTTDispatcher:
-    def __init__(self, client: asyncio_mqtt.Client):
+    def __init__(self, client: aiomqtt.Client):
         self.client = client
         self._subscriptions: Dict[str, Set[MessageCallback]] = {}
         self._running = False

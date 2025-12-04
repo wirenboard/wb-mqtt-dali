@@ -6,9 +6,10 @@ Standards-Version: 4.5.1
 Build-Depends: debhelper-compat (= 11),
                dh-python,
                python3-all,
-               python3-asyncio-mqtt (>= 0.10.0-wb100~~),
+               python3-asyncio-mqtt (>= 0.10.0-wb101~~),
                python3-dali,
                python3-jsonschema,
+               python3-mqttrpc,
                python3-pytest,
                python3-pytest-asyncio,
                python3-wb-common (>= 2.1.0~~),
@@ -19,9 +20,10 @@ Package: wb-mqtt-dali
 Architecture: all
 Depends: ${python3:Depends},
          ${misc:Depends},
-         python3-asyncio-mqtt (>= 0.10.0-wb100~~),
+         python3-asyncio-mqtt (>= 0.10.0-wb101~~),
          python3-dali,
          python3-jsonschema,
+         python3-mqttrpc,
          python3-usb,
          python3-wb-common (>= 2.1.0~~),
          python3-websockets

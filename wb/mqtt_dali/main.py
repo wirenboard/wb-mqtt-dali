@@ -28,14 +28,14 @@ EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
 
 
-async def dali():
+async def dali(mqtt_dispatcher: MQTTDispatcher):
     # todo
     dev_inst_map = AsyncDeviceInstanceTypeMapper()
     cfg = WBDALIConfig(
         modbus_port_path="/dev/ttyRS485-1",
         device_name="wb-mdali_1",
     )
-    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map)
+    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map, mqtt_dispatcher=mqtt_dispatcher)
     await dev.connect()
     await dev.connected.wait()
     await asyncio.sleep(1)

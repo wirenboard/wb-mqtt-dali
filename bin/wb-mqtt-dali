@@ -6,4 +6,7 @@ import sys
 
 from wb.mqtt_dali.main import main
 
-sys.exit(asyncio.run(main(sys.argv)))
+try:
+    sys.exit(asyncio.run(main(sys.argv)))
+except KeyboardInterrupt:
+    sys.exit(0)

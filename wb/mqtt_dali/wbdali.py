@@ -29,7 +29,7 @@ from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
-from wb.mqtt_dali.barrier import Barrier
+from .barrier import Barrier
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита

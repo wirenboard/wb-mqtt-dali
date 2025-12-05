@@ -28,9 +28,8 @@ from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
-from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-
 from .barrier import Barrier
+from .mqtt_dispatcher import MQTTDispatcher
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита
@@ -81,7 +80,7 @@ class WBDALIDriver(DALIDriver):
         )
 
         self.rpc_id_counter += 1
-        await self.mqtt_dispatcher.client.publish(
+        await self._mqtt_dispatcher.client.publish(
             "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response",
             json.dumps(
                 {
@@ -171,7 +170,7 @@ class WBDALIDriver(DALIDriver):
             self.bus_traffic._invoke(cmd, None, False)  # pylint: disable=W0212
 
         # Subscribe to FF24 topic
-        await self.mqtt_dispatcher.subscribe(
+        await self._mqtt_dispatcher.subscribe(
             f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
             handle_ff24_message,
         )
@@ -227,7 +226,7 @@ class WBDALIDriver(DALIDriver):
         # Subscribe to all reply topics
         for i in range(self.device_queue_size):
             topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
-            await self.mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
+            await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
 
         self.connected.set()
         self.logger.debug("Subscribed to all reply topics")
@@ -240,9 +239,9 @@ class WBDALIDriver(DALIDriver):
     ):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
-        self.mqtt_dispatcher = mqtt_dispatcher
+        self._mqtt_dispatcher = mqtt_dispatcher
 
-        if self.mqtt_dispatcher is None:
+        if self._mqtt_dispatcher is None:
             raise ValueError("mqtt_dispatcher is required")
 
         self.logger.debug(

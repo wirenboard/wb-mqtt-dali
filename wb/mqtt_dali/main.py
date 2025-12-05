@@ -59,7 +59,7 @@ async def wait_for_cancel():
     raise asyncio.CancelledError()
 
 
-async def rpc_handler(params: dict):
+async def rpc_handler(_params: dict):
     return [
         {
             "id": "1",

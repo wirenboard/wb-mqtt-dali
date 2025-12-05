@@ -123,9 +123,18 @@ class TestMQTTRPCServer:
     @pytest.mark.asyncio
     async def test_on_request_creates_task(self, rpc_server):
         mqtt_message = MagicMock()
-        with patch.object(asyncio, "create_task") as mock_create_task:
+        original_create_task = asyncio.create_task
+        created_tasks = []
+
+        def track_create_task(coro, **kwargs):
+            task = original_create_task(coro, **kwargs)
+            created_tasks.append(task)
+            return task
+
+        with patch.object(asyncio, "create_task", side_effect=track_create_task):
             await rpc_server._on_request(mqtt_message)
-            mock_create_task.assert_called_once()
+
+        assert len(created_tasks) == 1
 
     @pytest.mark.asyncio
     async def test_handle_request_success(self, rpc_server):

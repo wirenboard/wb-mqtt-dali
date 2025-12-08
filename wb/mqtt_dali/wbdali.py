@@ -83,8 +83,6 @@ class WBDALIDriver(DALIDriver):
 
         self.responses = {}
 
-        self._log = logging.getLogger()
-
         self._current_command_frame = None
         self._last_reply = None
         self._not_waiting_for_reply = asyncio.Event()

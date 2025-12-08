@@ -16,6 +16,7 @@ from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .commissioning import Commissioning
+from .fake_lunatone_iot import run_websocket
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import MQTTRPCServer
 from .mqtt_rpc_server import logger as rpc_logger
@@ -111,6 +112,15 @@ async def rpc(rpc_server: MQTTRPCServer):
 async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
     try:
         await mqtt_dispatcher.run()
+    except asyncio.CancelledError:
+        # Allow graceful shutdown on cancellation; no cleanup needed here.
+        pass
+
+
+async def websocket(driver, host: str, port: int):
+    try:
+        async with asyncio.TaskGroup() as tg:
+            await run_websocket(driver, tg, host, port)
     except asyncio.CancelledError:
         # Allow graceful shutdown on cancellation; no cleanup needed here.
         pass

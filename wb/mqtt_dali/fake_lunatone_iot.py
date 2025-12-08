@@ -20,9 +20,7 @@ import json
 import logging
 from enum import Enum
 
-import dali.device
 import dali.frame
-import dali.gear
 import websockets.exceptions
 from websockets.server import serve
 

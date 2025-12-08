@@ -269,6 +269,9 @@ def process_request(path, _request_headers):
 
 async def run_websocket(dev, tg, host, port):
     async with serve(
-        lambda websocket: emulate(tg, websocket, dev), host, port, process_request=process_request
+        lambda websocket, path: emulate(tg, websocket, dev),
+        host,
+        port,
+        process_request=process_request,
     ):
         await asyncio.Future()

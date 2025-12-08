@@ -81,3 +81,8 @@ class MQTTDispatcher:
 
     def get_subscribed_topics(self) -> Set[str]:
         return set(self._subscriptions.keys())
+
+    @property
+    def client_id(self) -> str:
+        client_id = self.client._client._client_id  # pylint: disable=W0212
+        return client_id.decode() if isinstance(client_id, bytes) else client_id

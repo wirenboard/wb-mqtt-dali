@@ -3,7 +3,9 @@ import asyncio
 import json
 import logging
 import os
+import random
 import signal
+import string
 import sys
 from urllib.parse import urlparse
 
@@ -131,7 +133,9 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         auth["username"] = urlparse_result.username
     if urlparse_result.password:
         auth["password"] = urlparse_result.password
+    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
     client = aiomqtt.Client(
+        client_id=f"wb-mqtt-dali-{client_id_suffix}",
         hostname=hostname,
         port=port,
         transport="websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,

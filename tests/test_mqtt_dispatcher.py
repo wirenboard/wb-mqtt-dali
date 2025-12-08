@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,6 +19,8 @@ class MockClient:
         self.subscribe = AsyncMock()
         self.unsubscribe = AsyncMock()
         self._message_generator = None
+        self._client = MagicMock()
+        self._client._client_id = "test-client-id"
 
     def set_message_generator(self, generator):
         self._message_generator = generator
@@ -222,3 +224,7 @@ async def test_concurrent_subscribe_unsubscribe(dispatcher):
     await asyncio.gather(*[dispatcher.unsubscribe(f"topic{i}") for i in range(10)])
 
     assert len(dispatcher._subscriptions) == 0  # pylint: disable=W0212
+
+
+def test_client_id(dispatcher):
+    assert dispatcher.client_id == "test-client-id"

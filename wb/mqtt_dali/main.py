@@ -3,7 +3,9 @@ import asyncio
 import json
 import logging
 import os
+import random
 import signal
+import string
 import sys
 from urllib.parse import urlparse
 
@@ -28,22 +30,23 @@ EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
 
 
-async def dali():
+async def dali(mqtt_dispatcher: MQTTDispatcher):
     # todo
     dev_inst_map = AsyncDeviceInstanceTypeMapper()
     cfg = WBDALIConfig(
-        modbus_port_path="/dev/ttyRS485-1",
-        device_name="wb-mdali_1",
+        modbus_port_path="/dev/ttyRS485-2",
+        device_name="wb-mdali_2",
+        modbus_slave_id=2,
     )
-    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map)
-    await dev.connect()
-    await dev.connected.wait()
+    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map, mqtt_dispatcher=mqtt_dispatcher)
+    await dev.initialize()
     await asyncio.sleep(1)
     await dev.send(StartQuiescentMode(DeviceBroadcast()))
-    obj = Commissioning(dev, None, load=False)
-    await obj.smart_extend()
-    await dev.send(StopQuiescentMode(DeviceBroadcast()))
-    dev.disconnect()
+    try:
+        obj = Commissioning(dev, None, load=False)
+        await obj.smart_extend()
+    finally:
+        await dev.send(StopQuiescentMode(DeviceBroadcast()))
 
 
 async def wait_for_cancel():
@@ -59,7 +62,7 @@ async def wait_for_cancel():
     raise asyncio.CancelledError()
 
 
-async def rpc_handler(params: dict):
+async def rpc_handler(_params: dict):
     return [
         {
             "id": "1",
@@ -130,7 +133,9 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         auth["username"] = urlparse_result.username
     if urlparse_result.password:
         auth["password"] = urlparse_result.password
+    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
     client = aiomqtt.Client(
+        client_id=f"wb-mqtt-dali-{client_id_suffix}",
         hostname=hostname,
         port=port,
         transport="websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,

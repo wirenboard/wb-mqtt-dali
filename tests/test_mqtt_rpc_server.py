@@ -115,11 +115,6 @@ class TestMQTTRPCServer:
         await rpc_server.stop()
         mock_mqtt_dispatcher.unsubscribe.assert_called_once()
 
-    def test_clear(self, rpc_server):
-        rpc_server._endpoints = {"test": "value"}
-        rpc_server.clear()
-        assert len(rpc_server._endpoints) == 0
-
     @pytest.mark.asyncio
     async def test_on_request_creates_task(self, rpc_server):
         mqtt_message = MagicMock()

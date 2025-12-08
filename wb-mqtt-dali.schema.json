@@ -7,41 +7,66 @@
         "service": "wb-mqtt-dali",
         "editor": "dali"
     },
+    "definitions": {
+        "device": {
+            "type": "object",
+            "properties": {
+                "short": {
+                    "type": "integer",
+                    "title": "Short Address"
+                },
+                "random": {
+                    "type": "integer",
+                    "title": "Random Address"
+                }
+            },
+            "required": ["short", "random"]
+        },
+        "bus": {
+            "type": "object",
+            "properties": {
+                "enable_lunaton": {
+                    "type": "boolean"
+                },
+                "devices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/device"
+                    }
+                }
+            },
+            "required": ["devices"]
+        },
+        "gateway": {
+            "type": "object",
+            "properties": {
+                "device_id": {
+                    "type": "string"
+                },
+                "buses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/bus"
+                    },
+                    "maxItems": 3
+                }
+            },
+            "required": ["device_id", "buses"]
+        }
+    },
     "properties": {
         "debug": {
-            "type": "boolean",
-            "title": "Enable debug logging",
-            "default": false,
-            "format": "checkbox",
-            "propertyOrder": 1,
-            "options": {
-                "wb": {
-                    "show_editor": true
-                }
-            }
+            "type": "boolean"
         },
-        "entries": {
+        "gateways": {
             "type": "array",
-            "title": "Device Entries",
             "items": {
-                "type": "object",
-                "properties": {
-                    "short": {
-                        "type": "integer",
-                        "title": "Short Address"
-                    },
-                    "random": {
-                        "type": "integer",
-                        "title": "Random Address"
-                    }
-                },
-                "required": ["short", "random"]
+                "$ref": "#/definitions/gateway"
             }
         }
     },
     "translations": {
         "ru": {
-            "Enable debug logging": "Включить отладочные сообщения",
             "DALI gateway configuration": "Настройки шлюза DALI"
         }
     }

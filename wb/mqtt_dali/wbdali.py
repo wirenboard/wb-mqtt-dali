@@ -22,7 +22,6 @@ from dali.device.general import (
     StopQuiescentMode,
 )
 from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
-from dali.driver.base import DALIDriver
 from dali.driver.hid import _callback
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
@@ -58,45 +57,23 @@ class WBDALIConfig:
     barrier_timeout: float = 0.01
 
 
-class WBDALIDriver(DALIDriver):
+class WBDALIDriver:
     """``DALIDriver`` implementation for Hasseb DALI USB device."""
 
-    device_found = None
     logger = logging.getLogger("WBDALIDriver")
-    sn = 0
-    send_message = None
-    _pending = None
-    _response_message = None
 
     def __init__(
         self,
-        config: Optional[WBDALIConfig] = None,
+        config: WBDALIConfig,
+        mqtt_dispatcher: MQTTDispatcher,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
-        mqtt_dispatcher: Optional[MQTTDispatcher] = None,
     ):
-        self.config = config or WBDALIConfig()
-        self.dev_inst_map = dev_inst_map
-        self._mqtt_dispatcher = mqtt_dispatcher
-        client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-        self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
-
-        if self._mqtt_dispatcher is None:
-            raise ValueError("mqtt_dispatcher is required")
-
         self.logger.debug("path=%s, dev_inst_map=%s", config.modbus_port_path, dev_inst_map)
 
+        self.config = config
+        self.dev_inst_map = dev_inst_map
+
         self.responses = {}
-
-        self._current_command_frame = None
-        self._last_reply = None
-        self._not_waiting_for_reply = asyncio.Event()
-        self._not_waiting_for_reply.set()
-
-        # Should the send() method raise an exception if there is a
-        # problem communicating with the underlying device, or should
-        # it catch the exception and keep trying?  Set this attribute
-        # as required.
-        self.exceptions_on_send = True
 
         # Acquire this lock to perform a series of commands as a
         # transaction.  While you hold the lock, you must call send()
@@ -110,12 +87,6 @@ class WBDALIDriver(DALIDriver):
         # if the command was not sent twice within the required time limit
         self.bus_traffic = _callback(self)
 
-        # firmware_version and serial may be populated on some
-        # devices, and will read as None on devices that don't support
-        # reading them.
-        self.firmware_version = None
-        self.serial = None
-
         self.device_queue_size = 10
         self.next_pointer = 0
         self.next_pointer_lock = asyncio.Lock()
@@ -125,6 +96,16 @@ class WBDALIDriver(DALIDriver):
             self.config.barrier_max_concurrent_tasks,
             default_timeout=self.config.barrier_timeout,
         )
+
+        self._mqtt_dispatcher = mqtt_dispatcher
+        self._not_waiting_for_reply = asyncio.Event()
+        self._not_waiting_for_reply.set()
+
+        client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
+        self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
+
+        if self._mqtt_dispatcher is None:
+            raise ValueError("mqtt_dispatcher is required")
 
     async def initialize(self) -> None:
         self.logger.debug("Initializing WBDALIDriver...")
@@ -145,6 +126,21 @@ class WBDALIDriver(DALIDriver):
         )
 
         self.logger.debug("WBDALIDriver initialized successfully")
+
+    async def deinitialize(self) -> None:
+        self.logger.debug("Deinitializing WBDALIDriver...")
+        # Unsubscribe from all reply topics
+        for i in range(self.device_queue_size):
+            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            if self._mqtt_dispatcher.is_running:
+                await self._mqtt_dispatcher.unsubscribe(topic)
+
+        # Unsubscribe from FF24 topic
+        if self._mqtt_dispatcher.is_running:
+            await self._mqtt_dispatcher.unsubscribe(
+                f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+            )
+        self.logger.debug("WBDALIDriver deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
         """Send a Modbus RPC command without expecting a response."""
@@ -334,16 +330,9 @@ class WBDALIDriver(DALIDriver):
             finally:
                 seq.close()
 
-    def wait_for_response(self) -> None:
-        self.logger.debug("wait_for_response()")
-
-    def construct(self, command) -> None:
-        self.logger.debug("construct(command=%s)", command)
-
-    def extract(self, data) -> None:
-        self.logger.debug("extract(data=%s)", data)
-
-    async def _add_cmd_to_send_buffer(self, pointer: int, reg_value: int, timeout: int = None) -> None:
+    async def _add_cmd_to_send_buffer(
+        self, pointer: int, reg_value: int, timeout: Optional[int] = None
+    ) -> None:
         """Use barrier primitive to write multiple commands via single Modbus request"""
         self.logger.debug("waiting at the barrier, pointer=%d", pointer)
         payload = (pointer, reg_value)
@@ -427,18 +416,6 @@ class WBDALIDriver(DALIDriver):
 
         self.bus_traffic._invoke(cmd, response, False)  # pylint: disable=W0212
         return response
-
-    def receive(self) -> None:
-        self.logger.debug("receive()")
-
-    def readFirmwareVersion(self) -> None:  # pylint: disable=C0103
-        self.logger.debug("readFirmwareVersion()")
-
-    def enableSniffing(self) -> None:  # pylint: disable=C0103
-        self.logger.debug("enableSniffing()")
-
-    def disableSniffing(self):  # pylint: disable=C0103
-        self.logger.debug("disableSniffing()")
 
 
 class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):

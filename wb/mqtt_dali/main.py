@@ -17,9 +17,9 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .commissioning import Commissioning
 from .fake_lunatone_iot import run_websocket
+from .gateway import Gateway
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import MQTTRPCServer
-from .mqtt_rpc_server import logger as rpc_logger
 from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
@@ -63,52 +63,6 @@ async def wait_for_cancel():
     raise asyncio.CancelledError()
 
 
-async def rpc_handler(_params: dict):
-    return [
-        {
-            "id": "1",
-            "name": "WB-MDALI3",
-            "buses": [
-                {
-                    "id": "11",
-                    "name": "Bus 1",
-                    "groups": [
-                        {"id": "group1", "name": 1},
-                        {"id": "group3", "name": 3},
-                        {"id": "group10", "name": 10},
-                    ],
-                    "devices": [
-                        {"id": "111", "name": "MART-DIN#22", "groups": ["group1", "group3"]},
-                        {"id": "222", "name": "Led-BR", "groups": []},
-                        {"id": "333", "name": "SMART_LAMP 12", "groups": ["group3", "group10"]},
-                    ],
-                },
-                {
-                    "id": "22",
-                    "name": "Bus 2",
-                    "groups": [],
-                    "devices": [
-                        {"id": "444", "name": "Crystal Lamp", "groups": []},
-                    ],
-                },
-            ],
-        }
-    ]
-
-
-async def rpc(rpc_server: MQTTRPCServer):
-    try:
-        await rpc_server.add_endpoint(
-            "Editor",
-            "GetList",
-            rpc_handler,
-        )
-        await rpc_server.start()
-    except asyncio.CancelledError:
-        # Allow graceful shutdown on cancellation; no cleanup needed here.
-        pass
-
-
 async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
     try:
         await mqtt_dispatcher.run()
@@ -149,6 +103,7 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         hostname=hostname,
         port=port,
         transport="websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
+        logger=logging.getLogger("mqtt_client"),
         **auth,
     )
     return client
@@ -208,39 +163,39 @@ async def main(argv):
 
     log_level = logging.DEBUG if config.get("debug") else args.log_level
     logging.basicConfig(level=log_level)
-    rpc_logger.setLevel(log_level)
+    MQTTRPCServer.logger.setLevel(log_level)
+    WBDALIDriver.logger.setLevel(log_level)
+    logging.getLogger("mqtt_client").setLevel(log_level)
 
     client = make_mqtt_client(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
-    rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
+    gateway = Gateway(config, mqtt_dispatcher)
     is_first_connection = True
     while True:
         try:
             async with client:
                 is_first_connection = True
                 dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-                rpc_task = asyncio.create_task(rpc(rpc_server))
+                gateway_task = asyncio.create_task(gateway.start())
                 task_group = asyncio.gather(
                     dispatcher_task,
-                    rpc_task,
+                    gateway_task,
                     wait_for_cancel(),
                 )
                 try:
                     await task_group
                 except asyncio.CancelledError:
-                    rpc_task.cancel()
-                    await rpc_task
-                    await rpc_server.stop()
+                    await gateway.stop()
                     dispatcher_task.cancel()
                     await dispatcher_task
                     break
 
         except aiomqtt.MqttError as e:
+            await gateway.stop()
             if is_first_connection:
                 is_first_connection = False
                 logging.error("%s. Reconnecting", str(e))
-            rpc_server.clear()
             await asyncio.sleep(1)
 
     return EXIT_SUCCESS

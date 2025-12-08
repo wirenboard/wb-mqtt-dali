@@ -119,8 +119,8 @@ async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
 
 async def websocket(driver, host: str, port: int):
     try:
-        async with asyncio.TaskGroup() as tg:
-            await run_websocket(driver, tg, host, port)
+        tg = asyncio
+        await run_websocket(driver, tg, host, port)
     except asyncio.CancelledError:
         # Allow graceful shutdown on cancellation; no cleanup needed here.
         pass

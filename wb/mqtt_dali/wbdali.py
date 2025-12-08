@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
+import string
 from dataclasses import dataclass
 from itertools import groupby
 from operator import itemgetter
@@ -75,7 +77,8 @@ class WBDALIDriver(DALIDriver):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
         self._mqtt_dispatcher = mqtt_dispatcher
-        self._rpc_client_id = mqtt_dispatcher.client_id.replace("/", "_")
+        client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
+        self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
 
         if self._mqtt_dispatcher is None:
             raise ValueError("mqtt_dispatcher is required")

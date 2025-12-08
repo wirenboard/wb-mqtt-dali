@@ -84,4 +84,5 @@ class MQTTDispatcher:
 
     @property
     def client_id(self) -> str:
-        return self.client._client._client_id.decode()  # pylint: disable=W0212
+        client_id = self.client._client._client_id  # pylint: disable=W0212
+        return client_id.decode() if isinstance(client_id, bytes) else client_id

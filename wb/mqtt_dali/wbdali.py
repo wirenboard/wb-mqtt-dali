@@ -66,6 +66,84 @@ class WBDALIDriver(DALIDriver):
     _pending = None
     _response_message = None
 
+    def __init__(
+        self,
+        config: Optional[WBDALIConfig] = None,
+        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
+        mqtt_dispatcher: Optional[MQTTDispatcher] = None,
+    ):
+        self.config = config or WBDALIConfig()
+        self.dev_inst_map = dev_inst_map
+        self._mqtt_dispatcher = mqtt_dispatcher
+
+        if self._mqtt_dispatcher is None:
+            raise ValueError("mqtt_dispatcher is required")
+
+        self.logger.debug("path=%s, dev_inst_map=%s", config.modbus_port_path, dev_inst_map)
+
+        self.responses = {}
+
+        self._log = logging.getLogger()
+
+        self._current_command_frame = None
+        self._last_reply = None
+        self._not_waiting_for_reply = asyncio.Event()
+        self._not_waiting_for_reply.set()
+
+        # Should the send() method raise an exception if there is a
+        # problem communicating with the underlying device, or should
+        # it catch the exception and keep trying?  Set this attribute
+        # as required.
+        self.exceptions_on_send = True
+
+        # Acquire this lock to perform a series of commands as a
+        # transaction.  While you hold the lock, you must call send()
+        # with keyword argument in_transaction=True
+        self.transaction_lock = asyncio.Lock()
+
+        # Register to be called back with bus traffic; three arguments are passed:
+        # command, response, config_command_error
+
+        # config_command_error is true if the config command has a response, or
+        # if the command was not sent twice within the required time limit
+        self.bus_traffic = _callback(self)
+
+        # firmware_version and serial may be populated on some
+        # devices, and will read as None on devices that don't support
+        # reading them.
+        self.firmware_version = None
+        self.serial = None
+
+        self.device_queue_size = 10
+        self.next_pointer = 0
+        self.next_pointer_lock = asyncio.Lock()
+        self.rpc_id_counter = 0
+        self.cmd_counter = 0
+        self.send_barrier = Barrier(
+            self.config.barrier_max_concurrent_tasks,
+            default_timeout=self.config.barrier_timeout,
+        )
+
+    async def initialize(self) -> None:
+        self.logger.debug("Initializing WBDALIDriver...")
+
+        await self.reset_queue()
+
+        # Subscribe to all reply topics
+        self.logger.debug("Subscribing to reply topics...")
+        for i in range(self.device_queue_size):
+            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
+
+        # Subscribe to FF24 topic
+        self.logger.debug("Subscribing to FF24 topic...")
+        await self._mqtt_dispatcher.subscribe(
+            f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+            self._handle_ff24_message,
+        )
+
+        self.logger.debug("WBDALIDriver initialized successfully")
+
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
         """Send a Modbus RPC command without expecting a response."""
         self.logger.debug(
@@ -207,84 +285,6 @@ class WBDALIDriver(DALIDriver):
             return
 
         resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
-
-    def __init__(
-        self,
-        config: Optional[WBDALIConfig] = None,
-        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
-        mqtt_dispatcher: Optional[MQTTDispatcher] = None,
-    ):
-        self.config = config or WBDALIConfig()
-        self.dev_inst_map = dev_inst_map
-        self._mqtt_dispatcher = mqtt_dispatcher
-
-        if self._mqtt_dispatcher is None:
-            raise ValueError("mqtt_dispatcher is required")
-
-        self.logger.debug("path=%s, dev_inst_map=%s", config.modbus_port_path, dev_inst_map)
-
-        self.responses = {}
-
-        self._log = logging.getLogger()
-
-        self._current_command_frame = None
-        self._last_reply = None
-        self._not_waiting_for_reply = asyncio.Event()
-        self._not_waiting_for_reply.set()
-
-        # Should the send() method raise an exception if there is a
-        # problem communicating with the underlying device, or should
-        # it catch the exception and keep trying?  Set this attribute
-        # as required.
-        self.exceptions_on_send = True
-
-        # Acquire this lock to perform a series of commands as a
-        # transaction.  While you hold the lock, you must call send()
-        # with keyword argument in_transaction=True
-        self.transaction_lock = asyncio.Lock()
-
-        # Register to be called back with bus traffic; three arguments are passed:
-        # command, response, config_command_error
-
-        # config_command_error is true if the config command has a response, or
-        # if the command was not sent twice within the required time limit
-        self.bus_traffic = _callback(self)
-
-        # firmware_version and serial may be populated on some
-        # devices, and will read as None on devices that don't support
-        # reading them.
-        self.firmware_version = None
-        self.serial = None
-
-        self.device_queue_size = 10
-        self.next_pointer = 0
-        self.next_pointer_lock = asyncio.Lock()
-        self.rpc_id_counter = 0
-        self.cmd_counter = 0
-        self.send_barrier = Barrier(
-            self.config.barrier_max_concurrent_tasks,
-            default_timeout=self.config.barrier_timeout,
-        )
-
-    async def initialize(self) -> None:
-        self.logger.debug("Initializing WBDALIDriver...")
-
-        await self.reset_queue()
-
-        # Subscribe to all reply topics
-        self.logger.debug("Subscribing to reply topics...")
-        for i in range(self.device_queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
-            await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
-
-        # Subscribe to FF24 topic
-        self.logger.debug("Subscribing to FF24 topic...")
-        await self._mqtt_dispatcher.subscribe(
-            f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
-            self._handle_ff24_message,
-        )
-
-        self.logger.debug("WBDALIDriver initialized successfully")
 
     async def run_sequence(
         self,

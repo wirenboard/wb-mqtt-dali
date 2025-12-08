@@ -17,8 +17,8 @@ from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 class MockMqttClient:
     def __init__(self, *args, **kwargs):
         self.publish = AsyncMock()
-        self._connected = asyncio.Future()
-        self._connected.set_result(None)
+        self._client = MagicMock()
+        self._client._client_id = "test-wbdali-client"
 
     async def __aenter__(self):
         return self
@@ -175,7 +175,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         call_args = self.mock_mqtt_client.publish.call_args
         topic, payload = call_args[0]
-        self.assertEqual(topic, "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response")
+        self.assertEqual(topic, "/rpc/v1/wb-mqtt-serial/port/Load/test-wbdali-client")
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["id"], 1)
         self.assertEqual(payload_data["params"]["slave_id"], driver.config.modbus_slave_id)
@@ -245,7 +245,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         call_args = self.mock_mqtt_client.publish.call_args
         topic, payload = call_args[0]
 
-        expected_topic = "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response"
+        expected_topic = "/rpc/v1/wb-mqtt-serial/port/Load/test-wbdali-client"
         self.assertEqual(topic, expected_topic)
 
         payload_data = json.loads(payload)

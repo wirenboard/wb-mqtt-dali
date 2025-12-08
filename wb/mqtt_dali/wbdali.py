@@ -75,6 +75,7 @@ class WBDALIDriver(DALIDriver):
         self.config = config or WBDALIConfig()
         self.dev_inst_map = dev_inst_map
         self._mqtt_dispatcher = mqtt_dispatcher
+        self._rpc_client_id = mqtt_dispatcher.client_id.replace("/", "_")
 
         if self._mqtt_dispatcher is None:
             raise ValueError("mqtt_dispatcher is required")
@@ -154,7 +155,7 @@ class WBDALIDriver(DALIDriver):
 
         self.rpc_id_counter += 1
         await self._mqtt_dispatcher.client.publish(
-            "/rpc/v1/wb-mqtt-serial/port/Load/dali-no-response",
+            f"/rpc/v1/wb-mqtt-serial/port/Load/{self._rpc_client_id}",
             json.dumps(
                 {
                     "params": {

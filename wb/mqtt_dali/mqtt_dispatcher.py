@@ -84,4 +84,4 @@ class MQTTDispatcher:
 
     @property
     def client_id(self) -> str:
-        return self.client._client._client_id  # pylint: disable=W0212
+        return self.client._client._client_id.decode()  # pylint: disable=W0212

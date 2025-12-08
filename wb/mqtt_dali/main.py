@@ -34,16 +34,15 @@ async def dali(mqtt_dispatcher: MQTTDispatcher):
     cfg = WBDALIConfig(
         modbus_port_path="/dev/ttyRS485-1",
         device_name="wb-mdali_1",
+        modbus_slave_id=1,
     )
     dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map, mqtt_dispatcher=mqtt_dispatcher)
-    await dev.connect()
-    await dev.connected.wait()
+    await dev.initialize()
     await asyncio.sleep(1)
     await dev.send(StartQuiescentMode(DeviceBroadcast()))
     obj = Commissioning(dev, None, load=False)
     await obj.smart_extend()
     await dev.send(StopQuiescentMode(DeviceBroadcast()))
-    dev.disconnect()
 
 
 async def wait_for_cancel():

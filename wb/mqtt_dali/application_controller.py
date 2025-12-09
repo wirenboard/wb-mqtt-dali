@@ -38,7 +38,7 @@ class ApplicationController:
             device_name=self.uid,
             modbus_slave_id=2,
         )
-        self.dev = WBDALIDriver(cfg, dev_inst_map=self.dev_inst_map, mqtt_dispatcher=self.mqtt_dispatcher)
+        self.dev = WBDALIDriver(cfg, mqtt_dispatcher=self.mqtt_dispatcher, dev_inst_map=self.dev_inst_map)
 
     async def start(self) -> None:
         await self.dev.initialize()

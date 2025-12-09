@@ -58,8 +58,6 @@ class WBDALIConfig:
 
 
 class WBDALIDriver:
-    """``DALIDriver`` implementation for Hasseb DALI USB device."""
-
     logger = logging.getLogger("WBDALIDriver")
 
     def __init__(
@@ -103,9 +101,6 @@ class WBDALIDriver:
 
         client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
         self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
-
-        if self._mqtt_dispatcher is None:
-            raise ValueError("mqtt_dispatcher is required")
 
     async def initialize(self) -> None:
         self.logger.debug("Initializing WBDALIDriver...")

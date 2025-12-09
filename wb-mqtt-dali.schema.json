@@ -25,9 +25,6 @@
         "bus": {
             "type": "object",
             "properties": {
-                "enable_lunaton": {
-                    "type": "boolean"
-                },
                 "devices": {
                     "type": "array",
                     "items": {

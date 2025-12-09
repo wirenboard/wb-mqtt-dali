@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 
 from .application_controller import ApplicationController, DaliDevice, DaliDeviceAddress
@@ -29,7 +30,6 @@ def bus_from_json(
     return ApplicationController(
         uid=uid,
         bus_name=f"Bus {bus_index}",
-        enable_lunaton=data.get("enable_lunaton", False),
         devices=devices,
         mqtt_dispatcher=mqtt_dispatcher,
     )
@@ -60,15 +60,23 @@ class Gateway:
             "GetList",
             self.get_list_rpc_handler,
         )
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                await bus.start()
+        res = await asyncio.gather(
+            *[bus.start() for gw in self.wb_dali_gateways for bus in gw.buses],
+            return_exceptions=True,
+        )
+        for r in res:
+            if isinstance(r, Exception):
+                raise r
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                await bus.stop()
+        res = await asyncio.gather(
+            *[bus.stop() for gw in self.wb_dali_gateways for bus in gw.buses],
+            return_exceptions=True,
+        )
+        for r in res:
+            if isinstance(r, Exception):
+                raise r
 
     async def get_list_rpc_handler(self, params: dict):
         return list(
@@ -81,7 +89,6 @@ class Gateway:
                             lambda bus: {
                                 "id": bus.uid,
                                 "name": bus.bus_name,
-                                "enable_lunaton": bus.enable_lunaton,
                                 "devices": list(
                                     map(
                                         lambda dev: {

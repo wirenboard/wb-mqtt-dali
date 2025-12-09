@@ -23,13 +23,11 @@ class ApplicationController:
         self,
         uid: str,
         bus_name: str,
-        enable_lunaton: bool,
         devices: list[DaliDevice],
         mqtt_dispatcher: MQTTDispatcher,
     ) -> None:
         self.uid = uid
         self.bus_name = bus_name
-        self.enable_lunaton = enable_lunaton
         self.devices = devices
         self.dev_inst_map = AsyncDeviceInstanceTypeMapper()
         self.mqtt_dispatcher = mqtt_dispatcher

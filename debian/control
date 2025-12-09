@@ -24,7 +24,6 @@ Depends: ${python3:Depends},
          python3-dali,
          python3-jsonschema,
          python3-mqttrpc,
-         python3-usb,
          python3-wb-common (>= 2.1.0~~),
          python3-websockets
 Description: MQTT DALI bridge for Wiren Board

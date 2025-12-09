@@ -15,8 +15,6 @@ from .mqtt_dispatcher import MQTTDispatcher
 
 RpcHandlerFunction = Callable[[dict], Awaitable[Union[dict, list, str, int, float, bool, None]]]
 
-logger = logging.getLogger("MQTTRPCServer")
-
 
 def get_topic_path(driver: str, service: str, method: str) -> str:
     return f"/rpc/v1/{driver}/{service}/{method}"
@@ -27,6 +25,9 @@ def get_request_topic_path(driver: str) -> str:
 
 
 class MQTTRPCServer:
+
+    logger = logging.getLogger("MQTTRPCServer")
+
     def __init__(self, driver_name: str, mqtt_dispatcher: MQTTDispatcher) -> None:
         self.driver_name = driver_name
 
@@ -34,44 +35,37 @@ class MQTTRPCServer:
         self._mqtt_dispatcher = mqtt_dispatcher
 
     async def start(self) -> None:
-        logger.debug("Starting MQTT RPC Server for driver: %s", self.driver_name)
+        self.logger.debug("Starting MQTT RPC Server for driver: %s", self.driver_name)
         await self._mqtt_dispatcher.subscribe(get_request_topic_path(self.driver_name), self._on_request)
 
     async def add_endpoint(self, service: str, method: str, callback: RpcHandlerFunction) -> None:
-        logger.debug("Add RPC: %s/%s", service, method)
+        self.logger.debug("Add RPC: %s/%s", service, method)
         topic_str = get_topic_path(self.driver_name, service, method)
         await self._mqtt_dispatcher.client.publish(topic_str, "1", retain=True, qos=1)
         self._endpoints[topic_str] = callback
 
     async def remove_endpoint(self, service: str, method: str) -> None:
-        logger.debug("Remove RPC: %s/%s", service, method)
+        self.logger.debug("Remove RPC: %s/%s", service, method)
         topic_str = get_topic_path(self.driver_name, service, method)
         try:
-            await self._mqtt_dispatcher.client.publish(topic_str, payload=None, retain=True, qos=1)
+            if self._mqtt_dispatcher.is_running:
+                await self._mqtt_dispatcher.client.publish(topic_str, payload=None, retain=True, qos=1)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to delete RPC topic %s: %s", topic_str, e)
+            self.logger.error("Failed to delete RPC topic %s: %s", topic_str, e)
         finally:
             self._endpoints.pop(topic_str, None)
 
     async def stop(self) -> None:
-        logger.debug("Clearing all endpoints")
+        self.logger.debug("Clearing all endpoints")
         items = list(self._endpoints.items())
         for topic_str, _ in items:
             service, method = topic_str.split("/")[-2:]
             await self.remove_endpoint(service, method)
-        try:
-            await self._mqtt_dispatcher.unsubscribe(get_request_topic_path(self.driver_name))
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to unsubscribe from RPC requests: %s", e)
-
-    def clear(self) -> None:
-        """
-        Clears the internal endpoint registry without performing any MQTT topic cleanup.
-        Use this method only if you want to reset the internal state without
-        affecting MQTT subscriptions or published topics.
-        For full cleanup including MQTT operations, use the `stop()` method instead.
-        """
-        self._endpoints.clear()
+        if self._mqtt_dispatcher.is_running:
+            try:
+                await self._mqtt_dispatcher.unsubscribe(get_request_topic_path(self.driver_name))
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                self.logger.error("Failed to unsubscribe from RPC requests: %s", e)
 
     async def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
         asyncio.create_task(self._process_callback(mqtt_message))
@@ -80,23 +74,23 @@ class MQTTRPCServer:
         try:
             request = MQTTRPC10Request.from_json(mqtt_message.payload.decode())
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Invalid JSON-RPC request: %s", e)
+            self.logger.error("Invalid JSON-RPC request: %s", e)
             return MQTTRPC10Response(error=JSONRPCInvalidRequest()._data)  # pylint: disable=protected-access
         try:
             topic_base, _ = mqtt_message.topic.rsplit("/", 1)
             handler = self._endpoints.get(topic_base)
             if handler is None:
-                logger.error("No RPC endpoint for topic: %s", mqtt_message.topic)
+                self.logger.error("No RPC endpoint for topic: %s", mqtt_message.topic)
                 return MQTTRPC10Response(
                     error=JSONRPCMethodNotFound()._data  # pylint: disable=protected-access
                 )
             result = await handler(request.params)
             return MQTTRPC10Response(_id=request._id, result=result)  # pylint: disable=protected-access
         except JSONRPCDispatchException as e:
-            logger.error("Error processing RPC request: %s", e)
+            self.logger.error("Error processing RPC request: %s", e)
             return MQTTRPC10Response(_id=request._id, error=e.error._data)  # pylint: disable=protected-access
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Error processing RPC request: %s", e)
+            self.logger.error("Error processing RPC request: %s", e)
             return MQTTRPC10Response(
                 _id=request._id,  # pylint: disable=protected-access
                 error=JSONRPCServerError(data=str(e))._data,  # pylint: disable=protected-access
@@ -109,4 +103,4 @@ class MQTTRPCServer:
                 mqtt_message.topic + "/reply", response.json, qos=2, retain=False
             )
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to publish RPC response: %s", e)
+            self.logger.error("Failed to publish RPC response: %s", e)

@@ -14,10 +14,10 @@ class WbDaliGateway:
 
 
 def bus_from_json(
-    gateway_uid: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
+    gateway_mqtt_device_id: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
 ) -> ApplicationController:
     devices = []
-    uid = f"{gateway_uid}_bus{bus_index}"
+    uid = f"{gateway_mqtt_device_id}_bus{bus_index}"
     for dev_conf in data.get("devices", []):
         device = DaliDevice(
             uid=f'{uid}_{dev_conf["short"]}',
@@ -29,8 +29,8 @@ def bus_from_json(
         )
         devices.append(device)
     return ApplicationController(
-        uid=gateway_uid,
-        bus_name=f"Bus {bus_index}",
+        mqtt_device_id=gateway_mqtt_device_id,
+        bus_index=bus_index,
         devices=devices,
         mqtt_dispatcher=mqtt_dispatcher,
     )

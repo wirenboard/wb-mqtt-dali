@@ -13,19 +13,19 @@ from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
 class ApplicationController:
     def __init__(
         self,
-        uid: str,
-        bus_name: str,
+        mqtt_device_id: str,
+        bus_index: int,
         devices: list[DaliDevice],
         mqtt_dispatcher: MQTTDispatcher,
     ) -> None:
-        self.uid = uid
-        self.bus_name = bus_name
+        self.uid = f"{mqtt_device_id}_{bus_index}"
+        self.bus_name = f"Bus {bus_index}"
         self.devices = devices
         self.dev_inst_map = AsyncDeviceInstanceTypeMapper()
         self.mqtt_dispatcher = mqtt_dispatcher
         cfg = WBDALIConfig(
             modbus_port_path="/dev/ttyRS485-2",
-            device_name=self.uid,
+            device_name=mqtt_device_id,
             modbus_slave_id=2,
         )
         self.dev = WBDALIDriver(cfg, mqtt_dispatcher=self.mqtt_dispatcher, dev_inst_map=self.dev_inst_map)

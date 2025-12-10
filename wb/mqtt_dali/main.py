@@ -11,16 +11,13 @@ from urllib.parse import urlparse
 
 import asyncio_mqtt as aiomqtt
 import jsonschema
-from dali.address import DeviceBroadcast
-from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
-from .commissioning import Commissioning
 from .fake_lunatone_iot import run_websocket
 from .gateway import Gateway
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import MQTTRPCServer
-from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
+from .wbdali import WBDALIDriver
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 WB_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
@@ -29,25 +26,6 @@ DEV_SCHEMA_FILEPATH = "./wb-mqtt-dali.schema.json"
 
 EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
-
-
-async def dali(mqtt_dispatcher: MQTTDispatcher):
-    # todo
-    dev_inst_map = AsyncDeviceInstanceTypeMapper()
-    cfg = WBDALIConfig(
-        modbus_port_path="/dev/ttyRS485-2",
-        device_name="wb-mdali_2",
-        modbus_slave_id=2,
-    )
-    dev = WBDALIDriver(cfg, dev_inst_map=dev_inst_map, mqtt_dispatcher=mqtt_dispatcher)
-    await dev.initialize()
-    await asyncio.sleep(1)
-    await dev.send(StartQuiescentMode(DeviceBroadcast()))
-    try:
-        obj = Commissioning(dev, None, load=False)
-        await obj.smart_extend()
-    finally:
-        await dev.send(StopQuiescentMode(DeviceBroadcast()))
 
 
 async def wait_for_cancel():

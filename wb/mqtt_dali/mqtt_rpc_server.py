@@ -82,7 +82,7 @@ class MQTTRPCServer:
             if handler is None:
                 self.logger.error("No RPC endpoint for topic: %s", mqtt_message.topic)
                 return MQTTRPC10Response(
-                    error=JSONRPCMethodNotFound()._data  # pylint: disable=protected-access
+                    _id=request._id, error=JSONRPCMethodNotFound()._data  # pylint: disable=protected-access
                 )
             result = await handler(request.params)
             return MQTTRPC10Response(_id=request._id, result=result)  # pylint: disable=protected-access

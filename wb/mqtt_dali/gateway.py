@@ -1,7 +1,8 @@
 import asyncio
 from dataclasses import dataclass, field
 
-from .application_controller import ApplicationController, DaliDevice, DaliDeviceAddress
+from .application_controller import ApplicationController
+from .dali_device import DaliDevice, DaliDeviceAddress
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import MQTTRPCServer
 
@@ -13,10 +14,10 @@ class WbDaliGateway:
 
 
 def bus_from_json(
-    gateway_uid: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
+    gateway_mqtt_device_id: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
 ) -> ApplicationController:
     devices = []
-    uid = f"{gateway_uid}_bus{bus_index}"
+    uid = f"{gateway_mqtt_device_id}_bus{bus_index}"
     for dev_conf in data.get("devices", []):
         device = DaliDevice(
             uid=f'{uid}_{dev_conf["short"]}',
@@ -28,11 +29,30 @@ def bus_from_json(
         )
         devices.append(device)
     return ApplicationController(
-        uid=uid,
-        bus_name=f"Bus {bus_index}",
+        mqtt_device_id=gateway_mqtt_device_id,
+        bus_index=bus_index,
         devices=devices,
         mqtt_dispatcher=mqtt_dispatcher,
     )
+
+
+def bus_to_json(bus: ApplicationController) -> dict:
+    return {
+        "id": bus.uid,
+        "name": bus.bus_name,
+        "devices": list(
+            map(
+                lambda dev: {
+                    "id": dev.uid,
+                    "name": dev.name,
+                    "groups": [],
+                },
+                bus.devices,
+            )
+        ),
+        "groups": [],
+        "isCommissioning": bus.is_commissioning(),
+    }
 
 
 class Gateway:
@@ -54,12 +74,6 @@ class Gateway:
         )
 
     async def start(self) -> None:
-        await self.rpc_server.start()
-        await self.rpc_server.add_endpoint(
-            "Editor",
-            "GetList",
-            self.get_list_rpc_handler,
-        )
         res = await asyncio.gather(
             *[bus.start() for gw in self.wb_dali_gateways for bus in gw.buses],
             return_exceptions=True,
@@ -67,6 +81,17 @@ class Gateway:
         for r in res:
             if isinstance(r, Exception):
                 raise r
+        await self.rpc_server.start()
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "GetList",
+            self.get_list_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "ScanBus",
+            self.rescan_bus_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -84,27 +109,17 @@ class Gateway:
                 lambda gw: {
                     "id": gw.uid,
                     "name": gw.uid,
-                    "buses": list(
-                        map(
-                            lambda bus: {
-                                "id": bus.uid,
-                                "name": bus.bus_name,
-                                "devices": list(
-                                    map(
-                                        lambda dev: {
-                                            "id": dev.uid,
-                                            "name": dev.name,
-                                            "groups": [],
-                                        },
-                                        bus.devices,
-                                    )
-                                ),
-                                "groups": [],
-                            },
-                            gw.buses,
-                        )
-                    ),
+                    "buses": list(map(bus_to_json, gw.buses)),
                 },
                 self.wb_dali_gateways,
             )
         )
+
+    async def rescan_bus_handler(self, params: dict):
+        bus_id = params.get("busId")
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                if bus.uid == bus_id:
+                    await bus.rescan_bus()
+                    return bus_to_json(bus)
+        raise ValueError("Bus not found")

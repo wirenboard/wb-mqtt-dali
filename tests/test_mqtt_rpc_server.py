@@ -169,6 +169,7 @@ class TestMQTTRPCServer:
 
         response = await rpc_server._handle_request(mqtt_message)
 
+        assert response.data["id"] == "req1"
         assert "error" in response.data
         assert response.data["error"]["code"] == JSONRPCMethodNotFound()._data["code"]
 

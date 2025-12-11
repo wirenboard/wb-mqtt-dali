@@ -1,9 +1,7 @@
 import asyncio
-import json
-import os
-import tempfile
 import unittest
-from unittest.mock import MagicMock, Mock, patch
+from typing import Optional
+from unittest.mock import MagicMock, Mock
 
 from dali.gear.general import (
     Compare,
@@ -31,6 +29,7 @@ from wb.mqtt_dali.commissioning import (
     Commissioning,
     SearchAddress,
 )
+from wb.mqtt_dali.dali_device import DaliDeviceAddress
 
 
 def search_sequence(cmd_cls, values):
@@ -195,7 +194,7 @@ class FakeDALIBus:
     def __init__(self, devices=None):
         self.devices = devices or {}  # short_addr: random_addr
         self.withdrawn = set()
-        self.search_addr = [None, None, None]
+        self.search_addr: list[Optional[int]] = [None, None, None]
         self.initialized_shorts = set()
         self.broadcast_initialized = False
         self.next_random = 0x200000
@@ -326,7 +325,7 @@ class FakeDALIBus:
 
         # Handle VerifyShortAddress
         if isinstance(cmd, VerifyShortAddress):
-            short_addr = cmd.destination.address
+            short_addr = cmd.address
             if short_addr in self.devices:
                 return MockResponse(value=True)
             return MockResponse(value=None)
@@ -337,13 +336,6 @@ class FakeDALIBus:
 class TestCommissioning(unittest.TestCase):
     def setUp(self):
         self.mock_driver = MagicMock()
-
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as self.temp_file:
-            self.temp_file_path = self.temp_file.name
-
-    def tearDown(self):
-        if os.path.exists(self.temp_file_path):
-            os.unlink(self.temp_file_path)
 
     def assert_commands_match(self, sent_commands, expected_commands):
         self.assertEqual(len(sent_commands), len(expected_commands))
@@ -401,68 +393,9 @@ class TestCommissioning(unittest.TestCase):
                     f"Command {i}: address mismatch",
                 )
 
-    def test_load_results(self):
-        """Test loading results from a JSON file."""
-        test_data = {
-            "version": 1,
-            "generated_at": "2023-12-01T10:30:00Z",
-            "entries": [
-                {"short": 1, "random": 0x123456, "random_hex": "0x123456"},
-                {"short": 2, "random": 0x789ABC, "random_hex": "0x789ABC"},
-                {"short": 5, "random": 0xDEF123, "random_hex": "0xDEF123"},
-            ],
-        }
-
-        with open(self.temp_file_path, "w", encoding="utf-8") as f:
-            json.dump(test_data, f)
-
-        with patch("wb.mqtt_dali.commissioning.log") as mock_log:
-            commissioning = Commissioning(self.mock_driver, self.temp_file_path, load=False)
-            commissioning._load_results()  # pylint: disable=W0212
-
-        expected_devices = {1: 0x123456, 2: 0x789ABC, 5: 0xDEF123}
-        self.assertEqual(commissioning.old_devices, expected_devices)
-
-        mock_log.info.assert_called_with(
-            "Loaded %d device entries (old devices) from %s", 3, self.temp_file_path
-        )
-
-    @patch("wb.mqtt_dali.commissioning.datetime")
-    def test_save_results(self, mock_datetime):
-        """Test saving results to a JSON file."""
-        mock_datetime.utcnow.return_value.isoformat.return_value = "2023-12-01T10:30:00"
-
-        commissioning = Commissioning(self.mock_driver, self.temp_file_path, load=False)
-        commissioning.known_devices = {1: 0x123456, 3: 0xDEF123}
-        commissioning.found_devices = {2: 0x789ABC}
-
-        with patch("wb.mqtt_dali.commissioning.log") as mock_log:
-            commissioning._save_results()  # pylint: disable=W0212
-
-        self.assertTrue(os.path.exists(self.temp_file_path))
-
-        with open(self.temp_file_path, "r", encoding="utf-8") as f:
-            saved_data = json.load(f)
-
-        expected_data = {
-            "version": 1,
-            "generated_at": "2023-12-01T10:30:00Z",
-            "entries": [
-                {"short": 1, "random": 0x123456, "random_hex": "0x123456"},
-                {"short": 2, "random": 0x789ABC, "random_hex": "0x789abc"},
-                {"short": 3, "random": 0xDEF123, "random_hex": "0xdef123"},
-            ],
-        }
-
-        self.assertEqual(saved_data, expected_data)
-
-        mock_log.info.assert_called_with(
-            "Saved %d device entries (known + new) to %s", 3, self.temp_file_path
-        )
-
     def test_set_search_addr(self):
         """Test setting search address."""
-        commissioning = Commissioning(self.mock_driver, None, load=False)
+        commissioning = Commissioning(self.mock_driver, [])
         self.assertEqual(commissioning.last_search_addr, SearchAddress(None, None, None))
 
         commands = list(commissioning._set_search_addr(0x123456))  # pylint: disable=W0212
@@ -498,7 +431,7 @@ class TestCommissioning(unittest.TestCase):
         async def run_test():
             fake_bus = FakeDALIBus(devices={0: 0x123456, 1: 0x789ABC})
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
 
             await commissioning.smart_extend()
 
@@ -569,7 +502,7 @@ class TestCommissioning(unittest.TestCase):
 
             fake_bus.send = mock_send_with_unaddressed
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             # Device should be found and assigned address 0
@@ -636,7 +569,7 @@ class TestCommissioning(unittest.TestCase):
 
             fake_bus.send = track_commands
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
 
             await commissioning.smart_extend()
 
@@ -714,7 +647,7 @@ class TestCommissioning(unittest.TestCase):
 
             fake_bus.send = track_commands
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 1)
@@ -772,21 +705,14 @@ class TestCommissioning(unittest.TestCase):
         """
 
         async def run_test():
-            state_data = {
-                "version": 1,
-                "generated_at": "2023-12-01T10:00:00Z",
-                "entries": [
-                    {"short": 3, "random": 0xAAAAAA, "random_hex": "0xaaaaaa"},
-                    {"short": 7, "random": 0xBBBBBB, "random_hex": "0xbbbbbb"},
-                ],
-            }
-
-            with open(self.temp_file_path, "w", encoding="utf-8") as f:
-                json.dump(state_data, f)
+            state_data = [
+                DaliDeviceAddress(short=3, random=0xAAAAAA),
+                DaliDeviceAddress(short=7, random=0xBBBBBB),
+            ]
 
             fake_bus = FakeDALIBus(devices={3: 0xAAAAAA, 7: 0xBBBBBB})
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=True)
+            commissioning = Commissioning(fake_bus, state_data)
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 2)
@@ -815,20 +741,11 @@ class TestCommissioning(unittest.TestCase):
         """
 
         async def run_test():
-            state_data = {
-                "version": 1,
-                "generated_at": "2023-12-01T10:00:00Z",
-                "entries": [
-                    {"short": 5, "random": 0xCCCCCC, "random_hex": "0xcccccc"},
-                ],
-            }
-
-            with open(self.temp_file_path, "w", encoding="utf-8") as f:
-                json.dump(state_data, f)
+            state_data = [DaliDeviceAddress(short=5, random=0xCCCCCC)]
 
             fake_bus = FakeDALIBus(devices={10: 0xCCCCCC})
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=True)
+            commissioning = Commissioning(fake_bus, state_data)
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 1)
@@ -861,20 +778,11 @@ class TestCommissioning(unittest.TestCase):
         """
 
         async def run_test():
-            state_data = {
-                "version": 1,
-                "generated_at": "2023-12-01T10:00:00Z",
-                "entries": [
-                    {"short": 1, "random": 0x111111, "random_hex": "0x111111"},
-                ],
-            }
-
-            with open(self.temp_file_path, "w", encoding="utf-8") as f:
-                json.dump(state_data, f)
+            state_data = [DaliDeviceAddress(short=1, random=0x111111)]
 
             fake_bus = FakeDALIBus(devices={1: 0x111111, 2: 0x333333})
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=True)
+            commissioning = Commissioning(fake_bus, state_data)
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 2)
@@ -910,7 +818,7 @@ class TestCommissioning(unittest.TestCase):
                 }
             )
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 6)
@@ -919,36 +827,6 @@ class TestCommissioning(unittest.TestCase):
                 self.assertNotIn(i, commissioning.available_addresses)
 
             self.assertIn(6, commissioning.available_addresses)
-
-        asyncio.run(run_test())
-
-    def test_smart_extend_state_file_persistence(self):
-        """Test smart_extend saving state file correctly.
-        Bus:
-        Short Addr | Random Addr
-        -------------------------
-        0          | 0xABCDEF
-        1          | 0x123456
-        2-63       | Unused
-        """
-
-        async def run_test():
-            fake_bus = FakeDALIBus(devices={0: 0xABCDEF, 1: 0x123456})
-
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
-            await commissioning.smart_extend()
-
-            self.assertTrue(os.path.exists(self.temp_file_path))
-
-            with open(self.temp_file_path, "r", encoding="utf-8") as f:
-                saved_data = json.load(f)
-
-            self.assertEqual(saved_data["version"], 1)
-            self.assertEqual(len(saved_data["entries"]), 2)
-
-            entries_by_short = {e["short"]: e for e in saved_data["entries"]}
-            self.assertEqual(entries_by_short[0]["random"], 0xABCDEF)
-            self.assertEqual(entries_by_short[1]["random"], 0x123456)
 
         asyncio.run(run_test())
 
@@ -1026,7 +904,7 @@ class TestCommissioning(unittest.TestCase):
 
             fake_bus.send = mock_boundary_send
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 3)
@@ -1049,7 +927,7 @@ class TestCommissioning(unittest.TestCase):
         async def run_test():
             fake_bus = FakeDALIBus(devices={})
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 0)
@@ -1071,7 +949,7 @@ class TestCommissioning(unittest.TestCase):
             devices = {i: 0x100000 + i for i in range(64)}
             fake_bus = FakeDALIBus(devices=devices)
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             self.assertEqual(len(commissioning.found_devices), 64)
@@ -1119,7 +997,7 @@ class TestCommissioning(unittest.TestCase):
 
             fake_bus.send = track_set_search
 
-            commissioning = Commissioning(fake_bus, self.temp_file_path, load=False)
+            commissioning = Commissioning(fake_bus, [])
             await commissioning.smart_extend()
 
             expected_calls = [

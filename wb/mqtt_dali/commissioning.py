@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 import asyncio
-import json
 import logging
-import os
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 from dali.address import GearShort
-from dali.driver.base import DALIDriver
 from dali.exceptions import ResponseError
 from dali.gear.general import (
     Compare,
@@ -28,7 +24,24 @@ from dali.gear.general import (
     Withdraw,
 )
 
+from .dali_device import DaliDeviceAddress
+from .wbdali import WBDALIDriver
+
 log = logging.getLogger("commissioning")
+
+
+@dataclass
+class ChangedDevice:
+    new: DaliDeviceAddress
+    old_short: int
+
+
+@dataclass
+class CommissioningResult:
+    unchanged: list[DaliDeviceAddress] = field(default_factory=list)
+    changed: list[ChangedDevice] = field(default_factory=list)
+    missing: list[DaliDeviceAddress] = field(default_factory=list)
+    new: list[DaliDeviceAddress] = field(default_factory=list)
 
 
 @dataclass
@@ -50,7 +63,7 @@ class SearchAddress:
 
 
 class BinarySearchAddressFinder:  # pylint: disable=R0903
-    def __init__(self, compare_callback: callable, set_search_addr_callback: callable):
+    def __init__(self, compare_callback: Callable, set_search_addr_callback: Callable):
         self.compare = compare_callback
         self.set_search_addr = set_search_addr_callback
 
@@ -78,7 +91,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         return found_addr
 
 
-async def get_random_address(driver: DALIDriver, addr: int) -> Optional[int]:
+async def get_random_address(driver: WBDALIDriver, addr: GearShort) -> Optional[int]:
     responses = await asyncio.gather(
         driver.send(QueryRandomAddressH(addr)),
         driver.send(QueryRandomAddressM(addr)),
@@ -99,7 +112,7 @@ async def get_random_address(driver: DALIDriver, addr: int) -> Optional[int]:
     return values[0] << 16 | values[1] << 8 | values[2]
 
 
-async def get_present_short_addresses(driver: DALIDriver) -> list[int]:
+async def get_present_short_addresses(driver: WBDALIDriver) -> list[int]:
     responses = await asyncio.gather(*[driver.send(QueryControlGearPresent(GearShort(i))) for i in range(64)])
     short_addr_present = []
     for i, resp in enumerate(responses):
@@ -110,79 +123,23 @@ async def get_present_short_addresses(driver: DALIDriver) -> list[int]:
 
 
 class Commissioning:
-    def __init__(self, driver: DALIDriver, state_file: str, load: bool = True):
-        self.driver: DALIDriver = driver
-        self.state_file: str = state_file
+    def __init__(self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress]) -> None:
+        self.driver: WBDALIDriver = driver
         self.last_search_addr = SearchAddress()
         self.found_devices: dict[int, int] = {}  # found this run, not in old_devices
         self.old_devices: dict[int, int] = {}  # loaded from previous state
-        self.known_devices: dict[int, int] = {}  # present in old_devices and confirmed this run
-        self.missing_devices = {}  # old short present before, not found now (after change detection)
-        self.changed_devices: dict[int, tuple[int, int]] = (
-            {}
-        )  # devices whose short address changed: old_short -> (new_short, random)
+        for dev in old_devices:
+            self.old_devices[dev.short] = dev.random
         self.available_addresses: list[int] = []
         self.binary_search_finder = BinarySearchAddressFinder(
             compare_callback=self.compare, set_search_addr_callback=self.set_search_addr
         )
-        if not self.state_file:
-            log.info("No state file provided: commissioning results will not be persisted")
-            return
-        if load:
-            self._load_results()
-
-    def _load_results(self) -> None:
-        if not self.state_file or not os.path.isfile(self.state_file):
-            return
-        try:
-            with open(self.state_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            entries = data.get("entries", [])
-            loaded = 0
-            for e in entries:
-                short = e.get("short")
-                rand = e.get("random")
-                if isinstance(short, int) and isinstance(rand, int):
-                    self.old_devices[short] = rand
-                    loaded += 1
-            log.info(
-                "Loaded %d device entries (old devices) from %s",
-                loaded,
-                self.state_file,
-            )
-        except (OSError, json.JSONDecodeError) as e:
-            log.warning("Failed to load commissioning state from %s: %s", self.state_file, e)
-
-    def _save_results(self) -> None:
-        if not self.state_file:
-            return
-        # Save only known (refreshed) + new (discovered) devices
-        combined = {**self.known_devices, **self.found_devices}
-        data = {
-            "version": 1,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "entries": [
-                {"short": s, "random": r, "random_hex": f"0x{r:06x}"} for s, r in sorted(combined.items())
-            ],
-        }
-        tmp_path = self.state_file + ".tmp"
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, self.state_file)
-            log.info(
-                "Saved %d device entries (known + new) to %s",
-                len(combined),
-                self.state_file,
-            )
-        except (OSError, TypeError) as e:
-            log.error("Failed to save commissioning state to %s: %s", self.state_file, e)
 
     def _add_device(self, short_addr: int, rand_addr: int) -> None:
         log.debug("Adding device: short %d, random 0x%06x", short_addr, rand_addr)
         self.found_devices[short_addr] = rand_addr
 
-    def _set_search_addr(self, addr: int) -> None:
+    def _set_search_addr(self, addr: int):
         log.debug("Setting search address 0x%06x", addr)
 
         new_addr = SearchAddress.from_int(addr)
@@ -219,7 +176,7 @@ class Commissioning:
                 if rand == found_addr:
                     if short in self.available_addresses:
                         self.available_addresses.remove(short)
-                        logging.info(
+                        log.info(
                             "Use previously stored short address %d for device at 0x%06x",
                             short,
                             found_addr,
@@ -227,11 +184,12 @@ class Commissioning:
                         return short
 
             return self.available_addresses.pop(0)
+        return None
 
     async def _assign_short_address(self, found_addr: int) -> Optional[int]:
         new_addr = self._pick_new_short_address(found_addr)
         if new_addr is not None:
-            logging.info(
+            log.info(
                 "Programming short address %d for device at 0x%06x",
                 new_addr,
                 found_addr,
@@ -240,29 +198,29 @@ class Commissioning:
             await asyncio.sleep(0.3)  # Wait for flash write
             r = await self.driver.send(VerifyShortAddress(new_addr))
             if r.value is True:
-                logging.info("Short address %d programmed successfully", new_addr)
+                log.info("Short address %d programmed successfully", new_addr)
                 return new_addr
 
-            logging.warning(
+            log.warning(
                 "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
                 new_addr,
             )
             r = await self.driver.send(QueryShortAddress())
             if r.value == (new_addr << 1) | 1:
-                logging.info(
+                log.info(
                     "Short address %d programmed successfully (QUERY SHORT ADDRESS)",
                     new_addr,
                 )
                 return new_addr
 
-            logging.error(
+            log.error(
                 "Failed to program short address %d for device at 0x%06x",
                 new_addr,
                 found_addr,
             )
 
         else:
-            logging.warning("Device found but no short addresses available")
+            log.warning("Device found but no short addresses available")
         return None
 
     async def find_next_device(self, low: int, high: int) -> Optional[int]:
@@ -337,11 +295,12 @@ class Commissioning:
                 )
                 await self.set_search_addr(found_addr)
                 new_short_addr = await self._assign_short_address(found_addr)
-                self._add_device(new_short_addr, found_addr)
+                if new_short_addr is not None:
+                    self._add_device(new_short_addr, found_addr)
                 # await self.driver.send(Withdraw())
         else:
             short_addr = query_short_resp.value >> 1
-            if short_addr in self.found_devices or short_addr in self.known_devices:
+            if short_addr in self.found_devices:
                 await self.set_search_addr(found_addr)
                 if found_addr == 0xFFFFFF:
                     log.warning(
@@ -392,7 +351,7 @@ class Commissioning:
 
         return random_address_conflicts
 
-    async def smart_extend(self) -> None:
+    async def smart_extend(self) -> CommissioningResult:
         # Есть весёлая железка, с таким поведением:
         #   на запросы QUERY RANDOM ADDRESS H/M/L не отвечает вообще
         #   на VERIFY SHORT ADDRESS тоже не отвечает
@@ -504,7 +463,7 @@ class Commissioning:
             resp = responses[query_cmd_indicies[i]]  # QueryShortAddress response
             random_address_conflicts |= await self._process_found_device(rand_addr, resp)
 
-        logging.info(
+        log.info(
             "After querying known random addresses found %d devices "
             "with random address conflict or unset random address",
             len(random_address_conflicts),
@@ -516,7 +475,7 @@ class Commissioning:
             # оптимизацию на поиск сброшенный randomAddress не делаем,
             # иначе устройства с unset random address получают короткие адреса быстрее, чем нормальные
             #
-            # logging.info("Probing whether there are devices with unset random address (0xffffff)")
+            # log.info("Probing whether there are devices with unset random address (0xffffff)")
             # cmds = [*self._set_search_addr(0xffffff), QueryShortAddress(), Withdraw()]
             # resps = await asyncio.gather(*[self.driver.send(cmd) for cmd in cmds])
             # resp = resps[-2]    # QueryShortAddress response
@@ -529,7 +488,7 @@ class Commissioning:
             # # если ответа не было. Но чот это довольно некрасиво получается,
             # # и ради экономии одного запроса и 200мс не хочется делать
 
-            logging.info("Start binary search (%d)", binary_search_counter)
+            log.info("Start binary search (%d)", binary_search_counter)
             low = 0
             high = 0xFFFFFF
             while low < high:
@@ -561,8 +520,6 @@ class Commissioning:
 
         await self.driver.send(Terminate())
 
-        log.info("After commissioning summary:")
-
         # Classification based purely on old_devices (from file) and found_devices (current scan)
         # Build reverse maps random -> short
         old_rand_to_short = {rand: short for short, rand in self.old_devices.items()}
@@ -572,54 +529,63 @@ class Commissioning:
         found_randoms = set(found_rand_to_short.keys())
 
         # 1) Unchanged devices: same short AND same random
-        unchanged = []
+        res = CommissioningResult()
         for short, rand in self.old_devices.items():
             if short in self.found_devices and self.found_devices[short] == rand:
-                unchanged.append((short, rand))
+                res.unchanged.append(DaliDeviceAddress(short, rand))
 
         # 2) Changed short address: random present both runs but short differs
-        changed = []
         for rand in old_randoms & found_randoms:
             old_short = old_rand_to_short[rand]
             new_short = found_rand_to_short[rand]
             if old_short != new_short:
-                changed.append((rand, old_short, new_short))
+                res.changed.append(ChangedDevice(DaliDeviceAddress(new_short, rand), old_short))
 
         # 3) Missing devices: random present before, absent now
         missing = sorted(old_randoms - found_randoms)
+        for rand in missing:
+            res.missing.append(DaliDeviceAddress(old_rand_to_short[rand], rand))
 
         # 4) New devices: random present now, absent before
         new = sorted(found_randoms - old_randoms)
-
-        # Output
-        for short, rand in sorted(unchanged):
-            log.info("  Unchanged device: short %d random 0x%06x", short, rand)
-        for rand, old_short, new_short in sorted(changed):
-            log.info(
-                "  Changed device:   random 0x%06x old short %d -> new short %d",
-                rand,
-                old_short,
-                new_short,
-            )
-        for rand in missing:
-            log.warning(
-                "  Missing device:   random 0x%06x (old short %d)",
-                rand,
-                old_rand_to_short[rand],
-            )
         for rand in new:
-            log.info(
-                "  New device:       random 0x%06x (short %d)",
-                rand,
-                found_rand_to_short[rand],
-            )
+            res.new.append(DaliDeviceAddress(found_rand_to_short[rand], rand))
 
+        if log.isEnabledFor(logging.DEBUG):
+            print_commissioning_summary(res)
+
+        return res
+
+
+def print_commissioning_summary(res: CommissioningResult) -> None:
+    # Output
+    log.info("After commissioning summary:")
+    for addr in sorted(res.unchanged, key=lambda x: x.short):
+        log.info("  Unchanged device: short %d random 0x%06x", addr.short, addr.random)
+    for changed_device in sorted(res.changed, key=lambda x: x.new.random):
         log.info(
-            "Totals: unchanged=%d changed=%d missing=%d new=%d",
-            len(unchanged),
-            len(changed),
-            len(missing),
-            len(new),
+            "  Changed device:   random 0x%06x old short %d -> new short %d",
+            changed_device.new.random,
+            changed_device.old_short,
+            changed_device.new.short,
+        )
+    for addr in res.missing:
+        log.warning(
+            "  Missing device:   random 0x%06x (old short %d)",
+            addr.random,
+            addr.short,
+        )
+    for addr in res.new:
+        log.info(
+            "  New device:       random 0x%06x (short %d)",
+            addr.random,
+            addr.short,
         )
 
-        self._save_results()
+    log.info(
+        "Totals: unchanged=%d changed=%d missing=%d new=%d",
+        len(res.unchanged),
+        len(res.changed),
+        len(res.missing),
+        len(res.new),
+    )

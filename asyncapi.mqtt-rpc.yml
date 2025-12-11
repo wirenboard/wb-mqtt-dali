@@ -148,6 +148,22 @@ channels:
     parameters:
       clientId:
         $ref: '#/components/parameters/clientId'
+  wbdaliEditorScanBus:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ScanBus/{clientId}'
+    messages:
+      wbdaliEditorScanBus:
+        $ref: '#/components/messages/wbdaliEditorScanBus'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorScanBusReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ScanBus/{clientId}/reply'
+    messages:
+      wbdaliEditorScanBusReply:
+        $ref: '#/components/messages/wbdaliEditorScanBusReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
 operations:
   wbdaliEditorGetList:
     action: send
@@ -266,6 +282,19 @@ operations:
         $ref: '#/channels/wbdaliEditorSetGroupReply'
       messages:
         - $ref: '#/channels/wbdaliEditorSetGroupReply/messages/wbdaliEditorSetGroupReply'
+  wbdaliEditorScanBus:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorScanBus'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorScanBus/messages/wbdaliEditorScanBus'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorScanBusReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorScanBusReply/messages/wbdaliEditorScanBusReply'
 components:
   messages:
     wbdaliEditorGetList:
@@ -340,6 +369,14 @@ components:
       name: editorSetGroupReply
       payload:
         $ref: '#/components/schemas/wbdaliEditorSetGroupReplyPayload'
+    wbdaliEditorScanBus:
+      name: editorScanBus
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorScanBusPayload'
+    wbdaliEditorScanBusReply:
+      name: editorScanBusReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorScanBusReplyPayload'
   schemas:
     deviceItem:
       type: object
@@ -657,6 +694,31 @@ components:
           type: number
         result:
           type: boolean
+      required:
+        - id
+        - result
+    wbdaliEditorScanBusPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            busId:
+              type: string
+          required:
+            - busId
+      required:
+        - id
+        - params
+    wbdaliEditorScanBusReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          $ref: '#/components/schemas/busItem'
       required:
         - id
         - result

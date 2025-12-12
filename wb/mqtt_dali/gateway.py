@@ -28,11 +28,17 @@ def bus_from_json(
             ),
         )
         devices.append(device)
+
+    websocket_enabled = data.get("websocket_enabled", False)
+    websocket_port = data.get("websocket_port", 8080)
+
     return ApplicationController(
         mqtt_device_id=gateway_mqtt_device_id,
         bus_index=bus_index,
         devices=devices,
         mqtt_dispatcher=mqtt_dispatcher,
+        websocket_enabled=websocket_enabled,
+        websocket_port=websocket_port,
     )
 
 

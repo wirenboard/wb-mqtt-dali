@@ -13,7 +13,6 @@ import asyncio_mqtt as aiomqtt
 import jsonschema
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
-from .fake_lunatone_iot import run_websocket
 from .gateway import Gateway
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import MQTTRPCServer
@@ -44,15 +43,6 @@ async def wait_for_cancel():
 async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
     try:
         await mqtt_dispatcher.run()
-    except asyncio.CancelledError:
-        # Allow graceful shutdown on cancellation; no cleanup needed here.
-        pass
-
-
-async def websocket(driver, host: str, port: int):
-    try:
-        tg = asyncio
-        await run_websocket(driver, tg, host, port)
     except asyncio.CancelledError:
         # Allow graceful shutdown on cancellation; no cleanup needed here.
         pass

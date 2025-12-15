@@ -1,0 +1,599 @@
+import asyncio
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from wb.mqtt_dali.device_publisher import ControlHandler, DeviceChange, DevicePublisher
+
+
+class MockMessage:
+    def __init__(self, topic: str, payload: bytes = b""):
+        self.topic = topic
+        self.payload = payload
+
+
+class MockMQTTClient:
+    def __init__(self):
+        self.publish = AsyncMock()
+        self.subscribe = AsyncMock()
+        self.unsubscribe = AsyncMock()
+
+
+class MockMQTTDispatcher:
+    def __init__(self, client):
+        self.client = client
+        self.subscribe = AsyncMock()
+        self.unsubscribe = AsyncMock()
+        self._subscriptions = {}
+
+    async def mock_subscribe(self, topic, callback):
+        if topic not in self._subscriptions:
+            self._subscriptions[topic] = []
+        self._subscriptions[topic].append(callback)
+
+    async def mock_unsubscribe(self, topic, callback=None):
+        if topic in self._subscriptions:
+            if callback is None:
+                del self._subscriptions[topic]
+            else:
+                if callback in self._subscriptions[topic]:
+                    self._subscriptions[topic].remove(callback)
+                if not self._subscriptions[topic]:
+                    del self._subscriptions[topic]
+
+
+@pytest.fixture
+def mock_client():
+    return MockMQTTClient()
+
+
+@pytest.fixture
+def mock_dispatcher(mock_client):
+    dispatcher = MockMQTTDispatcher(mock_client)
+    dispatcher.subscribe.side_effect = dispatcher.mock_subscribe
+    dispatcher.unsubscribe.side_effect = dispatcher.mock_unsubscribe
+    return dispatcher
+
+
+@pytest.fixture
+def publisher(mock_dispatcher):
+    return DevicePublisher(mock_dispatcher, "test_bus")
+
+
+class TestDeviceChange:
+    def test_default_initialization(self):
+        change = DeviceChange()
+        assert change.added == []
+        assert change.removed == []
+        assert change.updated == []
+
+    def test_with_parameters(self):
+        added = [{"id": "dev1"}]
+        removed = ["dev2"]
+        updated = [{"id": "dev3"}]
+
+        change = DeviceChange(added=added, removed=removed, updated=updated)
+
+        assert change.added == added
+        assert change.removed == removed
+        assert change.updated == updated
+
+
+class TestControlHandler:
+    def test_initialization(self):
+        def callback(msg):
+            pass
+
+        handler = ControlHandler("device1", "control1", callback)
+
+        assert handler.device_id == "device1"
+        assert handler.control_id == "control1"
+        assert handler.callback == callback
+
+
+class TestDevicePublisher:
+    @pytest.mark.asyncio
+    async def test_initialization(self, publisher):
+        assert publisher._bus_id == "test_bus"
+        assert len(publisher._devices) == 0
+        assert len(publisher._control_handlers) == 0
+        assert publisher._initialized is False
+
+    @pytest.mark.asyncio
+    async def test_initialize(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        assert publisher._initialized is True
+        assert mock_client.publish.call_count > 0
+
+    @pytest.mark.asyncio
+    async def test_add_device(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [
+                {
+                    "id": "ctrl1",
+                    "title": "Control 1",
+                    "type": "switch",
+                    "value": "0",
+                }
+            ],
+        }
+
+        await publisher.add_device(device_info)
+
+        assert "dev1" in publisher._devices
+        assert publisher.has_device("dev1")
+
+    @pytest.mark.asyncio
+    async def test_add_device_with_no_title(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "driver": "test_driver",
+            "controls": [],
+        }
+
+        await publisher.add_device(device_info)
+
+        assert "dev1" in publisher._devices
+        device = publisher._devices["dev1"]
+        assert device._device_title is None
+
+    @pytest.mark.asyncio
+    async def test_add_device_duplicate(self, publisher, mock_client, caplog):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.add_device(device_info)
+
+        assert "already exists" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_remove_device(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [],
+        }
+
+        await publisher.add_device(device_info)
+        assert "dev1" in publisher._devices
+
+        await publisher.remove_device("dev1")
+        assert "dev1" not in publisher._devices
+
+    @pytest.mark.asyncio
+    async def test_remove_nonexistent_device(self, publisher, caplog):
+        await publisher.remove_device("nonexistent")
+        assert "not found" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_update_device(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+
+        updated_info = {
+            "id": "dev1",
+            "title": "Updated Device",
+            "driver": "test_driver",
+            "controls": [
+                {
+                    "id": "ctrl1",
+                    "title": "Updated Control",
+                    "type": "switch",
+                    "value": "1",
+                }
+            ],
+        }
+
+        await publisher.update_device("dev1", updated_info)
+
+        device = publisher._devices["dev1"]
+        assert device._device_title == "Updated Device"
+
+    @pytest.mark.asyncio
+    async def test_update_device_add_control(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        updated_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [
+                {"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"},
+                {"id": "ctrl2", "title": "Control 2", "type": "text", "value": "test"},
+            ],
+        }
+
+        await publisher.update_device("dev1", updated_info)
+
+        device = publisher._devices["dev1"]
+        assert "ctrl1" in device._controls
+        assert "ctrl2" in device._controls
+
+    @pytest.mark.asyncio
+    async def test_update_device_remove_control(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [
+                {"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"},
+                {"id": "ctrl2", "title": "Control 2", "type": "text", "value": "test"},
+            ],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        updated_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.update_device("dev1", updated_info)
+
+        device = publisher._devices["dev1"]
+        assert "ctrl1" in device._controls
+        assert "ctrl2" not in device._controls
+
+    @pytest.mark.asyncio
+    async def test_rebuild_with_changes(self, publisher, mock_client):
+        initial_devices = [
+            {
+                "id": "dev1",
+                "title": "Device 1",
+                "driver": "test_driver",
+                "controls": [],
+            },
+            {
+                "id": "dev2",
+                "title": "Device 2",
+                "driver": "test_driver",
+                "controls": [],
+            },
+        ]
+
+        for device_info in initial_devices:
+            await publisher.add_device(device_info)
+
+        changes = DeviceChange(
+            added=[
+                {
+                    "id": "dev3",
+                    "title": "Device 3",
+                    "driver": "test_driver",
+                    "controls": [],
+                }
+            ],
+            removed=["dev1"],
+            updated=[
+                {
+                    "id": "dev2",
+                    "title": "Updated Device 2",
+                    "driver": "test_driver",
+                    "controls": [],
+                }
+            ],
+        )
+
+        await publisher.rebuild(changes)
+
+        assert "dev1" not in publisher._devices
+        assert "dev2" in publisher._devices
+        assert "dev3" in publisher._devices
+        assert publisher._devices["dev2"]._device_title == "Updated Device 2"
+
+    @pytest.mark.asyncio
+    async def test_set_control_value(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+        mock_client.publish.reset_mock()
+
+        await publisher.set_control_value("dev1", "ctrl1", "1")
+
+        device = publisher._devices["dev1"]
+        assert device._controls["ctrl1"].value == "1"
+        mock_client.publish.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_set_control_value_nonexistent_device(self, publisher, caplog):
+        await publisher.set_control_value("nonexistent", "ctrl1", "1")
+        assert "not found" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_register_control_handler(self, publisher, mock_dispatcher):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+
+        callback = AsyncMock()
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+
+        assert "dev1/ctrl1" in publisher._control_handlers
+        mock_dispatcher.subscribe.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_register_duplicate_handler(self, publisher, mock_dispatcher, caplog):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+
+        callback = AsyncMock()
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+
+        assert "already registered" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unregister_control_handler(self, publisher, mock_dispatcher):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+
+        callback = AsyncMock()
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+        assert "dev1/ctrl1" in publisher._control_handlers
+
+        await publisher.unregister_control_handler("dev1", "ctrl1")
+        assert "dev1/ctrl1" not in publisher._control_handlers
+
+    @pytest.mark.asyncio
+    async def test_handle_on_message(self, publisher, mock_dispatcher):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+
+        callback = AsyncMock()
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+
+        message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
+        await publisher._handle_on_message("dev1/ctrl1", message)
+
+        callback.assert_called_once_with(message)
+
+    @pytest.mark.asyncio
+    async def test_handle_on_message_with_error(self, publisher, mock_dispatcher, caplog):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+
+        callback = AsyncMock(side_effect=ValueError("Test error"))
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+
+        message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
+        await publisher._handle_on_message("dev1/ctrl1", message)
+
+        assert "Error handling /on message" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_get_device_ids(self, publisher):
+        device_info1 = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [],
+        }
+        device_info2 = {
+            "id": "dev2",
+            "title": "Device 2",
+            "driver": "test_driver",
+            "controls": [],
+        }
+
+        await publisher.add_device(device_info1)
+        await publisher.add_device(device_info2)
+
+        device_ids = publisher.get_device_ids()
+        assert device_ids == {"dev1", "dev2"}
+
+    @pytest.mark.asyncio
+    async def test_has_device(self, publisher):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [],
+        }
+
+        await publisher.add_device(device_info)
+
+        assert publisher.has_device("dev1") is True
+        assert publisher.has_device("dev2") is False
+
+    @pytest.mark.asyncio
+    async def test_cleanup(self, publisher, mock_client, mock_dispatcher):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [{"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"}],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        callback = AsyncMock()
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_device_prefix",
+            new_callable=AsyncMock,
+        ):
+            await publisher.cleanup()
+
+        assert len(publisher._devices) == 0
+        assert len(publisher._control_handlers) == 0
+        assert publisher._initialized is False
+
+    @pytest.mark.asyncio
+    async def test_get_control_on_topic(self, publisher):
+        topic = publisher._get_control_on_topic("dev1", "ctrl1")
+        assert topic == "/devices/test_bus_dev1/controls/ctrl1/on"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_operations(self, publisher, mock_client):
+        device_infos = [
+            {
+                "id": f"dev{i}",
+                "title": f"Device {i}",
+                "driver": "test_driver",
+                "controls": [
+                    {
+                        "id": "ctrl1",
+                        "title": "Control 1",
+                        "type": "switch",
+                        "value": "0",
+                    }
+                ],
+            }
+            for i in range(10)
+        ]
+
+        await asyncio.gather(*[publisher.add_device(info) for info in device_infos])
+
+        assert len(publisher._devices) == 10
+
+        updated_infos = [
+            {
+                "id": f"dev{i}",
+                "title": f"Updated Device {i}",
+                "driver": "test_driver",
+                "controls": [
+                    {
+                        "id": "ctrl1",
+                        "title": "Control 1",
+                        "type": "switch",
+                        "value": "1",
+                    }
+                ],
+            }
+            for i in range(10)
+        ]
+
+        await asyncio.gather(*[publisher.update_device(info["id"], info) for info in updated_infos])
+
+        await asyncio.gather(*[publisher.remove_device(f"dev{i}") for i in range(10)])
+
+        assert len(publisher._devices) == 0
+
+    @pytest.mark.asyncio
+    async def test_remove_device_removes_handlers(self, publisher, mock_dispatcher):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [
+                {"id": "ctrl1", "title": "Control 1", "type": "switch", "value": "0"},
+                {"id": "ctrl2", "title": "Control 2", "type": "text", "value": "test"},
+            ],
+        }
+
+        await publisher.add_device(device_info)
+
+        callback1 = AsyncMock()
+        callback2 = AsyncMock()
+        await publisher.register_control_handler("dev1", "ctrl1", callback1)
+        await publisher.register_control_handler("dev1", "ctrl2", callback2)
+
+        assert "dev1/ctrl1" in publisher._control_handlers
+        assert "dev1/ctrl2" in publisher._control_handlers
+
+        await publisher.remove_device("dev1")
+
+        assert "dev1/ctrl1" not in publisher._control_handlers
+        assert "dev1/ctrl2" not in publisher._control_handlers
+
+    @pytest.mark.asyncio
+    async def test_add_control_with_all_fields(self, publisher, mock_client):
+        device_info = {
+            "id": "dev1",
+            "title": "Device 1",
+            "driver": "test_driver",
+            "controls": [
+                {
+                    "id": "ctrl1",
+                    "title": "Full Control",
+                    "type": "temperature",
+                    "value": "23.5",
+                    "order": 1,
+                    "read_only": True,
+                }
+            ],
+        }
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        device = publisher._devices["dev1"]
+        control = device._controls["ctrl1"]
+
+        assert control.meta.title == "Full Control"
+        assert control.meta.control_type == "temperature"
+        assert control.meta.order == 1
+        assert control.meta.read_only is True
+        assert control.value == "23.5"

@@ -98,6 +98,11 @@ class Gateway:
             "ScanBus",
             self.rescan_bus_handler,
         )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "GetDevice",
+            self.get_device_rpc_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -120,6 +125,20 @@ class Gateway:
                 self.wb_dali_gateways,
             )
         )
+
+    async def get_device_rpc_handler(self, params: dict):
+        device_id = params.get("deviceId")
+        force_reload = params.get("forceReload", False)
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                for device in bus.devices:
+                    if device.uid == device_id:
+                        await bus.load_device_info(device, force_reload)
+                        return {
+                            "config": device.get_json_config(),
+                            "schema": device.get_config_schema(),
+                        }
+        raise ValueError(f"Device {device_id} not found")
 
     async def rescan_bus_handler(self, params: dict):
         bus_id = params.get("busId")

@@ -529,14 +529,11 @@ components:
         result:
           type: object
           properties:
-            id:
-              type: string
             schema:
               type: object
             busMonitor:
               type: string
           required:
-            - id
             - schema
       required:
         - id
@@ -592,14 +589,11 @@ components:
         result:
           type: object
           properties:
-            id:
-              type: string
             schema:
               type: object
             config:
               type: object
           required:
-            - id
             - schema
             - config
       required:
@@ -656,14 +650,11 @@ components:
         result:
           type: object
           properties:
-            id:
-              type: string
             schema:
               type: object
             config: 
               type: object
           required:
-            - id
             - schema
             - config
       required:

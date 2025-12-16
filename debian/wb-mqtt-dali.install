@@ -2,3 +2,4 @@ bin/wb-mqtt-dali /usr/bin
 wb-mqtt-dali.schema.json /usr/share/wb-mqtt-confed/schemas
 wb-mqtt-dali.conf /etc
 10wb-mqtt-dali /etc/wb-configs.d
+schemas /usr/share/wb-mqtt-dali

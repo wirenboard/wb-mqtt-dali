@@ -181,6 +181,9 @@ class ApplicationController:
 
     async def _notify_ready(self) -> None:
         async with self._state_lock:
-            if self._state != ApplicationControllerState.STOPPING:
+            if self._state not in [
+                ApplicationControllerState.STOPPING,
+                ApplicationControllerState.IN_QUIESCENT_MODE,
+            ]:
                 self._state = ApplicationControllerState.READY
                 self._ready_condition.notify()

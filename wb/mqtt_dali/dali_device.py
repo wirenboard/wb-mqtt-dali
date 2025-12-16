@@ -263,8 +263,8 @@ class DaliDevice:
         self.name = name
         self.address = address
         self.types: list[int] = []
-        self.groups: list[str] = []
-        self.params: Optional[dict] = {}
+        self.groups: list[bool] = [False for _ in range(16)]
+        self.params: dict = {}
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         if self.params and not force_reload:

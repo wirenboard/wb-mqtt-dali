@@ -378,7 +378,6 @@ class TestDevice:
         assert "title" not in meta_json
         assert "order" not in meta_json
 
-    @pytest.mark.asyncio
     def test_get_control_base_topic(self, mock_client):
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         topic = device._get_control_base_topic("my_control")

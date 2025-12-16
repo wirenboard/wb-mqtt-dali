@@ -1,5 +1,5 @@
 """
-Commands and responses from IEC 62386 part 218, Device Type 8 
+Commands and responses from IEC 62386 part 218, Device Type 17
 Dimming curve selection
 """
 

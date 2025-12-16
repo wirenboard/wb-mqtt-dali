@@ -138,7 +138,7 @@ class Gateway:
                             "config": device.get_json_config(),
                             "schema": device.get_config_schema(),
                         }
-        raise ValueError("Device not found")
+        raise ValueError(f"Device {device_id} not found")
 
     async def rescan_bus_handler(self, params: dict):
         bus_id = params.get("busId")

@@ -73,8 +73,12 @@ class ApplicationController:
 
     async def stop(self) -> None:
         async with self._state_lock:
-            if self._state != ApplicationControllerState.READY:
-                raise RuntimeError("ApplicationController must be in READY state to stop")
+            if self._state in (
+                ApplicationControllerState.UNINITIALIZED,
+                ApplicationControllerState.INITIALIZING,
+                ApplicationControllerState.STOPPING,
+            ):
+                raise RuntimeError("ApplicationController must be initialized to stop")
             self._state = ApplicationControllerState.STOPPING
 
         if self._quiescent_mode_timer:
@@ -108,7 +112,7 @@ class ApplicationController:
 
     async def load_device_info(self, device: DaliDevice, force_reload: bool = False) -> None:
         await self._run_task(
-            ApplicationControllerState.COMMISSIONING, device.load_info(self._dev, force_reload)
+            ApplicationControllerState.GENERIC_TASK, device.load_info(self._dev, force_reload)
         )
 
     async def _run_task(self, new_state: ApplicationControllerState, task) -> None:
@@ -122,14 +126,10 @@ class ApplicationController:
         except asyncio.TimeoutError as e:
             raise RuntimeError("Bus is busy") from e
         self._active_task = asyncio.create_task(task)
-        is_cancelled = False
         try:
             await self._active_task
-        except asyncio.CancelledError:
-            is_cancelled = True
         finally:
-            if not is_cancelled:
-                await self._notify_ready()
+            await self._notify_ready()
 
     async def _commissioning_task(self):
         await asyncio.sleep(1)
@@ -170,7 +170,7 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
         self._quiescent_mode_timer = asyncio.get_event_loop().call_later(
             60 * 15,  # 15 minutes
-            self._handle_stop_quiescent_mode,
+            lambda: asyncio.create_task(self._handle_stop_quiescent_mode()),
         )
 
     async def _handle_stop_quiescent_mode(self) -> None:
@@ -181,5 +181,6 @@ class ApplicationController:
 
     async def _notify_ready(self) -> None:
         async with self._state_lock:
-            self._state = ApplicationControllerState.READY
-            self._ready_condition.notify()
+            if self._state != ApplicationControllerState.STOPPING:
+                self._state = ApplicationControllerState.READY
+                self._ready_condition.notify()

@@ -125,7 +125,7 @@ class GroupsParam:
         if groups_value is None:
             groups = [False for _ in range(8)]
         else:
-            groups.append([((groups_value.value >> i) & 1 == 1) for i in range(8)])
+            groups.extend([((groups_value.value >> i) & 1 == 1) for i in range(8)])
         groups_value = await driver.send(QueryGroupsEightToFifteen(addr))
         if groups_value is None:
             groups.extend([False for _ in range(8)])
@@ -273,7 +273,7 @@ class DaliDevice:
         short_addr = GearShort(self.address.short)
         try:
             v = await driver.send(QueryVersionNumber(short_addr))
-            bank0 = info.BANK_0_legacy if v.value == 1 else info.BANK_0
+            bank0 = info.BANK_0_legacy if v is None or v.value == 1 else info.BANK_0
             self._update_info(await driver.run_sequence(bank0.read_all(short_addr)))
         except MemoryLocationNotImplemented:
             pass

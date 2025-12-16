@@ -1,7 +1,6 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from dali.address import GearShort
 from dali.exceptions import MemoryLocationNotImplemented
@@ -289,6 +288,7 @@ class DaliDevice:
                     self.params.update(value)
             except Exception as e:
                 raise RuntimeError(f'Error reading "{param.name}" for device {self.name}') from e
+        self.groups = self.params.get("groups", self.groups)
 
         types = await driver.run_sequence(QueryDeviceTypes(short_addr))
         if types is None:
@@ -298,12 +298,7 @@ class DaliDevice:
         self.types = types
 
     def get_json_config(self) -> dict:
-        res: dict = {
-            "groups": self.groups,
-        }
-        if self.params:
-            res.update(self.params)
-        return res
+        return self.params
 
     def get_config_schema(self) -> dict:
         schema_path = Path("/usr/share/wb-mqtt-dali/schemas/control_gear.schema.json")

@@ -62,7 +62,12 @@ class ApplicationController:
                 raise RuntimeError("ApplicationController must be in UNINITIALIZED state to start")
             self._state = ApplicationControllerState.INITIALIZING
 
-        await self._dev.initialize()
+        try:
+            await self._dev.initialize()
+        except Exception as e:
+            async with self._state_lock:
+                self._state = ApplicationControllerState.UNINITIALIZED
+            raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
         if self._websocket_enabled:
             self._websocket_task = asyncio.create_task(

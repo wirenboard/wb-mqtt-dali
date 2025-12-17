@@ -7,6 +7,7 @@ from dali.device.general import StartQuiescentMode, StopQuiescentMode
 
 from .commissioning import Commissioning
 from .dali_device import DaliDevice, make_device
+from .device_publisher import DeviceChange, DevicePublisher
 from .fake_lunatone_iot import run_websocket
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
@@ -43,6 +44,7 @@ class ApplicationController:
         self._active_task: Optional[asyncio.Task] = None
 
         self._mqtt_dispatcher = mqtt_dispatcher
+        self._device_publisher = DevicePublisher(mqtt_dispatcher, self.uid)
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
@@ -68,6 +70,17 @@ class ApplicationController:
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
+
+        for device in self.devices:
+            device_info = {
+                "id": str(device.address.short),
+                "title": device.name,
+                "driver": "wb-matt-dali",
+                "controls": [],
+            }
+            await self._device_publisher.add_device(device_info)
+
+        await self._device_publisher.initialize()
 
         if self._websocket_enabled:
             self._websocket_task = asyncio.create_task(
@@ -96,6 +109,8 @@ class ApplicationController:
             except asyncio.CancelledError:
                 pass
             self._websocket_task = None
+
+        await self._device_publisher.cleanup()
 
         if self._active_task:
             self._active_task.cancel()
@@ -148,8 +163,41 @@ class ApplicationController:
         unchanged_devices = [d for d in self.devices if d.address in res.unchanged]
         changed_devices = [make_device(self.uid, d.new) for d in res.changed]
         new_devices = [make_device(self.uid, addr) for addr in res.new]
+
+        old_device_ids = {str(d.address.short) for d in self.devices}
+
         self.devices = unchanged_devices + changed_devices + new_devices
         self.devices.sort(key=lambda d: d.address.short)
+
+        new_device_ids = {str(d.address.short) for d in self.devices}
+
+        removed_ids = list(old_device_ids - new_device_ids)
+        added_devices = [
+            {
+                "id": str(d.address.short),
+                "title": d.name,
+                "driver": "dali",
+                "controls": [],
+            }
+            for d in new_devices
+        ]
+        updated_devices = [
+            {
+                "id": str(d.address.short),
+                "title": d.name,
+                "driver": "dali",
+                "controls": [],
+            }
+            for d in changed_devices
+        ]
+
+        changes = DeviceChange(
+            added=added_devices,
+            removed=removed_ids,
+            updated=updated_devices,
+        )
+
+        await self._device_publisher.rebuild(changes)
 
     async def _run_websocket(self) -> None:
         await run_websocket(

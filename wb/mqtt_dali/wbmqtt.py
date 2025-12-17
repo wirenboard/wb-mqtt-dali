@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import random
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import asyncio_mqtt as aiomqtt
+
+from .mqtt_dispatcher import MQTTDispatcher
 
 
 @dataclass
@@ -143,7 +145,7 @@ class Device:
         await self._mqtt_client.publish(topic, value, retain=True)
 
 
-async def retain_hack(mqtt_client: aiomqtt.Client) -> None:
+async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
     random.seed()
     retain_hack_topic = f"/wbretainhack/{random.random()}"
 
@@ -152,65 +154,35 @@ async def retain_hack(mqtt_client: aiomqtt.Client) -> None:
     async def on_retain_hack(message):
         event.set()
 
-    await mqtt_client.subscribe(retain_hack_topic)
+    await mqtt_dispatcher.subscribe(retain_hack_topic, on_retain_hack)
 
-    async def wait_for_message():
-        async with mqtt_client.unfiltered_messages() as messages:
-            async for message in messages:
-                if message.topic == retain_hack_topic:
-                    await on_retain_hack(message)
-                    break
-
-    listener_task = asyncio.create_task(wait_for_message())
-
-    await mqtt_client.publish(retain_hack_topic, "2", qos=2)
+    await mqtt_dispatcher.client.publish(retain_hack_topic, "2", qos=2)
 
     try:
         await asyncio.wait_for(event.wait(), timeout=10)
     except asyncio.TimeoutError:
         logging.warning("Retain hack timeout")
     finally:
-        listener_task.cancel()
-        try:
-            await listener_task
-        except asyncio.CancelledError:
-            pass
-        await mqtt_client.unsubscribe(retain_hack_topic)
+        await mqtt_dispatcher.unsubscribe(retain_hack_topic)
 
 
-async def remove_topics_by_device_prefix(mqtt_client: aiomqtt.Client, device_prefix: str) -> None:
+async def remove_topics_by_device_prefix(mqtt_dispatcher: MQTTDispatcher, device_prefix: str) -> None:
     topics = []
     pattern = "/devices/" + device_prefix
     devices_pattern = "/devices/#"
 
-    await mqtt_client.subscribe(devices_pattern)
+    async def collect_topics(message):
+        topic = str(message.topic)
+        if topic.startswith(pattern):
+            topics.append(topic)
 
-    retain_hack_done = asyncio.Event()
+    await mqtt_dispatcher.subscribe(devices_pattern, collect_topics)
 
-    async def collect_topics():
-        async with mqtt_client.unfiltered_messages() as messages:
-            async for message in messages:
-                topic = str(message.topic)
-                if topic.startswith(pattern):
-                    topics.append(topic)
-                if retain_hack_done.is_set():
-                    break
-
-    collector_task = asyncio.create_task(collect_topics())
-
-    await retain_hack(mqtt_client)
-    retain_hack_done.set()
+    await retain_hack(mqtt_dispatcher)
 
     await asyncio.sleep(0.05)
 
-    collector_task.cancel()
-    try:
-        await collector_task
-    except asyncio.CancelledError:
-        pass
-
-    await mqtt_client.unsubscribe(devices_pattern)
+    await mqtt_dispatcher.unsubscribe(devices_pattern)
 
     for topic in topics:
-        logging.debug("Clear old topic %s", topic)
-        await mqtt_client.publish(topic, None, retain=True)
+        await mqtt_dispatcher.client.publish(topic, None, retain=True)

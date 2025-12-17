@@ -71,7 +71,7 @@ class DevicePublisher:
 
             self._devices.clear()
 
-            await remove_topics_by_device_prefix(self._mqtt_dispatcher.client, self._bus_id)
+            await remove_topics_by_device_prefix(self._mqtt_dispatcher, self._bus_id)
 
             self._initialized = False
             self.logger.info("Cleanup completed for bus %s", self._bus_id)

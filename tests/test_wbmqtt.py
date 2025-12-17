@@ -64,6 +64,38 @@ def mock_client():
     return MockMQTTClient()
 
 
+class MockMQTTDispatcher:
+    def __init__(self, client):
+        self.client = client
+        self._subscriptions = {}
+
+    async def subscribe(self, topic, callback):
+        if topic not in self._subscriptions:
+            self._subscriptions[topic] = []
+        self._subscriptions[topic].append(callback)
+        await self.client.subscribe(topic)
+
+        if "#" in topic:
+            prefix = topic.replace("/#", "")
+            for message in self.client._messages:
+                if str(message.topic).startswith(prefix):
+                    await callback(message)
+        else:
+            for message in self.client._messages:
+                if str(message.topic) == topic:
+                    await callback(message)
+
+    async def unsubscribe(self, topic):
+        if topic in self._subscriptions:
+            del self._subscriptions[topic]
+        await self.client.unsubscribe(topic)
+
+
+@pytest.fixture
+def mock_dispatcher(mock_client):
+    return MockMQTTDispatcher(mock_client)
+
+
 class TestControlMeta:
     def test_default_initialization(self):
         meta = ControlMeta()
@@ -429,58 +461,62 @@ class TestDevice:
 
 class TestRetainHack:
     @pytest.mark.asyncio
-    async def test_retain_hack_success(self, mock_client):
+    async def test_retain_hack_success(self, mock_dispatcher):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.12345):
-            mock_client.add_message("/wbretainhack/0.12345", b"2")
+            mock_dispatcher.client.add_message("/wbretainhack/0.12345", b"2")
 
-            await retain_hack(mock_client)
+            await retain_hack(mock_dispatcher)
 
-            mock_client.subscribe.assert_called()
-            mock_client.publish.assert_called()
-            mock_client.unsubscribe.assert_called()
+            mock_dispatcher.client.subscribe.assert_called()
+            mock_dispatcher.client.publish.assert_called()
+            mock_dispatcher.client.unsubscribe.assert_called()
 
     @pytest.mark.asyncio
-    async def test_retain_hack_timeout(self, mock_client, caplog):
+    async def test_retain_hack_timeout(self, mock_dispatcher, caplog):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.54321):
             with caplog.at_level(logging.WARNING):
-                await retain_hack(mock_client)
+                await retain_hack(mock_dispatcher)
 
             assert "Retain hack timeout" in caplog.text
 
 
 class TestRemoveTopicsByDevicePrefix:
     @pytest.mark.asyncio
-    async def test_remove_topics_by_device_prefix(self, mock_client):
+    async def test_remove_topics_by_device_prefix(self, mock_dispatcher):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.99999):
-            mock_client.add_message("/devices/wb-mdali_123/controls/ch1", b"on")
-            mock_client.add_message("/devices/wb-mdali_123/controls/ch2", b"off")
-            mock_client.add_message("/devices/wb-mdali_123/meta/name", b"Device")
-            mock_client.add_message("/devices/other_device/controls/ch1", b"value")
-            mock_client.add_message("/wbretainhack/0.99999", b"2")
+            mock_dispatcher.client.add_message("/devices/wb-mdali_123/controls/ch1", b"on")
+            mock_dispatcher.client.add_message("/devices/wb-mdali_123/controls/ch2", b"off")
+            mock_dispatcher.client.add_message("/devices/wb-mdali_123/meta/name", b"Device")
+            mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
+            mock_dispatcher.client.add_message("/wbretainhack/0.99999", b"2")
 
-            await remove_topics_by_device_prefix(mock_client, "wb-mdali_123")
+            await remove_topics_by_device_prefix(mock_dispatcher, "wb-mdali_123")
 
-            mock_client.subscribe.assert_any_call("/devices/#")
-            mock_client.unsubscribe.assert_called()
-
-            clear_calls = [c for c in mock_client.publish.call_args_list if c[0][1] is None]
-            assert len(clear_calls) >= 2
-
-    @pytest.mark.asyncio
-    async def test_remove_topics_no_matching(self, mock_client):
-        with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.11111):
-            mock_client.add_message("/devices/other_device/controls/ch1", b"value")
-            mock_client.add_message("/wbretainhack/0.11111", b"2")
-
-            await remove_topics_by_device_prefix(mock_client, "nonexistent")
-
-            mock_client.subscribe.assert_called()
-            mock_client.unsubscribe.assert_called()
+            mock_dispatcher.client.subscribe.assert_any_call("/devices/#")
+            mock_dispatcher.client.unsubscribe.assert_called()
 
             clear_calls = [
                 c
-                for c in mock_client.publish.call_args_list
-                if c[0][1] is None and "wbretainhack" not in c[0][0]
+                for c in mock_dispatcher.client.publish.call_args_list
+                if c[0][1] is None and c[0][0].startswith("/devices/wb-mdali_123")
+            ]
+            assert len(clear_calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_remove_topics_no_matching(self, mock_dispatcher):
+        with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.11111):
+            mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
+            mock_dispatcher.client.add_message("/wbretainhack/0.11111", b"2")
+
+            await remove_topics_by_device_prefix(mock_dispatcher, "nonexistent")
+
+            mock_dispatcher.client.subscribe.assert_called()
+            mock_dispatcher.client.unsubscribe.assert_called()
+
+            clear_calls = [
+                c
+                for c in mock_dispatcher.client.publish.call_args_list
+                if c[0][1] is None and c[0][0].startswith("/devices/nonexistent")
             ]
             assert len(clear_calls) == 0
 

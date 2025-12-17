@@ -351,7 +351,7 @@ class Commissioning:
 
         return random_address_conflicts
 
-    async def smart_extend(self) -> CommissioningResult:
+    async def smart_extend(self) -> CommissioningResult:  # pylint: disable=R0912 disable=R0914 disable=R0915
         # Есть весёлая железка, с таким поведением:
         #   на запросы QUERY RANDOM ADDRESS H/M/L не отвечает вообще
         #   на VERIFY SHORT ADDRESS тоже не отвечает

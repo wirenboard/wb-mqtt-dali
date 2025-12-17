@@ -75,7 +75,7 @@ class ApplicationController:
             device_info = {
                 "id": str(device.address.short),
                 "title": device.name,
-                "driver": "wb-matt-dali",
+                "driver": "wb-mqtt-dali",
                 "controls": [],
             }
             await self._device_publisher.add_device(device_info)

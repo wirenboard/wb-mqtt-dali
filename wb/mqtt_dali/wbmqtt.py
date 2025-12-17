@@ -2,8 +2,8 @@ import asyncio
 import json
 import logging
 import random
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 import asyncio_mqtt as aiomqtt
 
@@ -151,7 +151,7 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
 
     event = asyncio.Event()
 
-    async def on_retain_hack(message):
+    async def on_retain_hack(_message):
         event.set()
 
     await mqtt_dispatcher.subscribe(retain_hack_topic, on_retain_hack)

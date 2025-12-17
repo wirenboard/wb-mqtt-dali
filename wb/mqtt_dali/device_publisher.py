@@ -6,7 +6,7 @@ from .mqtt_dispatcher import MQTTDispatcher
 from .wbmqtt import ControlMeta, Device, remove_topics_by_device_prefix
 
 
-class DeviceChange:
+class DeviceChange:  # pylint: disable=R0903
     def __init__(
         self,
         added: Optional[List[Dict[str, Any]]] = None,
@@ -18,7 +18,7 @@ class DeviceChange:
         self.updated = updated or []
 
 
-class ControlHandler:
+class ControlHandler:  # pylint: disable=R0903
     def __init__(self, device_id: str, control_id: str, callback: Callable):
         self.device_id = device_id
         self.control_id = control_id

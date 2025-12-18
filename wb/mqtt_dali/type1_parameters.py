@@ -22,12 +22,16 @@ class EmergencyLevelParam(GearParam):
     set_command_class = StoreDTRAsEmergencyLevel
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
-        min_level = await driver.send(QueryEmergencyMinLevel(addr))
-        if min_level is None:
+        min_level_response = await driver.send(QueryEmergencyMinLevel(addr))
+        if min_level_response is None:
             min_level = 0
-        max_level = await driver.send(QueryEmergencyMaxLevel(addr))
-        if max_level is None:
+        else:
+            min_level = min_level_response.raw_value.as_integer
+        max_level_response = await driver.send(QueryEmergencyMaxLevel(addr))
+        if max_level_response is None:
             max_level = 254
+        else:
+            max_level = max_level_response.raw_value.as_integer
         value = await driver.send(QueryEmergencyLevel(addr))
         if value is None:
             return {}

@@ -46,11 +46,11 @@ class FastFadeTimeParam(GearParam):
     set_command_class = StoreDTRAsFastFadeTime
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
-        min_time_reponse = await send_extended_command(driver, QueryMinFastFadeTime(addr))
-        if min_time_reponse is None:
+        min_time_response = await send_extended_command(driver, QueryMinFastFadeTime(addr))
+        if min_time_response is None:
             min_time = 27
         else:
-            min_time = min_time_reponse.raw_value.as_integer
+            min_time = min_time_response.raw_value.as_integer
         return {
             "properties": {
                 self.property_name: {

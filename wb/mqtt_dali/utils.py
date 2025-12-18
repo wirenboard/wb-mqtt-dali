@@ -1,7 +1,8 @@
 def merge_json_schemas(dst: dict, src: dict) -> dict:
     if "properties" not in dst:
         dst["properties"] = {}
-    dst["properties"].update(src["properties"])
+    if "properties" in src:
+        dst["properties"].update(src["properties"])
     if "translations" in src:
         if "translations" not in dst:
             dst["translations"] = {}

@@ -54,7 +54,7 @@ class QueryReductionFactor3(_DemandResponseCommand):
 class SetLoadSheddingCondition(_DemandResponseCommand):
     """Set the load shedding condition.
 
-    The command is send once!
+    The command is sent once!
     """
 
     uses_dtr0 = True

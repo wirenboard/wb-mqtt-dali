@@ -42,4 +42,5 @@ class SelectDimmingCurve(_DimmingCurveConfigCommand):
     cleared by the Reset command.
     """
 
+    uses_dtr0 = True
     _cmdval = 0xE3

@@ -46,6 +46,8 @@ class GearParam:
             return rsp
 
         value_after_write = await driver.run_sequence(set_sequence())
+        if value_after_write is None:
+            return {}
         return {self.property_name: value_after_write.raw_value.as_integer}
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:

@@ -8,8 +8,9 @@ import string
 from dataclasses import dataclass
 from itertools import groupby
 from operator import itemgetter
-from typing import Any, Iterable, Optional
+from typing import Any, Generator, Iterable, Optional
 
+from dali import command
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
 from dali.command import Command, Response, from_frame
 from dali.device.general import (
@@ -524,3 +525,11 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
                 instance_type=type_rsp.value,
             )
         await driver.send(StopQuiescentMode(DeviceBroadcast()))
+
+
+async def send_extended_command(driver: WBDALIDriver, cmd: Command) -> Optional[Response]:
+    def set_sequence() -> Generator[command.Command, Optional[command.Response], Optional[command.Response]]:
+        rsp = yield cmd
+        return rsp
+
+    return await driver.run_sequence(set_sequence())

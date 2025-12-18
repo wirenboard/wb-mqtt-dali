@@ -135,8 +135,8 @@ class Gateway:
                     if device.uid == device_id:
                         await bus.load_device_info(device, force_reload)
                         return {
-                            "config": device.get_json_config(),
-                            "schema": device.get_config_schema(),
+                            "config": device.params,
+                            "schema": device.schema,
                         }
         raise ValueError(f"Device {device_id} not found")
 

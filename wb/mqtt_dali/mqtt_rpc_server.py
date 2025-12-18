@@ -70,12 +70,14 @@ class MQTTRPCServer:
     async def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
         asyncio.create_task(self._process_callback(mqtt_message))
 
-    async def _handle_request(self, mqtt_message: mqtt.MQTTMessage) -> MQTTRPC10Response:
+    async def _handle_request(self, mqtt_message: mqtt.MQTTMessage) -> str:
         try:
             request = MQTTRPC10Request.from_json(mqtt_message.payload.decode())
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Invalid JSON-RPC request: %s", e)
-            return MQTTRPC10Response(error=JSONRPCInvalidRequest()._data)  # pylint: disable=protected-access
+            return MQTTRPC10Response(
+                error=JSONRPCInvalidRequest()._data  # pylint: disable=protected-access
+            ).json
         try:
             topic_base, _ = mqtt_message.topic.rsplit("/", 1)
             handler = self._endpoints.get(topic_base)
@@ -83,24 +85,26 @@ class MQTTRPCServer:
                 self.logger.error("No RPC endpoint for topic: %s", mqtt_message.topic)
                 return MQTTRPC10Response(
                     _id=request._id, error=JSONRPCMethodNotFound()._data  # pylint: disable=protected-access
-                )
+                ).json
             result = await handler(request.params)
-            return MQTTRPC10Response(_id=request._id, result=result)  # pylint: disable=protected-access
+            return MQTTRPC10Response(_id=request._id, result=result).json  # pylint: disable=protected-access
         except JSONRPCDispatchException as e:
             self.logger.error("Error processing RPC request: %s", e)
-            return MQTTRPC10Response(_id=request._id, error=e.error._data)  # pylint: disable=protected-access
+            return MQTTRPC10Response(
+                _id=request._id, error=e.error._data  # pylint: disable=protected-access
+            ).json
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error processing RPC request: %s", e)
             return MQTTRPC10Response(
                 _id=request._id,  # pylint: disable=protected-access
                 error=JSONRPCServerError(data=str(e))._data,  # pylint: disable=protected-access
-            )
+            ).json
 
     async def _process_callback(self, mqtt_message: mqtt.MQTTMessage) -> None:
         response = await self._handle_request(mqtt_message)
         try:
             await self._mqtt_dispatcher.client.publish(
-                mqtt_message.topic + "/reply", response.json, qos=2, retain=False
+                mqtt_message.topic + "/reply", response, qos=2, retain=False
             )
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Failed to publish RPC response: %s", e)

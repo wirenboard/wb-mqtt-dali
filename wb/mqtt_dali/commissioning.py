@@ -258,7 +258,7 @@ class Commissioning:
         if query_short_resp.raw_value is None:
             log.error(
                 "No response while reading short address of device at 0x%06x. "
-                "Maybe shitty device doesn't implement the QUERY SHORT ADDRESS command? "
+                "Maybe the device doesn't implement the QUERY SHORT ADDRESS command? "
                 "Ask it to withdraw anyway",
                 found_addr,
             )

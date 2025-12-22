@@ -10,7 +10,7 @@ from dali.gear.emergency import (
 )
 
 from .extended_gear_parameters import GearParam, TypeParameters
-from .wbdali import WBDALIDriver, send_extended_command
+from .wbdali import WBDALIDriver, query_request
 
 # TODO: prolong time is write only
 
@@ -22,19 +22,14 @@ class EmergencyLevelParam(GearParam):
     set_command_class = StoreDTRAsEmergencyLevel
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
-        min_level_response = await driver.send(QueryEmergencyMinLevel(addr))
-        if min_level_response is None:
-            min_level = 0
-        else:
-            min_level = min_level_response.raw_value.as_integer
-        max_level_response = await driver.send(QueryEmergencyMaxLevel(addr))
-        if max_level_response is None:
-            max_level = 254
-        else:
-            max_level = max_level_response.raw_value.as_integer
-        value = await driver.send(QueryEmergencyLevel(addr))
-        if value is None:
-            return {}
+        try:
+            min_level = await query_request(driver, QueryEmergencyMinLevel(addr))
+        except RuntimeError as e:
+            raise RuntimeError(f"Failed to read emergency min level: {e}") from e
+        try:
+            max_level = await query_request(driver, QueryEmergencyMaxLevel(addr))
+        except RuntimeError as e:
+            raise RuntimeError(f"Failed to read emergency max level: {e}") from e
         return {
             "properties": {
                 self.property_name: {
@@ -50,7 +45,10 @@ class EmergencyLevelParam(GearParam):
 
 class Type1Parameters(TypeParameters):
     async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
-        features = await send_extended_command(driver, QueryEmergencyFeatures(addr))
-        if not features or not features.bits[4]:
+        try:
+            features = await query_request(driver, QueryEmergencyFeatures(addr))
+        except RuntimeError as e:
+            raise RuntimeError(f"Failed to read emergency features: {e}") from e
+        if ((features >> 4) & 1) != 1:  # bit 4: type 1 emergency lighting support
             return []
         return [EmergencyLevelParam()]

@@ -5,7 +5,7 @@ from dali.address import GearShort
 from dali.gear.general import DTR0
 
 from .utils import merge_json_schemas
-from .wbdali import WBDALIDriver, send_extended_command
+from .wbdali import WBDALIDriver, query_request
 
 
 class GearParam:
@@ -14,41 +14,36 @@ class GearParam:
     query_command_class: Optional[Callable] = None
     set_command_class: Optional[Callable] = None
 
-    async def read(self, driver: WBDALIDriver, addr: GearShort):
+    def __init__(self) -> None:
         if self.query_command_class is None:
-            return None
-        value = await send_extended_command(driver, self.query_command_class(addr))
-        if value is None:
-            return None
-        return {self.property_name: value.raw_value.as_integer}
+            raise RuntimeError(f"Query command class for {self.name} is not defined")
+        if self.set_command_class is None:
+            raise RuntimeError(f"Set command class for {self.name} is not defined")
+        self._last_value = None
+
+    async def read(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+        self._last_value = await query_request(driver, self.query_command_class(addr))
+        return {self.property_name: self._last_value}
 
     async def write(self, driver: WBDALIDriver, addr: GearShort, value: dict) -> dict:
-        if (
-            self.property_name not in value
-            or self.query_command_class is None
-            or self.set_command_class is None
-        ):
+        if self.property_name not in value:
             return {}
         value_to_set = value[self.property_name]
+        if self._last_value == value_to_set:
+            return {}
 
-        def set_sequence() -> (
-            Generator[command.Command, Optional[command.Response], Optional[command.Response]]
-        ):
+        def set_sequence() -> Generator[command.Command, Optional[command.Response], None]:
             rsp = yield DTR0(value_to_set)
             if rsp is not None:
-                return None
+                raise RuntimeError(f"Failed to write DTR0 got unexpected response {rsp}")
 
             rsp = yield self.set_command_class(addr)
             if rsp is not None:
-                return None
+                raise RuntimeError(f"Got unexpected response {rsp}")
 
-            rsp = yield self.query_command_class(addr)
-            return rsp
-
-        value_after_write = await driver.run_sequence(set_sequence())
-        if value_after_write is None:
-            return {}
-        return {self.property_name: value_after_write.raw_value.as_integer}
+        await driver.run_sequence(set_sequence())
+        await self.read(driver, addr)
+        return {self.property_name: self._last_value}
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
         return {}
@@ -68,7 +63,7 @@ class TypeParameters:
                 if value is not None:
                     res.update(value)
             except Exception as e:
-                raise RuntimeError(f'Error reading "{param.name}"') from e
+                raise RuntimeError(f'Error reading "{param.name}": {e}') from e
         return res
 
     async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
@@ -79,13 +74,16 @@ class TypeParameters:
                 if updated_value is not None:
                     res.update(updated_value)
             except Exception as e:
-                raise RuntimeError(f'Error writing "{param.name}"') from e
+                raise RuntimeError(f'Error writing "{param.name}": {e}') from e
         return res
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
         res = {}
         for param in self._parameters:
-            schema = await param.get_schema(driver, addr)
+            try:
+                schema = await param.get_schema(driver, addr)
+            except Exception as e:
+                raise RuntimeError(f'Error getting schema for "{param.name}": {e}') from e
             if schema:
                 merge_json_schemas(res, schema)
         return res

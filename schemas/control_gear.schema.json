@@ -21,6 +21,7 @@
       "title": "Global Trade Item Number",
       "propertyOrder": 1,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -31,6 +32,7 @@
       "title": "Identification Number",
       "propertyOrder": 2,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -41,6 +43,7 @@
       "title": "Firmware Version",
       "propertyOrder": 3,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -51,6 +54,7 @@
       "title": "Hardware Version",
       "propertyOrder": 4,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -61,6 +65,7 @@
       "title": "DALI Part 101 Version",
       "propertyOrder": 5,
       "options": {
+        "grid_columns": 4,
         "wb": {
           "read_only": true
         }
@@ -71,6 +76,7 @@
       "title": "DALI Part 102 Version",
       "propertyOrder": 6,
       "options": {
+        "grid_columns": 4,
         "wb": {
           "read_only": true
         }
@@ -81,6 +87,7 @@
       "title": "DALI Part 103 Version",
       "propertyOrder": 7,
       "options": {
+        "grid_columns": 4,
         "wb": {
           "read_only": true
         }
@@ -91,6 +98,7 @@
       "title": "OEM Global Trade Item Number",
       "propertyOrder": 8,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -101,6 +109,7 @@
       "title": "OEM Identification Number",
       "propertyOrder": 9,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -114,6 +123,7 @@
       "maximum": 63,
       "default": 0,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -124,6 +134,7 @@
       "title": "Random Address",
       "propertyOrder": 11,
       "options": {
+        "grid_columns": 6,
         "wb": {
           "read_only": true
         }
@@ -136,7 +147,8 @@
       "minItems": 16,
       "maxItems": 16,
       "items": {
-        "type": "boolean"
+        "type": "boolean",
+        "format": "button"
       }
     },
     "min_level": {
@@ -145,7 +157,10 @@
       "propertyOrder": 13,
       "minimum": 0,
       "maximum": 254,
-      "default": 0
+      "default": 0,
+      "options": {
+        "grid_columns": 3
+      }
     },
     "max_level": {
       "type": "number",
@@ -153,7 +168,10 @@
       "propertyOrder": 14,
       "minimum": 0,
       "maximum": 254,
-      "default": 254
+      "default": 254,
+      "options": {
+        "grid_columns": 3
+      }
     },
     "power_on_level": {
       "type": "number",
@@ -161,7 +179,11 @@
       "propertyOrder": 15,
       "minimum": 0,
       "maximum": 255,
-      "default": 254
+      "default": 254,
+      "options": {
+        "grid_columns": 3
+      }
+
     },
     "system_failure_level": {
       "type": "number",
@@ -169,7 +191,10 @@
       "propertyOrder": 16,
       "minimum": 0,
       "maximum": 255,
-      "default": 254
+      "default": 254,
+      "options": {
+        "grid_columns": 3
+      }
     },
     "fade_time": {
       "type": "number",
@@ -177,7 +202,10 @@
       "propertyOrder": 17,
       "minimum": 0,
       "maximum": 15,
-      "default": 1
+      "default": 1,
+      "options": {
+        "grid_columns": 6
+      }
     },
     "fade_rate": {
       "type": "number",
@@ -185,7 +213,10 @@
       "propertyOrder": 18,
       "minimum": 1,
       "maximum": 15,
-      "default": 1
+      "default": 1,
+      "options": {
+        "grid_columns": 6
+      }
     }
   },
 

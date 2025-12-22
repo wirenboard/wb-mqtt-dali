@@ -10,7 +10,7 @@ from dali.gear.led import (
 )
 
 from .extended_gear_parameters import GearParam, TypeParameters
-from .wbdali import WBDALIDriver, send_extended_command
+from .wbdali import WBDALIDriver, query_request
 
 
 class DimmingCurveParam(GearParam):
@@ -46,11 +46,10 @@ class FastFadeTimeParam(GearParam):
     set_command_class = StoreDTRAsFastFadeTime
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
-        min_time_response = await send_extended_command(driver, QueryMinFastFadeTime(addr))
-        if min_time_response is None:
-            min_time = 27
-        else:
-            min_time = min_time_response.raw_value.as_integer
+        try:
+            min_time = await query_request(driver, QueryMinFastFadeTime(addr))
+        except RuntimeError as e:
+            raise RuntimeError(f"Failed to read min fast fade time: {e}") from e
         return {
             "properties": {
                 self.property_name: {

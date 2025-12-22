@@ -45,6 +45,6 @@ class Type5Parameters(TypeParameters):
             features = await query_request(driver, QueryConverterFeatures(addr))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
-        if ((features >> 5) & 1) != 1:  # 5th bit: dimming curve selectable
+        if not ((features >> 5) & 1):  # 5th bit: dimming curve selectable
             return []
         return [DimmingCurveParam()]

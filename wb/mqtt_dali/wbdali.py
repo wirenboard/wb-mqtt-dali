@@ -547,5 +547,5 @@ def check_query_response(resp: Optional[Response]) -> None:
     raw_value = resp.raw_value
     if raw_value is None:
         raise RuntimeError("Got no response")
-    if raw_value.error is not None:
+    if raw_value.error:
         raise RuntimeError("Framing error")

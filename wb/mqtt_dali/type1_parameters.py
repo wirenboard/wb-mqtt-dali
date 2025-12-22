@@ -49,6 +49,6 @@ class Type1Parameters(TypeParameters):
             features = await query_request(driver, QueryEmergencyFeatures(addr))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency features: {e}") from e
-        if ((features >> 4) & 1) != 1:  # bit 4: type 1 emergency lighting support
+        if not ((features >> 4) & 1):  # bit 4: type 1 emergency lighting support
             return []
         return [EmergencyLevelParam()]

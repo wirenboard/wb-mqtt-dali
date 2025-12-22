@@ -84,38 +84,22 @@ class FadeTimeFadeRateParam:
         if self._fade_time == fade_time_to_set and self._fade_rate == fade_rate_to_set:
             return {}
 
-        def set_sequence() -> (
-            Generator[command.Command, Optional[command.Response], Optional[command.Response]]
-        ):
+        def set_sequence() -> Generator[command.Command, Optional[command.Response], None]:
             if fade_time_to_set is not None:
                 rsp = yield DTR0(fade_time_to_set)
-                if rsp is not None:
-                    return None
-
-                rsp = yield SetFadeTime(address)
-                if rsp is not None:
-                    return None
+                if rsp is None:
+                    yield SetFadeTime(address)
 
             if fade_rate_to_set is not None:
                 rsp = yield DTR0(fade_rate_to_set)
-                if rsp is not None:
-                    return None
+                if rsp is None:
+                    yield SetFadeRate(address)
 
-                rsp = yield SetFadeRate(address)
-                if rsp is not None:
-                    return None
-
-            rsp = yield QueryFadeTimeFadeRate(address)
-            return rsp
-
-        value_after_write = await driver.run_sequence(set_sequence())
-        if value_after_write is None:
-            return {}
-        self._fade_time = value_after_write.fade_time
-        self._fade_rate = value_after_write.fade_rate
+        await driver.run_sequence(set_sequence())
+        await self.read(driver, address)
         return {
-            "fade_time": value_after_write.fade_time,
-            "fade_rate": value_after_write.fade_rate,
+            "fade_time": self._fade_time,
+            "fade_rate": self._fade_rate,
         }
 
 
@@ -147,13 +131,9 @@ class GroupsParam:
             for i in range(16):
                 if groups_to_set[i] != self._groups[i]:
                     if groups_to_set[i]:
-                        resp = yield AddToGroup(address, i)
-                        if resp is not None:
-                            return resp
+                        yield AddToGroup(address, i)
                     else:
-                        resp = yield RemoveFromGroup(address, i)
-                        if resp is not None:
-                            return resp
+                        yield RemoveFromGroup(address, i)
             return None
 
         await driver.run_sequence(set_sequence())
@@ -206,7 +186,7 @@ class CommonParameters:
                 if value is not None:
                     res.update(value)
             except Exception as e:
-                raise RuntimeError(f'Error reading "{param.name}"') from e
+                raise RuntimeError(f'Error reading "{param.name}": {e}') from e
         return res
 
     async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
@@ -217,7 +197,7 @@ class CommonParameters:
                 if param_res is not None:
                     res.update(param_res)
             except Exception as e:
-                raise RuntimeError(f'Error writing "{param.name}"') from e
+                raise RuntimeError(f'Error writing "{param.name}": {e}') from e
         return res
 
     async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:

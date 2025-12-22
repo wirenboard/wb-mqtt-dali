@@ -1,4 +1,5 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -143,11 +144,11 @@ class TestMQTTRPCServer:
         request = MQTTRPC10Request(params={"test": "data"}, _id="req1")
         mqtt_message.payload.decode.return_value = request.json
 
-        response = await rpc_server._handle_request(mqtt_message)
+        response = json.loads(await rpc_server._handle_request(mqtt_message))
 
-        assert response.data["id"] == "req1"
-        assert response.data["result"]["result"] == "success"
-        assert response.data["result"]["value"] == "data"
+        assert response["id"] == "req1"
+        assert response["result"]["result"] == "success"
+        assert response["result"]["value"] == "data"
 
     @pytest.mark.asyncio
     async def test_handle_request_invalid_json(self, rpc_server):
@@ -155,10 +156,10 @@ class TestMQTTRPCServer:
         mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
         mqtt_message.payload.decode.return_value = "invalid json"
 
-        response = await rpc_server._handle_request(mqtt_message)
+        response = json.loads(await rpc_server._handle_request(mqtt_message))
 
-        assert "error" in response.data
-        assert response.data["error"]["code"] == JSONRPCInvalidRequest()._data["code"]
+        assert "error" in response
+        assert response["error"]["code"] == JSONRPCInvalidRequest()._data["code"]
 
     @pytest.mark.asyncio
     async def test_handle_request_method_not_found(self, rpc_server):
@@ -167,11 +168,11 @@ class TestMQTTRPCServer:
         request = MQTTRPC10Request(params={}, _id="req1")
         mqtt_message.payload.decode.return_value = request.json
 
-        response = await rpc_server._handle_request(mqtt_message)
+        response = json.loads(await rpc_server._handle_request(mqtt_message))
 
-        assert response.data["id"] == "req1"
-        assert "error" in response.data
-        assert response.data["error"]["code"] == JSONRPCMethodNotFound()._data["code"]
+        assert response["id"] == "req1"
+        assert "error" in response
+        assert response["error"]["code"] == JSONRPCMethodNotFound()._data["code"]
 
     @pytest.mark.asyncio
     async def test_handle_request_handler_exception(self, rpc_server):
@@ -188,26 +189,26 @@ class TestMQTTRPCServer:
         request = MQTTRPC10Request(params={"first_call": True}, _id="req1")
         mqtt_message.payload.decode.return_value = request.json
 
-        response = await rpc_server._handle_request(mqtt_message)
+        response = json.loads(await rpc_server._handle_request(mqtt_message))
 
-        assert response.data["id"] == "req1"
-        assert "error" in response.data
-        assert response.data["error"]["code"] == -32000
-        assert response.data["error"]["message"] == "Server error"
-        assert response.data["error"]["data"] == "Test error"
+        assert response["id"] == "req1"
+        assert "error" in response
+        assert response["error"]["code"] == -32000
+        assert response["error"]["message"] == "Server error"
+        assert response["error"]["data"] == "Test error"
 
         mqtt_message2 = MagicMock()
         mqtt_message2.topic = "/rpc/v1/test_driver/service1/method1/222"
         request = MQTTRPC10Request(params={}, _id="req2")
         mqtt_message2.payload.decode.return_value = request.json
 
-        response = await rpc_server._handle_request(mqtt_message2)
+        response = json.loads(await rpc_server._handle_request(mqtt_message2))
 
-        assert response.data["id"] == "req2"
-        assert "error" in response.data
-        assert response.data["error"]["code"] == -32123
-        assert response.data["error"]["message"] == "Dispatch error"
-        assert response.data["error"]["data"] == "Test error2"
+        assert response["id"] == "req2"
+        assert "error" in response
+        assert response["error"]["code"] == -32123
+        assert response["error"]["message"] == "Dispatch error"
+        assert response["error"]["data"] == "Test error2"
 
     @pytest.mark.asyncio
     async def test_process_callback(self, rpc_server, mock_mqtt_dispatcher):

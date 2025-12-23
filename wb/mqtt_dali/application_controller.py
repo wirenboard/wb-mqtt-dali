@@ -135,6 +135,11 @@ class ApplicationController:
             ApplicationControllerState.GENERIC_TASK, device.load_info(self._dev, force_reload)
         )
 
+    async def apply_parameters(self, device: DaliDevice, new_params: dict) -> None:
+        await self._run_task(
+            ApplicationControllerState.GENERIC_TASK, device.apply_parameters(self._dev, new_params)
+        )
+
     async def _run_task(self, new_state: ApplicationControllerState, task) -> None:
         try:
             async with self._ready_condition:

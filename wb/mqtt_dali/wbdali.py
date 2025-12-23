@@ -527,9 +527,25 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         await driver.send(StopQuiescentMode(DeviceBroadcast()))
 
 
-async def send_extended_command(driver: WBDALIDriver, cmd: Command) -> Optional[Response]:
+async def send_command(driver: WBDALIDriver, cmd: Command) -> Optional[Response]:
     def set_sequence() -> Generator[command.Command, Optional[command.Response], Optional[command.Response]]:
         rsp = yield cmd
         return rsp
 
     return await driver.run_sequence(set_sequence())
+
+
+async def query_request(driver: WBDALIDriver, cmd: Command) -> int:
+    resp = await send_command(driver, cmd)
+    check_query_response(resp)
+    return resp.raw_value.as_integer
+
+
+def check_query_response(resp: Optional[Response]) -> None:
+    if resp is None:
+        raise RuntimeError("Got no response")
+    raw_value = resp.raw_value
+    if raw_value is None:
+        raise RuntimeError("Got no response")
+    if raw_value.error:
+        raise RuntimeError("Framing error")

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import jsonschema
 from dali.address import GearShort
 from dali.sequences import QueryDeviceTypes
 
@@ -52,15 +53,7 @@ class DaliDevice:
         self.types: list[int] = []
         self.params: dict = {}
         self.schema: dict = {}
-        self._gear_type_params = {
-            1: Type1Parameters(),
-            4: Type4Parameters(),
-            5: Type5Parameters(),
-            6: Type6Parameters(),
-            7: Type7Parameters(),
-            17: Type17Parameters(),
-            20: Type20Parameters(),
-        }
+        self._parameter_handlers: list = []
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         if self.params and not force_reload:
@@ -71,27 +64,52 @@ class DaliDevice:
             raise RuntimeError(
                 f"Device at short address {short_addr.address} did not respond to QueryDeviceTypes"
             )
-        self.types = types
-        self.params = {
+        parameter_handlers = self._get_parameters(types)
+        schema = {}
+        params = {
             "short_address": self.address.short,
             "random_address": self.address.random,
-            "types": self.types,
+            "types": types,
         }
-        self.params.update(await CommonParameters().read(driver, short_addr))
-        for gear_type in self.types:
-            param_handler = self._gear_type_params.get(gear_type)
-            if param_handler is not None:
-                type_params = await param_handler.read(driver, short_addr)
-                self.params.update(type_params)
+        for param_handler in parameter_handlers:
+            type_params = await param_handler.read(driver, short_addr)
+            params.update(type_params)
+            type_schema = await param_handler.get_schema(driver, short_addr)
+            if type_schema is not None:
+                merge_json_schemas(schema, type_schema)
+        self._parameter_handlers = parameter_handlers
+        self.params = params
+        self.schema = schema
+        self.types = types
 
-        common_params = CommonParameters()
-        self.schema = await common_params.get_schema()
-        for gear_type in self.types:
-            param_handler = self._gear_type_params.get(gear_type)
+    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
+        if not self.params:
+            await self.load_info(driver)
+        jsonschema.validate(
+            instance=new_values, schema=self.schema, format_checker=jsonschema.draft4_format_checker
+        )
+        short_addr = GearShort(self.address.short)
+        updated_parameters = {}
+        for param_handler in self._parameter_handlers:
+            updated_parameters.update(await param_handler.write(driver, short_addr, new_values))
+        self.params.update(updated_parameters)
+
+    def _get_parameters(self, types: list[int]) -> list:
+        res = [CommonParameters()]
+        gear_type_params = {
+            1: Type1Parameters(),
+            4: Type4Parameters(),
+            5: Type5Parameters(),
+            6: Type6Parameters(),
+            7: Type7Parameters(),
+            17: Type17Parameters(),
+            20: Type20Parameters(),
+        }
+        for gear_type in types:
+            param_handler = gear_type_params.get(gear_type)
             if param_handler is not None:
-                type_schema = await param_handler.get_schema(driver, short_addr)
-                if type_schema is not None:
-                    merge_json_schemas(self.schema, type_schema)
+                res.append(param_handler)
+        return res
 
 
 def make_device(bus_uid: str, address: DaliDeviceAddress) -> DaliDevice:

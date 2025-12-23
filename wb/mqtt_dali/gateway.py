@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
+from typing import Optional, Tuple
 
 from .application_controller import ApplicationController
 from .dali_device import DaliDevice, DaliDeviceAddress
@@ -103,6 +104,11 @@ class Gateway:
             "GetDevice",
             self.get_device_rpc_handler,
         )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "SetDevice",
+            self.set_device_rpc_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -128,17 +134,28 @@ class Gateway:
 
     async def get_device_rpc_handler(self, params: dict):
         device_id = params.get("deviceId")
+        if device_id is None:
+            raise ValueError("deviceId parameter is required")
         force_reload = params.get("forceReload", False)
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                for device in bus.devices:
-                    if device.uid == device_id:
-                        await bus.load_device_info(device, force_reload)
-                        return {
-                            "config": device.params,
-                            "schema": device.schema,
-                        }
-        raise ValueError(f"Device {device_id} not found")
+        bus, device = self._get_bus_and_device_by_id(device_id)
+        if bus is None or device is None:
+            raise ValueError(f"Device {device_id} not found")
+        await bus.load_device_info(device, force_reload)
+        return {
+            "config": device.params,
+            "schema": device.schema,
+        }
+
+    async def set_device_rpc_handler(self, params: dict):
+        device_id = params.get("deviceId")
+        if device_id is None:
+            raise ValueError("deviceId parameter is required")
+        new_params = params.get("config", {})
+        bus, device = self._get_bus_and_device_by_id(device_id)
+        if bus is None or device is None:
+            raise ValueError(f"Device {device_id} not found")
+        await bus.apply_parameters(device, new_params)
+        return device.params
 
     async def rescan_bus_handler(self, params: dict):
         bus_id = params.get("busId")
@@ -148,3 +165,13 @@ class Gateway:
                     await bus.rescan_bus()
                     return bus_to_json(bus)
         raise ValueError("Bus not found")
+
+    def _get_bus_and_device_by_id(
+        self, device_id: str
+    ) -> Tuple[Optional[ApplicationController], Optional[DaliDevice]]:
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                for device in bus.devices:
+                    if device.uid == device_id:
+                        return bus, device
+        return None, None

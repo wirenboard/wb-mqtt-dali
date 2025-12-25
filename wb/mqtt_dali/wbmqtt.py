@@ -180,53 +180,46 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
 
 
 async def remove_topics_by_driver(mqtt_dispatcher: MQTTDispatcher, driver_name: str) -> None:
-    device_names_to_remove = []
-    all_topics_to_remove = []
+    all_topics = []
+    devices_to_remove = []
     devices_pattern = "/devices/#"
 
-    async def collect_device_meta(message):
+    async def collect_devices(message):
         topic = str(message.topic)
+        all_topics.append(topic)
         parts = topic.split("/")
-        if len(parts) == 4 and parts[1] == "devices" and parts[3] == "meta":
+        if len(parts) == 4 and parts[3] == "meta" and message.payload:
             device_name = parts[2]
             try:
-                if message.payload:
-                    payload = message.payload.decode("utf-8")
-                    meta = json.loads(payload)
-                    if meta.get("driver") == driver_name:
-                        device_names_to_remove.append(device_name)
+                meta = json.loads(message.payload.decode("utf-8"))
+                if meta.get("driver") == driver_name:
+                    devices_to_remove.append(device_name)
             except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                logging.debug("Failed to parse device meta for %s: %s", topic, e)
+                logging.debug("Failed to parse meta for %s: %s", topic, e)
 
-    async def collect_all_topics(message):
-        topic = str(message.topic)
-        for device_name in device_names_to_remove:
-            device_prefix = f"/devices/{device_name}/"
-            if topic.startswith(device_prefix):
-                all_topics_to_remove.append(topic)
-                break
-
-    await mqtt_dispatcher.subscribe(devices_pattern, collect_device_meta)
+    await mqtt_dispatcher.subscribe(devices_pattern, collect_devices)
     await retain_hack(mqtt_dispatcher)
     await asyncio.sleep(0.05)
     await mqtt_dispatcher.unsubscribe(devices_pattern)
 
-    if not device_names_to_remove:
+    if not devices_to_remove:
         logging.debug("No devices found with driver '%s'", driver_name)
         return
 
     logging.info(
         "Found %d device(s) with driver '%s': %s",
-        len(device_names_to_remove),
+        len(devices_to_remove),
         driver_name,
-        device_names_to_remove,
+        devices_to_remove,
     )
 
-    await mqtt_dispatcher.subscribe(devices_pattern, collect_all_topics)
-    await retain_hack(mqtt_dispatcher)
-    await asyncio.sleep(0.05)
-    await mqtt_dispatcher.unsubscribe(devices_pattern)
+    topics_to_remove = []
+    for topic in all_topics:
+        for device_name in devices_to_remove:
+            if topic.startswith(f"/devices/{device_name}/"):
+                topics_to_remove.append(topic)
+                break
 
-    logging.info("Removing %d topics for driver '%s'", len(all_topics_to_remove), driver_name)
-    for topic in all_topics_to_remove:
+    logging.info("Removing %d topics for driver '%s'", len(topics_to_remove), driver_name)
+    for topic in topics_to_remove:
         await mqtt_dispatcher.client.publish(topic, None, retain=True)

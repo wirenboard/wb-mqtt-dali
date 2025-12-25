@@ -289,6 +289,57 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_set_control_error(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+
+        meta = ControlMeta(title="Test")
+        await device.create_control("ctrl1", meta, "value")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_error("ctrl1", "r")
+
+        error_calls = [
+            c
+            for c in mock_client.publish.call_args_list
+            if len(c[0]) > 0 and c[0][0] == "/devices/test_device/controls/ctrl1/meta/error"
+        ]
+        assert len(error_calls) == 1
+        assert error_calls[0][0][1] == "r"
+        assert device._controls["ctrl1"].error == "r"
+
+    @pytest.mark.asyncio
+    async def test_set_control_error_clears(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+
+        meta = ControlMeta(title="Test")
+        await device.create_control("ctrl1", meta, "value")
+        await device.set_control_error("ctrl1", "r")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_value("ctrl1", "new_value")
+
+        error_calls = [
+            c
+            for c in mock_client.publish.call_args_list
+            if len(c[0]) > 0 and c[0][0] == "/devices/test_device/controls/ctrl1/meta/error"
+        ]
+        assert len(error_calls) == 1
+        assert error_calls[0][0][1] is None
+        assert device._controls["ctrl1"].error is None
+
+    @pytest.mark.asyncio
+    async def test_set_control_error_nonexistent(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        mock_client.publish.reset_mock()
+
+        await device.set_control_error("nonexistent", "r")
+
+        mock_client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_remove_control(self, mock_client):
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
@@ -498,11 +549,6 @@ class TestRemoveTopicsByDriver:
             other_device_meta = json.dumps({"driver": "other-driver"})
             mock_dispatcher.client.add_message("/devices/other_device/meta", other_device_meta.encode())
             mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
-
-            mock_dispatcher.client.add_message(
-                "/devices/dali_device_1/controls/ch1/meta",
-                b'{"type":"value","driver":"wb-mqtt-dali"}',
-            )
 
             mock_dispatcher.client.add_message("/wbretainhack/0.99999", b"2")
 

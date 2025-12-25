@@ -351,8 +351,11 @@ class TestDevice:
         await device.remove_control("ctrl1")
 
         assert "ctrl1" not in device._controls
-        assert mock_client.publish.call_count == 2
+        assert mock_client.publish.call_count == 3
         mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, retain=True)
+        mock_client.publish.assert_any_call(
+            "/devices/test_device/controls/ctrl1/meta/error", None, retain=True
+        )
         mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1/meta", None, retain=True)
 
     @pytest.mark.asyncio

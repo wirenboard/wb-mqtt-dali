@@ -80,6 +80,7 @@ class Device:
         if mqtt_control_name in self._controls:
             self._controls.pop(mqtt_control_name)
             await self._publish(self._get_control_base_topic(mqtt_control_name), None)
+            await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta/error", None)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", None)
 
     async def set_control_value(self, mqtt_control_name: str, value: str, force: bool = False) -> None:

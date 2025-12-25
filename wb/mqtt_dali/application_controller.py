@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from enum import Enum, auto
 from typing import Optional
 
@@ -6,6 +7,11 @@ from dali.address import DeviceBroadcast
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
 
 from .commissioning import Commissioning
+from .common_gear_controls import (
+    get_common_controls,
+    poll_device,
+    register_common_handlers,
+)
 from .dali_device import DaliDevice, make_device
 from .device_publisher import DeviceChange, DevicePublisher
 from .fake_lunatone_iot import run_websocket
@@ -30,12 +36,14 @@ class ApplicationController:
         bus_index: int,
         devices: list[DaliDevice],
         mqtt_dispatcher: MQTTDispatcher,
+        polling_interval: float = 2.0,
         websocket_enabled: bool = False,
         websocket_port: int = 8080,
     ) -> None:
         self.uid = f"{mqtt_device_id}_{bus_index}"
         self.bus_name = f"Bus {bus_index}"
         self.devices = devices
+        self.logger = logging.getLogger(f"{__name__}.{self.uid}")
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
@@ -53,7 +61,8 @@ class ApplicationController:
             modbus_slave_id=2,
         )
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher=self._mqtt_dispatcher, dev_inst_map=self._dev_inst_map)
-
+        self._polling_interval = polling_interval
+        self._polling_task: Optional[asyncio.Task] = None
         self._websocket_enabled = websocket_enabled
         self._websocket_port = websocket_port
         self._websocket_task: Optional[asyncio.Task] = None
@@ -76,11 +85,14 @@ class ApplicationController:
                 "id": str(device.address.short),
                 "title": device.name,
                 "driver": "wb-mqtt-dali",
-                "controls": [],
+                "controls": get_common_controls(),
             }
             await self._device_publisher.add_device(device_info)
+            await register_common_handlers(device, self._dev, self._device_publisher)
 
         await self._device_publisher.initialize()
+
+        self._polling_task = asyncio.create_task(self._polling_loop())
 
         if self._websocket_enabled:
             self._websocket_task = asyncio.create_task(
@@ -101,6 +113,14 @@ class ApplicationController:
 
         if self._quiescent_mode_timer:
             self._quiescent_mode_timer.cancel()
+
+        if self._polling_task:
+            self._polling_task.cancel()
+            try:
+                await self._polling_task
+            except asyncio.CancelledError:
+                pass
+            self._polling_task = None
 
         if self._websocket_task:
             self._websocket_task.cancel()
@@ -182,7 +202,7 @@ class ApplicationController:
                 "id": str(d.address.short),
                 "title": d.name,
                 "driver": "dali",
-                "controls": [],
+                "controls": get_common_controls(),
             }
             for d in new_devices
         ]
@@ -191,7 +211,7 @@ class ApplicationController:
                 "id": str(d.address.short),
                 "title": d.name,
                 "driver": "dali",
-                "controls": [],
+                "controls": get_common_controls(),
             }
             for d in changed_devices
         ]
@@ -203,6 +223,44 @@ class ApplicationController:
         )
 
         await self._device_publisher.rebuild(changes)
+
+        for device in new_devices + changed_devices:
+            await register_common_handlers(device, self._dev, self._device_publisher)
+
+    async def _polling_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self._polling_interval)
+
+                if not self.devices:
+                    continue
+
+                tasks = []
+                for device in self.devices:
+                    task = asyncio.create_task(
+                        asyncio.wait_for(
+                            poll_device(device, self._dev, self._device_publisher),
+                            timeout=5.0,
+                        )
+                    )
+                    tasks.append(task)
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for device, result in zip(self.devices, results):
+                    if isinstance(result, asyncio.TimeoutError):
+                        self.logger.warning("Poll timeout for device %s", device.name)
+                        # device_id = str(device.address.short)
+                        # await self._device_publisher.set_control_error(device_id, "actual_level", "r")
+                    elif isinstance(result, Exception):
+                        self.logger.error("Poll failed for device %s: %s", device.name, result)
+
+            except asyncio.CancelledError:
+                self.logger.info("Polling loop cancelled")
+                raise
+            except Exception as e:
+                self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
+                await asyncio.sleep(1)
 
     async def _run_websocket(self) -> None:
         await run_websocket(

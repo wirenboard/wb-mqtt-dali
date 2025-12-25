@@ -504,7 +504,7 @@ class TestRemoveTopicsByDriver:
                 b'{"type":"value","driver":"wb-mqtt-dali"}',
             )
 
-            mock_dispatcher.client.add_message("/wbretainhack/0.88888", b"2")
+            mock_dispatcher.client.add_message("/wbretainhack/0.99999", b"2")
 
             await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali")
 

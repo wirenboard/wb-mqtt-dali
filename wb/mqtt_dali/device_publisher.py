@@ -3,7 +3,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from .mqtt_dispatcher import MQTTDispatcher
-from .wbmqtt import ControlMeta, Device, remove_topics_by_device_prefix
+from .wbmqtt import ControlMeta, Device, remove_topics_by_driver
 
 
 class DeviceChange:  # pylint: disable=R0903
@@ -44,6 +44,8 @@ class DevicePublisher:
             if self._initialized:
                 return
 
+            await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
+
             if self._devices:
                 await asyncio.gather(*[device.initialize() for device in self._devices.values()])
 
@@ -70,8 +72,6 @@ class DevicePublisher:
                 await asyncio.gather(*[device.remove_device() for device in self._devices.values()])
 
             self._devices.clear()
-
-            await remove_topics_by_device_prefix(self._mqtt_dispatcher, self._bus_id)
 
             self._initialized = False
             self.logger.info("Cleanup completed for bus %s", self._bus_id)
@@ -128,6 +128,15 @@ class DevicePublisher:
 
             device = self._devices[device_id]
             await device.set_control_value(control_id, value)
+
+    async def set_control_error(self, device_id: str, control_id: str, error: str) -> None:
+        async with self._lock:
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+
+            device = self._devices[device_id]
+            await device.set_control_error(control_id, error)
 
     async def register_control_handler(self, device_id: str, control_id: str, callback: Callable) -> None:
         async with self._lock:

@@ -9,7 +9,7 @@ from wb.mqtt_dali.wbmqtt import (
     ControlMeta,
     ControlState,
     Device,
-    remove_topics_by_device_prefix,
+    remove_topics_by_driver,
     retain_hack,
 )
 
@@ -289,6 +289,57 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_set_control_error(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+
+        meta = ControlMeta(title="Test")
+        await device.create_control("ctrl1", meta, "value")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_error("ctrl1", "r")
+
+        error_calls = [
+            c
+            for c in mock_client.publish.call_args_list
+            if len(c[0]) > 0 and c[0][0] == "/devices/test_device/controls/ctrl1/meta/error"
+        ]
+        assert len(error_calls) == 1
+        assert error_calls[0][0][1] == "r"
+        assert device._controls["ctrl1"].error == "r"
+
+    @pytest.mark.asyncio
+    async def test_set_control_error_clears(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+
+        meta = ControlMeta(title="Test")
+        await device.create_control("ctrl1", meta, "value")
+        await device.set_control_error("ctrl1", "r")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_value("ctrl1", "new_value")
+
+        error_calls = [
+            c
+            for c in mock_client.publish.call_args_list
+            if len(c[0]) > 0 and c[0][0] == "/devices/test_device/controls/ctrl1/meta/error"
+        ]
+        assert len(error_calls) == 1
+        assert error_calls[0][0][1] is None
+        assert device._controls["ctrl1"].error is None
+
+    @pytest.mark.asyncio
+    async def test_set_control_error_nonexistent(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        mock_client.publish.reset_mock()
+
+        await device.set_control_error("nonexistent", "r")
+
+        mock_client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_remove_control(self, mock_client):
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
@@ -300,8 +351,11 @@ class TestDevice:
         await device.remove_control("ctrl1")
 
         assert "ctrl1" not in device._controls
-        assert mock_client.publish.call_count == 2
+        assert mock_client.publish.call_count == 3
         mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, retain=True)
+        mock_client.publish.assert_any_call(
+            "/devices/test_device/controls/ctrl1/meta/error", None, retain=True
+        )
         mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1/meta", None, retain=True)
 
     @pytest.mark.asyncio
@@ -480,35 +534,54 @@ class TestRetainHack:
             assert "Retain hack timeout" in caplog.text
 
 
-class TestRemoveTopicsByDevicePrefix:
+class TestRemoveTopicsByDriver:
     @pytest.mark.asyncio
-    async def test_remove_topics_by_device_prefix(self, mock_dispatcher):
+    async def test_remove_topics_by_driver(self, mock_dispatcher):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.99999):
-            mock_dispatcher.client.add_message("/devices/wb-mdali_123/controls/ch1", b"on")
-            mock_dispatcher.client.add_message("/devices/wb-mdali_123/controls/ch2", b"off")
-            mock_dispatcher.client.add_message("/devices/wb-mdali_123/meta/name", b"Device")
+            device1_meta = json.dumps({"driver": "wb-mqtt-dali", "title": {"en": "DALI Device 1"}})
+            mock_dispatcher.client.add_message("/devices/dali_device_1/meta", device1_meta.encode())
+            mock_dispatcher.client.add_message("/devices/dali_device_1/controls/ch1", b"100")
+            mock_dispatcher.client.add_message(
+                "/devices/dali_device_1/controls/ch1/meta", b'{"type":"value"}'
+            )
+
+            device2_meta = json.dumps({"driver": "wb-mqtt-dali"})
+            mock_dispatcher.client.add_message("/devices/dali_device_2/meta", device2_meta.encode())
+            mock_dispatcher.client.add_message("/devices/dali_device_2/controls/level", b"50")
+
+            other_device_meta = json.dumps({"driver": "other-driver"})
+            mock_dispatcher.client.add_message("/devices/other_device/meta", other_device_meta.encode())
             mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
+
             mock_dispatcher.client.add_message("/wbretainhack/0.99999", b"2")
 
-            await remove_topics_by_device_prefix(mock_dispatcher, "wb-mdali_123")
+            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali")
 
             mock_dispatcher.client.subscribe.assert_any_call("/devices/#")
             mock_dispatcher.client.unsubscribe.assert_called()
 
-            clear_calls = [
-                c
-                for c in mock_dispatcher.client.publish.call_args_list
-                if c[0][1] is None and c[0][0].startswith("/devices/wb-mdali_123")
-            ]
-            assert len(clear_calls) == 3
+            clear_calls = [c for c in mock_dispatcher.client.publish.call_args_list if c[0][1] is None]
+
+            cleared_topics = [c[0][0] for c in clear_calls]
+
+            assert "/devices/dali_device_1/meta" in cleared_topics
+            assert "/devices/dali_device_1/controls/ch1" in cleared_topics
+            assert "/devices/dali_device_1/controls/ch1/meta" in cleared_topics
+            assert "/devices/dali_device_2/meta" in cleared_topics
+            assert "/devices/dali_device_2/controls/level" in cleared_topics
+
+            assert "/devices/other_device/meta" not in cleared_topics
+            assert "/devices/other_device/controls/ch1" not in cleared_topics
 
     @pytest.mark.asyncio
     async def test_remove_topics_no_matching(self, mock_dispatcher):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.11111):
             mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
+            device_meta = json.dumps({"driver": "other-driver"})
+            mock_dispatcher.client.add_message("/devices/other_device/meta", device_meta.encode())
             mock_dispatcher.client.add_message("/wbretainhack/0.11111", b"2")
 
-            await remove_topics_by_device_prefix(mock_dispatcher, "nonexistent")
+            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali")
 
             mock_dispatcher.client.subscribe.assert_called()
             mock_dispatcher.client.unsubscribe.assert_called()
@@ -516,7 +589,7 @@ class TestRemoveTopicsByDevicePrefix:
             clear_calls = [
                 c
                 for c in mock_dispatcher.client.publish.call_args_list
-                if c[0][1] is None and c[0][0].startswith("/devices/nonexistent")
+                if c[0][1] is None and c[0][0].startswith("/devices/")
             ]
             assert len(clear_calls) == 0
 

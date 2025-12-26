@@ -22,6 +22,7 @@ class ControlMeta:
 class ControlState:
     meta: ControlMeta
     value: Optional[str] = None
+    error: Optional[str] = None
 
     def __post_init__(self):
         self.meta = ControlMeta(
@@ -59,9 +60,9 @@ class Device:
             await self.republish_control(mqtt_control_name)
 
     async def remove_device(self) -> None:
-        await self._publish(self._base_topic + "/meta", None)
         for mqtt_control_name in list(self._controls.keys()):
             await self.remove_control(mqtt_control_name)
+        await self._publish(self._base_topic + "/meta", None)
 
     async def create_control(self, mqtt_control_name: str, meta: ControlMeta, value: str) -> None:
         self._controls[mqtt_control_name] = ControlState(meta=meta, value=None)
@@ -79,6 +80,7 @@ class Device:
         if mqtt_control_name in self._controls:
             self._controls.pop(mqtt_control_name)
             await self._publish(self._get_control_base_topic(mqtt_control_name), None)
+            await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta/error", None)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", None)
 
     async def set_control_value(self, mqtt_control_name: str, value: str, force: bool = False) -> None:
@@ -87,6 +89,8 @@ class Device:
             if control.value != value or force:
                 control.value = value
                 await self._publish(self._get_control_base_topic(mqtt_control_name), value)
+            if control.error is not None:
+                await self.set_control_error(mqtt_control_name, "")
         else:
             logging.debug("Can't set value of undeclared control %s", mqtt_control_name)
 
@@ -110,6 +114,15 @@ class Device:
                 await self._publish_control_meta(mqtt_control_name, control.meta)
         else:
             logging.debug("Can't set title of undeclared control %s", mqtt_control_name)
+
+    async def set_control_error(self, mqtt_control_name: str, error: str) -> None:
+        if mqtt_control_name in self._controls:
+            control = self._controls[mqtt_control_name]
+            control.error = error if error else None
+            error_topic = self._get_control_base_topic(mqtt_control_name) + "/meta/error"
+            await self._publish(error_topic, error if error else None)
+        else:
+            logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
     def _get_control_base_topic(self, mqtt_control_name: str) -> str:
         return f"{self._base_topic}/controls/{mqtt_control_name}"
@@ -166,23 +179,47 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
         await mqtt_dispatcher.unsubscribe(retain_hack_topic)
 
 
-async def remove_topics_by_device_prefix(mqtt_dispatcher: MQTTDispatcher, device_prefix: str) -> None:
-    topics = []
-    pattern = "/devices/" + device_prefix
+async def remove_topics_by_driver(mqtt_dispatcher: MQTTDispatcher, driver_name: str) -> None:
+    all_topics = []
+    devices_to_remove = []
     devices_pattern = "/devices/#"
 
-    async def collect_topics(message):
+    async def collect_devices(message):
         topic = str(message.topic)
-        if topic.startswith(pattern):
-            topics.append(topic)
+        all_topics.append(topic)
+        parts = topic.split("/")
+        if len(parts) == 4 and parts[3] == "meta" and message.payload:
+            device_name = parts[2]
+            try:
+                meta = json.loads(message.payload.decode("utf-8"))
+                if meta.get("driver") == driver_name:
+                    devices_to_remove.append(device_name)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logging.debug("Failed to parse meta for %s: %s", topic, e)
 
-    await mqtt_dispatcher.subscribe(devices_pattern, collect_topics)
-
+    await mqtt_dispatcher.subscribe(devices_pattern, collect_devices)
     await retain_hack(mqtt_dispatcher)
-
     await asyncio.sleep(0.05)
-
     await mqtt_dispatcher.unsubscribe(devices_pattern)
 
-    for topic in topics:
+    if not devices_to_remove:
+        logging.debug("No devices found with driver '%s'", driver_name)
+        return
+
+    logging.info(
+        "Found %d device(s) with driver '%s': %s",
+        len(devices_to_remove),
+        driver_name,
+        devices_to_remove,
+    )
+
+    topics_to_remove = []
+    for topic in all_topics:
+        for device_name in devices_to_remove:
+            if topic.startswith(f"/devices/{device_name}/"):
+                topics_to_remove.append(topic)
+                break
+
+    logging.info("Removing %d topics for driver '%s'", len(topics_to_remove), driver_name)
+    for topic in topics_to_remove:
         await mqtt_dispatcher.client.publish(topic, None, retain=True)

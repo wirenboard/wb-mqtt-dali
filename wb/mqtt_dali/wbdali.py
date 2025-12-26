@@ -66,7 +66,7 @@ class BusTrafficCallbacks:
     def register(self, func: Callable[[Frame, str], None]):
 
         def cleanup():
-            self._callbacks.remove(func)
+            self._callbacks.discard(func)
 
         self._callbacks.add(func)
         return cleanup

@@ -259,6 +259,7 @@ class ApplicationController:
             try:
                 await self._websocket_task
             except asyncio.CancelledError:
+                # Task cancellation is expected when stopping the websocket; ignore this error.
                 pass
             self._websocket_task = None
 

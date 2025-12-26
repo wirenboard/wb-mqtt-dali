@@ -152,7 +152,7 @@ async def emulate(
                         # priority = message["data"]["mode"]["priority"]
                         wait_for_answer = message["data"]["mode"]["waitForAnswer"]
                     except KeyError as e:
-                        raise ValueError(f"Missing {e} for DALI frame: {message}") from e
+                        raise KeyError(f"Missing {e} for DALI frame: {message}") from e
                     logger.debug(
                         "WS << daliFrame (bits=%s line=%s sendTwice=%s waitForAnswer=%s) %s",
                         bits,

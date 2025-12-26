@@ -23,7 +23,7 @@ def bus_from_json(
     gateway_mqtt_device_id: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
 ) -> ApplicationController:
     devices = []
-    uid = f"{gateway_mqtt_device_id}_bus{bus_index}"
+    uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
     for dev_conf in data.get("devices", []):
         device = DaliDevice(
             uid=f'{uid}_{dev_conf["short"]}',

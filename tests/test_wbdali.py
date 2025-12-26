@@ -79,12 +79,41 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         frame_invalid = MagicMock()
         frame_invalid.__len__.return_value = 32
 
-        assert driver._encode_frame_for_modbus(frame_16) == 0x12340000  # pylint: disable=W0212
-        assert driver._encode_frame_for_modbus(frame_24) == 0x12345601  # pylint: disable=W0212
-        assert driver._encode_frame_for_modbus(frame_25) == 0x123453382  # pylint: disable=W0212
+        # Test FF16 frame: priority=1 (bits 31..29), sendtwice=0 (bit 28), size=0 (bits 27..25), data=0x1234 (bits 24..0)
+        # Result: 0x20000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x20001234
+        assert driver._encode_frame_for_modbus(frame_16) == 0x20001234  # pylint: disable=W0212
 
+        # Test FF24 frame: priority=1, sendtwice=0, size=1 (bits 27..25), data=0x123456
+        # Result: 0x20000000 | 0x00000000 | 0x02000000 | 0x00123456 = 0x22123456
+        assert driver._encode_frame_for_modbus(frame_24) == 0x22123456  # pylint: disable=W0212
+
+        # Test FF25 frame: priority=1, sendtwice=0, size=2 (bits 27..25), data=0x1234567
+        # Result: 0x20000000 | 0x00000000 | 0x04000000 | 0x01234567 = 0x25234567
+        assert driver._encode_frame_for_modbus(frame_25) == 0x25234567  # pylint: disable=W0212
+
+        # Test with sendtwice=True: bit 28 should be set
+        # Result: 0x20000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0x30001234
+        assert (
+            driver._encode_frame_for_modbus(frame_16, sendtwice=True) == 0x30001234
+        )  # pylint: disable=W0212
+
+        # Test with priority=3: bits 31..29 = 0b011 = 0x60000000
+        # Result: 0x60000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x60001234
+        assert driver._encode_frame_for_modbus(frame_16, priority=3) == 0x60001234  # pylint: disable=W0212
+
+        # Test with sendtwice=True and priority=5
+        # Result: 0xA0000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0xB0001234
+        assert (
+            driver._encode_frame_for_modbus(frame_16, sendtwice=True, priority=5) == 0xB0001234
+        )  # pylint: disable=W0212
+
+        # Test invalid frame length
         with self.assertRaises(ValueError):
             driver._encode_frame_for_modbus(frame_invalid)  # pylint: disable=W0212
+
+        # Test invalid priority
+        with self.assertRaises(ValueError):
+            driver._encode_frame_for_modbus(frame_16, priority=6)  # pylint: disable=W0212
 
     async def test_send_command_without_response(self):
         """Test sending a command that does not expect a response."""
@@ -180,7 +209,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_data["id"], 1)
         self.assertEqual(payload_data["params"]["slave_id"], driver.config.modbus_slave_id)
         self.assertEqual(payload_data["params"]["function"], 16)
-        self.assertEqual(payload_data["params"]["address"], 1920 + 5 * 2)
+        self.assertEqual(payload_data["params"]["address"], 1400 + 5 * 2)
         self.assertEqual(payload_data["params"]["count"], 2)
         self.assertEqual(payload_data["params"]["msg"], "12340000")
         self.assertEqual(payload_data["params"]["protocol"], "modbus")
@@ -202,7 +231,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         call_args = self.mock_mqtt_client.publish.call_args
         _, payload = call_args[0]
         payload_data = json.loads(payload)
-        self.assertEqual(payload_data["params"]["address"], 1920 + 5 * 2)
+        self.assertEqual(payload_data["params"]["address"], 1400 + 5 * 2)
         self.assertEqual(payload_data["params"]["count"], 6)
         self.assertEqual(payload_data["params"]["msg"], "12340000567800009abc0000")
 
@@ -224,12 +253,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mock_send_modbus.call_count, 2)
 
             first_call = mock_send_modbus.call_args_list[0]
-            self.assertEqual(first_call.kwargs["address"], 1920 + 5 * 2)
+            self.assertEqual(first_call.kwargs["address"], 1400 + 5 * 2)
             self.assertEqual(first_call.kwargs["count"], 2)
             self.assertEqual(first_call.kwargs["msg"], "12340000")
 
             second_call = mock_send_modbus.call_args_list[1]
-            self.assertEqual(second_call.kwargs["address"], 1920 + 8 * 2)
+            self.assertEqual(second_call.kwargs["address"], 1400 + 8 * 2)
             self.assertEqual(second_call.kwargs["count"], 2)
             self.assertEqual(second_call.kwargs["msg"], "56780000")
 
@@ -292,21 +321,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await driver.reset_queue()
 
         self.assertEqual(driver.next_pointer, 0)
-        self.assertEqual(self.mock_mqtt_client.publish.call_count, 2)
+        self.assertEqual(self.mock_mqtt_client.publish.call_count, 1)
 
         first_call = self.mock_mqtt_client.publish.call_args_list[0]
         first_payload = json.loads(first_call[0][1])
-        self.assertEqual(first_payload["params"]["function"], 16)
-        self.assertEqual(first_payload["params"]["address"], 1920)
-        self.assertEqual(first_payload["params"]["count"], 10 * 2)
-        self.assertEqual(first_payload["params"]["msg"], "0000fbdf" * 10)
-
-        second_call = self.mock_mqtt_client.publish.call_args_list[1]
-        second_payload = json.loads(second_call[0][1])
-        self.assertEqual(second_payload["params"]["function"], 6)
-        self.assertEqual(second_payload["params"]["address"], 1960)
-        self.assertEqual(second_payload["params"]["count"], 1)
-        self.assertEqual(second_payload["params"]["msg"], "0000")
+        self.assertEqual(first_payload["params"]["function"], 6)
+        self.assertEqual(first_payload["params"]["address"], 1432)  # config.channel * 1000 + 432
+        self.assertEqual(first_payload["params"]["count"], 1)
+        self.assertEqual(first_payload["params"]["msg"], "0000")
 
     async def test_get_next_pointer(self):
         """Test that get_next_pointer returns the correct pointer and future."""

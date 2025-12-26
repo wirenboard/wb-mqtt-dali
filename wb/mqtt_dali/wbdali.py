@@ -86,7 +86,7 @@ class WBDALIDriver:
         # if the command was not sent twice within the required time limit
         self.bus_traffic = _callback(self)
 
-        self.device_queue_size = 10
+        self.device_queue_size = 16
         self.next_pointer = 0
         self.next_pointer_lock = asyncio.Lock()
         self.rpc_id_counter = 0
@@ -111,15 +111,17 @@ class WBDALIDriver:
         # Subscribe to all reply topics
         self.logger.debug("Subscribing to reply topics...")
         for i in range(self.device_queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            topic = (
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{i}"
+            )
             await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
 
         # Subscribe to FF24 topic
-        self.logger.debug("Subscribing to FF24 topic...")
-        await self._mqtt_dispatcher.subscribe(
-            f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
-            self._handle_ff24_message,
-        )
+        # self.logger.debug("Subscribing to FF24 topic...")
+        # await self._mqtt_dispatcher.subscribe(
+        #    f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+        #    self._handle_ff24_message,
+        # )
 
         self.logger.debug("WBDALIDriver initialized successfully")
 
@@ -132,10 +134,10 @@ class WBDALIDriver:
                 await self._mqtt_dispatcher.unsubscribe(topic)
 
         # Unsubscribe from FF24 topic
-        if self._mqtt_dispatcher.is_running:
-            await self._mqtt_dispatcher.unsubscribe(
-                f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
-            )
+        # if self._mqtt_dispatcher.is_running:
+        #    await self._mqtt_dispatcher.unsubscribe(
+        #        f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+        #    )
         self.logger.debug("WBDALIDriver deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
@@ -180,15 +182,8 @@ class WBDALIDriver:
         self.next_pointer = 0
 
         await self.send_modbus_rpc_no_response(
-            function=16,
-            address=1920,
-            count=self.device_queue_size * 2,
-            msg="0000fbdf" * self.device_queue_size,
-        )
-
-        await self.send_modbus_rpc_no_response(
             function=6,
-            address=1960,
+            address=self.config.channel * 1000 + 432,  # todo: use bus_1_bulk_send_pointer control
             count=1,
             msg="0000",
         )
@@ -353,30 +348,63 @@ class WBDALIDriver:
 
                 await self.send_modbus_rpc_no_response(
                     function=16,
-                    address=1920 + start_pointer * 2,
+                    address=1400 + start_pointer * 2,
                     count=count * 2,
                     msg=msg,
                 )
 
-    def _encode_frame_for_modbus(self, dali_frame: Frame) -> int:
+    def _encode_frame_for_modbus(self, dali_frame: Frame, sendtwice: bool = False, priority: int = 1) -> int:
+        """Encode DALI frame for Modbus transmission.
+
+        Format:
+        [24..0]   - frame data, up to 25 bits, right-aligned
+        [27..25]  - frame size: 0=FF16, 1=FF24, 2=FF25
+        [28]      - send twice flag
+        [31..29]  - priority: 0=no send, 1-5=priority level
+
+        Args:
+            dali_frame: DALI frame to encode
+            sendtwice: Whether to send the frame twice
+            priority: Send priority (0=no send, 1-5=priority level)
+
+        Returns:
+            Encoded 32-bit value for Modbus register
+        """
         frame_len = len(dali_frame)
         frame_int = dali_frame.as_integer
 
-        if frame_len == 16:
-            return frame_int << 16
-        if frame_len == 24:
-            return (frame_int << 8) | 0x01
-        if frame_len == 25:
-            first_two_bytes = frame_int >> 8
-            last_byte = frame_int & 0xFF
-            # insert the 0x01 bit in the middle
-            dali_25bit_frame = (first_two_bytes << 1) | 0x00
-            dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
-            result = (dali_25bit_frame << 7) | 0x02
-            self.logger.debug("Sending 25-bit frame, modbus_reg_val=%x", result)
-            return result
+        # Bits [24..0] - frame data, right-aligned
+        result = frame_int & 0x1FFFFFF
 
-        raise ValueError(f"Unsupported frame length: {frame_len}")
+        # Bits [27..25] - frame size
+        if frame_len == 16:
+            frame_size = 0
+        elif frame_len == 24:
+            frame_size = 1
+        elif frame_len == 25:
+            frame_size = 2
+        else:
+            raise ValueError(f"Unsupported frame length: {frame_len}")
+
+        result |= (frame_size & 0x7) << 25
+
+        # Bit [28] - send twice
+        if sendtwice:
+            result |= 1 << 28
+
+        # Bits [31..29] - priority (0-5)
+        if not (0 <= priority <= 5):
+            raise ValueError(f"Priority must be 0-5, got {priority}")
+        result |= (priority & 0x7) << 29
+
+        self.logger.debug(
+            "Encoded frame: len=%d, sendtwice=%s, priority=%d, result=0x%08x",
+            frame_len,
+            sendtwice,
+            priority,
+            result,
+        )
+        return result
 
     async def send(self, cmd: Command) -> Optional[Response]:
         self.logger.debug("send(command=%s)", cmd)

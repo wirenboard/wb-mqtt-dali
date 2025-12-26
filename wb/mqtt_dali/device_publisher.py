@@ -30,6 +30,7 @@ class DevicePublisher:
         self,
         mqtt_dispatcher: MQTTDispatcher,
         bus_id: str,
+        logger: logging.Logger,
     ):
         self._mqtt_dispatcher = mqtt_dispatcher
         self._bus_id = bus_id
@@ -37,7 +38,7 @@ class DevicePublisher:
         self._control_handlers: Dict[str, ControlHandler] = {}
         self._initialized = False
         self._lock = asyncio.Lock()
-        self.logger = logging.getLogger(f"{__name__}.{bus_id}")
+        self.logger = logger.getChild("DevicePublisher")
 
     async def initialize(self) -> None:
         async with self._lock:
@@ -50,11 +51,11 @@ class DevicePublisher:
                 await asyncio.gather(*[device.initialize() for device in self._devices.values()])
 
             self._initialized = True
-            self.logger.info("DevicePublisher initialized for bus %s", self._bus_id)
+            self.logger.info("Initialized successfully")
 
     async def cleanup(self) -> None:
         async with self._lock:
-            self.logger.info("Cleaning up all devices for bus %s", self._bus_id)
+            self.logger.info("Cleaning up all devices")
 
             if self._control_handlers:
                 await asyncio.gather(
@@ -74,7 +75,7 @@ class DevicePublisher:
             self._devices.clear()
 
             self._initialized = False
-            self.logger.info("Cleanup completed for bus %s", self._bus_id)
+            self.logger.info("Cleanup completed")
 
     async def rebuild(self, changes: DeviceChange) -> None:
         async with self._lock:
@@ -106,7 +107,7 @@ class DevicePublisher:
                     *[self._add_device_internal(device_info) for device_info in changes.added]
                 )
 
-            self.logger.info("Rebuild completed for bus %s", self._bus_id)
+            self.logger.info("Rebuild completed")
 
     async def add_device(self, device_info: Dict[str, Any]) -> None:
         async with self._lock:

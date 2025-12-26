@@ -117,5 +117,5 @@ async def poll_device(device: DaliDevice, driver: WBDALIDriver, device_publisher
     if actual_level_response is not None:
         actual_level = str(actual_level_response.raw_value.as_integer)
         await device_publisher.set_control_value(device_id, "actual_level", actual_level)
-    # else:
-    #    await device_publisher.set_control_error(device_id, "actual_level", "r")
+    else:
+        await device_publisher.set_control_error(device_id, "actual_level", "r")

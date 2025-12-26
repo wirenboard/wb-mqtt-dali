@@ -201,7 +201,7 @@ class ApplicationController:
             {
                 "id": str(d.address.short),
                 "title": d.name,
-                "driver": "dali",
+                "driver": "wb-mqtt-dali",
                 "controls": get_common_controls(),
             }
             for d in new_devices
@@ -210,7 +210,7 @@ class ApplicationController:
             {
                 "id": str(d.address.short),
                 "title": d.name,
-                "driver": "dali",
+                "driver": "wb-mqtt-dali",
                 "controls": get_common_controls(),
             }
             for d in changed_devices

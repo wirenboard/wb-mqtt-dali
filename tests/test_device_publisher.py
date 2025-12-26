@@ -481,7 +481,7 @@ class TestDevicePublisher:
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
         with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_device_prefix",
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
             new_callable=AsyncMock,
         ):
             await publisher.cleanup()

@@ -286,7 +286,6 @@ class WBDALIDriver:
             backward_frame_byte,
         )
 
-        # Handle status codes
         if status == 0:
             # No transmission
             self.logger.debug("Status 0: No transmission")
@@ -490,16 +489,13 @@ class WBDALIDriver:
             )
             raise ValueError("Command with sendtwice=True cannot have a response")
 
-        if cmd.sendtwice:
-            next_pointers = await asyncio.gather(self.get_next_pointer(), self.get_next_pointer())
-        else:
-            next_pointers = [
-                await self.get_next_pointer(),
-            ]
+        next_pointers = [
+            await self.get_next_pointer(),
+        ]
         # if cmd.bits
         for i, (pointer, future) in enumerate(next_pointers):
             self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, len(next_pointers))
-            modbus_reg_val = self._encode_frame_for_modbus(cmd.frame)
+            modbus_reg_val = self._encode_frame_for_modbus(cmd.frame, cmd.sendtwice)
             self.bus_traffic.invoke(cmd.frame, source)
             await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
 

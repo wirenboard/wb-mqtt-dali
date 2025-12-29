@@ -31,15 +31,6 @@ from dali.sequences import sleep as seq_sleep
 from .barrier import Barrier
 from .mqtt_dispatcher import MQTTDispatcher
 
-ERR_START_BIT = 0x100  # не получен старт бит
-ERR_BIT_TIME = 0x200  # неверное время бита
-ERR_FRAME_LENGTH = 0x400  # неверная длина фрейма
-ERR_STOP_BITS = 0x800  # не получены стоп биты
-ERR_TIMEOUT = 0x1000  # таймаут приёма фрейма
-ERR_LINE_POWER = 0x2000  # линия не запитана
-ERR_LINE_BUSY = 0x4000  # линия занята
-ERR_STILL_SENDING = 0x8000
-
 
 @dataclass
 class WBDALIConfig:
@@ -250,6 +241,17 @@ class WBDALIDriver:
         self.bus_traffic.invoke(frame, "bus")
 
     async def _handle_reply_message(self, message):
+        """Handle reply message from the DALI bus.
+
+        Message payload format:
+        [7..0]   - Backward Frame (8 bit)
+        [15..8]  - status:
+                   0 - no transmission
+                   1 - transmission with backward response
+                   2 - transmission without response
+                   3 - broken response
+                   4 - transmission impossible (no power on bus)
+        """
         self.logger.debug(
             "Received message: %s %s",
             message.topic,
@@ -262,9 +264,14 @@ class WBDALIDriver:
 
         resp = int(message.payload.decode())
 
+        backward_frame_byte = resp & 0xFF
+        status = (resp >> 8) & 0xFF
+
         # Process the message as needed
         resp_pointer = int(
-            str(message.topic).rsplit("/", maxsplit=1)[-1].replace(f"channel{self.config.channel}_reply", "")
+            str(message.topic)
+            .rsplit("/", maxsplit=1)[-1]
+            .replace(f"bus_{self.config.channel}_bulk_send_reply_", "")
         )
 
         if resp_pointer not in self.responses:
@@ -272,29 +279,58 @@ class WBDALIDriver:
             return
         resp_future = self.responses[resp_pointer]
 
-        # порядок важен, потому что может быть framing error + timeout
-        if (
-            ((resp & ERR_START_BIT) != 0)
-            or ((resp & ERR_BIT_TIME) != 0)
-            or ((resp & ERR_FRAME_LENGTH) != 0)
-            or ((resp & ERR_STOP_BITS) != 0)
-        ):
+        self.logger.debug(
+            "Parsed response: pointer=%d, status=%d, backward_frame=0x%02x",
+            resp_pointer,
+            status,
+            backward_frame_byte,
+        )
+
+        # Handle status codes
+        if status == 0:
+            # No transmission
+            self.logger.debug("Status 0: No transmission")
+            resp_future.set_result(None)
+            return
+        elif status == 1:
+            # Transmission with backward response
+            self.logger.debug("Status 1: Transmission with backward response")
+            backward_frame = BackwardFrame(backward_frame_byte)
+            resp_future.set_result(backward_frame)
+            self.bus_traffic.invoke(backward_frame, "bus")
+            return
+        elif status == 2:
+            # Transmission without response (timeout)
+            self.logger.debug("Status 2: Transmission without response (timeout)")
+            resp_future.set_result(None)
+            return
+        elif status == 3:
+            # Broken response (framing error)
             self.logger.error(
-                "Received error in response: %x (%x)",
-                resp,
-                resp & ~ERR_STILL_SENDING,
+                "Status 3: Broken response for pointer %d (backward_frame=0x%02x)",
+                resp_pointer,
+                backward_frame_byte,
+            )
+            resp_future.set_result(BackwardFrameError(backward_frame_byte))
+            return
+        elif status == 4:
+            # Transmission impossible (no power on bus)
+            self.logger.error(
+                "Status 4: Transmission impossible - no power on bus (pointer=%d)",
+                resp_pointer,
             )
             resp_future.set_result(BackwardFrameError(0))
             return
-
-        if (resp & ERR_TIMEOUT) != 0:
-            self.logger.debug("Timeout waiting for response")
-            resp_future.set_result(None)
+        else:
+            # Unknown status
+            self.logger.error(
+                "Unknown status %d for pointer %d (backward_frame=0x%02x)",
+                status,
+                resp_pointer,
+                backward_frame_byte,
+            )
+            resp_future.set_result(BackwardFrameError(0))
             return
-
-        backward_frame = BackwardFrame(resp & ~ERR_STILL_SENDING)
-        resp_future.set_result(backward_frame)
-        self.bus_traffic.invoke(backward_frame, "bus")
 
     async def run_sequence(
         self,

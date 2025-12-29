@@ -72,7 +72,9 @@ class MQTTRPCServer:
 
     async def _handle_request(self, mqtt_message: mqtt.MQTTMessage) -> str:
         try:
-            request = MQTTRPC10Request.from_json(mqtt_message.payload.decode())
+            request_string = mqtt_message.payload.decode()
+            self.logger.debug("Request %s: %s", mqtt_message.topic, request_string)
+            request = MQTTRPC10Request.from_json(request_string)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Invalid JSON-RPC request: %s", e)
             return MQTTRPC10Response(
@@ -103,8 +105,8 @@ class MQTTRPCServer:
     async def _process_callback(self, mqtt_message: mqtt.MQTTMessage) -> None:
         response = await self._handle_request(mqtt_message)
         try:
-            await self._mqtt_dispatcher.client.publish(
-                mqtt_message.topic + "/reply", response, qos=2, retain=False
-            )
+            reply_topic = mqtt_message.topic + "/reply"
+            self.logger.debug("Response %s: %s", reply_topic, response)
+            await self._mqtt_dispatcher.client.publish(reply_topic, response, qos=2, retain=False)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Failed to publish RPC response: %s", e)

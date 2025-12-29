@@ -59,11 +59,11 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.config = WBDALIConfig()
         self.mock_mqtt_client = MockMqttClient()
         self.mock_mqtt_dispatcher = MQTTDispatcher(self.mock_mqtt_client)
+        self.mock_logger = MagicMock()
 
     def test_encode_frame_for_modbus(self):
         """Test encoding of DALI frames into Modbus frames."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
-
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         frame_16 = MagicMock()
         frame_16.__len__.return_value = 16
         frame_16.as_integer = 0x1234
@@ -88,8 +88,8 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_command_without_response(self):
         """Test sending a command that does not expect a response."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
-        driver.bus_traffic._invoke = MagicMock()  # pylint: disable=W0212
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        driver.bus_traffic.invoke = MagicMock()  # pylint: disable=W0212
 
         driver.send_barrier = AsyncMock()
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(0, 0x12340000)]))
@@ -104,12 +104,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 result = await driver.send(cmd)
                 self.assertIsNone(result)
                 mock_add_cmd.assert_called_once()
-                driver.bus_traffic._invoke.assert_called_once_with(cmd, None, False)  # pylint: disable=W0212
+                driver.bus_traffic.invoke.assert_called_once_with(cmd.frame, "default")
 
     async def test_send_command_with_response(self):
         """Test sending a command that expects a response."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
-        driver.bus_traffic._invoke = MagicMock()  # pylint: disable=W0212
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        driver.bus_traffic.invoke = MagicMock()  # pylint: disable=W0212
 
         driver.send_barrier = AsyncMock()
         driver.send_barrier.wait = AsyncMock(return_value=(0, [(0, 0x12340000)]))
@@ -128,13 +128,11 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(result, MockResponse)
                 self.assertEqual(result.data, 0x56)
                 mock_add_cmd.assert_called_once()
-                driver.bus_traffic._invoke.assert_called_once_with(  # pylint: disable=W0212
-                    cmd, result, False
-                )
+                driver.bus_traffic.invoke.assert_called_once_with(cmd.frame, "default")
 
     async def test_send_command_sendtwice_with_response_raises_error(self):
         """Test that sending a command with sendtwice=True and a response raises an error."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
 
         cmd = _MockCommand(sendtwice=True, response_class=MockResponse)
 
@@ -145,8 +143,8 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_command_sendtwice_without_response(self):
         """Test sending a command with sendtwice=True and no response."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
-        driver.bus_traffic._invoke = MagicMock()  # pylint: disable=W0212
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        driver.bus_traffic.invoke = MagicMock()  # pylint: disable=W0212
 
         cmd = _MockCommand(sendtwice=True, response_class=None)
 
@@ -159,11 +157,17 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 result = await driver.send(cmd)
                 self.assertIsNone(result)
                 self.assertEqual(mock_add_cmd.call_count, 2)
-                driver.bus_traffic._invoke.assert_called_once_with(cmd, None, False)  # pylint: disable=W0212
+                self.assertEqual(driver.bus_traffic.invoke.call_count, 2)
+                first_call = driver.bus_traffic.invoke.call_args_list[0]
+                second_call = driver.bus_traffic.invoke.call_args_list[1]
+                self.assertEqual(first_call[0][0], cmd.frame)
+                self.assertEqual(first_call[0][1], "default")
+                self.assertEqual(second_call[0][0], cmd.frame)
+                self.assertEqual(second_call[0][1], "default")
 
     async def test_add_cmd_to_send_buffer_single_command(self):
         """Test adding a single command to the send buffer."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.rpc_id_counter = 0
 
         driver.send_barrier = AsyncMock()
@@ -188,7 +192,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_add_cmd_to_send_buffer_multiple_consecutive_commands(self):
         """Test adding multiple consecutive commands to the send buffer."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.rpc_id_counter = 0
 
         driver.send_barrier = AsyncMock()
@@ -208,7 +212,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_add_cmd_to_send_buffer_non_consecutive_commands(self):
         """Test adding non-consecutive commands to the send buffer."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.rpc_id_counter = 0
 
         driver.send_barrier = AsyncMock()
@@ -235,7 +239,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_modbus_rpc_no_response_mqtt_publish(self):
         """Test that send_modbus_rpc_no_response sends the correct MQTT publish."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.rpc_id_counter = 42
 
         await driver.send_modbus_rpc_no_response(function=16, address=1930, count=4, msg="1234567890abcdef")
@@ -272,7 +276,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_modbus_rpc_mqtt_publish_timeout(self):
         """Test that send_modbus_rpc_no_response raises exception when MQTT publish fails."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
 
         self.mock_mqtt_client.publish.side_effect = Exception("MQTT publish failed")
 
@@ -285,7 +289,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_reset_queue(self):
         """Test that reset_queue sends the correct Modbus commands to reset the device queue."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.rpc_id_counter = 10
         driver.next_pointer = 5
 
@@ -310,7 +314,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_next_pointer(self):
         """Test that get_next_pointer returns the correct pointer and future."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.next_pointer = 5
         driver.cmd_counter = 10
 
@@ -324,7 +328,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_next_pointer_wraps_around(self):
         """Test that get_next_pointer wraps around when reaching device_queue_size."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.next_pointer = 19
         driver.device_queue_size = 20
 
@@ -334,7 +338,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_next_pointer_waits_for_pending_response(self):
         """Test that get_next_pointer waits if there is a pending response for the next pointer."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.next_pointer = 3
 
         pending_future = asyncio.Future()
@@ -353,7 +357,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_add_cmd_to_send_buffer_with_barrier_timeout(self):
         """Test that _add_cmd_to_send_buffer raises TimeoutError on barrier timeout."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
 
         driver.send_barrier = AsyncMock()
         driver.send_barrier.wait = AsyncMock(side_effect=asyncio.TimeoutError())
@@ -363,7 +367,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_modbus_rpc_increments_counter(self):
         """Test that rpc_id_counter increments correctly with multiple calls."""
-        driver = WBDALIDriver(self.config, mqtt_dispatcher=self.mock_mqtt_dispatcher)
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.rpc_id_counter = 100
 
         await driver.send_modbus_rpc_no_response(function=16, address=1920, count=2, msg="12340000")

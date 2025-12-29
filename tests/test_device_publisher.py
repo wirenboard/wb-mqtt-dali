@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -57,7 +57,9 @@ def mock_dispatcher(mock_client):
 
 @pytest.fixture
 def publisher(mock_dispatcher):
-    return DevicePublisher(mock_dispatcher, "test_bus")
+    logger_mock = MagicMock()
+    logger_mock.getChild.return_value = MagicMock()
+    return DevicePublisher(mock_dispatcher, "test_bus", logger_mock)
 
 
 class TestDeviceChange:
@@ -150,7 +152,7 @@ class TestDevicePublisher:
         assert device._device_title is None
 
     @pytest.mark.asyncio
-    async def test_add_device_duplicate(self, publisher, mock_client, caplog):
+    async def test_add_device_duplicate(self, publisher, mock_client):
         device_info = {
             "id": "dev1",
             "title": "Device 1",
@@ -160,8 +162,7 @@ class TestDevicePublisher:
 
         await publisher.add_device(device_info)
         await publisher.add_device(device_info)
-
-        assert "already exists" in caplog.text
+        publisher.logger.warning.assert_called_with("Device %s already exists, skipping", "dev1")
 
     @pytest.mark.asyncio
     async def test_remove_device(self, publisher, mock_client):
@@ -179,9 +180,9 @@ class TestDevicePublisher:
         assert "dev1" not in publisher._devices
 
     @pytest.mark.asyncio
-    async def test_remove_nonexistent_device(self, publisher, caplog):
+    async def test_remove_nonexistent_device(self, publisher):
         await publisher.remove_device("nonexistent")
-        assert "not found" in caplog.text
+        publisher.logger.warning.assert_called_with("Device %s not found for removal", "nonexistent")
 
     @pytest.mark.asyncio
     async def test_update_device(self, publisher, mock_client):
@@ -336,9 +337,9 @@ class TestDevicePublisher:
         mock_client.publish.assert_called()
 
     @pytest.mark.asyncio
-    async def test_set_control_value_nonexistent_device(self, publisher, caplog):
+    async def test_set_control_value_nonexistent_device(self, publisher):
         await publisher.set_control_value("nonexistent", "ctrl1", "1")
-        assert "not found" in caplog.text
+        publisher.logger.warning.assert_called_with("Device %s not found", "nonexistent")
 
     @pytest.mark.asyncio
     async def test_register_control_handler(self, publisher, mock_dispatcher):
@@ -372,7 +373,7 @@ class TestDevicePublisher:
         await publisher.register_control_handler("dev1", "ctrl1", callback)
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
-        assert "already registered" in caplog.text
+        publisher.logger.warning.assert_called_with("Handler already registered for %s/%s", "dev1", "ctrl1")
 
     @pytest.mark.asyncio
     async def test_unregister_control_handler(self, publisher, mock_dispatcher):
@@ -428,7 +429,8 @@ class TestDevicePublisher:
         message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
         await publisher._handle_on_message("dev1/ctrl1", message)
 
-        assert "Error handling /on message" in caplog.text
+        publisher.logger.error.assert_called_once()
+        assert publisher.logger.error.call_args[0][0] == "Error handling /on message for %s/%s: %s"
 
     @pytest.mark.asyncio
     async def test_get_device_ids(self, publisher):

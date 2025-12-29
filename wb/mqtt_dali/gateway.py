@@ -1,8 +1,13 @@
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
-from .application_controller import ApplicationController
+from .application_controller import (
+    ApplicationController,
+    ApplicationControllerConfig,
+    WebSocketConfig,
+)
 from .dali_device import DaliDevice, DaliDeviceAddress
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import MQTTRPCServer
@@ -18,7 +23,7 @@ def bus_from_json(
     gateway_mqtt_device_id: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
 ) -> ApplicationController:
     devices = []
-    uid = f"{gateway_mqtt_device_id}_bus{bus_index}"
+    uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
     for dev_conf in data.get("devices", []):
         device = DaliDevice(
             uid=f'{uid}_{dev_conf["short"]}',
@@ -30,17 +35,14 @@ def bus_from_json(
         )
         devices.append(device)
 
-    websocket_enabled = data.get("websocket_enabled", False)
-    websocket_port = data.get("websocket_port", 8080)
-
-    return ApplicationController(
-        mqtt_device_id=gateway_mqtt_device_id,
-        bus_index=bus_index,
-        devices=devices,
-        mqtt_dispatcher=mqtt_dispatcher,
-        websocket_enabled=websocket_enabled,
-        websocket_port=websocket_port,
+    websocket_conf = WebSocketConfig(
+        enabled=data.get("websocket_enabled", False),
+        port=data.get("websocket_port", 8080),
     )
+    ap_conf = ApplicationControllerConfig(gateway_mqtt_device_id, bus_index, devices, websocket_conf)
+
+    res = ApplicationController(ap_conf, mqtt_dispatcher)
+    return res
 
 
 def bus_to_json(bus: ApplicationController) -> dict:
@@ -63,7 +65,7 @@ def bus_to_json(bus: ApplicationController) -> dict:
 
 
 class Gateway:
-    def __init__(self, config: dict, mqtt_dispatcher: MQTTDispatcher) -> None:
+    def __init__(self, config: dict, mqtt_dispatcher: MQTTDispatcher, config_path: str) -> None:
         self.rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
         self.wb_dali_gateways: list[WbDaliGateway] = list(
             map(
@@ -79,6 +81,10 @@ class Gateway:
                 config.get("gateways", []),
             )
         )
+
+        self._config_lock = asyncio.Lock()
+        self._config_path = config_path
+        self._debug = config.get("debug", False)
 
     async def start(self) -> None:
         res = await asyncio.gather(
@@ -97,7 +103,7 @@ class Gateway:
         await self.rpc_server.add_endpoint(
             "Editor",
             "ScanBus",
-            self.rescan_bus_handler,
+            self.rescan_bus_rpc_handler,
         )
         await self.rpc_server.add_endpoint(
             "Editor",
@@ -108,6 +114,16 @@ class Gateway:
             "Editor",
             "SetDevice",
             self.set_device_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "GetBus",
+            self.get_bus_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "SetBus",
+            self.set_bus_rpc_handler,
         )
 
     async def stop(self) -> None:
@@ -157,14 +173,78 @@ class Gateway:
         await bus.apply_parameters(device, new_params)
         return device.params
 
-    async def rescan_bus_handler(self, params: dict):
+    async def rescan_bus_rpc_handler(self, params: dict):
         bus_id = params.get("busId")
         for gw in self.wb_dali_gateways:
             for bus in gw.buses:
                 if bus.uid == bus_id:
                     await bus.rescan_bus()
+                    await self._save_configuration()
                     return bus_to_json(bus)
         raise ValueError("Bus not found")
+
+    async def get_bus_rpc_handler(self, params: dict):
+        bus_id = params.get("busId")
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                if bus.uid == bus_id:
+                    return {
+                        "config": {
+                            "websocket_enabled": bus.websocket_config.enabled,
+                            "websocket_port": bus.websocket_config.port,
+                        },
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "websocket_enabled": {
+                                    "title": "Enable WebSocket",
+                                    "type": "boolean",
+                                },
+                                "websocket_port": {
+                                    "title": "WebSocket port",
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 65535,
+                                },
+                            },
+                            "translations": {
+                                "ru": {
+                                    "Enable WebSocket": "Включить WebSocket",
+                                    "WebSocket port": "Порт WebSocket'а",
+                                }
+                            },
+                        },
+                    }
+        raise ValueError(f"Bus {bus_id} not found")
+
+    async def set_bus_rpc_handler(self, params: dict):
+        bus_id = params.get("busId")
+        new_config = params.get("config", {})
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                if bus.uid == bus_id:
+                    new_websocket_config = WebSocketConfig(
+                        enabled=new_config.get("websocket_enabled", bus.websocket_config.enabled),
+                        port=new_config.get("websocket_port", bus.websocket_config.port),
+                    )
+                    if new_websocket_config.enabled and self._is_websocket_port_in_use(
+                        new_websocket_config.port, bus.uid
+                    ):
+                        raise ValueError(f"WebSocket port {new_websocket_config.port} is already in use")
+                    await bus.setup_websocket(new_websocket_config)
+                    await self._save_configuration()
+                    return {
+                        "websocket_enabled": new_websocket_config.enabled,
+                        "websocket_port": new_websocket_config.port,
+                    }
+        raise ValueError("Bus not found")
+
+    def _is_websocket_port_in_use(self, port: int, bus_id: str) -> bool:
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                if bus.uid != bus_id and bus.websocket_config.enabled and bus.websocket_config.port == port:
+                    return True
+        return False
 
     def _get_bus_and_device_by_id(
         self, device_id: str
@@ -175,3 +255,32 @@ class Gateway:
                     if device.uid == device_id:
                         return bus, device
         return None, None
+
+    async def _save_configuration(self) -> None:
+        async with self._config_lock:
+            with open(self._config_path, "w", encoding="utf-8") as f:
+                config: dict = {
+                    "gateways": [
+                        {
+                            "device_id": gw.uid,
+                            "buses": [
+                                {
+                                    "websocket_enabled": bus.websocket_config.enabled,
+                                    "websocket_port": bus.websocket_config.port,
+                                    "devices": [
+                                        {
+                                            "short": dev.address.short,
+                                            "random": dev.address.random,
+                                        }
+                                        for dev in bus.devices
+                                    ],
+                                }
+                                for bus in gw.buses
+                            ],
+                        }
+                        for gw in self.wb_dali_gateways
+                    ]
+                }
+                if self._debug:
+                    config["debug"] = True
+                json.dump(config, f, indent=4)

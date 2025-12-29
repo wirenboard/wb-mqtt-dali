@@ -1,10 +1,13 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Optional
 
 from dali.address import DeviceBroadcast
+from dali.command import from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
+from dali.frame import Frame
 
 from .commissioning import Commissioning
 from .common_gear_controls import (
@@ -14,7 +17,7 @@ from .common_gear_controls import (
 )
 from .dali_device import DaliDevice, make_device
 from .device_publisher import DeviceChange, DevicePublisher
-from .fake_lunatone_iot import run_websocket
+from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
 
@@ -29,43 +32,56 @@ class ApplicationControllerState(Enum):
     GENERIC_TASK = auto()
 
 
+@dataclass
+class WebSocketConfig:
+    enabled: bool = False
+    port: int = 8080
+
+
+@dataclass
+class ApplicationControllerConfig:
+    mqtt_device_id: str
+    bus_index: int
+    devices: list[DaliDevice]
+    polling_interval: float
+    websocket_config: WebSocketConfig = WebSocketConfig()
+
+
 class ApplicationController:
     def __init__(
         self,
-        mqtt_device_id: str,
-        bus_index: int,
-        devices: list[DaliDevice],
+        config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
-        polling_interval: float = 2.0,
-        websocket_enabled: bool = False,
-        websocket_port: int = 8080,
     ) -> None:
-        self.uid = f"{mqtt_device_id}_{bus_index}"
-        self.bus_name = f"Bus {bus_index}"
-        self.devices = devices
-        self.logger = logging.getLogger(f"{__name__}.{self.uid}")
+        self.uid = f"{config.mqtt_device_id}_bus_{config.bus_index}"
+        self.bus_name = f"Bus {config.bus_index}"
+        self.devices = config.devices
+        self.websocket_config = config.websocket_config
+        self.logger = logging.getLogger(self.uid)
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
         self._ready_condition = asyncio.Condition(self._state_lock)
+
         self._quiescent_mode_timer: Optional[asyncio.TimerHandle] = None
         self._active_task: Optional[asyncio.Task] = None
 
-        self._mqtt_dispatcher = mqtt_dispatcher
-        self._device_publisher = DevicePublisher(mqtt_dispatcher, self.uid)
+        self._device_publisher = DevicePublisher(mqtt_dispatcher, self.uid, self.logger)
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
             modbus_port_path="/dev/ttyRS485-2",
-            device_name=mqtt_device_id,
+            device_name=config.mqtt_device_id,
             modbus_slave_id=2,
         )
-        self._dev = WBDALIDriver(cfg, mqtt_dispatcher=self._mqtt_dispatcher, dev_inst_map=self._dev_inst_map)
+
         self._polling_interval = polling_interval
         self._polling_task: Optional[asyncio.Task] = None
-        self._websocket_enabled = websocket_enabled
-        self._websocket_port = websocket_port
+        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+
         self._websocket_task: Optional[asyncio.Task] = None
+        self._websocket_lock = asyncio.Lock()
+        self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
     async def start(self) -> None:
         async with self._state_lock:
@@ -94,11 +110,9 @@ class ApplicationController:
 
         self._polling_task = asyncio.create_task(self._polling_loop())
 
-        if self._websocket_enabled:
-            self._websocket_task = asyncio.create_task(
-                self._run_websocket(),
-                name=f"websocket-{self.uid}",
-            )
+        async with self._websocket_lock:
+            if self.websocket_config.enabled:
+                self._run_websocket()
         await self._notify_ready()
 
     async def stop(self) -> None:
@@ -122,13 +136,8 @@ class ApplicationController:
                 pass
             self._polling_task = None
 
-        if self._websocket_task:
-            self._websocket_task.cancel()
-            try:
-                await self._websocket_task
-            except asyncio.CancelledError:
-                pass
-            self._websocket_task = None
+        async with self._websocket_lock:
+            await self._stop_websocket()
 
         await self._device_publisher.cleanup()
 
@@ -159,6 +168,40 @@ class ApplicationController:
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK, device.apply_parameters(self._dev, new_params)
         )
+
+    async def setup_websocket(self, config: WebSocketConfig) -> None:
+        async with self._state_lock:
+            if self._state in (
+                ApplicationControllerState.UNINITIALIZED,
+                ApplicationControllerState.INITIALIZING,
+                ApplicationControllerState.STOPPING,
+            ):
+                self.websocket_config = config
+                self.logger.debug(
+                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state %s, just saving config",
+                    self._state,
+                )
+                return
+
+            async with self._websocket_lock:
+                if self.websocket_config == config:
+                    self.logger.debug("Lunatone IoT Gateway emulator config unchanged, no action needed")
+                    return
+
+                # Disable websocket
+                if not config.enabled:
+                    self.logger.info("Stop Lunatone IoT Gateway emulator")
+                    await self._stop_websocket()
+                    self.websocket_config = config
+                    return
+
+                # Port changed, so stop existing websocket first
+                if self.websocket_config.port != config.port:
+                    self.logger.info("Lunatone IoT Gateway emulator port changed, restarting")
+                    await self._stop_websocket()
+
+                self.websocket_config = config
+                self._run_websocket()
 
     async def _run_task(self, new_state: ApplicationControllerState, task) -> None:
         try:
@@ -262,13 +305,21 @@ class ApplicationController:
                 self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
                 await asyncio.sleep(1)
 
-    async def _run_websocket(self) -> None:
-        await run_websocket(
-            self._dev,
-            asyncio,
-            "0.0.0.0",
-            self._websocket_port,
+    def _run_websocket(self) -> None:
+        self._websocket_task = asyncio.create_task(
+            run_websocket(self._dev, "0.0.0.0", self.websocket_config.port, self.logger),
+            name=f"websocket-{self.uid}",
         )
+
+    async def _stop_websocket(self) -> None:
+        if self._websocket_task is not None:
+            self._websocket_task.cancel()
+            try:
+                await self._websocket_task
+            except asyncio.CancelledError:
+                # Task cancellation is expected when stopping the websocket; ignore this error.
+                pass
+            self._websocket_task = None
 
     async def _handle_start_quiescent_mode(self) -> None:
         async with self._state_lock:
@@ -293,6 +344,9 @@ class ApplicationController:
         async with self._state_lock:
             if self._state == ApplicationControllerState.IN_QUIESCENT_MODE:
                 self._state = ApplicationControllerState.READY
+                if self._quiescent_mode_timer:
+                    self._quiescent_mode_timer.cancel()
+                    self._quiescent_mode_timer = None
                 self._ready_condition.notify()
 
     async def _notify_ready(self) -> None:
@@ -303,3 +357,14 @@ class ApplicationController:
             ]:
                 self._state = ApplicationControllerState.READY
                 self._ready_condition.notify()
+
+    def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:
+        command = from_frame(frame)
+        if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
+            try:
+                if isinstance(command, StartQuiescentMode):
+                    asyncio.create_task(self._handle_start_quiescent_mode())
+                elif isinstance(command, StopQuiescentMode):
+                    asyncio.create_task(self._handle_stop_quiescent_mode())
+            except Exception:
+                pass  # Ignore errors in bus traffic handling

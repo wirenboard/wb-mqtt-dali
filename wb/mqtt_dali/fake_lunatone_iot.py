@@ -19,10 +19,19 @@ import asyncio
 import json
 import logging
 from enum import Enum
+from http import HTTPStatus
+from typing import Any, Awaitable, Callable, Optional
 
+import dali.command
 import dali.frame
 import websockets.exceptions
-from websockets.server import serve
+from websockets.http import Headers
+from websockets.server import HTTPResponse, WebSocketServerProtocol, serve
+from websockets.typing import Data
+
+from .wbdali import WBDALIDriver
+
+LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE = "lunatone-iot-emulator"
 
 
 class LunatoneIotProtocolError(RuntimeError):
@@ -50,9 +59,9 @@ class AnswerResult(Enum):
     FRAMING_ERROR = 63
 
 
-def _msg_dali_monitor(line, bits, data, framing_error):
+def _msg_dali_monitor(line: int, bits: int, data: list[int], framing_error: bool) -> dict[str, Any]:
     if bits == 25:
-        # eDALI actually has 24 meaningul bits and DALI Cockpit expects 24 bits here as well
+        # eDALI actually has 24 meaningful bits and DALI Cockpit expects 24 bits here as well
         data = data[1:]
     return {
         "type": "daliMonitor",
@@ -66,7 +75,7 @@ def _msg_dali_monitor(line, bits, data, framing_error):
 
 
 # The docs mention a ton of other fields, but I'm still getting this thing displayed as a 'DALI-2 Display 7"',
-# despite using the IoT-getway's GTIN. I can live with that :).
+# despite using the IoT-gateway's GTIN. I can live with that :).
 _INITIAL_GREET = {
     "type": "info",
     "data": {
@@ -82,27 +91,30 @@ _INITIAL_GREET = {
     },
 }
 
-_log = logging.getLogger("fake-lunatone-iot")
 
-
-def _unbreak_jsonish(blob: str):
+def _unbreak_jsonish(blob: Data) -> str:
     # Lunatone's DALI-Cockpit sends malformed JSON,
     # with `True` and `False` instead of JSON's own `true` and `false`.
     # This is a huge hack which will corrupt unrelated data, but hey,
     # I *hope* I won't be getting any strings here.
-    return blob.replace("True", "true").replace("False", "false")
+    string_blob = ""
+    if isinstance(blob, bytes):
+        string_blob = blob.decode("utf-8")
+    if isinstance(blob, str):
+        string_blob = blob
+    return string_blob.replace("True", "true").replace("False", "false")
 
 
-async def frame_result(websocket, line, result: SendingResult):
-    _log.debug(">> daliFrame result=%s", result)
+async def frame_result(websocket, line, result: SendingResult, logger: logging.Logger):
+    logger.debug("WS >> daliFrame result=%s", result)
     await websocket.send(json.dumps({"type": "daliFrame", "data": {"line": line, "result": result.value}}))
 
 
-async def dali_answer(websocket, line, result, dali_data):
+async def dali_answer(websocket, line, result, dali_data, logger: logging.Logger):
     if dali_data is None:
-        _log.debug("WS >> daliAnswer result=%s dali_data=%s", result, dali_data)
+        logger.debug("WS >> daliAnswer result=%s dali_data=%s", result, dali_data)
     else:
-        _log.debug("WS >> daliAnswer result=%s dali_data=%02x", result, dali_data)
+        logger.debug("WS >> daliAnswer result=%s dali_data=%02x", result, dali_data)
     await websocket.send(
         json.dumps(
             {"type": "daliAnswer", "data": {"line": line, "result": result.value, "daliData": dali_data}}
@@ -110,22 +122,16 @@ async def dali_answer(websocket, line, result, dali_data):
     )
 
 
-async def _cleanup_bus_traffic(_driver, handle):
-    try:
-        await asyncio.Future()
-    except asyncio.CancelledError:
-        handle.unregister()
-
-
-async def emulate(tg, websocket, driver):  # pylint: disable=R0912 disable=R0914 disable=R0915
-    handle = driver.bus_traffic.register(publish_traffic(tg, websocket))
-    unregister = tg.create_task(
-        _cleanup_bus_traffic(driver, handle), name="unregister-dali-bus-watcher-to-websocket"
-    )
-    _log.info("WS >> info")
+async def emulate(
+    websocket: WebSocketServerProtocol,
+    driver: WBDALIDriver,
+    logger: logging.Logger,
+):  # pylint: disable=R0912 disable=R0915
+    unregister_bus_traffic_watcher = driver.bus_traffic.register(publish_traffic(websocket, logger))
     try:
         await websocket.send(json.dumps(_INITIAL_GREET))
         async for raw_message in websocket:
+            line = 0
             try:
                 try:
                     message = json.loads(_unbreak_jsonish(raw_message))
@@ -134,7 +140,7 @@ async def emulate(tg, websocket, driver):  # pylint: disable=R0912 disable=R0914
                 if "type" not in message:
                     raise LunatoneIotProtocolError(f'No "type" field in this JSON packet: {message}')
                 if message["type"] == "filtering":
-                    _log.debug("WS << NOOP filtering: %s", message)
+                    logger.debug("WS << NOOP filtering: %s", message)
                     # FIXME: do we need to implement this?
                     pass  # pylint: disable=W0107
                 elif message["type"] == "daliFrame":
@@ -146,8 +152,8 @@ async def emulate(tg, websocket, driver):  # pylint: disable=R0912 disable=R0914
                         # priority = message["data"]["mode"]["priority"]
                         wait_for_answer = message["data"]["mode"]["waitForAnswer"]
                     except KeyError as e:
-                        raise MissingData(f"{e} for DALI frame: {message}") from e
-                    _log.debug(
+                        raise KeyError(f"Missing {e} for DALI frame: {message}") from e
+                    logger.debug(
                         "WS << daliFrame (bits=%s line=%s sendTwice=%s waitForAnswer=%s) %s",
                         bits,
                         line,
@@ -156,14 +162,14 @@ async def emulate(tg, websocket, driver):  # pylint: disable=R0912 disable=R0914
                         " ".join(f"{b:02x}" for b in payload),
                     )
                     if line != 0:
-                        await frame_result(websocket, line, SendingResult.NO_SUCH_LINE)
+                        await frame_result(websocket, line, SendingResult.NO_SUCH_LINE, logger)
                         continue
 
                     if bits not in (16, 24, 25):
-                        _log.error("bits=%s not supported yet, faking a no-reply", bits)
-                        await frame_result(websocket, line, SendingResult.SENT)
+                        logger.error("bits=%s not supported yet, faking a no-reply", bits)
+                        await frame_result(websocket, line, SendingResult.SENT, logger)
                         if wait_for_answer:
-                            await dali_answer(websocket, line, AnswerResult.NO_ANSWER, None)
+                            await dali_answer(websocket, line, AnswerResult.NO_ANSWER, None, logger)
                         continue
 
                     frame = dali.frame.ForwardFrame(bits, payload)
@@ -174,104 +180,82 @@ async def emulate(tg, websocket, driver):  # pylint: disable=R0912 disable=R0914
                         # this is useful for commands unknown to python-dali, like eDALI
                         command.response = dali.command.Response
 
-                    resp = await driver.send(command)
+                    resp = await driver.send(command, LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE)
                     # FIXME: error handling
-                    await frame_result(websocket, line, SendingResult.SENT)
+                    await frame_result(websocket, line, SendingResult.SENT, logger)
                     if send_twice:
                         # As per docs, just send the confirmation twice.
                         # I am lazy, and therefore I ignore the `sendTwice`
                         # because the frame parser within python-dali already does that for me.
                         # This might be a bug from the DALI Cockpit's point of view.
-                        await frame_result(websocket, line, SendingResult.SENT)
+                        await frame_result(websocket, line, SendingResult.SENT, logger)
                     if wait_for_answer:
                         if resp is None or resp.raw_value is None:
-                            await dali_answer(websocket, line, AnswerResult.NO_ANSWER, None)
+                            await dali_answer(websocket, line, AnswerResult.NO_ANSWER, None, logger)
                         elif isinstance(resp.raw_value, dali.frame.BackwardFrameError):
-                            await dali_answer(websocket, line, AnswerResult.FRAMING_ERROR, None)
+                            await dali_answer(websocket, line, AnswerResult.FRAMING_ERROR, None, logger)
                         else:
                             await dali_answer(
-                                websocket, line, AnswerResult.VALUE_8BIT, resp.raw_value.as_integer
+                                websocket, line, AnswerResult.VALUE_8BIT, resp.raw_value.as_integer, logger
                             )
                 else:
                     raise LunatoneIotProtocolError(f'Unknown "type" field in this JSON packet: {message}')
             except LunatoneIotProtocolError as e:
-                _log.error("Error: %s", e)
-                await frame_result(websocket, line, SendingResult.SYNTAX_ERROR)
+                logger.error("Error: %s", e)
+                await frame_result(websocket, line, SendingResult.SYNTAX_ERROR, logger)
     except websockets.exceptions.ConnectionClosed as e:
-        _log.info("WS closed: %s", e)
-    unregister.cancel()
+        logger.info("WS closed: %s", e)
+    finally:
+        unregister_bus_traffic_watcher()
 
 
-def publish_traffic(tg, websocket):
-    def _traffic_filter(_dev, command, response, config_command_error):
-        tasks = []
-        if config_command_error:
-            # FIXME: how to handle this one?
-            _log.debug(
-                "WS >> daliMonitor: FRAMING_ERROR bits=%d %s",
-                len(command.frame),
-                " ".join(f"{b:02x}" for b in command.frame.as_byte_sequence),
+def publish_traffic(websocket, logger):
+    def _traffic_filter(frame: dali.frame.Frame, _source: str):
+        logger.debug(
+            "WS >> daliMonitor: %sbits=%d %s",
+            "FRAMING ERROR " if frame.error else "",
+            len(frame),
+            " ".join(f"{b:02x}" for b in frame.as_byte_sequence),
+        )
+        asyncio.create_task(
+            websocket.send(
+                json.dumps(_msg_dali_monitor(0, len(frame), frame.as_byte_sequence, frame.error is True))
+            ),
+            name="publish_traffic",
+        ).add_done_callback(
+            lambda fut: (
+                logger.error("Failed to publish DALI bus traffic to websocket: %s", fut.exception())
+                if fut.exception()
+                else None
             )
-            tasks.append(
-                websocket.send(
-                    json.dumps(
-                        _msg_dali_monitor(
-                            0, len(command.frame), command.frame.as_byte_sequence, framing_error=True
-                        )
-                    )
-                )
-            )
-        elif command:
-            _log.debug(
-                "WS >> daliMonitor: bits=%d %s",
-                len(command.frame),
-                " ".join(f"{b:02x}" for b in command.frame.as_byte_sequence),
-            )
-            tasks.append(
-                websocket.send(
-                    json.dumps(
-                        _msg_dali_monitor(
-                            0, len(command.frame), command.frame.as_byte_sequence, framing_error=False
-                        )
-                    )
-                )
-            )
-            if response and response.raw_value is not None:
-                _log.debug(
-                    "WS >> daliMonitor: bits=%d %s",
-                    len(response.raw_value),
-                    " ".join(f"{b:02x}" for b in response.raw_value.as_byte_sequence),
-                )
-                tasks.append(
-                    websocket.send(
-                        json.dumps(
-                            _msg_dali_monitor(
-                                0,
-                                len(response.raw_value),
-                                response.raw_value.as_byte_sequence,
-                                framing_error=response.raw_value.error,
-                            )
-                        )
-                    )
-                )
-        for t in tasks:
-            tg.create_task(t, name="publish_traffic")
+        )
 
     return _traffic_filter
 
 
-def process_request(path, _request_headers):
-    _log.info("WS: %s", path)
+async def process_request(path: str, _request_headers: Headers) -> Optional[HTTPResponse]:
     if path != "/":
-        return (404, [], "Not found")
+        return (HTTPStatus.NOT_FOUND, [], "Not found".encode("utf-8"))
     return None
 
 
-async def run_websocket(dev, tg, host, port):
-    async with serve(
-        lambda websocket, path: emulate(tg, websocket, dev),
-        host,
-        port,
-        process_request=process_request,
-    ):
-        await asyncio.Future()
+async def run_websocket(dev: WBDALIDriver, host: str, port: int, logger: logging.Logger) -> None:
+    _log = logger.getChild("lunatone-iot-emulator")
+    _log.info("Starting Lunatone IoT Gateway emulator on %s:%d", host, port)
+    func: Callable[[WebSocketServerProtocol, str], Awaitable[Any]] = lambda websocket, path: emulate(
+        websocket, dev, _log
+    )
+    try:
+        async with serve(
+            func,
+            host,
+            port,
+            process_request=process_request,
+        ):
+            await asyncio.Future()
+    except Exception as e:
+        if isinstance(e, asyncio.CancelledError):
+            _log.debug("Lunatone IoT Gateway emulator stopped")
+        else:
+            _log.error("Lunatone IoT Gateway emulator failed: %s", e)
+        raise

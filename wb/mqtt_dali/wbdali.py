@@ -8,7 +8,7 @@ import string
 from dataclasses import dataclass
 from itertools import groupby
 from operator import itemgetter
-from typing import Any, Generator, Iterable, Optional
+from typing import Any, Callable, Generator, Iterable, Optional
 
 from dali import command
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
@@ -23,7 +23,6 @@ from dali.device.general import (
     StopQuiescentMode,
 )
 from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
-from dali.driver.hid import _callback
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
@@ -58,15 +57,35 @@ class WBDALIConfig:
     barrier_timeout: float = 0.01
 
 
+class BusTrafficCallbacks:
+    """Helper class for callback registration"""
+
+    def __init__(self):
+        self._callbacks = set()
+
+    def register(self, func: Callable[[Frame, str], None]):
+
+        def cleanup():
+            self._callbacks.discard(func)
+
+        self._callbacks.add(func)
+        return cleanup
+
+    def invoke(self, frame: Frame, source: str):
+        for func in self._callbacks:
+            func(frame, source)
+
+
 class WBDALIDriver:
-    logger = logging.getLogger("WBDALIDriver")
 
     def __init__(
         self,
         config: WBDALIConfig,
         mqtt_dispatcher: MQTTDispatcher,
+        logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ):
+        self.logger = logger.getChild("WBDALIDriver")
         self.logger.debug("path=%s, dev_inst_map=%s", config.modbus_port_path, dev_inst_map)
 
         self.config = config
@@ -84,7 +103,7 @@ class WBDALIDriver:
 
         # config_command_error is true if the config command has a response, or
         # if the command was not sent twice within the required time limit
-        self.bus_traffic = _callback(self)
+        self.bus_traffic = BusTrafficCallbacks()
 
         self.device_queue_size = 16
         self.next_pointer = 0
@@ -104,7 +123,7 @@ class WBDALIDriver:
         self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
 
     async def initialize(self) -> None:
-        self.logger.debug("Initializing WBDALIDriver...")
+        self.logger.debug("Initializing...")
 
         await self.reset_queue()
 
@@ -123,10 +142,10 @@ class WBDALIDriver:
         #    self._handle_ff24_message,
         # )
 
-        self.logger.debug("WBDALIDriver initialized successfully")
+        self.logger.debug("Initialized successfully")
 
     async def deinitialize(self) -> None:
-        self.logger.debug("Deinitializing WBDALIDriver...")
+        self.logger.debug("Deinitializing...")
         # Unsubscribe from all reply topics
         for i in range(self.device_queue_size):
             topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
@@ -138,7 +157,7 @@ class WBDALIDriver:
         #    await self._mqtt_dispatcher.unsubscribe(
         #        f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
         #    )
-        self.logger.debug("WBDALIDriver deinitialized successfully")
+        self.logger.debug("Deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
         """Send a Modbus RPC command without expecting a response."""
@@ -228,7 +247,7 @@ class WBDALIDriver:
         frame = ForwardFrame(24, int(message.payload) >> 8)
         cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
         self.logger.debug("Received FF24: %s", cmd)
-        self.bus_traffic._invoke(cmd, None, False)  # pylint: disable=W0212
+        self.bus_traffic.invoke(frame, "bus")
 
     async def _handle_reply_message(self, message):
         self.logger.debug(
@@ -273,7 +292,9 @@ class WBDALIDriver:
             resp_future.set_result(None)
             return
 
-        resp_future.set_result(BackwardFrame(resp & ~ERR_STILL_SENDING))
+        backward_frame = BackwardFrame(resp & ~ERR_STILL_SENDING)
+        resp_future.set_result(backward_frame)
+        self.bus_traffic.invoke(backward_frame, "bus")
 
     async def run_sequence(
         self,
@@ -406,7 +427,18 @@ class WBDALIDriver:
         )
         return result
 
-    async def send(self, cmd: Command) -> Optional[Response]:
+    async def send(self, cmd: Command, source: str = "default") -> Optional[Response]:
+        """
+        Send a DALI command to the bus and optionally wait for a response.
+        Args:
+            cmd (Command): The DALI command to send. Must contain a valid frame and
+                optional response handler.
+            source (str): The source identifier for logging and tracking purposes.
+        Returns:
+            Optional[Response]: The response from the DALI device if cmd.response is set,
+                otherwise None.
+        """
+
         self.logger.debug("send(command=%s)", cmd)
         response = None
         # await self.connected.wait()
@@ -432,13 +464,13 @@ class WBDALIDriver:
         for i, (pointer, future) in enumerate(next_pointers):
             self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, len(next_pointers))
             modbus_reg_val = self._encode_frame_for_modbus(cmd.frame)
+            self.bus_traffic.invoke(cmd.frame, source)
             await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
 
             if cmd.response:
                 resp_frame = await future
                 response = cmd.response(resp_frame)
 
-        self.bus_traffic._invoke(cmd, response, False)  # pylint: disable=W0212
         return response
 
 

@@ -15,8 +15,6 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .gateway import Gateway
 from .mqtt_dispatcher import MQTTDispatcher
-from .mqtt_rpc_server import MQTTRPCServer
-from .wbdali import WBDALIDriver
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 WB_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
@@ -131,14 +129,12 @@ async def main(argv):
 
     log_level = logging.DEBUG if config.get("debug") else args.log_level
     logging.basicConfig(level=log_level)
-    MQTTRPCServer.logger.setLevel(log_level)
-    WBDALIDriver.logger.setLevel(log_level)
-    logging.getLogger("mqtt_client").setLevel(log_level)
+    logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     client = make_mqtt_client(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
-    gateway = Gateway(config, mqtt_dispatcher)
+    gateway = Gateway(config, mqtt_dispatcher, args.config)
     is_first_connection = True
     while True:
         try:

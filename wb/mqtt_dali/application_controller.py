@@ -75,7 +75,7 @@ class ApplicationController:
             modbus_slave_id=2,
         )
 
-        self._polling_interval = polling_interval
+        self._polling_interval = config.polling_interval
         self._polling_task: Optional[asyncio.Task] = None
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 

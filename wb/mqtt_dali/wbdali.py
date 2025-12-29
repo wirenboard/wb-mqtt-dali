@@ -68,6 +68,9 @@ class BusTrafficCallbacks:
 
 
 class WBDALIDriver:
+    MODBUS_CHANNEL_OFFSET = 1000
+    MODBUS_BULK_SEND_BUFFER_BASE = 1400
+    MODBUS_BULK_SEND_POINTER_BASE = 1432
 
     def __init__(
         self,
@@ -191,9 +194,12 @@ class WBDALIDriver:
         self.logger.debug("Resetting message queue")
         self.next_pointer = 0
 
+        pointer_address = (
+            self.MODBUS_BULK_SEND_POINTER_BASE + (self.config.channel - 1) * self.MODBUS_CHANNEL_OFFSET
+        )
         await self.send_modbus_rpc_no_response(
             function=6,
-            address=self.config.channel * 1000 + 432,  # todo: use bus_1_bulk_send_pointer control
+            address=pointer_address,
             count=1,
             msg="0000",
         )
@@ -402,9 +408,14 @@ class WBDALIDriver:
                 count = len(conseq_range)
                 msg = "".join([f"{reg_val_at_pointer[p]:08x}" for p in conseq_range])
 
+                buffer_address = (
+                    self.MODBUS_BULK_SEND_BUFFER_BASE
+                    + (self.config.channel - 1) * self.MODBUS_CHANNEL_OFFSET
+                    + start_pointer * 2
+                )
                 await self.send_modbus_rpc_no_response(
                     function=16,
-                    address=self.config.channel * 1000 + 400 + start_pointer * 2,
+                    address=buffer_address,
                     count=count * 2,
                     msg=msg,
                 )

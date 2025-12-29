@@ -369,7 +369,7 @@ class WBDALIDriver:
 
                 await self.send_modbus_rpc_no_response(
                     function=16,
-                    address=1400 + start_pointer * 2,
+                    address=self.config.channel * 1000 + 400 + start_pointer * 2,
                     count=count * 2,
                     msg=msg,
                 )

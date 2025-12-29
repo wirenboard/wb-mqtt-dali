@@ -489,19 +489,15 @@ class WBDALIDriver:
             )
             raise ValueError("Command with sendtwice=True cannot have a response")
 
-        next_pointers = [
-            await self.get_next_pointer(),
-        ]
-        # if cmd.bits
-        for i, (pointer, future) in enumerate(next_pointers):
-            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, len(next_pointers))
-            modbus_reg_val = self._encode_frame_for_modbus(cmd.frame, cmd.sendtwice)
-            self.bus_traffic.invoke(cmd.frame, source)
-            await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
+        pointer, future = await self.get_next_pointer()
+        self.logger.debug("Sending command: %s", cmd)
+        modbus_reg_val = self._encode_frame_for_modbus(cmd.frame, cmd.sendtwice)
+        self.bus_traffic.invoke(cmd.frame, source)
+        await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
 
-            if cmd.response:
-                resp_frame = await future
-                response = cmd.response(resp_frame)
+        if cmd.response:
+            resp_frame = await future
+            response = cmd.response(resp_frame)
 
         return response
 

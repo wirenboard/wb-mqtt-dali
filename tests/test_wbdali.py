@@ -185,14 +185,11 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             with patch.object(driver, "_add_cmd_to_send_buffer", new_callable=AsyncMock) as mock_add_cmd:
                 result = await driver.send(cmd)
                 self.assertIsNone(result)
-                self.assertEqual(mock_add_cmd.call_count, 2)
-                self.assertEqual(driver.bus_traffic.invoke.call_count, 2)
+                self.assertEqual(mock_add_cmd.call_count, 1)
+                self.assertEqual(driver.bus_traffic.invoke.call_count, 1)
                 first_call = driver.bus_traffic.invoke.call_args_list[0]
-                second_call = driver.bus_traffic.invoke.call_args_list[1]
                 self.assertEqual(first_call[0][0], cmd.frame)
                 self.assertEqual(first_call[0][1], "default")
-                self.assertEqual(second_call[0][0], cmd.frame)
-                self.assertEqual(second_call[0][1], "default")
 
     async def test_add_cmd_to_send_buffer_single_command(self):
         """Test adding a single command to the send buffer."""

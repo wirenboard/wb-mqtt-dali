@@ -5,12 +5,11 @@ import json
 import logging
 import random
 import string
+from collections import deque
 from dataclasses import dataclass
-from itertools import groupby
-from operator import itemgetter
-from typing import Any, Callable, Generator, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
-from dali import command
+import paho.mqtt.client as mqtt
 from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
 from dali.command import Command, Response, from_frame
 from dali.device.general import (
@@ -28,7 +27,6 @@ from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
-from .barrier import Barrier
 from .mqtt_dispatcher import MQTTDispatcher
 
 ERR_START_BIT = 0x100  # не получен старт бит
@@ -39,6 +37,8 @@ ERR_TIMEOUT = 0x1000  # таймаут приёма фрейма
 ERR_LINE_POWER = 0x2000  # линия не запитана
 ERR_LINE_BUSY = 0x4000  # линия занята
 ERR_STILL_SENDING = 0x8000
+
+WAIT_DALI_RESPONSE_TIMEOUT = 1.5  # seconds
 
 
 @dataclass
@@ -60,10 +60,10 @@ class WBDALIConfig:
 class BusTrafficCallbacks:
     """Helper class for callback registration"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._callbacks = set()
 
-    def register(self, func: Callable[[Frame, str], None]):
+    def register(self, func: Callable[[Frame, str], None]) -> Callable[[], None]:
 
         def cleanup():
             self._callbacks.discard(func)
@@ -71,9 +71,23 @@ class BusTrafficCallbacks:
         self._callbacks.add(func)
         return cleanup
 
-    def invoke(self, frame: Frame, source: str):
+    def invoke(self, frame: Frame, source: str) -> None:
         for func in self._callbacks:
             func(frame, source)
+
+
+@dataclass
+class SendQueueItem:
+    future: asyncio.Future
+    command: Command
+    source: str
+
+
+@dataclass
+class ResponseWaiter:
+    future: asyncio.Future
+    queue_index: int
+    timeout_handler: Optional[asyncio.Handle] = None
 
 
 class WBDALIDriver:
@@ -84,46 +98,36 @@ class WBDALIDriver:
         mqtt_dispatcher: MQTTDispatcher,
         logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
-    ):
+    ) -> None:
         self.logger = logger.getChild("WBDALIDriver")
         self.logger.debug("path=%s, dev_inst_map=%s", config.modbus_port_path, dev_inst_map)
 
         self.config = config
         self.dev_inst_map = dev_inst_map
 
-        self.responses = {}
+        self._waiting_for_responses: deque[ResponseWaiter] = deque()
 
-        # Acquire this lock to perform a series of commands as a
-        # transaction.  While you hold the lock, you must call send()
-        # with keyword argument in_transaction=True
-        self.transaction_lock = asyncio.Lock()
-
-        # Register to be called back with bus traffic; three arguments are passed:
-        # command, response, config_command_error
-
-        # config_command_error is true if the config command has a response, or
-        # if the command was not sent twice within the required time limit
+        # Register to be called back with bus traffic
         self.bus_traffic = BusTrafficCallbacks()
 
         self.device_queue_size = 10
-        self.next_pointer = 0
-        self.next_pointer_lock = asyncio.Lock()
         self.rpc_id_counter = 0
-        self.cmd_counter = 0
-        self.send_barrier = Barrier(
-            self.config.barrier_max_concurrent_tasks,
-            default_timeout=self.config.barrier_timeout,
-        )
+
+        self._send_queue_lock = asyncio.Lock()
+        self._send_queue = asyncio.Queue(maxsize=self.device_queue_size)
+        self._queue_sender_task: Optional[asyncio.Task] = None
 
         self._mqtt_dispatcher = mqtt_dispatcher
-        self._not_waiting_for_reply = asyncio.Event()
-        self._not_waiting_for_reply.set()
+
+        self._queue_start_modbus_address = 1920
 
         client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
         self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
 
     async def initialize(self) -> None:
         self.logger.debug("Initializing...")
+
+        self._queue_sender_task = asyncio.create_task(self._queue_sender())
 
         await self.reset_queue()
 
@@ -144,6 +148,14 @@ class WBDALIDriver:
 
     async def deinitialize(self) -> None:
         self.logger.debug("Deinitializing...")
+        if self._queue_sender_task is not None:
+            self._queue_sender_task.cancel()
+            try:
+                await self._queue_sender_task
+            except asyncio.CancelledError:
+                pass
+            self._queue_sender_task = None
+
         # Unsubscribe from all reply topics
         for i in range(self.device_queue_size):
             topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
@@ -196,11 +208,10 @@ class WBDALIDriver:
 
     async def reset_queue(self) -> None:
         self.logger.debug("Resetting message queue")
-        self.next_pointer = 0
 
         await self.send_modbus_rpc_no_response(
             function=16,
-            address=1920,
+            address=self._queue_start_modbus_address,
             count=self.device_queue_size * 2,
             msg="0000fbdf" * self.device_queue_size,
         )
@@ -212,35 +223,12 @@ class WBDALIDriver:
             msg="0000",
         )
 
-        self.responses = {}
+        for resp_waiter in self._waiting_for_responses:
+            if resp_waiter.timeout_handler is not None:
+                resp_waiter.timeout_handler.cancel()
+        self._waiting_for_responses.clear()
 
-    async def get_next_pointer(self):
-        """Get the next pointer for the message queue."""
-        async with self.next_pointer_lock:
-            pointer = self.next_pointer
-            if (pointer in self.responses) and asyncio.isfuture(self.responses[pointer]):
-                if not self.responses[pointer].done():
-                    self.logger.debug("Pointer %d is still waiting for a response", pointer)
-                await self.responses[pointer]
-
-            self.responses[pointer] = asyncio.get_event_loop().create_future()
-
-            self.next_pointer = (self.next_pointer + 1) % self.device_queue_size
-            self.cmd_counter += 1
-
-            msgs = []
-            for i in range(self.device_queue_size):
-                if i not in self.responses:
-                    val = 0
-                else:
-                    val = self.responses[i].done()
-                msgs.append(f"{i}={val}")
-
-            self.logger.debug("Next pointer: %d, responses: %s", pointer, " ".join(msgs))
-
-            return pointer, self.responses[pointer]
-
-    async def _handle_ff24_message(self, message):
+    async def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
         self.logger.debug(
             "Received FF24 MQTT message: %s %s",
             message.topic,
@@ -254,7 +242,7 @@ class WBDALIDriver:
         self.logger.debug("Received FF24: %s", cmd)
         self.bus_traffic.invoke(frame, "bus")
 
-    async def _handle_reply_message(self, message):
+    async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
         self.logger.debug(
             "Received message: %s %s",
             message.topic,
@@ -263,7 +251,7 @@ class WBDALIDriver:
 
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
-            return  # Ignore retained messages
+            return
 
         resp = int(message.payload.decode())
 
@@ -272,10 +260,17 @@ class WBDALIDriver:
             str(message.topic).rsplit("/", maxsplit=1)[-1].replace(f"channel{self.config.channel}_reply", "")
         )
 
-        if resp_pointer not in self.responses:
+        resp_future = None
+        for resp_waiter in self._waiting_for_responses:
+            if resp_waiter.queue_index == resp_pointer:
+                resp_future = resp_waiter.future
+                if resp_waiter.timeout_handler is not None:
+                    resp_waiter.timeout_handler.cancel()
+                self._waiting_for_responses.remove(resp_waiter)
+                break
+        if resp_future is None:
             self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
             return
-        resp_future = self.responses[resp_pointer]
 
         # порядок важен, потому что может быть framing error + timeout
         if (
@@ -307,8 +302,8 @@ class WBDALIDriver:
         progress=None,
     ) -> Any:
         """
-        Run a command sequence as a transaction. Implements the same API as
-        the 'hid' drivers.
+        Run a command sequence.
+        Implements the same API as the 'hid' drivers.
 
         :param seq: A "generator" function to use as a sequence. These are
         available in various places in the python-dali library.
@@ -319,9 +314,9 @@ class WBDALIDriver:
         :return: Depends on the sequence being used
         """
 
-        async with self.transaction_lock:
-            response = None
-            try:
+        response = None
+        try:
+            async with self._send_queue_lock:
                 while True:
                     try:
                         # Note that 'send()' here refers to the Python
@@ -340,44 +335,32 @@ class WBDALIDriver:
                         if cmd.devicetype != 0:
                             # The 'send()' calls here *do* refer to the DALI
                             # transmit method
-                            await self.send(
-                                EnableDeviceType(cmd.devicetype),
+                            await self._send_commands_unsafe(
+                                [EnableDeviceType(cmd.devicetype)],
                             )
-                        response = await self.send(cmd)
-            finally:
-                seq.close()
+                        response = await self._send_commands_unsafe([cmd])
+        finally:
+            seq.close()
 
-    async def _add_cmd_to_send_buffer(
-        self, pointer: int, reg_value: int, timeout: Optional[int] = None
-    ) -> None:
-        """Use barrier primitive to write multiple commands via single Modbus request"""
-        self.logger.debug("waiting at the barrier, pointer=%d", pointer)
-        payload = (pointer, reg_value)
-        position, payloads = await self.send_barrier.wait(payload, timeout=timeout)
-        self.logger.debug("barrier position: %s, pointer=%d, payloads=%s", position, pointer, payloads)
+    async def send_commands(
+        self, commands: list[Command], source: str = "default"
+    ) -> list[Optional[Response]]:
+        """
+        Send a sequence of DALI commands to the bus and optionally wait for responses.
+        Send order is preserved, but commands are sent in batches
+        and can't be interleaved with other send() calls.
+        If sending multiple commands is desired, but order is not important,
+        consider using asyncio.gather with individual send() calls instead.
+        Args:
+            commands (list[Command]): The list of DALI commands to send.
+            source (str): The source identifier for logging and tracking purposes.
+        Returns:
+            list[Optional[Response]]: The list of responses from the DALI devices
+                if commands have responses set, otherwise None.
+        """
 
-        if position == 0:
-            # We are the first task to reach the barrier, we will send the commands
-            reg_val_at_pointer = {}
-            for p, c in payloads:
-                reg_val_at_pointer[p] = c
-            pointers = list(sorted(reg_val_at_pointer.keys()))
-
-            # magic, credit: https://docs.python.org/2.6/library/itertools.html#examples
-            # [1, 4,5,6, 10, 15,16,17,18, 22, 25,26,27,28]
-            # => [1], [4,5,6], [10], [15,16,17,18], [22], [25,26,27,28]
-            for _, g in groupby(enumerate(pointers), lambda ix: ix[0] - ix[1]):
-                conseq_range = list((map(itemgetter(1), g)))
-                start_pointer = conseq_range[0]
-                count = len(conseq_range)
-                msg = "".join([f"{reg_val_at_pointer[p]:08x}" for p in conseq_range])
-
-                await self.send_modbus_rpc_no_response(
-                    function=16,
-                    address=1920 + start_pointer * 2,
-                    count=count * 2,
-                    msg=msg,
-                )
+        async with self._send_queue_lock:
+            return await self._send_commands_unsafe(commands, source)
 
     def _encode_frame_for_modbus(self, dali_frame: Frame) -> int:
         frame_len = len(dali_frame)
@@ -411,39 +394,109 @@ class WBDALIDriver:
                 otherwise None.
         """
 
-        self.logger.debug("send(command=%s)", cmd)
-        response = None
-        # await self.connected.wait()
-        # await asyncio.sleep(0.001)
-        # if not self._not_waiting_for_reply.is_set():
-        #     self.logger.warning("another send() is still in progress, waiting for it to complete")
-        # await self._not_waiting_for_reply.wait()
+        res = await self.send_commands([cmd], source=source)
+        return res[0]
 
-        if (cmd.sendtwice) and (cmd.response is not None):
-            self.logger.warning(
-                "Command %s has sendtwice=True and a response, this is not supported",
-                cmd,
+    async def _queue_sender(self) -> None:
+        start_index = 0
+        current_index = 0
+        regs_to_save = []
+        timeout = None
+        while True:
+            # wait for free slot in the queue
+            for resp_waiter in self._waiting_for_responses:
+                if resp_waiter.queue_index == current_index:
+                    if not resp_waiter.future.done():
+                        await resp_waiter.future
+                    break
+
+            try:
+                item: SendQueueItem = await asyncio.wait_for(self._send_queue.get(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await self._send_data_to_modbus(
+                    regs_to_save,
+                    self._queue_start_modbus_address + start_index * 2,
+                )
+                regs_to_save = []
+                start_index = current_index
+                timeout = None
+                continue
+            try:
+                self.logger.debug("Processing queue item: %s", item)
+                modbus_reg_val = self._encode_frame_for_modbus(item.command.frame)
+                self.bus_traffic.invoke(item.command.frame, "bus")
+                regs_to_save.append(modbus_reg_val)
+                response_waiter = ResponseWaiter(item.future, current_index)
+
+                def timeout_callback():
+                    if not item.future.done():
+                        item.future.set_result(None)
+                        self._waiting_for_responses.remove(response_waiter)
+
+                response_waiter.timeout_handler = asyncio.get_event_loop().call_later(
+                    WAIT_DALI_RESPONSE_TIMEOUT,
+                    timeout_callback,
+                )
+                self._waiting_for_responses.append(response_waiter)
+                current_index += 1
+                if current_index == self.device_queue_size:
+                    # We have reached the end of the queue, send the commands
+                    await self._send_data_to_modbus(
+                        regs_to_save,
+                        self._queue_start_modbus_address + start_index * 2,
+                    )
+                    regs_to_save = []
+                    start_index = 0
+                    current_index = 0
+                timeout = 0.1
+            except Exception as e:
+                # TODO: more specific exception handling
+                self.logger.error("Error processing queue item: %s", e)
+                if not item.future.done():
+                    item.future.set_result(None)
+
+    async def _send_data_to_modbus(self, data: list[int], address: int) -> None:
+        if len(data) != 0:
+            msg = "".join([f"{reg:04x}" for reg in data])
+            await self.send_modbus_rpc_no_response(
+                function=16,
+                address=address,
+                count=len(data),
+                msg=msg,
             )
-            raise ValueError("Command with sendtwice=True cannot have a response")
 
-        if cmd.sendtwice:
-            next_pointers = await asyncio.gather(self.get_next_pointer(), self.get_next_pointer())
-        else:
-            next_pointers = [
-                await self.get_next_pointer(),
-            ]
-        # if cmd.bits
-        for i, (pointer, future) in enumerate(next_pointers):
-            self.logger.debug("Sending command: %s %d/%d", cmd, i + 1, len(next_pointers))
-            modbus_reg_val = self._encode_frame_for_modbus(cmd.frame)
-            self.bus_traffic.invoke(cmd.frame, source)
-            await self._add_cmd_to_send_buffer(pointer, modbus_reg_val)
+    async def _send_commands_unsafe(
+        self, commands: list[Command], source: str = "default"
+    ) -> list[Optional[Response]]:
+        self.logger.debug("send: %s", commands)
+        commands_to_send = []
+        for cmd in commands:
+            if cmd.sendtwice:
+                if cmd.response is not None:
+                    self.logger.warning(
+                        "Command %s has sendtwice=True and a response, this is not supported",
+                        cmd,
+                    )
+                    raise ValueError(f"Command {cmd} with sendtwice=True cannot have a response")
 
-            if cmd.response:
-                resp_frame = await future
-                response = cmd.response(resp_frame)
+                # A hack to handle sendtwice commands. Remove when proper sendtwice sending is implemented.
+                commands_to_send.extend([cmd, cmd])
+            else:
+                commands_to_send.append(cmd)
+        response_futures: list[asyncio.Future] = []
+        for cmd in commands_to_send:
+            response_futures.append(asyncio.get_event_loop().create_future())
+            await self._send_queue.put(SendQueueItem(response_futures[-1], cmd, source))
 
-        return response
+        response_frames = await asyncio.gather(*response_futures)
+        responses: list[Optional[Response]] = []
+        for cmd, frame in zip(commands_to_send, response_frames):
+            if cmd.response is not None:
+                responses.append(cmd.response(frame))
+            else:
+                responses.append(None)
+
+        return responses
 
 
 class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
@@ -456,8 +509,8 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
     ) -> None:
         """
         An async function to scan a DALI bus for control device instances,
-        and query their types. Internaly it uses asyncio.gather to wait for
-        completion of mulitple DALI commands in parallel.
+        and query their types. Internally it uses asyncio.gather to wait for
+        completion of multiple DALI commands in parallel.
         This information is stored within this AsyncDeviceInstanceTypeMapper,
         for use in decoding "Device/Instance" event messages.
 
@@ -559,18 +612,17 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         await driver.send(StopQuiescentMode(DeviceBroadcast()))
 
 
-async def send_command(driver: WBDALIDriver, cmd: Command) -> Optional[Response]:
-    def set_sequence() -> Generator[command.Command, Optional[command.Response], Optional[command.Response]]:
-        rsp = yield cmd
-        return rsp
-
-    return await driver.run_sequence(set_sequence())
-
-
 async def query_request(driver: WBDALIDriver, cmd: Command) -> int:
-    resp = await send_command(driver, cmd)
-    check_query_response(resp)
-    return resp.raw_value.as_integer
+    commands = []
+    if cmd.devicetype != 0:
+        commands.append(EnableDeviceType(cmd.devicetype))
+    commands.append(cmd)
+    responses = await driver.send_commands(commands)
+    if cmd.devicetype != 0:
+        res = responses[1]
+    res = responses[0]
+    check_query_response(res)
+    return res.raw_value.as_integer
 
 
 def check_query_response(resp: Optional[Response]) -> None:

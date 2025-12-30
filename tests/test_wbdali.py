@@ -316,14 +316,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         """Test that get_next_pointer returns the correct pointer and future."""
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         driver.next_pointer = 5
-        driver.cmd_counter = 10
 
         pointer, future = await driver.get_next_pointer()
 
         self.assertEqual(pointer, 5)
         self.assertIsInstance(future, asyncio.Future)
         self.assertEqual(driver.next_pointer, 6)
-        self.assertEqual(driver.cmd_counter, 11)
         self.assertIs(driver.responses[5], future)
 
     async def test_get_next_pointer_wraps_around(self):

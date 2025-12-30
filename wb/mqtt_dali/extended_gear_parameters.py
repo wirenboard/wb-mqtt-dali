@@ -1,51 +1,48 @@
-from typing import Callable, Generator, Optional
+import asyncio
+from typing import Callable, Optional
 
-from dali import command
 from dali.address import GearShort
+from dali.command import Command
 from dali.gear.general import DTR0
 
 from .utils import merge_json_schemas
-from .wbdali import WBDALIDriver, query_request
+from .wbdali import WBDALIDriver, check_query_response, query_request
 
 
 class GearParam:
     name: str = ""
     property_name: str = ""
-    query_command_class: Optional[Callable] = None
-    set_command_class: Optional[Callable] = None
+    query_command_class: Optional[Callable[[GearShort], Command]] = None
+    set_command_class: Optional[Callable[[GearShort], Command]] = None
 
     def __init__(self) -> None:
         if self.query_command_class is None:
             raise RuntimeError(f"Query command class for {self.name} is not defined")
-        if self.set_command_class is None:
-            raise RuntimeError(f"Set command class for {self.name} is not defined")
         self._last_value = None
 
-    async def read(self, driver: WBDALIDriver, addr: GearShort) -> dict:
-        self._last_value = await query_request(driver, self.query_command_class(addr))
+    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
+        self._last_value = await query_request(driver, self.query_command_class(address))
         return {self.property_name: self._last_value}
 
-    async def write(self, driver: WBDALIDriver, addr: GearShort, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
+        if self.set_command_class is None:
+            raise RuntimeError(f"Set command class for {self.name} is not defined")
         if self.property_name not in value:
             return {}
         value_to_set = value[self.property_name]
         if self._last_value == value_to_set:
             return {}
-
-        def set_sequence() -> Generator[command.Command, Optional[command.Response], None]:
-            rsp = yield DTR0(value_to_set)
-            if rsp is not None:
-                raise RuntimeError(f"Failed to write DTR0 got unexpected response {rsp}")
-
-            rsp = yield self.set_command_class(addr)
-            if rsp is not None:
-                raise RuntimeError(f"Got unexpected response {rsp}")
-
-        await driver.run_sequence(set_sequence())
-        await self.read(driver, addr)
+        commands = [
+            DTR0(value_to_set),
+            self.set_command_class(address),
+            self.query_command_class(address),
+        ]
+        res = (await driver.send_commands(commands))[-1]
+        check_query_response(res)
+        self._last_value = res.raw_value.as_integer
         return {self.property_name: self._last_value}
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {}
 
 
@@ -54,39 +51,43 @@ class TypeParameters:
     def __init__(self) -> None:
         self._parameters = []
 
-    async def read(self, driver: WBDALIDriver, addr: GearShort) -> dict:
-        self._parameters = await self.get_parameters(driver, addr)
+    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
+        self._parameters = await self.get_parameters(driver, address)
         res = {}
-        for param in self._parameters:
-            try:
-                value = await param.read(driver, addr)
-                if value is not None:
-                    res.update(value)
-            except Exception as e:
-                raise RuntimeError(f'Error reading "{param.name}": {e}') from e
+        awaitables = [param.read(driver, address) for param in self._parameters]
+        results = await asyncio.gather(*awaitables, return_exceptions=True)
+        for param, result in zip(self._parameters, results):
+            if isinstance(result, BaseException):
+                raise RuntimeError(f'Error reading "{param.name}": {result}') from result
+            if result is not None:
+                res.update(result)
         return res
 
     async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
+        if not self._parameters:
+            self._parameters = await self.get_parameters(driver, address)
+        awaitables = [param.write(driver, address, value) for param in self._parameters]
+        results = await asyncio.gather(*awaitables, return_exceptions=True)
         res = {}
-        for param in self._parameters:
-            try:
-                updated_value = await param.write(driver, address, value)
-                if updated_value is not None:
-                    res.update(updated_value)
-            except Exception as e:
-                raise RuntimeError(f'Error writing "{param.name}": {e}') from e
+        for param, result in zip(self._parameters, results):
+            if isinstance(result, BaseException):
+                raise RuntimeError(f'Error writing "{param.name}": {result}') from result
+            if result is not None:
+                res.update(result)
         return res
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
+        if not self._parameters:
+            self._parameters = await self.get_parameters(driver, address)
+        awaitables = [param.get_schema(driver, address) for param in self._parameters]
+        results = await asyncio.gather(*awaitables, return_exceptions=True)
         res = {}
-        for param in self._parameters:
-            try:
-                schema = await param.get_schema(driver, addr)
-            except Exception as e:
-                raise RuntimeError(f'Error getting schema for "{param.name}": {e}') from e
-            if schema:
-                merge_json_schemas(res, schema)
+        for param, result in zip(self._parameters, results):
+            if isinstance(result, BaseException):
+                raise RuntimeError(f'Error getting schema for "{param.name}": {result}') from result
+            if result is not None:
+                merge_json_schemas(res, result)
         return res
 
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         return []

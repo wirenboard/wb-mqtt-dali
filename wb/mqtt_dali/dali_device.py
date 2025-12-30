@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 
 import jsonschema
@@ -71,10 +72,16 @@ class DaliDevice:
             "random_address": self.address.random,
             "types": types,
         }
-        for param_handler in parameter_handlers:
-            type_params = await param_handler.read(driver, short_addr)
+        awaitables = [param_handler.read(driver, short_addr) for param_handler in parameter_handlers]
+        awaitables.extend(
+            [param_handler.get_schema(driver, short_addr) for param_handler in parameter_handlers]
+        )
+        results_iterable = iter(await asyncio.gather(*awaitables))
+        for _ in parameter_handlers:
+            type_params = next(results_iterable)
             params.update(type_params)
-            type_schema = await param_handler.get_schema(driver, short_addr)
+        for _ in parameter_handlers:
+            type_schema = next(results_iterable)
             if type_schema is not None:
                 merge_json_schemas(schema, type_schema)
         self._parameter_handlers = parameter_handlers

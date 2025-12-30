@@ -19,7 +19,7 @@ class DimmingCurveParam(GearParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -45,9 +45,9 @@ class FastFadeTimeParam(GearParam):
     query_command_class = QueryFastFadeTime
     set_command_class = StoreDTRAsFastFadeTime
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         try:
-            min_time = await query_request(driver, QueryMinFastFadeTime(addr))
+            min_time = await query_request(driver, QueryMinFastFadeTime(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read min fast fade time: {e}") from e
         return {
@@ -64,7 +64,7 @@ class FastFadeTimeParam(GearParam):
 
 
 class Type6Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         return [
             DimmingCurveParam(),
             FastFadeTimeParam(),

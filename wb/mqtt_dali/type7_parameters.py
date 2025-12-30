@@ -24,7 +24,7 @@ class UpSwitchOnThresholdParam(GearParam):
     query_command_class = QueryUpSwitchOnThreshold
     set_command_class = StoreDTRAsUpSwitchOnThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -48,7 +48,7 @@ class UpSwitchOffThresholdParam(GearParam):
     query_command_class = QueryUpSwitchOffThreshold
     set_command_class = StoreDTRAsUpSwitchOffThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -72,7 +72,7 @@ class DownSwitchOnThresholdParam(GearParam):
     query_command_class = QueryDownSwitchOnThreshold
     set_command_class = StoreDTRAsDownSwitchOnThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -96,7 +96,7 @@ class DownSwitchOffThresholdParam(GearParam):
     query_command_class = QueryDownSwitchOffThreshold
     set_command_class = StoreDTRAsDownSwitchOffThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -120,7 +120,7 @@ class ErrorHoldOffTimeParam(GearParam):
     query_command_class = QueryErrorHoldOffTime
     set_command_class = StoreDTRAsErrorHoldOffTime
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -139,7 +139,7 @@ class ErrorHoldOffTimeParam(GearParam):
 
 
 class Type7Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         return [
             UpSwitchOnThresholdParam(),
             UpSwitchOffThresholdParam(),

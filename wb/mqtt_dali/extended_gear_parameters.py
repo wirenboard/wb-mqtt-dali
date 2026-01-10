@@ -25,7 +25,7 @@ class GearParam:
         return {self.property_name: self._last_value}
 
     async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
-        if self.set_command_class is not None:
+        if self.set_command_class is None:
             raise RuntimeError(f"Set command class for {self.name} is not defined")
         if self.property_name not in value:
             return {}

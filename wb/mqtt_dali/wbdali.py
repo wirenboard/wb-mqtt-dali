@@ -421,8 +421,8 @@ class WBDALIDriver:
                 regs_to_save.append(modbus_reg_val)
                 response_waiter = ResponseWaiter(item.future)
 
-                def timeout_callback():
-                    waiter_to_clear = self._waiting_for_responses.pop(current_index, None)
+                def timeout_callback(index=current_index):
+                    waiter_to_clear = self._waiting_for_responses.pop(index, None)
                     if waiter_to_clear is not None and not waiter_to_clear.future.done():
                         waiter_to_clear.future.set_result(None)
 
@@ -441,7 +441,7 @@ class WBDALIDriver:
                     regs_to_save = []
                     start_index = 0
                     current_index = 0
-                timeout = 0.1
+                timeout = 0.01
             except Exception as e:
                 self.logger.error("Error processing queue item: %s", e)
                 if not item.future.done():
@@ -487,7 +487,7 @@ class WBDALIDriver:
             if cmd.response is None:
                 responses.append(None)
             else:
-                responses.append(response_frames[i])
+                responses.append(cmd.response(response_frames[i]))
             # Skip the second response for sendtwice commands
             i += 2 if cmd.sendtwice else 1
 

@@ -82,17 +82,16 @@ class FadeTimeFadeRateParam:
         if self._fade_time == fade_time_to_set and self._fade_rate == fade_rate_to_set:
             return {}
 
-        commands = [
-            DTR0(fade_time_to_set),
-            SetFadeTime(address),
-            DTR0(fade_rate_to_set),
-            SetFadeRate(address),
-            QueryFadeTimeFadeRate(address),
-        ]
-        responses = await driver.send_commands(commands)
-        if len(responses) != len(commands):
-            raise RuntimeError("Unexpected number of responses")
-        last_response = responses[-1]
+        commands = []
+        if fade_time_to_set is not None:
+            commands.append(DTR0(fade_time_to_set))
+            commands.append(SetFadeTime(address))
+        if fade_rate_to_set is not None:
+            commands.append(DTR0(fade_rate_to_set))
+            commands.append(SetFadeRate(address))
+        commands.append(QueryFadeTimeFadeRate(address))
+
+        last_response = (await driver.send_commands(commands))[-1]
         check_query_response(last_response)
         self._fade_time = last_response.fade_time
         self._fade_rate = last_response.fade_rate

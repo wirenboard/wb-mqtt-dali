@@ -63,8 +63,8 @@ class FadeTimeFadeRateParam:
         self._fade_time = None
         self._fade_rate = None
 
-    async def read(self, driver: WBDALIDriver, addr: GearShort):
-        value = await driver.send(QueryFadeTimeFadeRate(addr))
+    async def read(self, driver: WBDALIDriver, address: GearShort):
+        value = await driver.send(QueryFadeTimeFadeRate(address))
         check_query_response(value)
         self._fade_time = value.fade_time
         self._fade_rate = value.fade_rate
@@ -108,13 +108,13 @@ class GroupsParam:
     def __init__(self) -> None:
         self._groups = [False for _ in range(16)]
 
-    async def read(self, driver: WBDALIDriver, addr: GearShort):
+    async def read(self, driver: WBDALIDriver, address: GearShort):
         groups = []
-        commands = [QueryGroupsZeroToSeven(addr), QueryGroupsEightToFifteen(addr)]
+        commands = [QueryGroupsZeroToSeven(address), QueryGroupsEightToFifteen(address)]
         responses = await driver.send_commands(commands)
         for response in responses:
             check_query_response(response)
-            groups.extend([((response >> i) & 1) == 1 for i in range(8)])
+            groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
         self._groups = groups
         return {"groups": groups}
 
@@ -138,9 +138,9 @@ class GroupsParam:
         commands.append(QueryGroupsEightToFifteen(address))
         responses = await driver.send_commands(commands)
         groups = []
-        for response in responses[:-2]:
+        for response in responses[-2:]:
             check_query_response(response)
-            groups.extend([((response >> i) & 1) == 1 for i in range(8)])
+            groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
         self._groups = groups
         return {"groups": groups}
 
@@ -159,26 +159,26 @@ class CommonParameters(TypeParameters):
         oem.LuminaireID: "oem_identification_number",
     }
 
-    async def read(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
         res = {}
         try:
-            v = await driver.send(QueryVersionNumber(addr))
+            v = await driver.send(QueryVersionNumber(address))
             if v is None or v.raw_value is None or v.value == 1:
                 bank0 = info.BANK_0_legacy
             else:
                 bank0 = info.BANK_0
-            self._update_info(res, await driver.run_sequence(bank0.read_all(addr)))
+            self._update_info(res, await driver.run_sequence(bank0.read_all(address)))
         except MemoryLocationNotImplemented:
             pass
         try:
-            self._update_info(res, await driver.run_sequence(oem.BANK_1.read_all(addr)))
+            self._update_info(res, await driver.run_sequence(oem.BANK_1.read_all(address)))
         except MemoryLocationNotImplemented:
             pass
 
-        res.update(await super().read(driver, addr))
+        res.update(await super().read(driver, address))
         return res
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         schema_path = Path("/usr/share/wb-mqtt-dali/schemas/control_gear.schema.json")
         with open(schema_path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -189,7 +189,7 @@ class CommonParameters(TypeParameters):
             if value is not None:
                 dst[param] = value
 
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         return [
             GroupsParam(),
             MaxLevelParam(),

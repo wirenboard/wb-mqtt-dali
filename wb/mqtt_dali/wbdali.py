@@ -5,7 +5,6 @@ import json
 import logging
 import random
 import string
-from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
@@ -86,7 +85,6 @@ class SendQueueItem:
 @dataclass
 class ResponseWaiter:
     future: asyncio.Future
-    queue_index: int
     timeout_handler: Optional[asyncio.Handle] = None
 
 
@@ -105,7 +103,7 @@ class WBDALIDriver:
         self.config = config
         self.dev_inst_map = dev_inst_map
 
-        self._waiting_for_responses: deque[ResponseWaiter] = deque()
+        self._waiting_for_responses: dict[int, ResponseWaiter] = {}
 
         # Register to be called back with bus traffic
         self.bus_traffic = BusTrafficCallbacks()
@@ -113,8 +111,8 @@ class WBDALIDriver:
         self.device_queue_size = 10
         self.rpc_id_counter = 0
 
-        self._send_queue_lock = asyncio.Lock()
         self._send_queue = asyncio.Queue(maxsize=self.device_queue_size)
+        self._send_queue_lock = asyncio.Lock()
         self._queue_sender_task: Optional[asyncio.Task] = None
 
         self._mqtt_dispatcher = mqtt_dispatcher
@@ -129,7 +127,7 @@ class WBDALIDriver:
 
         self._queue_sender_task = asyncio.create_task(self._queue_sender())
 
-        await self.reset_queue()
+        await self._reset_queue_in_gateway()
 
         # Subscribe to all reply topics
         self.logger.debug("Subscribing to reply topics...")
@@ -153,8 +151,14 @@ class WBDALIDriver:
             try:
                 await self._queue_sender_task
             except asyncio.CancelledError:
+                # Task cancellation is expected during deinitialization
                 pass
             self._queue_sender_task = None
+
+        for resp_waiter in self._waiting_for_responses.values():
+            if resp_waiter.timeout_handler is not None:
+                resp_waiter.timeout_handler.cancel()
+        self._waiting_for_responses.clear()
 
         # Unsubscribe from all reply topics
         for i in range(self.device_queue_size):
@@ -206,8 +210,8 @@ class WBDALIDriver:
             ),
         )
 
-    async def reset_queue(self) -> None:
-        self.logger.debug("Resetting message queue")
+    async def _reset_queue_in_gateway(self) -> None:
+        self.logger.debug("Resetting message queue in gateway")
 
         await self.send_modbus_rpc_no_response(
             function=16,
@@ -222,11 +226,6 @@ class WBDALIDriver:
             count=1,
             msg="0000",
         )
-
-        for resp_waiter in self._waiting_for_responses:
-            if resp_waiter.timeout_handler is not None:
-                resp_waiter.timeout_handler.cancel()
-        self._waiting_for_responses.clear()
 
     async def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
         self.logger.debug(
@@ -260,17 +259,13 @@ class WBDALIDriver:
             str(message.topic).rsplit("/", maxsplit=1)[-1].replace(f"channel{self.config.channel}_reply", "")
         )
 
-        resp_future = None
-        for resp_waiter in self._waiting_for_responses:
-            if resp_waiter.queue_index == resp_pointer:
-                resp_future = resp_waiter.future
-                if resp_waiter.timeout_handler is not None:
-                    resp_waiter.timeout_handler.cancel()
-                self._waiting_for_responses.remove(resp_waiter)
-                break
-        if resp_future is None:
+        resp_waiter = self._waiting_for_responses.pop(resp_pointer, None)
+        if resp_waiter is None:
             self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
             return
+        resp_future = resp_waiter.future
+        if resp_waiter.timeout_handler is not None:
+            resp_waiter.timeout_handler.cancel()
 
         # порядок важен, потому что может быть framing error + timeout
         if (
@@ -338,7 +333,7 @@ class WBDALIDriver:
                             await self._send_commands_unsafe(
                                 [EnableDeviceType(cmd.devicetype)],
                             )
-                        response = await self._send_commands_unsafe([cmd])
+                        response = (await self._send_commands_unsafe([cmd]))[0]
         finally:
             seq.close()
 
@@ -404,11 +399,9 @@ class WBDALIDriver:
         timeout = None
         while True:
             # wait for free slot in the queue
-            for resp_waiter in self._waiting_for_responses:
-                if resp_waiter.queue_index == current_index:
-                    if not resp_waiter.future.done():
-                        await resp_waiter.future
-                    break
+            resp_waiter = self._waiting_for_responses.get(current_index)
+            if resp_waiter is not None and not resp_waiter.future.done():
+                await resp_waiter.future
 
             try:
                 item: SendQueueItem = await asyncio.wait_for(self._send_queue.get(), timeout=timeout)
@@ -424,20 +417,20 @@ class WBDALIDriver:
             try:
                 self.logger.debug("Processing queue item: %s", item)
                 modbus_reg_val = self._encode_frame_for_modbus(item.command.frame)
-                self.bus_traffic.invoke(item.command.frame, "bus")
+                self.bus_traffic.invoke(item.command.frame, item.source)
                 regs_to_save.append(modbus_reg_val)
-                response_waiter = ResponseWaiter(item.future, current_index)
+                response_waiter = ResponseWaiter(item.future)
 
                 def timeout_callback():
-                    if not item.future.done():
-                        item.future.set_result(None)
-                        self._waiting_for_responses.remove(response_waiter)
+                    waiter_to_clear = self._waiting_for_responses.pop(current_index, None)
+                    if waiter_to_clear is not None and not waiter_to_clear.future.done():
+                        waiter_to_clear.future.set_result(None)
 
-                response_waiter.timeout_handler = asyncio.get_event_loop().call_later(
+                response_waiter.timeout_handler = asyncio.get_running_loop().call_later(
                     WAIT_DALI_RESPONSE_TIMEOUT,
                     timeout_callback,
                 )
-                self._waiting_for_responses.append(response_waiter)
+                self._waiting_for_responses[current_index] = response_waiter
                 current_index += 1
                 if current_index == self.device_queue_size:
                     # We have reached the end of the queue, send the commands
@@ -450,7 +443,6 @@ class WBDALIDriver:
                     current_index = 0
                 timeout = 0.1
             except Exception as e:
-                # TODO: more specific exception handling
                 self.logger.error("Error processing queue item: %s", e)
                 if not item.future.done():
                     item.future.set_result(None)
@@ -485,16 +477,19 @@ class WBDALIDriver:
                 commands_to_send.append(cmd)
         response_futures: list[asyncio.Future] = []
         for cmd in commands_to_send:
-            response_futures.append(asyncio.get_event_loop().create_future())
+            response_futures.append(asyncio.get_running_loop().create_future())
             await self._send_queue.put(SendQueueItem(response_futures[-1], cmd, source))
 
         response_frames = await asyncio.gather(*response_futures)
         responses: list[Optional[Response]] = []
-        for cmd, frame in zip(commands_to_send, response_frames):
-            if cmd.response is not None:
-                responses.append(cmd.response(frame))
-            else:
+        i = 0
+        for cmd in commands:
+            if cmd.response is None:
                 responses.append(None)
+            else:
+                responses.append(response_frames[i])
+            # Skip the second response for sendtwice commands
+            i += 2 if cmd.sendtwice else 1
 
         return responses
 
@@ -618,9 +613,7 @@ async def query_request(driver: WBDALIDriver, cmd: Command) -> int:
         commands.append(EnableDeviceType(cmd.devicetype))
     commands.append(cmd)
     responses = await driver.send_commands(commands)
-    if cmd.devicetype != 0:
-        res = responses[1]
-    res = responses[0]
+    res = responses[-1]
     check_query_response(res)
     return res.raw_value.as_integer
 

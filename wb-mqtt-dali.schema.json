@@ -44,7 +44,7 @@
                     "default": 8080
                 },
                 "polling_interval": {
-                    "type": "integer",
+                    "type": "number",
                     "title": "Polling Interval",
                     "default": 5
                 }

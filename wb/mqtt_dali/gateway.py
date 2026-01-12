@@ -211,7 +211,7 @@ class Gateway:
                                     "maximum": 65535,
                                 },
                                 "polling_interval": {
-                                    "type": "integer",
+                                    "type": "number",
                                     "title": "Polling Interval",
                                     "default": 5,
                                 },

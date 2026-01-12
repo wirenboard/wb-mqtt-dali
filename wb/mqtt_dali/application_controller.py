@@ -104,7 +104,7 @@ class ApplicationController:
                 "controls": get_common_controls(),
             }
             await self._device_publisher.add_device(device_info)
-            await register_common_handlers(device, self._dev, self._device_publisher)
+            await register_common_handlers(device, self, self._device_publisher)
 
         await self._device_publisher.initialize()
 
@@ -168,6 +168,9 @@ class ApplicationController:
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK, device.apply_parameters(self._dev, new_params)
         )
+
+    async def send_command(self, command):
+        return await self._run_task(ApplicationControllerState.GENERIC_TASK, self._dev.send(command))
 
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
@@ -268,7 +271,7 @@ class ApplicationController:
         await self._device_publisher.rebuild(changes)
 
         for device in new_devices + changed_devices:
-            await register_common_handlers(device, self._dev, self._device_publisher)
+            await register_common_handlers(device, self, self._device_publisher)
 
     async def _polling_loop(self) -> None:
         while True:
@@ -282,7 +285,7 @@ class ApplicationController:
                 for device in self.devices:
                     task = asyncio.create_task(
                         asyncio.wait_for(
-                            poll_device(device, self._dev, self._device_publisher),
+                            poll_device(device, self, self._device_publisher),
                             timeout=5.0,
                         )
                     )

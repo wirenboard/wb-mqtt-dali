@@ -14,9 +14,9 @@ from dali.gear.general import (
     Up,
 )
 
+from .application_controller import ApplicationController
 from .dali_device import DaliDevice
 from .device_publisher import DevicePublisher
-from .wbdali import WBDALIDriver
 
 
 def get_common_controls() -> list[dict]:
@@ -77,7 +77,9 @@ def get_common_controls() -> list[dict]:
 
 
 async def register_common_handlers(
-    device: DaliDevice, driver: WBDALIDriver, device_publisher: DevicePublisher
+    device: DaliDevice,
+    controller: ApplicationController,
+    device_publisher: DevicePublisher,
 ) -> None:
     device_id = str(device.address.short)
     short_addr = GearShort(device.address.short)
@@ -96,7 +98,7 @@ async def register_common_handlers(
 
     def make_handler(cmd_class):
         async def handler(msg):
-            await driver.send(cmd_class(short_addr))
+            await controller.send_command(cmd_class(short_addr))
 
         return handler
 
@@ -108,11 +110,15 @@ async def register_common_handlers(
     await asyncio.gather(*registration_tasks)
 
 
-async def poll_device(device: DaliDevice, driver: WBDALIDriver, device_publisher: DevicePublisher) -> None:
+async def poll_device(
+    device: DaliDevice,
+    controller: ApplicationController,
+    device_publisher: DevicePublisher,
+) -> None:
     device_id = str(device.address.short)
     short_addr = GearShort(device.address.short)
 
-    actual_level_response = await driver.send(QueryActualLevel(short_addr))
+    actual_level_response = await controller.send_command(QueryActualLevel(short_addr))
 
     if actual_level_response is not None:
         actual_level = str(actual_level_response.raw_value.as_integer)

@@ -39,7 +39,10 @@ def bus_from_json(
         enabled=data.get("websocket_enabled", False),
         port=data.get("websocket_port", 8080),
     )
-    ap_conf = ApplicationControllerConfig(gateway_mqtt_device_id, bus_index, devices, websocket_conf)
+    polling_interval = data.get("polling_interval", 5.0)
+    ap_conf = ApplicationControllerConfig(
+        gateway_mqtt_device_id, bus_index, devices, polling_interval, websocket_conf
+    )
 
     res = ApplicationController(ap_conf, mqtt_dispatcher)
     return res
@@ -192,6 +195,7 @@ class Gateway:
                         "config": {
                             "websocket_enabled": bus.websocket_config.enabled,
                             "websocket_port": bus.websocket_config.port,
+                            "polling_interval": bus._polling_interval,
                         },
                         "schema": {
                             "type": "object",
@@ -206,11 +210,17 @@ class Gateway:
                                     "minimum": 1,
                                     "maximum": 65535,
                                 },
+                                "polling_interval": {
+                                    "type": "integer",
+                                    "title": "Polling Interval",
+                                    "default": 5,
+                                },
                             },
                             "translations": {
                                 "ru": {
                                     "Enable WebSocket": "Включить WebSocket",
                                     "WebSocket port": "Порт WebSocket'а",
+                                    "Polling Interval": "Интервал опроса",
                                 }
                             },
                         },
@@ -236,6 +246,7 @@ class Gateway:
                     return {
                         "websocket_enabled": new_websocket_config.enabled,
                         "websocket_port": new_websocket_config.port,
+                        "poll_interval": bus._polling_interval,
                     }
         raise ValueError("Bus not found")
 
@@ -267,6 +278,7 @@ class Gateway:
                                 {
                                     "websocket_enabled": bus.websocket_config.enabled,
                                     "websocket_port": bus.websocket_config.port,
+                                    "polling_interval": bus._polling_interval,
                                     "devices": [
                                         {
                                             "short": dev.address.short,

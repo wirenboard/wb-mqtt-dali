@@ -14,7 +14,6 @@ from dali.gear.general import (
     Up,
 )
 
-from .application_controller import ApplicationController
 from .dali_device import DaliDevice
 from .device_publisher import DevicePublisher
 
@@ -78,7 +77,7 @@ def get_common_controls() -> list[dict]:
 
 async def register_common_handlers(
     device: DaliDevice,
-    controller: ApplicationController,
+    controller: "ApplicationController",
     device_publisher: DevicePublisher,
 ) -> None:
     device_id = str(device.address.short)
@@ -112,7 +111,7 @@ async def register_common_handlers(
 
 async def poll_device(
     device: DaliDevice,
-    controller: ApplicationController,
+    controller: "ApplicationController",
     device_publisher: DevicePublisher,
 ) -> None:
     device_id = str(device.address.short)

@@ -7,7 +7,7 @@ from typing import Optional
 from dali.address import DeviceBroadcast
 from dali.command import from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
-from dali.frame import Frame
+from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning
 from .common_gear_controls import (
@@ -362,7 +362,10 @@ class ApplicationController:
                 self._ready_condition.notify()
 
     def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:
-        command = from_frame(frame)
+        command = None
+        if isinstance(frame, ForwardFrame):
+            command = from_frame(frame)
+
         if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
             try:
                 if isinstance(command, StartQuiescentMode):

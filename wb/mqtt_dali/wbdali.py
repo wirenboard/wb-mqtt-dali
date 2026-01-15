@@ -305,8 +305,8 @@ class WBDALIDriver:
             self.bus_traffic.invoke(backward_frame, "bus")
             return
         elif status == 2:
-            # Transmission without response (timeout)
-            self.logger.debug("Status 2: Transmission without response (timeout)")
+            # Transmission without response
+            self.logger.debug("Status 2: Transmission without response")
             resp_future.set_result(None)
             return
         elif status == 3:
@@ -406,7 +406,12 @@ class WBDALIDriver:
                 conseq_range = list((map(itemgetter(1), g)))
                 start_pointer = conseq_range[0]
                 count = len(conseq_range)
-                msg = "".join([f"{reg_val_at_pointer[p]:08x}" for p in conseq_range])
+                msg = "".join(
+                    [
+                        f"{((reg_val_at_pointer[p] & 0xFFFF) << 16) | ((reg_val_at_pointer[p] >> 16) & 0xFFFF):08x}"
+                        for p in conseq_range
+                    ]
+                )
 
                 buffer_address = (
                     self.MODBUS_BULK_SEND_BUFFER_BASE

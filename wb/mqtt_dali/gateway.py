@@ -128,6 +128,11 @@ class Gateway:
             "SetBus",
             self.set_bus_rpc_handler,
         )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "GetGateway",
+            self.get_gateway_rpc_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -249,6 +254,10 @@ class Gateway:
                         "poll_interval": bus._polling_interval,
                     }
         raise ValueError("Bus not found")
+
+    async def get_gateway_rpc_handler(self, params: dict):
+        gateway_id = params.get("gatewayId")
+        return {"config": {}, "schema": {}}
 
     def _is_websocket_port_in_use(self, port: int, bus_id: str) -> bool:
         for gw in self.wb_dali_gateways:

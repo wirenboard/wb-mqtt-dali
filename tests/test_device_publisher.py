@@ -102,7 +102,7 @@ class TestDevicePublisher:
         assert publisher._initialized is False
 
     @pytest.mark.asyncio
-    async def test_initialize(self, publisher, mock_client):
+    async def test_initialize(self, publisher: DevicePublisher, mock_client):
         device_info = {
             "id": "dev1",
             "title": "Device 1",
@@ -111,7 +111,11 @@ class TestDevicePublisher:
         }
 
         await publisher.add_device(device_info)
-        await publisher.initialize()
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
 
         assert publisher._initialized is True
         assert mock_client.publish.call_count > 0
@@ -224,7 +228,11 @@ class TestDevicePublisher:
         }
 
         await publisher.add_device(device_info)
-        await publisher.initialize()
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
 
         updated_info = {
             "id": "dev1",
@@ -255,7 +263,11 @@ class TestDevicePublisher:
         }
 
         await publisher.add_device(device_info)
-        await publisher.initialize()
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
 
         updated_info = {
             "id": "dev1",
@@ -327,7 +339,11 @@ class TestDevicePublisher:
         }
 
         await publisher.add_device(device_info)
-        await publisher.initialize()
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
         mock_client.publish.reset_mock()
 
         await publisher.set_control_value("dev1", "ctrl1", "1")
@@ -477,7 +493,11 @@ class TestDevicePublisher:
         }
 
         await publisher.add_device(device_info)
-        await publisher.initialize()
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
 
         callback = AsyncMock()
         await publisher.register_control_handler("dev1", "ctrl1", callback)
@@ -589,7 +609,11 @@ class TestDevicePublisher:
         }
 
         await publisher.add_device(device_info)
-        await publisher.initialize()
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
 
         device = publisher._devices["dev1"]
         control = device._controls["ctrl1"]

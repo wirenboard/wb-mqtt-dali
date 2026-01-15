@@ -22,7 +22,7 @@ class LoadSheddingConditionParam(GearParam):
     query_command_class = QueryLoadSheddingCondition
     set_command_class = SetLoadSheddingCondition
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -57,7 +57,7 @@ class ReductionFactor1Param(GearParam):
     query_command_class = QueryReductionFactor1
     set_command_class = SetReductionFactor1
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -81,7 +81,7 @@ class ReductionFactor2Param(GearParam):
     query_command_class = QueryReductionFactor2
     set_command_class = SetReductionFactor2
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -105,7 +105,7 @@ class ReductionFactor3Param(GearParam):
     query_command_class = QueryReductionFactor3
     set_command_class = SetReductionFactor3
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -124,7 +124,7 @@ class ReductionFactor3Param(GearParam):
 
 
 class Type20Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         return [
             LoadSheddingConditionParam(),
             ReductionFactor1Param(),

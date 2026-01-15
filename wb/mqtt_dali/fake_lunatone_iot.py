@@ -252,10 +252,10 @@ async def run_websocket(dev: WBDALIDriver, host: str, port: int, logger: logging
             port,
             process_request=process_request,
         ):
-            await asyncio.Future()
+            await asyncio.get_running_loop().create_future()
+    except asyncio.CancelledError:
+        _log.info("Lunatone IoT Gateway emulator stopped")
+        raise
     except Exception as e:
-        if isinstance(e, asyncio.CancelledError):
-            _log.debug("Lunatone IoT Gateway emulator stopped")
-        else:
-            _log.error("Lunatone IoT Gateway emulator failed: %s", e)
+        _log.error("Lunatone IoT Gateway emulator failed: %s", e)
         raise

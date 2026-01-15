@@ -13,7 +13,7 @@ class DimmingCurveParam(GearParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -34,7 +34,7 @@ class DimmingCurveParam(GearParam):
 
 
 class Type17Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         return [
             DimmingCurveParam(),
         ]

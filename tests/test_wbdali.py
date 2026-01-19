@@ -200,6 +200,27 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result, MockResponse)
         self.assertEqual(result.data, 0x56)
 
+    async def test_send_command_sendtwice_without_response(self):
+        """Test sending a command with sendtwice=True and no response."""
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        await self.prepare_driver(driver)
+
+        cmd = _MockCommand(sendtwice=True, response_class=None)
+
+        fut = asyncio.gather(driver.send(cmd))
+        payload = await self.mock_mqtt_client.wait_for_publish(
+            topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
+        )
+
+        payload_data = json.loads(payload)
+        self.assertEqual(payload_data["params"]["count"], 2)
+        self.assertEqual(payload_data["params"]["msg"], "12342000")
+
+        await self.simulate_timeout_response_from_gateway(0, 2)
+
+        result = (await fut)[0]
+        self.assertIsNone(result)
+
     async def test_send_single_command_rpc_request(self):
         """Test adding a single command to the send buffer."""
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)

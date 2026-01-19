@@ -19,7 +19,7 @@ class DimmingCurveParam(GearParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    async def get_schema(self, driver: WBDALIDriver, addr: GearShort) -> dict:
+    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -40,9 +40,9 @@ class DimmingCurveParam(GearParam):
 
 
 class Type5Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, addr: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
         try:
-            features = await query_request(driver, QueryConverterFeatures(addr))
+            features = await query_request(driver, QueryConverterFeatures(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if not ((features >> 5) & 1):  # 5th bit: dimming curve selectable

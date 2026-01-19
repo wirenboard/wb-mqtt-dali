@@ -2,12 +2,13 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from enum import Enum, auto
+from timeit import default_timer
 from typing import Optional
 
 from dali.address import DeviceBroadcast
 from dali.command import from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
-from dali.frame import Frame
+from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning
 from .dali_device import DaliDevice, make_device
@@ -200,6 +201,8 @@ class ApplicationController:
             await self._notify_ready()
 
     async def _commissioning_task(self):
+        start_time = default_timer()
+
         await asyncio.sleep(1)
         await self._dev.send(StartQuiescentMode(DeviceBroadcast()))
         try:
@@ -244,6 +247,9 @@ class ApplicationController:
             removed=removed_ids,
             updated=updated_devices,
         )
+
+        end_time = default_timer()
+        self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
 
         await self._device_publisher.rebuild(changes)
 
@@ -301,12 +307,13 @@ class ApplicationController:
                 self._ready_condition.notify()
 
     def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:
-        command = from_frame(frame)
-        if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
-            try:
-                if isinstance(command, StartQuiescentMode):
-                    asyncio.create_task(self._handle_start_quiescent_mode())
-                elif isinstance(command, StopQuiescentMode):
-                    asyncio.create_task(self._handle_stop_quiescent_mode())
-            except Exception:
-                pass  # Ignore errors in bus traffic handling
+        if isinstance(frame, ForwardFrame):
+            command = from_frame(frame)
+            if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
+                try:
+                    if isinstance(command, StartQuiescentMode):
+                        asyncio.create_task(self._handle_start_quiescent_mode())
+                    elif isinstance(command, StopQuiescentMode):
+                        asyncio.create_task(self._handle_stop_quiescent_mode())
+                except Exception:
+                    pass  # Ignore errors in bus traffic handling

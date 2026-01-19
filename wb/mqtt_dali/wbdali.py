@@ -58,7 +58,6 @@ class BusTrafficCallbacks:
         self._callbacks = set()
 
     def register(self, func: Callable[[Frame, str], None]) -> Callable[[], None]:
-
         def cleanup():
             self._callbacks.discard(func)
 
@@ -131,8 +130,6 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority
 
 
 class WBDALIDriver:
-    MODBUS_BULK_SEND_POINTER_BASE = 1432
-
     def __init__(
         self,
         config: WBDALIConfig,

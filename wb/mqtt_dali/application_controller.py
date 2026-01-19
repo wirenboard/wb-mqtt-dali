@@ -65,9 +65,9 @@ class ApplicationController:
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
-            modbus_port_path="/dev/ttyRS485-2",
+            modbus_port_path="/dev/ttyRS485-1",
             device_name=config.mqtt_device_id,
-            modbus_slave_id=2,
+            modbus_slave_id=1,
         )
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 

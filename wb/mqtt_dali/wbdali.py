@@ -37,7 +37,7 @@ WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
-    device_name: str = "wb-mdali_1"
+    device_name: str = "wb-dali_1"
     channel: int = 1
     modbus_slave_id: int = 1
     modbus_port_path: str = "/dev/ttyRS485-1"

@@ -130,21 +130,21 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         frame_invalid = MagicMock()
         frame_invalid.__len__.return_value = 32
 
-        # Test FF16 frame: priority=1 (bits 31..29), sendtwice=0 (bit 28), size=0 (bits 27..25), data=0x1234 (bits 24..0)
-        # Result: 0x20000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x20001234
-        assert encode_frame_for_modbus(frame_16) == 0x20001234  # pylint: disable=W0212
+        # Test FF16 frame: priority=4 (bits 31..29), sendtwice=0 (bit 28), size=0 (bits 27..25), data=0x1234 (bits 24..0)
+        # Result: 0x80000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x80001234
+        assert encode_frame_for_modbus(frame_16) == 0x80001234  # pylint: disable=W0212
 
-        # Test FF24 frame: priority=1, sendtwice=0, size=1 (bits 27..25), data=0x123456
-        # Result: 0x20000000 | 0x00000000 | 0x02000000 | 0x00123456 = 0x22123456
-        assert encode_frame_for_modbus(frame_24) == 0x22123456  # pylint: disable=W0212
+        # Test FF24 frame: priority=4, sendtwice=0, size=1 (bits 27..25), data=0x123456
+        # Result: 0x80000000 | 0x00000000 | 0x02000000 | 0x00123456 = 0x82123456
+        assert encode_frame_for_modbus(frame_24) == 0x82123456  # pylint: disable=W0212
 
-        # Test FF25 frame: priority=1, sendtwice=0, size=2 (bits 27..25), data=0x1234567
-        # Result: 0x20000000 | 0x00000000 | 0x04000000 | 0x01234567 = 0x25234567
-        assert encode_frame_for_modbus(frame_25) == 0x25234567  # pylint: disable=W0212
+        # Test FF25 frame: priority=4, sendtwice=0, size=2 (bits 27..25), data=0x1234567
+        # Result: 0x80000000 | 0x00000000 | 0x04000000 | 0x01234567 = 0x85234567
+        assert encode_frame_for_modbus(frame_25) == 0x85234567  # pylint: disable=W0212
 
         # Test with sendtwice=True: bit 28 should be set
-        # Result: 0x20000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0x30001234
-        assert encode_frame_for_modbus(frame_16, sendtwice=True) == 0x30001234  # pylint: disable=W0212
+        # Result: 0x80000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0x90001234
+        assert encode_frame_for_modbus(frame_16, sendtwice=True) == 0x90001234  # pylint: disable=W0212
 
         # Test with priority=3: bits 31..29 = 0b011 = 0x60000000
         # Result: 0x60000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x60001234
@@ -214,7 +214,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 2)
-        self.assertEqual(payload_data["params"]["msg"], "12342000")
+        self.assertEqual(payload_data["params"]["msg"], "12349000")
 
         await self.simulate_timeout_response_from_gateway(0, 2)
 
@@ -238,7 +238,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_data["params"]["function"], 16)
         self.assertEqual(payload_data["params"]["address"], self.config.queue_start_modbus_address)
         self.assertEqual(payload_data["params"]["count"], 2)
-        self.assertEqual(payload_data["params"]["msg"], "12342000")
+        self.assertEqual(payload_data["params"]["msg"], "12348000")
         self.assertEqual(payload_data["params"]["protocol"], "modbus")
         self.assertEqual(payload_data["params"]["format"], "HEX")
         self.assertEqual(payload_data["params"]["path"], self.config.modbus_port_path)
@@ -263,7 +263,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 6)
-        self.assertEqual(payload_data["params"]["msg"], "12342000567820009abc2000")
+        self.assertEqual(payload_data["params"]["msg"], "12348000567880009abc8000")
 
         # Simulate responses
         for i in range(3):
@@ -301,7 +301,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await fut
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 6)
-        self.assertEqual(payload_data["params"]["msg"], "12342000567820009abc2000")
+        self.assertEqual(payload_data["params"]["msg"], "12348000567880009abc8000")
 
     async def test_send_modbus_rpc_increments_counter(self):
         """Test that rpc_id_counter increments correctly with multiple calls."""
@@ -440,7 +440,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 4)
-        self.assertEqual(payload_data["params"]["msg"], "1234200056782000")
+        self.assertEqual(payload_data["params"]["msg"], "1234800056788000")
         self.assertEqual(driver.batch_start_index, 0)
 
         await self.simulate_timeout_response_from_gateway(0, 2)
@@ -451,7 +451,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 2)
-        self.assertEqual(payload_data["params"]["msg"], "9abc2000")
+        self.assertEqual(payload_data["params"]["msg"], "9abc8000")
 
         await self.simulate_timeout_response_from_gateway(2)
 

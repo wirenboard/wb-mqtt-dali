@@ -82,7 +82,7 @@ class SendQueueItem:
             self.timeout_handler = None
 
 
-def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority: int = 1) -> int:
+def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority: int = 4) -> int:
     """Encode DALI frame for Modbus transmission.
 
     Format:

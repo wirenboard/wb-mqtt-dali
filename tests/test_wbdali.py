@@ -398,7 +398,6 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received_source, "bus")
         self.assertEqual(BackwardFrame(0x12), received_frame)
 
-    @unittest.skip
     async def test_handle_ff24_message(self):
         """Test handling of 24-bit forward frame messages."""
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
@@ -413,9 +412,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.bus_traffic.register(traffic_callback)
 
         message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward".encode()
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame".encode()
         )
-        message.payload = str(0x123456 << 8).encode()
+        message.payload = str(0x1A900180088863B).encode()
         await self.mock_mqtt_dispatcher._dispatch_message(message)
 
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)

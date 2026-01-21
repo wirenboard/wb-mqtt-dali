@@ -192,11 +192,11 @@ class WBDALIDriver:
             await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
 
         # Subscribe to FF24 topic
-        # self.logger.debug("Subscribing to FF24 topic...")
-        # await self._mqtt_dispatcher.subscribe(
-        #     f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
-        #     self._handle_ff24_message,
-        # )
+        self.logger.debug("Subscribing to FF24 topic...")
+        await self._mqtt_dispatcher.subscribe(
+            f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame",
+            self._handle_ff24_message,
+        )
 
         self.logger.debug("Initialized successfully")
 
@@ -226,10 +226,10 @@ class WBDALIDriver:
                 await self._mqtt_dispatcher.unsubscribe(topic)
 
         # Unsubscribe from FF24 topic
-        # if self._mqtt_dispatcher.is_running:
-        #     await self._mqtt_dispatcher.unsubscribe(
-        #         f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
-        #     )
+        if self._mqtt_dispatcher.is_running:
+            await self._mqtt_dispatcher.unsubscribe(
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame",
+            )
         self.logger.debug("Deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
@@ -293,7 +293,18 @@ class WBDALIDriver:
 
         if message.retain:
             return
-        frame = ForwardFrame(24, int(message.payload) >> 8)
+
+        raw_value = int(message.payload)
+        frame_data = raw_value & 0xFFFFFFFF
+        frame_length = (raw_value >> 32) & 0xFF
+        is_backward = bool((raw_value >> 40) & 0x1)
+        # is_broken = bool((raw_value >> 41) & 0x1)
+        # frame_counter = (raw_value >> 48) & 0xFFFF
+
+        if is_backward or frame_length != 24:
+            return
+
+        frame = ForwardFrame(24, frame_data & 0xFFFFFF)
         cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
         self.logger.debug("Received FF24: %s", cmd)
         self.bus_traffic.invoke(frame, "bus")

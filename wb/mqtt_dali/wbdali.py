@@ -82,7 +82,7 @@ class SendQueueItem:
             self.timeout_handler = None
 
 
-def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = True, priority: int = 5) -> int:
+def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority: int = 1) -> int:
     """Encode DALI frame for Modbus transmission.
 
     Format:
@@ -539,7 +539,7 @@ class WBDALIDriver:
                 )
                 self._waiting_for_responses[current_index] = item
 
-                result = encode_frame_for_modbus(item.command.frame)
+                result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice)
                 self.logger.debug(
                     "Encoded frame: len=%d, result=0x%08x",
                     len(item.command.frame),

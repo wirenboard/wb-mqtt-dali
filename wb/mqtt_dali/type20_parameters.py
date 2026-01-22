@@ -2,7 +2,12 @@
 
 from dali.address import GearShort
 
-from .extended_gear_parameters import GearParam, TypeParameters
+from .extended_gear_parameters import (
+    GearParamBase,
+    GearParamName,
+    NumberGearParam,
+    TypeParameters,
+)
 from .gear.demand_response import (
     QueryLoadSheddingCondition,
     QueryReductionFactor1,
@@ -16,17 +21,18 @@ from .gear.demand_response import (
 from .wbdali import WBDALIDriver
 
 
-class LoadSheddingConditionParam(GearParam):
-    name = "Load shedding condition"
-    property_name = "type_20_load_shedding_condition"
+class LoadSheddingConditionParam(NumberGearParam):
     query_command_class = QueryLoadSheddingCondition
     set_command_class = SetLoadSheddingCondition
+
+    def __init__(self) -> None:
+        super().__init__(GearParamName("Load shedding condition"), "type_20_load_shedding_condition")
 
     async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
-                    "title": self.name,
+                    "title": self.name.en,
                     "type": "integer",
                     "enum": [0, 1, 2, 3],
                     "options": {
@@ -41,7 +47,7 @@ class LoadSheddingConditionParam(GearParam):
             },
             "translations": {
                 "ru": {
-                    self.name: "Условие снижения нагрузки",
+                    self.name.en: "Условие снижения нагрузки",
                     "no reduction": "не использовать коэффициент снижения",
                     "use reduction factor 1": "использовать коэффициент снижения 1",
                     "use reduction factor 2": "использовать коэффициент снижения 2",
@@ -51,80 +57,41 @@ class LoadSheddingConditionParam(GearParam):
         }
 
 
-class ReductionFactor1Param(GearParam):
-    name = "Reduction factor 1"
-    property_name = "type_20_reduction_factor_1"
+class ReductionFactor1Param(NumberGearParam):
     query_command_class = QueryReductionFactor1
     set_command_class = SetReductionFactor1
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Коэффициент снижения 1",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Reduction factor 1", "Коэффициент снижения 1"), "type_20_reduction_factor_1"
+        )
+        self.maximum = 100
 
 
-class ReductionFactor2Param(GearParam):
-    name = "Reduction factor 2"
-    property_name = "type_20_reduction_factor_2"
+class ReductionFactor2Param(NumberGearParam):
     query_command_class = QueryReductionFactor2
     set_command_class = SetReductionFactor2
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Коэффициент снижения 2",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Reduction factor 2", "Коэффициент снижения 2"), "type_20_reduction_factor_2"
+        )
+        self.maximum = 100
 
 
-class ReductionFactor3Param(GearParam):
-    name = "Reduction factor 3"
-    property_name = "type_20_reduction_factor_3"
+class ReductionFactor3Param(NumberGearParam):
     query_command_class = QueryReductionFactor3
     set_command_class = SetReductionFactor3
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Коэффициент снижения 3",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Reduction factor 3", "Коэффициент снижения 3"), "type_20_reduction_factor_3"
+        )
+        self.maximum = 100
 
 
 class Type20Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
         return [
             LoadSheddingConditionParam(),
             ReductionFactor1Param(),

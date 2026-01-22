@@ -11,6 +11,7 @@ from .type4_parameters import Type4Parameters
 from .type5_parameters import Type5Parameters
 from .type6_parameters import Type6Parameters
 from .type7_parameters import Type7Parameters
+from .type8_parameters import Type8Parameters
 from .type17_parameters import Type17Parameters
 from .type20_parameters import Type20Parameters
 from .utils import merge_json_schemas
@@ -31,8 +32,7 @@ class DaliDeviceAddress:
 # Type 5 type5_parameters.py
 # Type 6 type6_parameters.py
 # Type 7 type7_parameters.py
-# Type 8 Colour control gear
-# TODO: implement
+# Type 8 type8_parameters.py
 # Type 9 Sequencer
 # TODO: implement
 # Type 15 Load referencing has no custom parameters
@@ -73,13 +73,12 @@ class DaliDevice:
             "types": types,
         }
         awaitables = [param_handler.read(driver, short_addr) for param_handler in parameter_handlers]
-        awaitables.extend(
-            [param_handler.get_schema(driver, short_addr) for param_handler in parameter_handlers]
-        )
         results_iterable = iter(await asyncio.gather(*awaitables))
         for _ in parameter_handlers:
             type_params = next(results_iterable)
             params.update(type_params)
+        awaitables = [param_handler.get_schema(driver, short_addr) for param_handler in parameter_handlers]
+        results_iterable = iter(await asyncio.gather(*awaitables))
         for _ in parameter_handlers:
             type_schema = next(results_iterable)
             if type_schema is not None:
@@ -102,13 +101,16 @@ class DaliDevice:
         self.params.update(updated_parameters)
 
     def _get_parameters(self, types: list[int]) -> list:
-        res = [CommonParameters()]
+        # Type 8 Colour control has own scenes parameter, so exclude common scenes parameter
+        exclude_scenes = 8 in types
+        res = [CommonParameters(exclude_scenes)]
         gear_type_params = {
             1: Type1Parameters(),
             4: Type4Parameters(),
             5: Type5Parameters(),
             6: Type6Parameters(),
             7: Type7Parameters(),
+            8: Type8Parameters(),
             17: Type17Parameters(),
             20: Type20Parameters(),
         }

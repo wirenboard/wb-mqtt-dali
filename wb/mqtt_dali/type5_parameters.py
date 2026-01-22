@@ -7,23 +7,29 @@ from dali.gear.converter import (
     SelectDimmingCurve,
 )
 
-from .extended_gear_parameters import GearParam, TypeParameters
+from .extended_gear_parameters import (
+    GearParamBase,
+    GearParamName,
+    NumberGearParam,
+    TypeParameters,
+)
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: Output range is write only
 
 
-class DimmingCurveParam(GearParam):
-    name = "Dimming curve"
-    property_name = "type_5_dimming_curve"
+class DimmingCurveParam(NumberGearParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
+
+    def __init__(self) -> None:
+        super().__init__(GearParamName("Dimming curve"), "type_5_dimming_curve")
 
     async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         return {
             "properties": {
                 self.property_name: {
-                    "title": self.name,
+                    "title": self.name.en,
                     "type": "integer",
                     "enum": [0, 1],
                     "options": {"enum_titles": ["standard", "linear"]},
@@ -31,7 +37,7 @@ class DimmingCurveParam(GearParam):
             },
             "translations": {
                 "ru": {
-                    self.name: "Кривая диммирования",
+                    self.name.en: "Кривая диммирования",
                     "standard": "стандартная",
                     "linear": "линейная",
                 }
@@ -40,7 +46,7 @@ class DimmingCurveParam(GearParam):
 
 
 class Type5Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
         try:
             features = await query_request(driver, QueryConverterFeatures(address))
         except RuntimeError as e:

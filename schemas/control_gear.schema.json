@@ -151,55 +151,10 @@
         "format": "button"
       }
     },
-    "min_level": {
-      "type": "number",
-      "title": "Minimum Level",
-      "propertyOrder": 13,
-      "minimum": 0,
-      "maximum": 254,
-      "default": 0,
-      "options": {
-        "grid_columns": 3
-      }
-    },
-    "max_level": {
-      "type": "number",
-      "title": "Maximum Level",
-      "propertyOrder": 14,
-      "minimum": 0,
-      "maximum": 254,
-      "default": 254,
-      "options": {
-        "grid_columns": 3
-      }
-    },
-    "power_on_level": {
-      "type": "number",
-      "title": "Power On Level",
-      "propertyOrder": 15,
-      "minimum": 0,
-      "maximum": 255,
-      "default": 254,
-      "options": {
-        "grid_columns": 3
-      }
-
-    },
-    "system_failure_level": {
-      "type": "number",
-      "title": "System Failure Level",
-      "propertyOrder": 16,
-      "minimum": 0,
-      "maximum": 255,
-      "default": 254,
-      "options": {
-        "grid_columns": 3
-      }
-    },
     "fade_time": {
       "type": "number",
       "title": "Fade Time",
-      "propertyOrder": 17,
+      "propertyOrder": 15,
       "minimum": 0,
       "maximum": 15,
       "default": 1,
@@ -210,7 +165,7 @@
     "fade_rate": {
       "type": "number",
       "title": "Fade Rate",
-      "propertyOrder": 18,
+      "propertyOrder": 16,
       "minimum": 1,
       "maximum": 15,
       "default": 1,
@@ -235,10 +190,6 @@
       "Control Gear Types": "Типы оборудования",
       "Short Address": "Короткий адрес",
       "Random Address": "Случайный адрес",
-      "Minimum Level": "Минимальный уровень",
-      "Maximum Level": "Максимальный уровень",
-      "Power On Level": "Уровень при включении",
-      "System Failure Level": "Уровень при сбое системы",
       "Fade Time": "Время затухания",
       "Fade Rate": "Скорость затухания"
     }

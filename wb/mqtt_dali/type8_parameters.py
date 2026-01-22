@@ -142,7 +142,7 @@ def query_colour_with_level(
     return res
 
 
-class ColorsState(GearParamBase):
+class ColourState(GearParamBase):
     def __init__(
         self,
         name: GearParamName,
@@ -205,6 +205,7 @@ class ColorsState(GearParamBase):
                     "title": self.name.en,
                     "properties": {},
                     "propertyOrder": self._property_order,
+                    "required": [],
                 },
             },
             "translations": {"ru": {self.name.en: self.name.ru}},
@@ -220,6 +221,7 @@ class ColorsState(GearParamBase):
                     "grid_columns": 2,
                 },
             }
+            schema["properties"][self.property_name]["required"].append(colour.value)
         return schema
 
 
@@ -380,7 +382,7 @@ class Type8Parameters(TypeParameters):
             ]
             self._active_colour_type = ColourType.RGBWAF
             parameters = [
-                ColorsState(
+                ColourState(
                     GearParamName("Current colour", "Текущий цвет"),
                     "current_colour",
                     QueryActualLevel,
@@ -389,7 +391,7 @@ class Type8Parameters(TypeParameters):
                     ACTUAL_LEVEL_COLOUR_TAGS,
                     801,
                 ),
-                ColorsState(
+                ColourState(
                     GearParamName("Power On Colour", "Цвет после включения питания"),
                     "power_on_colour",
                     QueryPowerOnLevel,
@@ -398,7 +400,7 @@ class Type8Parameters(TypeParameters):
                     REPORT_COLOUR_TAGS,
                     21,
                 ),
-                ColorsState(
+                ColourState(
                     GearParamName("System Failure Colour", "Цвет при сбое"),
                     "system_failure_colour",
                     QuerySystemFailureLevel,

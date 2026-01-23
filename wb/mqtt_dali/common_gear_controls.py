@@ -1,6 +1,8 @@
 import asyncio
+from typing import Iterable, Optional, Sequence
 
 from dali.address import GearShort
+from dali.command import Response
 from dali.gear.general import (
     Down,
     Off,
@@ -109,18 +111,36 @@ async def register_common_handlers(
     await asyncio.gather(*registration_tasks)
 
 
-async def poll_device(
+def make_actual_level_query(device: DaliDevice) -> QueryActualLevel:
+    short_addr = GearShort(device.address.short)
+    return QueryActualLevel(short_addr)
+
+
+def build_actual_level_queries(devices: Iterable[DaliDevice]) -> list[QueryActualLevel]:
+    return [make_actual_level_query(device) for device in devices]
+
+
+async def publish_actual_level_response(
     device: DaliDevice,
-    controller: "ApplicationController",
+    response: Optional[Response],
     device_publisher: DevicePublisher,
 ) -> None:
     device_id = str(device.address.short)
-    short_addr = GearShort(device.address.short)
-
-    actual_level_response = await controller.send_command(QueryActualLevel(short_addr))
-
-    if actual_level_response is not None:
-        actual_level = str(actual_level_response.raw_value.as_integer)
+    if response is not None:
+        actual_level = str(response.raw_value.as_integer)
         await device_publisher.set_control_value(device_id, "actual_level", actual_level)
     else:
         await device_publisher.set_control_error(device_id, "actual_level", "r")
+
+
+async def publish_actual_level_results(
+    devices: Sequence[DaliDevice],
+    responses: Sequence[Optional[Response]],
+    device_publisher: DevicePublisher,
+) -> None:
+    await asyncio.gather(
+        *[
+            publish_actual_level_response(device, response, device_publisher)
+            for device, response in zip(devices, responses)
+        ]
+    )

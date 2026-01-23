@@ -12,8 +12,9 @@ from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning
 from .common_gear_controls import (
+    build_actual_level_queries,
     get_common_controls,
-    poll_device,
+    publish_actual_level_results,
     register_common_handlers,
 )
 from .dali_device import DaliDevice, make_device
@@ -284,28 +285,36 @@ class ApplicationController:
             try:
                 await asyncio.sleep(self._polling_interval)
 
-                if not self.devices:
+                devices_snapshot = tuple(self.devices)
+                if not devices_snapshot:
                     continue
 
-                tasks = []
-                for device in self.devices:
-                    task = asyncio.create_task(
-                        asyncio.wait_for(
-                            poll_device(device, self, self._device_publisher),
-                            timeout=5.0,
-                        )
+                queries = build_actual_level_queries(devices_snapshot)
+                batch_failed = False
+                try:
+                    responses = await asyncio.wait_for(
+                        self._dev.send_commands(queries, source="polling"),
+                        timeout=5.0,
                     )
-                    tasks.append(task)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Batch poll timeout")
+                    responses = [None] * len(devices_snapshot)
+                    batch_failed = True
+                except Exception as e:
+                    self.logger.error("Batch poll failed: %s", e)
+                    responses = [None] * len(devices_snapshot)
+                    batch_failed = True
 
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                if not batch_failed:
+                    for device, response in zip(devices_snapshot, responses):
+                        if response is None:
+                            self.logger.warning("No response during polling for device %s", device.name)
 
-                for device, result in zip(self.devices, results):
-                    if isinstance(result, asyncio.TimeoutError):
-                        self.logger.warning("Poll timeout for device %s", device.name)
-                        # device_id = str(device.address.short)
-                        # await self._device_publisher.set_control_error(device_id, "actual_level", "r")
-                    elif isinstance(result, Exception):
-                        self.logger.error("Poll failed for device %s: %s", device.name, result)
+                await publish_actual_level_results(
+                    devices_snapshot,
+                    responses,
+                    self._device_publisher,
+                )
 
             except asyncio.CancelledError:
                 self.logger.info("Polling loop cancelled")

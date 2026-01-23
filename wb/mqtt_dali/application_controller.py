@@ -292,10 +292,7 @@ class ApplicationController:
                 queries = build_actual_level_queries(devices_snapshot)
                 batch_failed = False
                 try:
-                    responses = await asyncio.wait_for(
-                        self._dev.send_commands(queries, source="polling"),
-                        timeout=5.0,
-                    )
+                    responses = await self._dev.send_commands(queries, source="polling")
                 except asyncio.TimeoutError:
                     self.logger.warning("Batch poll timeout")
                     responses = [None] * len(devices_snapshot)

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
 from typing import Optional
@@ -39,7 +39,7 @@ class ApplicationControllerConfig:
     mqtt_device_id: str
     bus_index: int
     devices: list[DaliDevice]
-    websocket_config: WebSocketConfig = WebSocketConfig()
+    websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
 
 
 class ApplicationController:

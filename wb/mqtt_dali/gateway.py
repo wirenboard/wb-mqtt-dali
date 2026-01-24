@@ -11,7 +11,8 @@ from .application_controller import (
 )
 from .dali_device import DaliDevice, DaliDeviceAddress
 from .mqtt_dispatcher import MQTTDispatcher
-from .mqtt_rpc_server import MQTTRPCServer, rpc_call
+from .mqtt_rpc_client import rpc_call
+from .mqtt_rpc_server import MQTTRPCServer
 
 
 @dataclass

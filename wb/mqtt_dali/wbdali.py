@@ -48,12 +48,6 @@ class WBDALIConfig:
 
     device_name: str = "wb-mdali_1"
     channel: int = 1
-    modbus_slave_id: int = 1
-    modbus_port_path: str = "/dev/ttyRS485-1"
-    modbus_baud_rate: int = 115200
-    modbus_parity: str = "N"
-    modbus_data_bits: int = 8
-    modbus_stop_bits: int = 2
     queue_size: int = 10
     queue_start_modbus_address: int = 1920
 
@@ -124,7 +118,7 @@ class WBDALIDriver:
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ) -> None:
         self.logger = logger.getChild("WBDALIDriver")
-        self.logger.debug("path=%s, dev_inst_map=%s", config.modbus_port_path, dev_inst_map)
+        self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
 
         self.config = config
         self.dev_inst_map = dev_inst_map
@@ -230,20 +224,14 @@ class WBDALIDriver:
             json.dumps(
                 {
                     "params": {
-                        "slave_id": self.config.modbus_slave_id,
+                        "device_id": self.config.device_name,
                         "function": function,
                         "address": address,
                         "count": count,
                         # "response_timeout": 8,
                         "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
                         "frame_timeout": 0,
-                        "protocol": "modbus",
                         "format": "HEX",
-                        "path": self.config.modbus_port_path,
-                        "baud_rate": self.config.modbus_baud_rate,
-                        "parity": self.config.modbus_parity,
-                        "data_bits": self.config.modbus_data_bits,
-                        "stop_bits": self.config.modbus_stop_bits,
                         "msg": msg,
                     },
                     "id": self.rpc_id_counter,

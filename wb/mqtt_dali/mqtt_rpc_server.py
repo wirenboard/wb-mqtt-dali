@@ -144,14 +144,15 @@ async def rpc_call(
     fut = asyncio.get_running_loop().create_future()
 
     async def on_response(mqtt_message: mqtt.MQTTMessage) -> None:
-        try:
-            response = MQTTRPC10Response.from_json(mqtt_message.payload.decode())
-            if response.error:
-                fut.set_exception(JSONRPCDispatchException(response.error))
-            else:
-                fut.set_result(response.result)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            fut.set_exception(e)
+        if not fut.done():
+            try:
+                response = MQTTRPC10Response.from_json(mqtt_message.payload.decode())
+                if response.error:
+                    fut.set_exception(JSONRPCDispatchException(response.error))
+                else:
+                    fut.set_result(response.result)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                fut.set_exception(e)
 
     reply_topic = topic_str + "/reply"
     await mqtt_dispatcher.subscribe(reply_topic, on_response)

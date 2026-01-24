@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -107,11 +108,11 @@ class Gateway:
         self._debug = config.get("debug", False)
 
     async def start(self) -> None:
-        await self._update_gateways()
         res = await asyncio.gather(
             *[gw.start() for gw in self.wb_dali_gateways],
             return_exceptions=True,
         )
+        await self._update_gateways()
         for r in res:
             if isinstance(r, Exception):
                 raise r

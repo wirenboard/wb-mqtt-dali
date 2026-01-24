@@ -36,6 +36,9 @@ from .extended_gear_parameters import (
 )
 from .wbdali import MASK, WBDALIDriver, check_query_response
 
+SCENES_TOTAL = 16
+GROUPS_TOTAL = 16
+
 
 def read_memory_bank(bank: info.MemoryBank, address: GearShort):
     last_address = yield from bank.LastAddress.read(address)
@@ -165,7 +168,7 @@ class FadeTimeFadeRateParam(GearParamBase):
 class GroupsParam(GearParamBase):
     def __init__(self) -> None:
         super().__init__(GearParamName("Groups"))
-        self._groups = [False for _ in range(16)]
+        self._groups = [False for _ in range(GROUPS_TOTAL)]
 
     async def read(self, driver: WBDALIDriver, address: GearShort):
         groups = []
@@ -185,7 +188,7 @@ class GroupsParam(GearParamBase):
             return {}
 
         commands = []
-        for i in range(16):
+        for i in range(GROUPS_TOTAL):
             if groups_to_set[i] != self._groups[i]:
                 if groups_to_set[i]:
                     commands.append(AddToGroup(address, i))
@@ -207,10 +210,10 @@ class GroupsParam(GearParamBase):
 class ScenesParam(GearParamBase):
     def __init__(self) -> None:
         super().__init__(GearParamName("Scenes", "Сцены"))
-        self._scenes = [MASK for _ in range(16)]
+        self._scenes = [MASK for _ in range(SCENES_TOTAL)]
 
     async def read(self, driver: WBDALIDriver, address: GearShort):
-        commands = [QuerySceneLevel(address, scene_number) for scene_number in range(16)]
+        commands = [QuerySceneLevel(address, scene_number) for scene_number in range(SCENES_TOTAL)]
         responses = await driver.send_commands(commands)
         res = []
         for response in responses:
@@ -223,8 +226,8 @@ class ScenesParam(GearParamBase):
         scenes = value.get("scenes")
         if scenes is None:
             return {}
-        values_to_set = [MASK for _ in range(16)]
-        for i in range(16):
+        values_to_set = [MASK for _ in range(SCENES_TOTAL)]
+        for i in range(SCENES_TOTAL):
             scene = scenes[i]
             if scene.get("enabled", False) is False:
                 values_to_set[i] = MASK
@@ -233,7 +236,7 @@ class ScenesParam(GearParamBase):
 
         commands = []
         modified_scene_indexes = []
-        for i in range(16):
+        for i in range(SCENES_TOTAL):
             if self._scenes[i] != values_to_set[i]:
                 commands.extend([DTR0(values_to_set[i]), SetScene(address, i), QuerySceneLevel(address, i)])
                 modified_scene_indexes.append(i)
@@ -253,8 +256,8 @@ class ScenesParam(GearParamBase):
                     "type": "array",
                     "title": self.name.en,
                     "format": "table",
-                    "minItems": 16,
-                    "maxItems": 16,
+                    "minItems": SCENES_TOTAL,
+                    "maxItems": SCENES_TOTAL,
                     "items": {
                         "type": "object",
                         "properties": {

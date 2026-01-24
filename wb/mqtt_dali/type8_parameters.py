@@ -29,6 +29,7 @@ from dali.gear.general import (
     SetSystemFailureLevel,
 )
 
+from .common_gear_parameters import SCENES_TOTAL
 from .extended_gear_parameters import GearParamBase, GearParamName, TypeParameters
 from .wbdali import MASK, WBDALIDriver, query_request
 
@@ -287,8 +288,8 @@ class ScenesSettings(GearParamBase):
         self.property_name = "scenes"
 
         self._colour_components = colour_components
-        self._scenes = [SceneSettings(i, colour_components) for i in range(16)]
-        self._scene_values = []
+        self._scenes = [SceneSettings(i, colour_components) for i in range(SCENES_TOTAL)]
+        self._scene_values = [{} for _ in range(SCENES_TOTAL)]
 
     async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
         self._scene_values = await asyncio.gather(*[scene.read(driver, address) for scene in self._scenes])
@@ -314,8 +315,8 @@ class ScenesSettings(GearParamBase):
                     "type": "array",
                     "title": self.name.en,
                     "format": "table",
-                    "minItems": 16,
-                    "maxItems": 16,
+                    "minItems": SCENES_TOTAL,
+                    "maxItems": SCENES_TOTAL,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -339,7 +340,7 @@ class ScenesSettings(GearParamBase):
                         },
                         "required": ["enabled", "level"],
                     },
-                    "propertyOrder": 807,
+                    "propertyOrder": 900,
                 },
             },
             "translations": {
@@ -389,7 +390,7 @@ class Type8Parameters(TypeParameters):
                     Activate,
                     colour_components,
                     ACTUAL_LEVEL_COLOUR_TAGS,
-                    801,
+                    800,
                 ),
                 ColourState(
                     GearParamName("Power On Colour", "Цвет после включения питания"),

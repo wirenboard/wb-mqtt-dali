@@ -321,7 +321,7 @@ class Gateway:
     async def _update_gateways(self) -> None:
         device_ids = set()
         serial_config = await rpc_call("wb-mqtt-serial", "config", "Load", {}, self._mqtt_dispatcher)
-        for port in serial_config.get("ports", []):
+        for port in serial_config.get("config", {}).get("ports", []):
             for device in port.get("devices", []):
                 if device.get("device_type") == "WB-MDALI":
                     device_id = device.get("id")

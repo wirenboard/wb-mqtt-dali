@@ -156,9 +156,16 @@ async def rpc_call(
 
     reply_topic = topic_str + "/reply"
     await mqtt_dispatcher.subscribe(reply_topic, on_response)
+    logger = logging.getLogger("MQTTRPCClient")
     try:
         request = MQTTRPC10Request(params=params, _id="1")
+        logger.debug("RPC call %s: %s", topic_str, request.json)
         await mqtt_dispatcher.client.publish(topic_str, request.json, qos=2, retain=False)
-        return await asyncio.wait_for(fut, timeout)
+        res = await asyncio.wait_for(fut, timeout)
+        logger.debug("RPC response %s: %s", reply_topic, res)
+        return res
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("RPC call failed: %s", e)
+        raise
     finally:
         await mqtt_dispatcher.unsubscribe(reply_topic, on_response)

@@ -289,6 +289,10 @@ class ApplicationController:
                 if not devices_snapshot:
                     continue
 
+                async with self._state_lock:
+                    if self._state != ApplicationControllerState.READY:
+                        continue
+
                 queries = build_actual_level_queries(devices_snapshot)
                 batch_failed = False
                 try:

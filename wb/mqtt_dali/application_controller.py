@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Optional
+from typing import Optional, Sequence
 
 from dali.address import DeviceBroadcast
 from dali.command import from_frame
@@ -281,48 +281,58 @@ class ApplicationController:
             await register_common_handlers(device, self, self._device_publisher)
 
     async def _polling_loop(self) -> None:
-        while True:
-            try:
-                await asyncio.sleep(self._polling_interval)
+        reschedule = True
+        try:
+            await asyncio.sleep(self._polling_interval)
 
-                devices_snapshot = tuple(self.devices)
-                if not devices_snapshot:
-                    continue
-
-                async with self._state_lock:
-                    if self._state != ApplicationControllerState.READY:
-                        continue
-
-                queries = build_actual_level_queries(devices_snapshot)
-                batch_failed = False
+            devices = tuple(self.devices)
+            if devices:
                 try:
-                    responses = await self._dev.send_commands(queries, source="polling")
-                except asyncio.TimeoutError:
-                    self.logger.warning("Batch poll timeout")
-                    responses = [None] * len(devices_snapshot)
-                    batch_failed = True
-                except Exception as e:
-                    self.logger.error("Batch poll failed: %s", e)
-                    responses = [None] * len(devices_snapshot)
-                    batch_failed = True
+                    await self._run_task(
+                        ApplicationControllerState.GENERIC_TASK,
+                        self._poll_devices(devices),
+                    )
+                except RuntimeError as e:
+                    self.logger.debug("Skipping polling cycle: %s", e)
 
-                if not batch_failed:
-                    for device, response in zip(devices_snapshot, responses):
-                        if response is None:
-                            self.logger.warning("No response during polling for device %s", device.name)
+        except asyncio.CancelledError:
+            reschedule = False
+            self.logger.info("Polling loop cancelled")
+            raise
+        except Exception as e:
+            self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
+            await asyncio.sleep(1)
+        finally:
+            if reschedule and self._state not in (
+                ApplicationControllerState.STOPPING,
+                ApplicationControllerState.UNINITIALIZED,
+            ):
+                self._polling_task = asyncio.create_task(self._polling_loop())
 
-                await publish_actual_level_results(
-                    devices_snapshot,
-                    responses,
-                    self._device_publisher,
-                )
+    async def _poll_devices(self, devices: Sequence[DaliDevice]) -> None:
+        queries = build_actual_level_queries(devices)
+        batch_failed = False
+        try:
+            responses = await self._dev.send_commands(queries, source="polling")
+        except asyncio.TimeoutError:
+            self.logger.warning("Batch poll timeout")
+            responses = [None] * len(devices)
+            batch_failed = True
+        except Exception as e:
+            self.logger.error("Batch poll failed: %s", e)
+            responses = [None] * len(devices)
+            batch_failed = True
 
-            except asyncio.CancelledError:
-                self.logger.info("Polling loop cancelled")
-                raise
-            except Exception as e:
-                self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
-                await asyncio.sleep(1)
+        if not batch_failed:
+            for device, response in zip(devices, responses):
+                if response is None:
+                    self.logger.warning("No response during polling for device %s", device.name)
+
+        await publish_actual_level_results(
+            devices,
+            responses,
+            self._device_publisher,
+        )
 
     def _run_websocket(self) -> None:
         self._websocket_task = asyncio.create_task(

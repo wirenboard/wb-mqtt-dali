@@ -340,7 +340,7 @@ class Gateway:
                 if device.get("device_type") == "WB-MDALI":
                     device_id = device.get("id")
                     if device_id is None:
-                        device_id = f"wb-mdali_{device.get('slave_id', '')}"
+                        device_id = f"wb-dali_{device.get('slave_id', '')}"
                     device_ids.add(device_id)
         async with self._config_lock:
             new_gateways = []

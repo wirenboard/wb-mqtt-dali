@@ -223,18 +223,12 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await fut
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["id"], driver.rpc_id_counter)
-        self.assertEqual(payload_data["params"]["slave_id"], driver.config.modbus_slave_id)
+        self.assertEqual(payload_data["params"]["device_id"], driver.config.device_name)
         self.assertEqual(payload_data["params"]["function"], 16)
         self.assertEqual(payload_data["params"]["address"], self.config.queue_start_modbus_address)
         self.assertEqual(payload_data["params"]["count"], 2)
         self.assertEqual(payload_data["params"]["msg"], "12340000")
-        self.assertEqual(payload_data["params"]["protocol"], "modbus")
         self.assertEqual(payload_data["params"]["format"], "HEX")
-        self.assertEqual(payload_data["params"]["path"], self.config.modbus_port_path)
-        self.assertEqual(payload_data["params"]["baud_rate"], self.config.modbus_baud_rate)
-        self.assertEqual(payload_data["params"]["parity"], self.config.modbus_parity)
-        self.assertEqual(payload_data["params"]["data_bits"], self.config.modbus_data_bits)
-        self.assertEqual(payload_data["params"]["stop_bits"], self.config.modbus_stop_bits)
         self.assertEqual(payload_data["params"]["frame_timeout"], 0)
 
     async def test_send_commands(self):

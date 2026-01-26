@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
 from typing import Optional, Sequence
@@ -46,7 +46,7 @@ class ApplicationControllerConfig:
     bus_index: int
     devices: list[DaliDevice]
     polling_interval: float
-    websocket_config: WebSocketConfig = WebSocketConfig()
+    websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
 
 
 class ApplicationController:

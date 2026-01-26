@@ -351,9 +351,12 @@ class Gateway:
                 else:
                     await current_gw.stop()
             for did in device_ids:
-                apc_conf = ApplicationControllerConfig(did, 0, [], DEFAULT_POLLING_INTERVAL)
-                apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
-                gw = WbDaliGateway(uid=did, buses=[apc])
+                buses = []
+                for bus_index in range(3):
+                    apc_conf = ApplicationControllerConfig(did, bus_index, [], DEFAULT_POLLING_INTERVAL)
+                    apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
+                    buses.append(apc)
+                gw = WbDaliGateway(uid=did, buses=buses)
                 new_gateways.append(gw)
                 await gw.start()
             self.wb_dali_gateways = new_gateways

@@ -72,10 +72,8 @@ class ApplicationController:
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
-            channel=config.bus_index + 1,
-            modbus_port_path="/dev/ttyRS485-1",
             device_name=config.mqtt_device_id,
-            modbus_slave_id=1,
+            channel=config.bus_index + 1,
         )
 
         self._polling_interval = config.polling_interval

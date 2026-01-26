@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
 from typing import Optional, Sequence
@@ -46,7 +46,7 @@ class ApplicationControllerConfig:
     bus_index: int
     devices: list[DaliDevice]
     polling_interval: float
-    websocket_config: WebSocketConfig = WebSocketConfig()
+    websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
 
 
 class ApplicationController:
@@ -72,9 +72,8 @@ class ApplicationController:
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
-            modbus_port_path="/dev/ttyRS485-2",
             device_name=config.mqtt_device_id,
-            modbus_slave_id=2,
+            channel=config.bus_index + 1,
         )
 
         self._polling_interval = config.polling_interval

@@ -10,6 +10,7 @@ from .application_controller import (
 )
 from .dali_device import DaliDevice, DaliDeviceAddress
 from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_rpc_client import rpc_call
 from .mqtt_rpc_server import MQTTRPCServer
 
 
@@ -17,6 +18,24 @@ from .mqtt_rpc_server import MQTTRPCServer
 class WbDaliGateway:
     uid: str
     buses: list[ApplicationController] = field(default_factory=list)
+
+    async def stop(self) -> None:
+        res = await asyncio.gather(
+            *[bus.stop() for bus in self.buses],
+            return_exceptions=True,
+        )
+        for r in res:
+            if isinstance(r, Exception):
+                raise r
+
+    async def start(self) -> None:
+        res = await asyncio.gather(
+            *[bus.start() for bus in self.buses],
+            return_exceptions=True,
+        )
+        for r in res:
+            if isinstance(r, Exception):
+                raise r
 
 
 def bus_from_json(
@@ -85,15 +104,18 @@ class Gateway:
             )
         )
 
+        self._mqtt_dispatcher = mqtt_dispatcher
+
         self._config_lock = asyncio.Lock()
         self._config_path = config_path
         self._debug = config.get("debug", False)
 
     async def start(self) -> None:
         res = await asyncio.gather(
-            *[bus.start() for gw in self.wb_dali_gateways for bus in gw.buses],
+            *[gw.start() for gw in self.wb_dali_gateways],
             return_exceptions=True,
         )
+        await self._update_gateways()
         for r in res:
             if isinstance(r, Exception):
                 raise r
@@ -137,7 +159,7 @@ class Gateway:
     async def stop(self) -> None:
         await self.rpc_server.stop()
         res = await asyncio.gather(
-            *[bus.stop() for gw in self.wb_dali_gateways for bus in gw.buses],
+            *[gw.stop() for gw in self.wb_dali_gateways],
             return_exceptions=True,
         )
         for r in res:
@@ -145,16 +167,18 @@ class Gateway:
                 raise r
 
     async def get_list_rpc_handler(self, params: dict):
-        return list(
-            map(
-                lambda gw: {
-                    "id": gw.uid,
-                    "name": gw.uid,
-                    "buses": list(map(bus_to_json, gw.buses)),
-                },
-                self.wb_dali_gateways,
+        await self._update_gateways()
+        async with self._config_lock:
+            return list(
+                map(
+                    lambda gw: {
+                        "id": gw.uid,
+                        "name": gw.uid,
+                        "buses": list(map(bus_to_json, gw.buses)),
+                    },
+                    self.wb_dali_gateways,
+                )
             )
-        )
 
     async def get_device_rpc_handler(self, params: dict):
         device_id = params.get("deviceId")
@@ -305,3 +329,30 @@ class Gateway:
                 if self._debug:
                     config["debug"] = True
                 json.dump(config, f, indent=4)
+
+    async def _update_gateways(self) -> None:
+        device_ids = set()
+        serial_config = await rpc_call("wb-mqtt-serial", "config", "Load", {}, self._mqtt_dispatcher)
+        for port in serial_config.get("config", {}).get("ports", []):
+            for device in port.get("devices", []):
+                if device.get("device_type") == "WB-MDALI":
+                    device_id = device.get("id")
+                    if device_id is None:
+                        device_id = f"wb-mdali_{device.get('slave_id', '')}"
+                    device_ids.add(device_id)
+        async with self._config_lock:
+            new_gateways = []
+            for current_gw in self.wb_dali_gateways:
+                if current_gw.uid in device_ids:
+                    new_gateways.append(current_gw)
+                    device_ids.remove(current_gw.uid)
+                else:
+                    await current_gw.stop()
+            for did in device_ids:
+                apc_conf = ApplicationControllerConfig(did, 0, [])
+                apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
+                gw = WbDaliGateway(uid=did, buses=[apc])
+                new_gateways.append(gw)
+                await gw.start()
+            self.wb_dali_gateways = new_gateways
+        await self._save_configuration()

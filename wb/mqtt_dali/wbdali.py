@@ -41,6 +41,8 @@ WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
+MASK = 0xFF
+
 
 @dataclass
 class WBDALIConfig:
@@ -638,16 +640,19 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
 
 
 async def query_request(driver: WBDALIDriver, cmd: Command) -> int:
-    res = await driver.send(cmd)
-    check_query_response(res)
-    return res.raw_value.as_integer
+    resp = await driver.send(cmd)
+    try:
+        check_query_response(resp)
+    except Exception as e:
+        raise RuntimeError(f"Error in response for {cmd}: {e}") from e
+    return resp.raw_value.as_integer
 
 
 def check_query_response(resp: Optional[Response]) -> None:
     if resp is None:
-        raise RuntimeError("Got no response")
+        raise RuntimeError("no response")
     raw_value = resp.raw_value
     if raw_value is None:
-        raise RuntimeError("Got no response")
+        raise RuntimeError("no response")
     if raw_value.error:
-        raise RuntimeError("Framing error")
+        raise RuntimeError("framing error")

@@ -2,7 +2,12 @@
 
 from dali.address import GearShort
 
-from .extended_gear_parameters import GearParam, TypeParameters
+from .extended_gear_parameters import (
+    GearParamBase,
+    GearParamName,
+    NumberGearParam,
+    TypeParameters,
+)
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,
@@ -18,128 +23,64 @@ from .gear.switching_function import (
 from .wbdali import WBDALIDriver
 
 
-class UpSwitchOnThresholdParam(GearParam):
-    name = "Up switch on threshold"
-    property_name = "type_7_up_switch_on_threshold"
+class UpSwitchOnThresholdParam(NumberGearParam):
     query_command_class = QueryUpSwitchOnThreshold
     set_command_class = StoreDTRAsUpSwitchOnThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 255,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Верхний порог включения переключателя",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Up switch on threshold", "Верхний порог включения переключателя"),
+            "type_7_up_switch_on_threshold",
+        )
+        self.minimum = 1
 
 
-class UpSwitchOffThresholdParam(GearParam):
-    name = "Up switch off threshold"
-    property_name = "type_7_up_switch_off_threshold"
+class UpSwitchOffThresholdParam(NumberGearParam):
     query_command_class = QueryUpSwitchOffThreshold
     set_command_class = StoreDTRAsUpSwitchOffThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 255,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Верхний порог выключения переключателя",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Up switch off threshold", "Верхний порог выключения переключателя"),
+            "type_7_up_switch_off_threshold",
+        )
+        self.minimum = 1
 
 
-class DownSwitchOnThresholdParam(GearParam):
-    name = "Down switch on threshold"
-    property_name = "type_7_down_switch_on_threshold"
+class DownSwitchOnThresholdParam(NumberGearParam):
     query_command_class = QueryDownSwitchOnThreshold
     set_command_class = StoreDTRAsDownSwitchOnThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 255,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Нижний порог включения переключателя",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Down switch on threshold", "Нижний порог включения переключателя"),
+            "type_7_down_switch_on_threshold",
+        )
 
 
-class DownSwitchOffThresholdParam(GearParam):
-    name = "Down switch off threshold"
-    property_name = "type_7_down_switch_off_threshold"
+class DownSwitchOffThresholdParam(NumberGearParam):
     query_command_class = QueryDownSwitchOffThreshold
     set_command_class = StoreDTRAsDownSwitchOffThreshold
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 255,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Нижний порог выключения переключателя",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Down switch off threshold", "Нижний порог выключения переключателя"),
+            "type_7_down_switch_off_threshold",
+        )
 
 
-class ErrorHoldOffTimeParam(GearParam):
-    name = "Error holdoff time"
-    property_name = "type_7_error_holdoff_time"
+class ErrorHoldOffTimeParam(NumberGearParam):
     query_command_class = QueryErrorHoldOffTime
     set_command_class = StoreDTRAsErrorHoldOffTime
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 255,
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name: "Время задержки ошибки",
-                }
-            },
-        }
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Error holdoff time", "Время задержки ошибки"), "type_7_error_holdoff_time"
+        )
 
 
 class Type7Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
         return [
             UpSwitchOnThresholdParam(),
             UpSwitchOffThresholdParam(),

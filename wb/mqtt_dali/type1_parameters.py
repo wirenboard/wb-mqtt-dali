@@ -9,42 +9,40 @@ from dali.gear.emergency import (
     StoreDTRAsEmergencyLevel,
 )
 
-from .extended_gear_parameters import GearParam, TypeParameters
+from .extended_gear_parameters import (
+    GearParamBase,
+    GearParamName,
+    NumberGearParam,
+    TypeParameters,
+)
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: prolong time is write only
 
 
-class EmergencyLevelParam(GearParam):
-    name = "Emergency level"
-    property_name = "type_1_emergency_level"
+class EmergencyLevelParam(NumberGearParam):
     query_command_class = QueryEmergencyLevel
     set_command_class = StoreDTRAsEmergencyLevel
 
+    def __init__(self) -> None:
+        super().__init__(
+            GearParamName("Emergency level", "Уровень аварийного освещения"), "type_1_emergency_level"
+        )
+
     async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
         try:
-            min_level = await query_request(driver, QueryEmergencyMinLevel(address))
+            self.minimum = await query_request(driver, QueryEmergencyMinLevel(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency min level: {e}") from e
         try:
-            max_level = await query_request(driver, QueryEmergencyMaxLevel(address))
+            self.maximum = await query_request(driver, QueryEmergencyMaxLevel(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency max level: {e}") from e
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name,
-                    "type": "integer",
-                    "minimum": min_level,
-                    "maximum": max_level,
-                }
-            },
-            "translations": {"ru": {self.name: "Уровень аварийного освещения"}},
-        }
+        return await super().get_schema(driver, address)
 
 
 class Type1Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
+    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
         try:
             features = await query_request(driver, QueryEmergencyFeatures(address))
         except RuntimeError as e:

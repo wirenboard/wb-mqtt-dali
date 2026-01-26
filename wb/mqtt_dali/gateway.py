@@ -13,6 +13,8 @@ from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call
 from .mqtt_rpc_server import MQTTRPCServer
 
+DEFAULT_POLLING_INTERVAL = 5.0
+
 
 @dataclass
 class WbDaliGateway:
@@ -58,7 +60,7 @@ def bus_from_json(
         enabled=data.get("websocket_enabled", False),
         port=data.get("websocket_port", 8080),
     )
-    polling_interval = data.get("polling_interval", 5.0)
+    polling_interval = data.get("polling_interval", DEFAULT_POLLING_INTERVAL)
     ap_conf = ApplicationControllerConfig(
         gateway_mqtt_device_id, bus_index, devices, polling_interval, websocket_conf
     )
@@ -349,7 +351,7 @@ class Gateway:
                 else:
                     await current_gw.stop()
             for did in device_ids:
-                apc_conf = ApplicationControllerConfig(did, 0, [])
+                apc_conf = ApplicationControllerConfig(did, 0, [], DEFAULT_POLLING_INTERVAL)
                 apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
                 gw = WbDaliGateway(uid=did, buses=[apc])
                 new_gateways.append(gw)

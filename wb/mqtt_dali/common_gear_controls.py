@@ -19,7 +19,7 @@ from dali.gear.general import (
 )
 
 from .dali_device import DaliDevice
-from .device_publisher import DevicePublisher
+from .device_publisher import ControlInfo, DevicePublisher
 
 
 @dataclass(frozen=True)
@@ -83,28 +83,28 @@ def get_polling_control_count() -> int:
     return len(POLLING_CONTROLS)
 
 
-PUSHBUTTON_CONTROLS: tuple[dict, ...] = (
-    {"id": "off", "title": "Off", "type": "pushbutton"},
-    {"id": "up", "title": "Up", "type": "pushbutton"},
-    {"id": "down", "title": "Down", "type": "pushbutton"},
-    {"id": "step_up", "title": "Step Up", "type": "pushbutton"},
-    {"id": "step_down", "title": "Step Down", "type": "pushbutton"},
-    {"id": "recall_max_level", "title": "Recall Max Level", "type": "pushbutton"},
-    {"id": "recall_min_level", "title": "Recall Min Level", "type": "pushbutton"},
-    {"id": "step_down_and_off", "title": "Step Down And Off", "type": "pushbutton"},
-    {"id": "on_and_step_up", "title": "On And Step Up", "type": "pushbutton"},
-)
+PUSHBUTTON_CONTROLS: list[ControlInfo] = [
+    ControlInfo("off", "Off", "pushbutton"),
+    ControlInfo("up", "Up", "pushbutton"),
+    ControlInfo("down", "Down", "pushbutton"),
+    ControlInfo("step_up", "Step Up", "pushbutton"),
+    ControlInfo("step_down", "Step Down", "pushbutton"),
+    ControlInfo("recall_max_level", "Recall Max Level", "pushbutton"),
+    ControlInfo("recall_min_level", "Recall Min Level", "pushbutton"),
+    ControlInfo("step_down_and_off", "Step Down And Off", "pushbutton"),
+    ControlInfo("on_and_step_up", "On And Step Up", "pushbutton"),
+]
 
 
-def get_common_controls() -> list[dict]:
+def get_common_controls() -> list[ControlInfo]:
     controls = [
-        {
-            "id": descriptor.control_id,
-            "title": descriptor.title,
-            "type": descriptor.control_type,
-            "value": descriptor.default_value,
-            "read_only": True,
-        }
+        ControlInfo(
+            id=descriptor.control_id,
+            title=descriptor.title,
+            type=descriptor.control_type,
+            value=descriptor.default_value,
+            read_only=True,
+        )
         for descriptor in POLLING_CONTROLS
     ]
     controls.extend(PUSHBUTTON_CONTROLS)
@@ -116,7 +116,7 @@ async def register_common_handlers(
     controller: "ApplicationController",
     device_publisher: DevicePublisher,
 ) -> None:
-    device_id = str(device.address.short)
+    device_id = device.uid
     short_addr = GearShort(device.address.short)
 
     command_mapping = {
@@ -171,7 +171,7 @@ async def publish_polling_results(
         device_responses = [next(response_iter, None) for _ in range(per_device)]
 
         for descriptor, response in zip(POLLING_CONTROLS, device_responses):
-            if response is None:
+            if response is None or response.raw_value is None:
                 tasks.append(
                     device_publisher.set_control_error(str(device.address.short), descriptor.control_id, "r")
                 )

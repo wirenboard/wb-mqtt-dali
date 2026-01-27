@@ -3,7 +3,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import asyncio_mqtt as aiomqtt
 
@@ -49,6 +49,14 @@ class Device:
         self._controls: dict[str, ControlState] = {}
         self._initialized = False
 
+    @property
+    def control_ids(self) -> set[str]:
+        return set(self._controls.keys())
+
+    @property
+    def title(self) -> Optional[str]:
+        return self._device_title
+
     async def initialize(self) -> None:
         if not self._initialized:
             await self._publish_device_meta()
@@ -83,7 +91,9 @@ class Device:
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta/error", None)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", None)
 
-    async def set_control_value(self, mqtt_control_name: str, value: str, force: bool = False) -> None:
+    async def set_control_value(
+        self, mqtt_control_name: str, value: Optional[str], force: bool = False
+    ) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
             if control.value != value or force:
@@ -124,11 +134,15 @@ class Device:
         else:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
+    async def set_device_title(self, title: Optional[str]) -> None:
+        self._device_title = title
+        await self._publish_device_meta()
+
     def _get_control_base_topic(self, mqtt_control_name: str) -> str:
         return f"{self._base_topic}/controls/{mqtt_control_name}"
 
     async def _publish_device_meta(self) -> None:
-        meta_dict = {
+        meta_dict: dict[str, Any] = {
             "driver": self._driver_name,
         }
         if self._device_title is not None:

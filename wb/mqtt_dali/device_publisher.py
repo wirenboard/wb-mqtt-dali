@@ -1,21 +1,48 @@
 import asyncio
 import logging
-from typing import Any, Callable, Dict, List, Optional, Set
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Set
+
+import paho.mqtt.client as mqtt
 
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbmqtt import ControlMeta, Device, remove_topics_by_driver
 
 
-class DeviceChange:  # pylint: disable=R0903
-    def __init__(
-        self,
-        added: Optional[List[Dict[str, Any]]] = None,
-        removed: Optional[List[str]] = None,
-        updated: Optional[List[Dict[str, Any]]] = None,
-    ):
-        self.added = added or []
-        self.removed = removed or []
-        self.updated = updated or []
+@dataclass
+class ControlInfo:  # pylint: disable=R0903
+    # MQTT control ID
+    # Must be unique per device
+    # Control topic /devices/{device_mqtt_name}/controls/{id}
+    id: str
+    title: Optional[str] = None
+    type: str = "value"
+    value: Optional[str] = None
+    read_only: bool = False
+    order: Optional[int] = None
+
+
+@dataclass
+class DeviceInfo:  # pylint: disable=R0903
+    # MQTT device ID
+    # Must be unique
+    # Device topic /devices/{id}
+    id: str
+    title: Optional[str] = None
+    controls: List[ControlInfo] = field(default_factory=list)
+
+
+@dataclass
+class DeviceChange:
+    # Newly added devices
+    added: List[DeviceInfo] = field(default_factory=list)
+
+    # List of device IDs matching DeviceInfo.id
+    removed: List[str] = field(default_factory=list)
+
+    # Updated devices
+    # id must match existing device IDs
+    updated: List[DeviceInfo] = field(default_factory=list)
 
 
 class ControlHandler:  # pylint: disable=R0903
@@ -29,11 +56,9 @@ class DevicePublisher:
     def __init__(
         self,
         mqtt_dispatcher: MQTTDispatcher,
-        bus_id: str,
         logger: logging.Logger,
     ):
         self._mqtt_dispatcher = mqtt_dispatcher
-        self._bus_id = bus_id
         self._devices: Dict[str, Device] = {}
         self._control_handlers: Dict[str, ControlHandler] = {}
         self._initialized = False
@@ -86,30 +111,29 @@ class DevicePublisher:
                 len(changes.updated),
             )
 
-            if changes.removed:
+            if len(changes.removed):
                 await asyncio.gather(
                     *[self._remove_device_internal(device_id) for device_id in changes.removed]
                 )
 
-            if changes.updated:
+            if len(changes.updated):
                 update_tasks = []
                 for device_info in changes.updated:
-                    device_id = device_info["id"]
-                    if device_id in self._devices:
-                        update_tasks.append(self._update_device_internal(device_id, device_info))
+                    if device_info.id in self._devices:
+                        update_tasks.append(self._update_device_internal(device_info.id, device_info))
                     else:
-                        self.logger.warning("Device %s marked for update but not found", device_id)
+                        self.logger.warning("Device %s marked for update but not found", device_info.id)
                 if update_tasks:
                     await asyncio.gather(*update_tasks)
 
-            if changes.added:
+            if len(changes.added):
                 await asyncio.gather(
                     *[self._add_device_internal(device_info) for device_info in changes.added]
                 )
 
             self.logger.info("Rebuild completed")
 
-    async def add_device(self, device_info: Dict[str, Any]) -> None:
+    async def add_device(self, device_info: DeviceInfo) -> None:
         async with self._lock:
             await self._add_device_internal(device_info)
 
@@ -117,7 +141,7 @@ class DevicePublisher:
         async with self._lock:
             await self._remove_device_internal(device_id)
 
-    async def update_device(self, device_id: str, device_info: Dict[str, Any]) -> None:
+    async def update_device(self, device_id: str, device_info: DeviceInfo) -> None:
         async with self._lock:
             await self._update_device_internal(device_id, device_info)
 
@@ -189,9 +213,8 @@ class DevicePublisher:
     def has_device(self, device_id: str) -> bool:
         return device_id in self._devices
 
-    async def _add_device_internal(self, device_info: Dict[str, Any]) -> None:
-        device_id = device_info["id"]
-        device_mqtt_name = f"{self._bus_id}_{device_id}"
+    async def _add_device_internal(self, device_info: DeviceInfo) -> None:
+        device_id = device_info.id
 
         if device_id in self._devices:
             self.logger.warning("Device %s already exists, skipping", device_id)
@@ -199,15 +222,15 @@ class DevicePublisher:
 
         device = Device(
             mqtt_client=self._mqtt_dispatcher.client,
-            device_mqtt_name=device_mqtt_name,
-            driver_name=device_info.get("driver", self._bus_id),
-            device_title=device_info.get("title"),
+            device_mqtt_name=device_id,
+            driver_name="wb-mqtt-dali",
+            device_title=device_info.title,
         )
 
         if self._initialized:
             await device.initialize()
 
-        for control_info in device_info.get("controls", []):
+        for control_info in device_info.controls:
             await self._add_control(device, control_info)
 
         self._devices[device_id] = device
@@ -231,64 +254,51 @@ class DevicePublisher:
         del self._devices[device_id]
         self.logger.info("Removed device %s", device_id)
 
-    async def _update_device_internal(self, device_id: str, device_info: Dict[str, Any]) -> None:
+    async def _update_device_internal(self, device_id: str, device_info: DeviceInfo) -> None:
         if device_id not in self._devices:
             self.logger.warning("Device %s not found for update", device_id)
             return
 
         device = self._devices[device_id]
 
-        existing_controls = set(device._controls.keys())
-        new_controls = {c["id"] for c in device_info.get("controls", [])}
+        existing_controls = device.control_ids
+        new_controls = {c.id for c in device_info.controls}
 
         for control_id in existing_controls - new_controls:
             await device.remove_control(control_id)
             await self._unregister_control_handler_internal(device_id, control_id)
 
-        for control_info in device_info.get("controls", []):
-            control_id = control_info["id"]
-            if control_id in existing_controls:
-                await self._update_control(device, control_id, control_info)
+        for control_info in device_info.controls:
+            if control_info.id in existing_controls:
+                await self._update_control(device, control_info.id, control_info)
             else:
                 await self._add_control(device, control_info)
 
-        new_title = device_info.get("title")
-        new_driver = device_info.get("driver", self._bus_id)
-
-        if new_title != device._device_title or new_driver != device._driver_name:
-            device._device_title = new_title
-            device._driver_name = new_driver
-            await device.republish_device()
+        if device_info.title != device.title:
+            await device.set_device_title(device_info.title)
 
         self.logger.info("Updated device %s", device_id)
 
-    async def _add_control(self, device: Device, control_info: Dict[str, Any]) -> None:
-        control_id = control_info["id"]
+    async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
         meta = ControlMeta(
-            title=control_info.get("title"),
-            control_type=control_info.get("type", "value"),
-            order=control_info.get("order"),
-            read_only=control_info.get("read_only", False),
+            title=control_info.title,
+            control_type=control_info.type,
+            order=control_info.order,
+            read_only=control_info.read_only,
         )
-        value = control_info.get("value", "")
-        await device.create_control(control_id, meta, value)
+        value = control_info.value if control_info.value is not None else ""
+        await device.create_control(control_info.id, meta, value)
 
-    async def _update_control(self, device: Device, control_id: str, control_info: Dict[str, Any]) -> None:
-        new_value = control_info.get("value", "")
-        await device.set_control_value(control_id, new_value)
-
-        new_title = control_info.get("title")
-        if new_title is not None:
-            await device.set_control_title(control_id, new_title)
-
-        new_read_only = control_info.get("read_only", False)
-        await device.set_control_read_only(control_id, new_read_only)
+    async def _update_control(self, device: Device, control_id: str, control_info: ControlInfo) -> None:
+        await device.set_control_value(control_id, control_info.value)
+        if control_info.title is not None:
+            await device.set_control_title(control_id, control_info.title)
+        await device.set_control_read_only(control_id, control_info.read_only)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
-        device_mqtt_name = f"{self._bus_id}_{device_id}"
-        return f"/devices/{device_mqtt_name}/controls/{control_id}/on"
+        return f"/devices/{device_id}/controls/{control_id}/on"
 
-    async def _handle_on_message(self, handler_key: str, message) -> None:
+    async def _handle_on_message(self, handler_key: str, message: mqtt.MQTTMessage) -> None:
         if handler_key not in self._control_handlers:
             return
 

@@ -139,9 +139,7 @@ async def register_common_handlers(
 
     await asyncio.gather(
         *[
-            device_publisher.register_control_handler(
-                device_id, control_id, make_handler(command_class)
-            )
+            device_publisher.register_control_handler(device_id, control_id, make_handler(command_class))
             for control_id, command_class in command_mapping.items()
         ]
     )
@@ -175,9 +173,7 @@ async def publish_polling_results(
         for descriptor, response in zip(POLLING_CONTROLS, device_responses):
             if response is None:
                 tasks.append(
-                    device_publisher.set_control_error(
-                        str(device.address.short), descriptor.control_id, "r"
-                    )
+                    device_publisher.set_control_error(str(device.address.short), descriptor.control_id, "r")
                 )
                 continue
 

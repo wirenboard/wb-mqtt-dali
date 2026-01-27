@@ -80,34 +80,23 @@ class Commissioning:
     def __init__(
         self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress], dali2: bool = False
     ) -> None:
-        if dali2:
-            self.Compare = control_device.Compare
-            self.ProgramShortAddress = control_device.ProgramShortAddress
-            self.QueryRandomAddressH = control_device.QueryRandomAddressH
-            self.QueryRandomAddressL = control_device.QueryRandomAddressL
-            self.QueryRandomAddressM = control_device.QueryRandomAddressM
-            self.QueryShortAddress = control_device.QueryShortAddress
-            self.Randomise = control_device.Randomise
-            self.SetSearchAddrH = control_device.SearchAddrH
-            self.SetSearchAddrL = control_device.SearchAddrL
-            self.SetSearchAddrM = control_device.SearchAddrM
-            self.Terminate = control_device.Terminate
-            self.VerifyShortAddress = control_device.VerifyShortAddress
-            self.Withdraw = control_device.Withdraw
-        else:
-            self.Compare = control_gear.Compare
-            self.ProgramShortAddress = control_gear.ProgramShortAddress
-            self.QueryRandomAddressH = control_gear.QueryRandomAddressH
-            self.QueryRandomAddressL = control_gear.QueryRandomAddressL
-            self.QueryRandomAddressM = control_gear.QueryRandomAddressM
-            self.QueryShortAddress = control_gear.QueryShortAddress
-            self.Randomise = control_gear.Randomise
-            self.SetSearchAddrH = control_gear.SetSearchAddrH
-            self.SetSearchAddrL = control_gear.SetSearchAddrL
-            self.SetSearchAddrM = control_gear.SetSearchAddrM
-            self.Terminate = control_gear.Terminate
-            self.VerifyShortAddress = control_gear.VerifyShortAddress
-            self.Withdraw = control_gear.Withdraw
+        src = control_device if dali2 else control_gear
+        for name in (
+            "Compare",
+            "ProgramShortAddress",
+            "QueryRandomAddressH",
+            "QueryRandomAddressL",
+            "QueryRandomAddressM",
+            "QueryShortAddress",
+            "Randomise",
+            "SetSearchAddrH",
+            "SetSearchAddrL",
+            "SetSearchAddrM",
+            "Terminate",
+            "VerifyShortAddress",
+            "Withdraw",
+        ):
+            setattr(self, name, getattr(src, name))
 
         self.driver: WBDALIDriver = driver
         self.last_search_addr = SearchAddress()

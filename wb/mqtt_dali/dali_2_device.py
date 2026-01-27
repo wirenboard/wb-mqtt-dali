@@ -27,6 +27,6 @@ class Dali2Device:
 def make_dali2_device(bus_uid: str, address: DaliDeviceAddress) -> Dali2Device:
     return Dali2Device(
         uid=f"{bus_uid}_dali2_{address.short}",
-        name=f"DALI 2 {address.short}:{address.random:#x}",
+        name=f"DALI-2 {address.short}:{address.random:#x}",
         address=address,
     )

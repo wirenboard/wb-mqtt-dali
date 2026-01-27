@@ -172,22 +172,18 @@ async def publish_polling_results(
 
         for descriptor, response in zip(POLLING_CONTROLS, device_responses):
             if response is None or response.raw_value is None:
-                tasks.append(
-                    device_publisher.set_control_error(str(device.address.short), descriptor.control_id, "r")
-                )
+                tasks.append(device_publisher.set_control_error(device.uid, descriptor.control_id, "r"))
                 continue
 
             if descriptor.control_type == "alarm":
                 alarm_title = descriptor.value_formatter(response)
                 alarm_active = "1" if getattr(response, "error", False) else "0"
                 tasks.append(
-                    device_publisher.set_control_title(
-                        str(device.address.short), descriptor.control_id, alarm_title
-                    )
+                    device_publisher.set_control_title(device.uid, descriptor.control_id, alarm_title)
                 )
                 tasks.append(
                     device_publisher.set_control_value(
-                        str(device.address.short),
+                        device.uid,
                         descriptor.control_id,
                         alarm_active,
                     )
@@ -196,7 +192,7 @@ async def publish_polling_results(
 
             tasks.append(
                 device_publisher.set_control_value(
-                    str(device.address.short),
+                    device.uid,
                     descriptor.control_id,
                     descriptor.value_formatter(response),
                 )

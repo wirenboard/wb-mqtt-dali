@@ -130,6 +130,15 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_value(control_id, value)
 
+    async def set_control_title(self, device_id: str, control_id: str, title: str) -> None:
+        async with self._lock:
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+
+            device = self._devices[device_id]
+            await device.set_control_title(control_id, title)
+
     async def set_control_error(self, device_id: str, control_id: str, error: str) -> None:
         async with self._lock:
             if device_id not in self._devices:

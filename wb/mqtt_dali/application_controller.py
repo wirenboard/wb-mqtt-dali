@@ -12,9 +12,10 @@ from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning
 from .common_gear_controls import (
-    build_actual_level_queries,
+    build_polling_queries,
     get_common_controls,
-    publish_actual_level_results,
+    get_polling_control_count,
+    publish_polling_results,
     register_common_handlers,
 )
 from .dali_device import DaliDevice, make_device
@@ -309,17 +310,19 @@ class ApplicationController:
                 self._polling_task = asyncio.create_task(self._polling_loop())
 
     async def _poll_devices(self, devices: Sequence[DaliDevice]) -> None:
-        queries = build_actual_level_queries(devices)
+        queries = build_polling_queries(devices)
+        if not queries:
+            return
         batch_failed = False
         try:
             responses = await self._dev.send_commands(queries, source="polling")
         except asyncio.TimeoutError:
             self.logger.warning("Batch poll timeout")
-            responses = [None] * len(devices)
+            responses = [None] * len(queries)
             batch_failed = True
         except Exception as e:
             self.logger.error("Batch poll failed: %s", e)
-            responses = [None] * len(devices)
+            responses = [None] * len(queries)
             batch_failed = True
 
         if not batch_failed:
@@ -327,7 +330,7 @@ class ApplicationController:
                 if response is None:
                     self.logger.warning("No response during polling for device %s", device.name)
 
-        await publish_actual_level_results(
+        await publish_polling_results(
             devices,
             responses,
             self._device_publisher,

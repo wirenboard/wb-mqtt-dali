@@ -1,5 +1,6 @@
 import asyncio
-from typing import Iterable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Callable, Iterable, Optional, Sequence
 
 from dali.address import GearShort
 from dali.command import Response
@@ -8,6 +9,7 @@ from dali.gear.general import (
     Off,
     OnAndStepUp,
     QueryActualLevel,
+    QueryStatus,
     RecallMaxLevel,
     RecallMinLevel,
     StepDown,
@@ -20,61 +22,93 @@ from .dali_device import DaliDevice
 from .device_publisher import DevicePublisher
 
 
+@dataclass(frozen=True)
+class PollingControl:
+    control_id: str
+    title: str
+    default_value: str
+    query_builder: Callable[[DaliDevice], object]
+    value_formatter: Callable[[Response], str]
+    control_type: str = "value"
+
+
+def _build_actual_level_query(device: DaliDevice) -> QueryActualLevel:
+    return QueryActualLevel(GearShort(device.address.short))
+
+
+def _format_actual_level(response: Response) -> str:
+    return str(response.raw_value.as_integer)
+
+
+def _build_error_status_query(device: DaliDevice) -> QueryStatus:
+    return QueryStatus(GearShort(device.address.short))
+
+
+def _format_error_status(response: Response) -> str:
+    if not getattr(response, "error", False):
+        return "OK"
+
+    details: list[str] = []
+    if getattr(response, "ballast_status", False):
+        details.append("ballast not ok")
+    if getattr(response, "lamp_failure", False):
+        details.append("lamp failure")
+    if getattr(response, "missing_short_address", False):
+        details.append("missing short address")
+
+    return ", ".join(details)
+
+
+POLLING_CONTROLS: tuple[PollingControl, ...] = (
+    PollingControl(
+        control_id="actual_level",
+        title="Actual Level",
+        default_value="0",
+        query_builder=_build_actual_level_query,
+        value_formatter=_format_actual_level,
+        control_type="value",
+    ),
+    PollingControl(
+        control_id="error_status",
+        title="Error Status",
+        default_value="0",
+        query_builder=_build_error_status_query,
+        value_formatter=_format_error_status,
+        control_type="alarm",
+    ),
+)
+
+
+def get_polling_control_count() -> int:
+    return len(POLLING_CONTROLS)
+
+
+PUSHBUTTON_CONTROLS: tuple[dict, ...] = (
+    {"id": "off", "title": "Off", "type": "pushbutton"},
+    {"id": "up", "title": "Up", "type": "pushbutton"},
+    {"id": "down", "title": "Down", "type": "pushbutton"},
+    {"id": "step_up", "title": "Step Up", "type": "pushbutton"},
+    {"id": "step_down", "title": "Step Down", "type": "pushbutton"},
+    {"id": "recall_max_level", "title": "Recall Max Level", "type": "pushbutton"},
+    {"id": "recall_min_level", "title": "Recall Min Level", "type": "pushbutton"},
+    {"id": "step_down_and_off", "title": "Step Down And Off", "type": "pushbutton"},
+    {"id": "on_and_step_up", "title": "On And Step Up", "type": "pushbutton"},
+)
+
+
 def get_common_controls() -> list[dict]:
-    return [
+    controls = [
         {
-            "id": "actual_level",
-            "title": "Actual Level",
-            "type": "value",
-            "value": "0",
+            "id": descriptor.control_id,
+            "title": descriptor.title,
+            "type": descriptor.control_type,
+            "value": descriptor.default_value,
             "read_only": True,
-        },
-        {
-            "id": "off",
-            "title": "Off",
-            "type": "pushbutton",
-        },
-        {
-            "id": "up",
-            "title": "Up",
-            "type": "pushbutton",
-        },
-        {
-            "id": "down",
-            "title": "Down",
-            "type": "pushbutton",
-        },
-        {
-            "id": "step_up",
-            "title": "Step Up",
-            "type": "pushbutton",
-        },
-        {
-            "id": "step_down",
-            "title": "Step Down",
-            "type": "pushbutton",
-        },
-        {
-            "id": "recall_max_level",
-            "title": "Recall Max Level",
-            "type": "pushbutton",
-        },
-        {
-            "id": "recall_min_level",
-            "title": "Recall Min Level",
-            "type": "pushbutton",
-        },
-        {
-            "id": "step_down_and_off",
-            "title": "Step Down And Off",
-            "type": "pushbutton",
-        },
-        {
-            "id": "on_and_step_up",
-            "title": "On And Step Up",
-            "type": "pushbutton",
-        },
+        }
+        for descriptor in POLLING_CONTROLS
     ]
+    controls.extend(PUSHBUTTON_CONTROLS)
+    return controls
 
 
 async def register_common_handlers(
@@ -98,49 +132,75 @@ async def register_common_handlers(
     }
 
     def make_handler(cmd_class):
-        async def handler(msg):
+        async def handler(_msg):
             await controller.send_command(cmd_class(short_addr))
 
         return handler
 
-    registration_tasks = [
-        device_publisher.register_control_handler(device_id, control_id, make_handler(command_class))
-        for control_id, command_class in command_mapping.items()
-    ]
-
-    await asyncio.gather(*registration_tasks)
-
-
-def make_actual_level_query(device: DaliDevice) -> QueryActualLevel:
-    short_addr = GearShort(device.address.short)
-    return QueryActualLevel(short_addr)
+    await asyncio.gather(
+        *[
+            device_publisher.register_control_handler(device_id, control_id, make_handler(command_class))
+            for control_id, command_class in command_mapping.items()
+        ]
+    )
 
 
-def build_actual_level_queries(devices: Iterable[DaliDevice]) -> list[QueryActualLevel]:
-    return [make_actual_level_query(device) for device in devices]
+def build_polling_queries(devices: Iterable[DaliDevice]) -> list:
+    if not POLLING_CONTROLS:
+        return []
+    queries: list = []
+    for device in devices:
+        for descriptor in POLLING_CONTROLS:
+            queries.append(descriptor.query_builder(device))
+    return queries
 
 
-async def publish_actual_level_response(
-    device: DaliDevice,
-    response: Optional[Response],
-    device_publisher: DevicePublisher,
-) -> None:
-    device_id = str(device.address.short)
-    if response is not None:
-        actual_level = str(response.raw_value.as_integer)
-        await device_publisher.set_control_value(device_id, "actual_level", actual_level)
-    else:
-        await device_publisher.set_control_error(device_id, "actual_level", "r")
-
-
-async def publish_actual_level_results(
+async def publish_polling_results(
     devices: Sequence[DaliDevice],
     responses: Sequence[Optional[Response]],
     device_publisher: DevicePublisher,
 ) -> None:
-    await asyncio.gather(
-        *[
-            publish_actual_level_response(device, response, device_publisher)
-            for device, response in zip(devices, responses)
-        ]
-    )
+    per_device = get_polling_control_count()
+    if per_device == 0:
+        return
+
+    tasks = []
+    response_iter = iter(responses)
+
+    for device in devices:
+        device_responses = [next(response_iter, None) for _ in range(per_device)]
+
+        for descriptor, response in zip(POLLING_CONTROLS, device_responses):
+            if response is None:
+                tasks.append(
+                    device_publisher.set_control_error(str(device.address.short), descriptor.control_id, "r")
+                )
+                continue
+
+            if descriptor.control_type == "alarm":
+                alarm_title = descriptor.value_formatter(response)
+                alarm_active = "1" if getattr(response, "error", False) else "0"
+                tasks.append(
+                    device_publisher.set_control_title(
+                        str(device.address.short), descriptor.control_id, alarm_title
+                    )
+                )
+                tasks.append(
+                    device_publisher.set_control_value(
+                        str(device.address.short),
+                        descriptor.control_id,
+                        alarm_active,
+                    )
+                )
+                continue
+
+            tasks.append(
+                device_publisher.set_control_value(
+                    str(device.address.short),
+                    descriptor.control_id,
+                    descriptor.value_formatter(response),
+                )
+            )
+
+    if tasks:
+        await asyncio.gather(*tasks)

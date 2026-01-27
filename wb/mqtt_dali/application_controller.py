@@ -256,12 +256,12 @@ class ApplicationController:
         changed_devices = [make_dali_device(self.uid, d.new) for d in commissioning_result.changed]
         new_devices = [make_dali_device(self.uid, addr) for addr in commissioning_result.new]
 
-        old_device_ids = {str(d.address.short) for d in self.dali_devices}
+        old_device_ids = {d.uid for d in self.dali_devices}
 
         self.dali_devices = unchanged_devices + changed_devices + new_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
 
-        new_device_ids = {str(d.address.short) for d in self.dali_devices}
+        new_device_ids = {d.uid for d in self.dali_devices}
         removed_ids = list(old_device_ids - new_device_ids)
         added_devices = [DeviceInfo(d.uid, d.name, get_common_controls()) for d in new_devices]
         updated_devices = [DeviceInfo(d.uid, d.name, get_common_controls()) for d in changed_devices]
@@ -282,11 +282,11 @@ class ApplicationController:
         changed_devices = [make_dali2_device(self.uid, d.new) for d in commissioning_result.changed]
         new_devices = [make_dali2_device(self.uid, addr) for addr in commissioning_result.new]
 
-        old_device_ids = {str(d.address.short) for d in self.dali2_devices}
+        old_device_ids = {d.uid for d in self.dali2_devices}
         self.dali2_devices = unchanged_devices + changed_devices + new_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
 
-        new_device_ids = {str(d.address.short) for d in self.dali2_devices}
+        new_device_ids = {d.uid for d in self.dali2_devices}
         removed_ids = list(old_device_ids - new_device_ids)
         added_devices = [DeviceInfo(d.uid, d.name) for d in new_devices]
         updated_devices = [DeviceInfo(d.uid, d.name) for d in changed_devices]

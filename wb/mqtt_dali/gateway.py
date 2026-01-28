@@ -189,11 +189,6 @@ class Gateway:
         bus, device = self._get_bus_and_device_by_id(device_id)
         if bus is None or device is None:
             raise ValueError(f"Device {device_id} not found")
-        if isinstance(device, Dali2Device):
-            return {
-                "config": {},
-                "schema": {},
-            }
         await bus.load_device_info(device, force_reload)
         return {
             "config": device.params,
@@ -208,8 +203,6 @@ class Gateway:
         bus, device = self._get_bus_and_device_by_id(device_id)
         if bus is None or device is None:
             raise ValueError(f"Device {device_id} not found")
-        if isinstance(device, Dali2Device):
-            return {}
         await bus.apply_parameters(device, new_params)
         return device.params
 

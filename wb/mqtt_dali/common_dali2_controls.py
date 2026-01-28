@@ -1,7 +1,6 @@
 from typing import Optional
 
 import asyncio_mqtt as aiomqtt
-from dali.address import DeviceShort
 from dali.command import Command
 from dali.device import light, occupancy, pushbutton
 from dali.device.general import _Event
@@ -115,8 +114,8 @@ async def publish_event(
     )
 
 
-def get_device(devices: dict[DeviceShort, Dali2Device], command: _Event) -> Optional[Dali2Device]:
-    device = devices.get(command.short_address)
+def get_device(devices: dict[int, Dali2Device], command: _Event) -> Optional[Dali2Device]:
+    device = devices.get(command.short_address.address)
     if device is not None:
         instance = device.instances.get(command.instance_number)
         if instance is not None:
@@ -125,7 +124,7 @@ def get_device(devices: dict[DeviceShort, Dali2Device], command: _Event) -> Opti
 
 
 async def publish_dali2_event(
-    command: Command, devices: dict[DeviceShort, Dali2Device], mqtt_client: aiomqtt.Client
+    command: Command, devices: dict[int, Dali2Device], mqtt_client: aiomqtt.Client
 ) -> None:
     if not isinstance(command, _Event) or command.instance_number is None or command.short_address is None:
         return

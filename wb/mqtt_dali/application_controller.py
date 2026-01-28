@@ -5,7 +5,7 @@ from enum import Enum, auto
 from timeit import default_timer
 from typing import Optional, Sequence, Union
 
-from dali.address import DeviceBroadcast, DeviceShort
+from dali.address import DeviceBroadcast
 from dali.command import from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from dali.frame import ForwardFrame, Frame
@@ -89,9 +89,7 @@ class ApplicationController:
         self._websocket_lock = asyncio.Lock()
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
-        self._dali2_devices_by_addr: dict[DeviceShort, Dali2Device] = {
-            DeviceShort(d.address.short): d for d in self.dali2_devices
-        }
+        self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
 
     @property
     def polling_interval(self) -> float:
@@ -298,7 +296,7 @@ class ApplicationController:
         old_device_ids = {d.uid for d in self.dali2_devices}
         self.dali2_devices = unchanged_devices + changed_devices + new_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
-        self._dali2_devices_by_addr = {DeviceShort(d.address.short): d for d in self.dali2_devices}
+        self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
         await self._dev_inst_map.async_autodiscover(self._dev, [d.address.short for d in self.dali2_devices])
         self._update_dali2_devices_instances({d.address.short: d for d in changed_devices + new_devices})
@@ -319,7 +317,7 @@ class ApplicationController:
     def _update_dali2_devices_instances(self, dali2_devices_by_addr: dict[int, Dali2Device]) -> None:
         for (addr, inst_num), inst_type in self._dev_inst_map.mapping.items():
             device = dali2_devices_by_addr.get(addr)
-            if device:
+            if device is not None:
                 self.logger.debug(
                     "Adding instance %d of type %d to DALI 2 device %s", inst_num, inst_type, device.uid
                 )

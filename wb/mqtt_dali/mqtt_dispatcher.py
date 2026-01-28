@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Awaitable, Callable, Dict, Set
+from typing import Awaitable, Callable, Dict, Optional, Set
 
 import asyncio_mqtt as aiomqtt
 import paho.mqtt.client as mqtt
@@ -23,7 +23,7 @@ class MQTTDispatcher:
 
             self._subscriptions[topic].add(callback)
 
-    async def unsubscribe(self, topic: str, callback: MessageCallback = None) -> None:
+    async def unsubscribe(self, topic: str, callback: Optional[MessageCallback] = None) -> None:
         async with self._lock:
             if topic not in self._subscriptions:
                 return
@@ -72,7 +72,7 @@ class MQTTDispatcher:
         for callback in callbacks:
             try:
                 await callback(message)
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logging.error("Error in callback for topic %s: %s", topic, e)
 
     @property

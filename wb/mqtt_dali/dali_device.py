@@ -121,9 +121,9 @@ class DaliDevice:
         return res
 
 
-def make_device(bus_uid: str, address: DaliDeviceAddress) -> DaliDevice:
+def make_dali_device(bus_uid: str, address: DaliDeviceAddress) -> DaliDevice:
     return DaliDevice(
         uid=f"{bus_uid}_{address.short}",
-        name=f"Dev {address.short}:{address.random:#x}",
+        name=f"DALI {address.short}:{address.random:#x}",
         address=address,
     )

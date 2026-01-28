@@ -1,14 +1,15 @@
 import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from .application_controller import (
     ApplicationController,
     ApplicationControllerConfig,
     WebSocketConfig,
 )
-from .dali_device import DaliDevice, DaliDeviceAddress
+from .dali_2_device import Dali2Device, make_dali2_device
+from .dali_device import DaliDevice, DaliDeviceAddress, make_dali_device
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call
 from .mqtt_rpc_server import MQTTRPCServer
@@ -43,18 +44,16 @@ class WbDaliGateway:
 def bus_from_json(
     gateway_mqtt_device_id: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
 ) -> ApplicationController:
-    devices = []
+    dali_devices: list[DaliDevice] = []
+    dali2_devices: list[Dali2Device] = []
     uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
     for dev_conf in data.get("devices", []):
-        device = DaliDevice(
-            uid=f'{uid}_{dev_conf["short"]}',
-            name=f'Dev {dev_conf["short"]}:{dev_conf["random"]}',
-            address=DaliDeviceAddress(
-                short=dev_conf["short"],
-                random=dev_conf["random"],
-            ),
-        )
-        devices.append(device)
+        if dev_conf.get("dali2", False):
+            device = make_dali2_device(uid, DaliDeviceAddress(dev_conf["short"], dev_conf["random"]))
+            dali2_devices.append(device)
+        else:
+            device = make_dali_device(uid, DaliDeviceAddress(dev_conf["short"], dev_conf["random"]))
+            dali_devices.append(device)
 
     websocket_conf = WebSocketConfig(
         enabled=data.get("websocket_enabled", False),
@@ -62,7 +61,7 @@ def bus_from_json(
     )
     polling_interval = data.get("polling_interval", DEFAULT_POLLING_INTERVAL)
     ap_conf = ApplicationControllerConfig(
-        gateway_mqtt_device_id, bus_index, devices, polling_interval, websocket_conf
+        gateway_mqtt_device_id, bus_index, dali_devices, dali2_devices, polling_interval, websocket_conf
     )
 
     res = ApplicationController(ap_conf, mqtt_dispatcher)
@@ -80,7 +79,7 @@ def bus_to_json(bus: ApplicationController) -> dict:
                     "name": dev.name,
                     "groups": [],
                 },
-                bus.devices,
+                bus.dali_devices + bus.dali2_devices,
             )
         ),
         "groups": [],
@@ -190,6 +189,11 @@ class Gateway:
         bus, device = self._get_bus_and_device_by_id(device_id)
         if bus is None or device is None:
             raise ValueError(f"Device {device_id} not found")
+        if isinstance(device, Dali2Device):
+            return {
+                "config": {},
+                "schema": {},
+            }
         await bus.load_device_info(device, force_reload)
         return {
             "config": device.params,
@@ -204,6 +208,8 @@ class Gateway:
         bus, device = self._get_bus_and_device_by_id(device_id)
         if bus is None or device is None:
             raise ValueError(f"Device {device_id} not found")
+        if isinstance(device, Dali2Device):
+            return {}
         await bus.apply_parameters(device, new_params)
         return device.params
 
@@ -226,7 +232,7 @@ class Gateway:
                         "config": {
                             "websocket_enabled": bus.websocket_config.enabled,
                             "websocket_port": bus.websocket_config.port,
-                            "polling_interval": bus._polling_interval,
+                            "polling_interval": bus.polling_interval,
                         },
                         "schema": {
                             "type": "object",
@@ -277,12 +283,11 @@ class Gateway:
                     return {
                         "websocket_enabled": new_websocket_config.enabled,
                         "websocket_port": new_websocket_config.port,
-                        "poll_interval": bus._polling_interval,
+                        "poll_interval": bus.polling_interval,
                     }
         raise ValueError("Bus not found")
 
     async def get_gateway_rpc_handler(self, params: dict):
-        gateway_id = params.get("gatewayId")
         return {"config": {}, "schema": {}}
 
     def _is_websocket_port_in_use(self, port: int, bus_id: str) -> bool:
@@ -294,10 +299,13 @@ class Gateway:
 
     def _get_bus_and_device_by_id(
         self, device_id: str
-    ) -> Tuple[Optional[ApplicationController], Optional[DaliDevice]]:
+    ) -> Tuple[Optional[ApplicationController], Optional[Union[DaliDevice, Dali2Device]]]:
         for gw in self.wb_dali_gateways:
             for bus in gw.buses:
-                for device in bus.devices:
+                for device in bus.dali_devices:
+                    if device.uid == device_id:
+                        return bus, device
+                for device in bus.dali2_devices:
                     if device.uid == device_id:
                         return bus, device
         return None, None
@@ -313,13 +321,14 @@ class Gateway:
                                 {
                                     "websocket_enabled": bus.websocket_config.enabled,
                                     "websocket_port": bus.websocket_config.port,
-                                    "polling_interval": bus._polling_interval,
+                                    "polling_interval": bus.polling_interval,
                                     "devices": [
                                         {
                                             "short": dev.address.short,
                                             "random": dev.address.random,
+                                            "dali2": isinstance(dev, Dali2Device),
                                         }
-                                        for dev in bus.devices
+                                        for dev in bus.dali_devices + bus.dali2_devices
                                     ],
                                 }
                                 for bus in gw.buses
@@ -351,7 +360,7 @@ class Gateway:
                 else:
                     await current_gw.stop()
             for did in device_ids:
-                apc_conf = ApplicationControllerConfig(did, 0, [], DEFAULT_POLLING_INTERVAL)
+                apc_conf = ApplicationControllerConfig(did, 0, [], [], DEFAULT_POLLING_INTERVAL)
                 apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
                 gw = WbDaliGateway(uid=did, buses=[apc])
                 new_gateways.append(gw)

@@ -18,6 +18,11 @@
                 "random": {
                     "type": "integer",
                     "title": "Random Address"
+                },
+                "dali2": {
+                    "type": "boolean",
+                    "title": "DALI 2.0 Device",
+                    "default": false
                 }
             },
             "required": ["short", "random"]

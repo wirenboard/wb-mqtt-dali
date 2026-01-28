@@ -95,7 +95,7 @@ class NumberInstanceParam(InstanceParamBase):
         }
         has_options = False
         if self.set_command_class is None:
-            schema["properties"][self.property_name]["options"] = {"wb": {"readOnly": True}}
+            schema["properties"][self.property_name]["options"] = {"wb": {"read_only": True}}
             has_options = True
         if self.grid_columns is not None:
             if not has_options:
@@ -151,6 +151,7 @@ class InstanceParameters:
         res = {
             "properties": {
                 self._property_name: {
+                    "title": f"Instance {self.instance_number.value}",
                     "properties": {},
                 }
             }
@@ -184,19 +185,28 @@ class EventSchemeParam(NumberInstanceParam):
 
 
 class InstanceTypeParam(InstanceParamBase):
+    INSTANCE_TYPE_NAMES = {
+        0: "Generic (0)",
+        1: "Push button (1)",
+        2: "Absolute input device (2)",
+        3: "Occupancy sensor (3)",
+        4: "Light sensor (4)",
+        6: "General purpose sensor (6)",
+    }
+
     def __init__(self, instance_type: int) -> None:
         super().__init__(GearParamName("Instance type"))
-        self.instance_type = instance_type
+        self.instance_type_name = self.INSTANCE_TYPE_NAMES.get(instance_type, f"Unknown ({instance_type})")
         self.property_name = "instance_type"
 
     async def read(self, driver: WBDALIDriver, address: DeviceShort, instance_number: InstanceNumber) -> dict:
-        return {self.property_name: self.instance_type}
+        return {self.property_name: self.instance_type_name}
 
     def get_schema(self) -> dict:
         return {
             "properties": {
                 self.property_name: {
-                    "type": "integer",
+                    "type": "string",
                     "title": self.name.en,
                     "options": {
                         "wb": {"read_only": True},

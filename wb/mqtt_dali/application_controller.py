@@ -5,7 +5,7 @@ from enum import Enum, auto
 from timeit import default_timer
 from typing import Optional, Sequence, Union
 
-from dali.address import DeviceBroadcast
+from dali.address import DeviceBroadcast, DeviceShort
 from dali.command import from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from dali.frame import ForwardFrame, Frame
@@ -88,6 +88,10 @@ class ApplicationController:
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
+
+        self._dali2_devices_by_addr: dict[DeviceShort, Dali2Device] = {
+            DeviceShort(d.address.short): d for d in self.dali2_devices
+        }
 
     @property
     def polling_interval(self) -> float:
@@ -294,6 +298,7 @@ class ApplicationController:
         old_device_ids = {d.uid for d in self.dali2_devices}
         self.dali2_devices = unchanged_devices + changed_devices + new_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
+        self._dali2_devices_by_addr = {DeviceShort(d.address.short): d for d in self.dali2_devices}
 
         await self._dev_inst_map.async_autodiscover(self._dev, [d.address.short for d in self.dali2_devices])
         self._update_dali2_devices_instances({d.address.short: d for d in changed_devices + new_devices})
@@ -443,5 +448,5 @@ class ApplicationController:
                 except Exception:
                     pass  # Ignore errors in bus traffic handling
             asyncio.create_task(
-                publish_dali2_event(command, self.dali2_devices, self._mqtt_dispatcher.client)
+                publish_dali2_event(command, self._dali2_devices_by_addr, self._mqtt_dispatcher.client)
             )

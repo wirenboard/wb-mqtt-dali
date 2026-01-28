@@ -10,7 +10,7 @@ from dali.command import from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from dali.frame import ForwardFrame, Frame
 
-from .commissioning import Commissioning
+from .commissioning import Commissioning, CommissioningResult
 from .common_gear_controls import (
     build_polling_queries,
     get_common_controls,
@@ -18,8 +18,9 @@ from .common_gear_controls import (
     publish_polling_results,
     register_common_handlers,
 )
-from .dali_device import DaliDevice, make_device
-from .device_publisher import DeviceChange, DevicePublisher
+from .dali_2_device import Dali2Device, make_dali2_device
+from .dali_device import DaliDevice, make_dali_device
+from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
@@ -45,7 +46,8 @@ class WebSocketConfig:
 class ApplicationControllerConfig:
     mqtt_device_id: str
     bus_index: int
-    devices: list[DaliDevice]
+    dali_devices: list[DaliDevice]
+    dali2_devices: list[Dali2Device]
     polling_interval: float
     websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
 
@@ -58,7 +60,8 @@ class ApplicationController:
     ) -> None:
         self.uid = f"{config.mqtt_device_id}_bus_{config.bus_index}"
         self.bus_name = f"Bus {config.bus_index}"
-        self.devices = config.devices
+        self.dali_devices = config.dali_devices
+        self.dali2_devices = config.dali2_devices
         self.websocket_config = config.websocket_config
         self.logger = logging.getLogger(self.uid)
 
@@ -69,7 +72,7 @@ class ApplicationController:
         self._quiescent_mode_timer: Optional[asyncio.TimerHandle] = None
         self._active_task: Optional[asyncio.Task] = None
 
-        self._device_publisher = DevicePublisher(mqtt_dispatcher, self.uid, self.logger)
+        self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
@@ -85,6 +88,10 @@ class ApplicationController:
         self._websocket_lock = asyncio.Lock()
         self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
+    @property
+    def polling_interval(self) -> float:
+        return self._polling_interval
+
     async def start(self) -> None:
         async with self._state_lock:
             if self._state != ApplicationControllerState.UNINITIALIZED:
@@ -98,15 +105,14 @@ class ApplicationController:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
-        for device in self.devices:
-            device_info = {
-                "id": str(device.address.short),
-                "title": device.name,
-                "driver": "wb-mqtt-dali",
-                "controls": get_common_controls(),
-            }
+        for device in self.dali_devices:
+            device_info = DeviceInfo(device.uid, device.name, get_common_controls())
             await self._device_publisher.add_device(device_info)
             await register_common_handlers(device, self, self._device_publisher)
+
+        for device in self.dali2_devices:
+            device_info = DeviceInfo(device.uid, device.name)
+            await self._device_publisher.add_device(device_info)
 
         await self._device_publisher.initialize()
 
@@ -230,41 +236,35 @@ class ApplicationController:
         await asyncio.sleep(1)
         await self._dev.send(StartQuiescentMode(DeviceBroadcast()))
         try:
-            obj = Commissioning(self._dev, [d.address for d in self.devices])
-            res = await obj.smart_extend()
+            self.logger.debug("Commissioning for DALI 1.0 devices")
+            obj = Commissioning(self._dev, [d.address for d in self.dali_devices], dali2=False)
+            res_dali = await obj.smart_extend()
+            self.logger.debug("Commissioning for DALI 2.0 devices")
+            obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], dali2=True)
+            res_dali2 = await obj.smart_extend()
         finally:
             await self._dev.send(StopQuiescentMode(DeviceBroadcast()))
 
-        unchanged_devices = [d for d in self.devices if d.address in res.unchanged]
-        changed_devices = [make_device(self.uid, d.new) for d in res.changed]
-        new_devices = [make_device(self.uid, addr) for addr in res.new]
+        end_time = default_timer()
+        self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
 
-        old_device_ids = {str(d.address.short) for d in self.devices}
+        await self._update_dali_devices(res_dali)
+        await self._update_dali2_devices(res_dali2)
 
-        self.devices = unchanged_devices + changed_devices + new_devices
-        self.devices.sort(key=lambda d: d.address.short)
+    async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
+        unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
+        changed_devices = [make_dali_device(self.uid, d.new) for d in commissioning_result.changed]
+        new_devices = [make_dali_device(self.uid, addr) for addr in commissioning_result.new]
 
-        new_device_ids = {str(d.address.short) for d in self.devices}
+        old_device_ids = {d.uid for d in self.dali_devices}
 
+        self.dali_devices = unchanged_devices + changed_devices + new_devices
+        self.dali_devices.sort(key=lambda d: d.address.short)
+
+        new_device_ids = {d.uid for d in self.dali_devices}
         removed_ids = list(old_device_ids - new_device_ids)
-        added_devices = [
-            {
-                "id": str(d.address.short),
-                "title": d.name,
-                "driver": "wb-mqtt-dali",
-                "controls": get_common_controls(),
-            }
-            for d in new_devices
-        ]
-        updated_devices = [
-            {
-                "id": str(d.address.short),
-                "title": d.name,
-                "driver": "wb-mqtt-dali",
-                "controls": get_common_controls(),
-            }
-            for d in changed_devices
-        ]
+        added_devices = [DeviceInfo(d.uid, d.name, get_common_controls()) for d in new_devices]
+        updated_devices = [DeviceInfo(d.uid, d.name, get_common_controls()) for d in changed_devices]
 
         changes = DeviceChange(
             added=added_devices,
@@ -272,20 +272,39 @@ class ApplicationController:
             updated=updated_devices,
         )
 
-        end_time = default_timer()
-        self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
-
         await self._device_publisher.rebuild(changes)
 
         for device in new_devices + changed_devices:
             await register_common_handlers(device, self, self._device_publisher)
+
+    async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
+        unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
+        changed_devices = [make_dali2_device(self.uid, d.new) for d in commissioning_result.changed]
+        new_devices = [make_dali2_device(self.uid, addr) for addr in commissioning_result.new]
+
+        old_device_ids = {d.uid for d in self.dali2_devices}
+        self.dali2_devices = unchanged_devices + changed_devices + new_devices
+        self.dali2_devices.sort(key=lambda d: d.address.short)
+
+        new_device_ids = {d.uid for d in self.dali2_devices}
+        removed_ids = list(old_device_ids - new_device_ids)
+        added_devices = [DeviceInfo(d.uid, d.name) for d in new_devices]
+        updated_devices = [DeviceInfo(d.uid, d.name) for d in changed_devices]
+
+        changes = DeviceChange(
+            added=added_devices,
+            removed=removed_ids,
+            updated=updated_devices,
+        )
+
+        await self._device_publisher.rebuild(changes)
 
     async def _polling_loop(self) -> None:
         reschedule = True
         try:
             await asyncio.sleep(self._polling_interval)
 
-            devices = tuple(self.devices)
+            devices = tuple(self.dali_devices)
             if devices:
                 try:
                     await self._run_task(

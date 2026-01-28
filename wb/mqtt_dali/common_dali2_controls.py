@@ -1,3 +1,5 @@
+from typing import Optional
+
 import asyncio_mqtt as aiomqtt
 from dali.address import DeviceShort
 from dali.command import Command
@@ -106,11 +108,20 @@ async def publish_event(
     mqtt_client: aiomqtt.Client, device: Dali2Device, control_id: str, value: str, retain: bool = True
 ) -> None:
     await mqtt_client.publish(
-        f"/devices/{device.uid}/controls/illuminance{instance_number}",
+        f"/devices/{device.uid}/controls/{control_id}",
         value,
         retain=retain,
         qos=2,
     )
+
+
+def get_device(devices: dict[DeviceShort, Dali2Device], command: _Event) -> Optional[Dali2Device]:
+    device = devices.get(command.short_address)
+    if device is not None:
+        instance = device.instances.get(command.instance_number)
+        if instance is not None:
+            return device
+    return None
 
 
 async def publish_dali2_event(
@@ -120,78 +131,59 @@ async def publish_dali2_event(
         return
 
     if isinstance(command, LightEvent):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(
-                    mqtt_client, device, f"illuminance{command.instance_number}", str(command.illuminance)
-                )
+            await publish_event(
+                mqtt_client, device, f"illuminance{command.instance_number}", str(command.illuminance)
+            )
         return
 
     if isinstance(command, OccupancyEvent):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(
-                    mqtt_client,
-                    device,
-                    f"movement{command.instance_number}",
-                    "1" if command.movement else "0",
-                )
-                await publish_event(
-                    mqtt_client,
-                    device,
-                    f"occupied{command.instance_number}",
-                    "1" if command.occupied else "0",
-                )
+            await publish_event(
+                mqtt_client, device, f"movement{command.instance_number}", "1" if command.movement else "0"
+            )
+            await publish_event(
+                mqtt_client, device, f"occupied{command.instance_number}", "1" if command.occupied else "0"
+            )
         return
 
     if isinstance(command, ButtonPressed):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(mqtt_client, device, f"button{command.instance_number}", "1")
+            await publish_event(mqtt_client, device, f"button{command.instance_number}", "1")
         return
 
     if isinstance(command, ButtonReleased):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(mqtt_client, device, f"button{command.instance_number}", "0")
+            await publish_event(mqtt_client, device, f"button{command.instance_number}", "0")
+        return
 
     if isinstance(command, (LongPressStart, LongPressRepeat)):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(mqtt_client, device, f"long_press{command.instance_number}", "1")
+            await publish_event(mqtt_client, device, f"long_press{command.instance_number}", "1")
         return
 
     if isinstance(command, LongPressStop):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(mqtt_client, device, f"long_press{command.instance_number}", "0")
+            await publish_event(mqtt_client, device, f"long_press{command.instance_number}", "0")
+        return
 
     if isinstance(command, ShortPress):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(
-                    mqtt_client, device, f"short_press{command.instance_number}", "1", retain=False
-                )
+            await publish_event(
+                mqtt_client, device, f"short_press{command.instance_number}", "1", retain=False
+            )
+        return
 
     if isinstance(command, DoublePress):
-        device = devices.get(command.short_address)
+        device = get_device(devices, command)
         if device is not None:
-            instance = device.instances.get(command.instance_number)
-            if instance is not None:
-                await publish_event(
-                    mqtt_client, device, f"double_press{command.instance_number}", "1", retain=False
-                )
+            await publish_event(
+                mqtt_client, device, f"double_press{command.instance_number}", "1", retain=False
+            )

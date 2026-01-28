@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 from dali.address import DeviceBroadcast
 from dali.command import from_frame
@@ -11,10 +11,10 @@ from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning, CommissioningResult
+from .common_dali2_controls import get_dali2_controls, publish_dali2_event
 from .common_gear_controls import (
     build_polling_queries,
     get_common_controls,
-    get_polling_control_count,
     publish_polling_results,
     register_common_handlers,
 )
@@ -72,6 +72,7 @@ class ApplicationController:
         self._quiescent_mode_timer: Optional[asyncio.TimerHandle] = None
         self._active_task: Optional[asyncio.Task] = None
 
+        self._mqtt_dispatcher = mqtt_dispatcher
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
@@ -86,7 +87,7 @@ class ApplicationController:
 
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()
-        self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
+        self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
     @property
     def polling_interval(self) -> float:
@@ -100,6 +101,9 @@ class ApplicationController:
 
         try:
             await self._dev.initialize()
+            await self._dev_inst_map.async_autodiscover(
+                self._dev, [d.address.short for d in self.dali2_devices]
+            )
         except Exception as e:
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED
@@ -110,8 +114,9 @@ class ApplicationController:
             await self._device_publisher.add_device(device_info)
             await register_common_handlers(device, self, self._device_publisher)
 
+        self._update_dali2_devices_instances({d.address.short: d for d in self.dali2_devices})
         for device in self.dali2_devices:
-            device_info = DeviceInfo(device.uid, device.name)
+            device_info = DeviceInfo(device.uid, device.name, get_dali2_controls(device))
             await self._device_publisher.add_device(device_info)
 
         await self._device_publisher.initialize()
@@ -132,6 +137,8 @@ class ApplicationController:
             ):
                 raise RuntimeError("ApplicationController must be initialized to stop")
             self._state = ApplicationControllerState.STOPPING
+
+        self._bus_traffic_cleanup()
 
         if self._quiescent_mode_timer:
             self._quiescent_mode_timer.cancel()
@@ -167,12 +174,14 @@ class ApplicationController:
     def is_commissioning(self) -> bool:
         return self._state == ApplicationControllerState.COMMISSIONING
 
-    async def load_device_info(self, device: DaliDevice, force_reload: bool = False) -> None:
+    async def load_device_info(
+        self, device: Union[DaliDevice, Dali2Device], force_reload: bool = False
+    ) -> None:
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK, device.load_info(self._dev, force_reload)
         )
 
-    async def apply_parameters(self, device: DaliDevice, new_params: dict) -> None:
+    async def apply_parameters(self, device: Union[DaliDevice, Dali2Device], new_params: dict) -> None:
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK, device.apply_parameters(self._dev, new_params)
         )
@@ -286,10 +295,13 @@ class ApplicationController:
         self.dali2_devices = unchanged_devices + changed_devices + new_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
 
+        await self._dev_inst_map.async_autodiscover(self._dev, [d.address.short for d in self.dali2_devices])
+        self._update_dali2_devices_instances({d.address.short: d for d in changed_devices + new_devices})
+
         new_device_ids = {d.uid for d in self.dali2_devices}
         removed_ids = list(old_device_ids - new_device_ids)
-        added_devices = [DeviceInfo(d.uid, d.name) for d in new_devices]
-        updated_devices = [DeviceInfo(d.uid, d.name) for d in changed_devices]
+        added_devices = [DeviceInfo(d.uid, d.name, get_dali2_controls(d)) for d in new_devices]
+        updated_devices = [DeviceInfo(d.uid, d.name, get_dali2_controls(d)) for d in changed_devices]
 
         changes = DeviceChange(
             added=added_devices,
@@ -298,6 +310,15 @@ class ApplicationController:
         )
 
         await self._device_publisher.rebuild(changes)
+
+    def _update_dali2_devices_instances(self, dali2_devices_by_addr: dict[int, Dali2Device]) -> None:
+        for (addr, inst_num), inst_type in self._dev_inst_map.mapping.items():
+            device = dali2_devices_by_addr.get(addr)
+            if device:
+                self.logger.debug(
+                    "Adding instance %d of type %d to DALI 2 device %s", inst_num, inst_type, device.uid
+                )
+                device.add_instance(inst_num, inst_type)
 
     async def _polling_loop(self) -> None:
         reschedule = True
@@ -410,12 +431,17 @@ class ApplicationController:
 
     def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:
         if isinstance(frame, ForwardFrame):
-            command = from_frame(frame)
+            command = from_frame(frame, dev_inst_map=self._dev_inst_map)
             if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
                 try:
                     if isinstance(command, StartQuiescentMode):
                         asyncio.create_task(self._handle_start_quiescent_mode())
-                    elif isinstance(command, StopQuiescentMode):
+                        return
+                    if isinstance(command, StopQuiescentMode):
                         asyncio.create_task(self._handle_stop_quiescent_mode())
+                        return
                 except Exception:
                     pass  # Ignore errors in bus traffic handling
+            asyncio.create_task(
+                publish_dali2_event(command, self.dali2_devices, self._mqtt_dispatcher.client)
+            )

@@ -94,7 +94,7 @@ class NumberGearParam(GearParamBase):
         }
         has_options = False
         if self.set_command_class is None:
-            schema["properties"][self.property_name]["options"] = {"wb": {"readOnly": True}}
+            schema["properties"][self.property_name]["options"] = {"wb": {"read_only": True}}
             has_options = True
         if self.grid_columns is not None:
             if not has_options:

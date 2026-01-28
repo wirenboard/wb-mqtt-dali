@@ -89,14 +89,19 @@ class Commissioning:
             "QueryRandomAddressM",
             "QueryShortAddress",
             "Randomise",
-            "SetSearchAddrH",
-            "SetSearchAddrL",
-            "SetSearchAddrM",
             "Terminate",
             "VerifyShortAddress",
             "Withdraw",
         ):
             setattr(self, name, getattr(src, name))
+        if dali2:
+            self.SetSearchAddrH = control_device.SearchAddrH
+            self.SetSearchAddrM = control_device.SearchAddrM
+            self.SetSearchAddrL = control_device.SearchAddrL
+        else:
+            self.SetSearchAddrH = control_gear.SetSearchAddrH
+            self.SetSearchAddrM = control_gear.SetSearchAddrM
+            self.SetSearchAddrL = control_gear.SetSearchAddrL
 
         self.driver: WBDALIDriver = driver
         self.last_search_addr = SearchAddress()

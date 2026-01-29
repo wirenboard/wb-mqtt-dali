@@ -382,6 +382,29 @@ class TestDevicePublisher:
         callback.assert_called_once_with(message)
 
     @pytest.mark.asyncio
+    async def test_handle_on_message_with_error(self, publisher, mock_dispatcher, caplog):
+        device_info = DeviceInfo(
+            "dev1",
+            "Device 1",
+            [
+                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+            ],
+        )
+
+        await publisher.add_device(device_info)
+
+        callback = AsyncMock(side_effect=ValueError("Test error"))
+        await publisher.register_control_handler("dev1", "ctrl1", callback)
+
+        message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
+        await publisher._handle_on_message("dev1/ctrl1", message)
+        if len(publisher._on_topic_running_handlers):
+            await asyncio.gather(*publisher._on_topic_running_handlers, return_exceptions=True)
+
+        publisher.logger.error.assert_called_once()
+        assert publisher.logger.error.call_args[0][0] == "Error handling /on message for %s/%s: %s"
+
+    @pytest.mark.asyncio
     async def test_get_device_ids(self, publisher):
         device_info1 = DeviceInfo(
             "dev1",

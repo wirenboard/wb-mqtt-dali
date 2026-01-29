@@ -84,6 +84,7 @@ class ApplicationController:
 
         self._polling_interval = config.polling_interval
         self._polling_task: Optional[asyncio.Task] = None
+        self._reschedule_polling_task = True
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 
         self._websocket_task: Optional[asyncio.Task] = None
@@ -147,6 +148,7 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
 
         if self._polling_task:
+            self._reschedule_polling_task = False
             self._polling_task.cancel()
             try:
                 await self._polling_task
@@ -345,7 +347,6 @@ class ApplicationController:
                 device.add_instance(inst_num, inst_type)
 
     async def _polling_loop(self) -> None:
-        reschedule = True
         try:
             await asyncio.sleep(self._polling_interval)
 
@@ -357,23 +358,18 @@ class ApplicationController:
                         self._poll_devices(devices),
                         "polling",
                     )
-                except asyncio.CancelledError as e:
-                    if str(e) == "command sent":
-                        self.logger.debug("Polling cancelled due to command sent")
-                    else:
-                        raise
                 except RuntimeError as e:
                     self.logger.debug("Skipping polling cycle: %s", e)
 
         except asyncio.CancelledError:
-            reschedule = False
             self.logger.info("Polling loop cancelled")
-            raise
+            if not self._reschedule_polling_task:
+                raise
         except Exception as e:
             self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
             await asyncio.sleep(1)
         finally:
-            if reschedule and self._state not in (
+            if self._reschedule_polling_task and self._state not in (
                 ApplicationControllerState.STOPPING,
                 ApplicationControllerState.UNINITIALIZED,
             ):

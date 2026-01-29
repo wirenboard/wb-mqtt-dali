@@ -71,6 +71,7 @@ class ApplicationController:
 
         self._quiescent_mode_timer: Optional[asyncio.TimerHandle] = None
         self._active_task: Optional[asyncio.Task] = None
+        self._active_task_description: str = ""
 
         self._mqtt_dispatcher = mqtt_dispatcher
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
@@ -159,6 +160,7 @@ class ApplicationController:
         await self._device_publisher.cleanup()
 
         if self._active_task:
+            self.logger.debug("Cancelling active task: %s", self._active_task_description)
             self._active_task.cancel()
             try:
                 await self._active_task
@@ -171,7 +173,9 @@ class ApplicationController:
             self._state = ApplicationControllerState.UNINITIALIZED
 
     async def rescan_bus(self) -> None:
-        await self._run_task(ApplicationControllerState.COMMISSIONING, self._commissioning_task())
+        await self._run_task(
+            ApplicationControllerState.COMMISSIONING, self._commissioning_task(), "commissioning"
+        )
 
     def is_commissioning(self) -> bool:
         return self._state == ApplicationControllerState.COMMISSIONING
@@ -180,16 +184,22 @@ class ApplicationController:
         self, device: Union[DaliDevice, Dali2Device], force_reload: bool = False
     ) -> None:
         await self._run_task(
-            ApplicationControllerState.GENERIC_TASK, device.load_info(self._dev, force_reload)
+            ApplicationControllerState.GENERIC_TASK,
+            device.load_info(self._dev, force_reload),
+            f"loading device {device.uid} info",
         )
 
     async def apply_parameters(self, device: Union[DaliDevice, Dali2Device], new_params: dict) -> None:
         await self._run_task(
-            ApplicationControllerState.GENERIC_TASK, device.apply_parameters(self._dev, new_params)
+            ApplicationControllerState.GENERIC_TASK,
+            device.apply_parameters(self._dev, new_params),
+            f"applying parameters to device {device.uid}",
         )
 
     async def send_command(self, command):
-        return await self._run_task(ApplicationControllerState.GENERIC_TASK, self._dev.send(command))
+        return await self._run_task(
+            ApplicationControllerState.GENERIC_TASK, self._dev.send(command), f"sending command {command}"
+        )
 
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
@@ -225,7 +235,7 @@ class ApplicationController:
                 self.websocket_config = config
                 self._run_websocket()
 
-    async def _run_task(self, new_state: ApplicationControllerState, task) -> None:
+    async def _run_task(self, new_state: ApplicationControllerState, task, task_description: str) -> None:
         try:
             async with self._ready_condition:
                 await asyncio.wait_for(
@@ -234,8 +244,9 @@ class ApplicationController:
                 )
                 self._state = new_state
         except asyncio.TimeoutError as e:
-            raise RuntimeError("Bus is busy") from e
+            raise RuntimeError(f"Bus is occupied by {self._active_task_description}") from e
         self._active_task = asyncio.create_task(task)
+        self._active_task_description = task_description
         try:
             await self._active_task
         finally:
@@ -334,6 +345,7 @@ class ApplicationController:
                     await self._run_task(
                         ApplicationControllerState.GENERIC_TASK,
                         self._poll_devices(devices),
+                        "polling",
                     )
                 except RuntimeError as e:
                     self.logger.debug("Skipping polling cycle: %s", e)
@@ -430,6 +442,7 @@ class ApplicationController:
                 ApplicationControllerState.IN_QUIESCENT_MODE,
             ]:
                 self._state = ApplicationControllerState.READY
+                self._active_task_description = ""
                 self._ready_condition.notify()
 
     def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:

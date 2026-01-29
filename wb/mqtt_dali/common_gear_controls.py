@@ -5,6 +5,7 @@ from typing import Callable, Iterable, Optional, Sequence
 from dali.address import GearShort
 from dali.command import Response
 from dali.gear.general import (
+    DAPC,
     Down,
     Off,
     OnAndStepUp,
@@ -93,6 +94,7 @@ PUSHBUTTON_CONTROLS: list[ControlInfo] = [
     ControlInfo("recall_min_level", "Recall Min Level", "pushbutton"),
     ControlInfo("step_down_and_off", "Step Down And Off", "pushbutton"),
     ControlInfo("on_and_step_up", "On And Step Up", "pushbutton"),
+    ControlInfo("dapc", "Direct Arc Power Control", "text", value=""),
 ]
 
 
@@ -137,10 +139,33 @@ async def register_common_handlers(
 
         return handler
 
+    async def handle_dapc(message) -> None:
+        payload = message.payload.decode("utf-8") if getattr(message, "payload", None) else ""
+        value_str = payload.strip()
+        try:
+            power = int(value_str, 0)
+        except ValueError:
+            power = value_str
+
+        try:
+            command = DAPC(short_addr, power)
+        except ValueError as exc:
+            controller.logger.warning("Invalid DAPC value '%s' for device %s: %s", value_str, device_id, exc)
+            await device_publisher.set_control_error(device_id, "dapc", "r")
+            return
+
+        await controller.send_command(command)
+        await device_publisher.set_control_value(device_id, "dapc", "")
+
+    handlers: dict[str, Callable] = {
+        control_id: make_handler(command_class) for control_id, command_class in command_mapping.items()
+    }
+    handlers["dapc"] = handle_dapc
+
     await asyncio.gather(
         *[
-            device_publisher.register_control_handler(device_id, control_id, make_handler(command_class))
-            for control_id, command_class in command_mapping.items()
+            device_publisher.register_control_handler(device_id, control_id, handler)
+            for control_id, handler in handlers.items()
         ]
     )
 

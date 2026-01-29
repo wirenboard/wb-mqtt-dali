@@ -353,7 +353,7 @@ class Gateway:
                 if device.get("device_type") == "WB-MDALI":
                     device_id = device.get("id")
                     if device_id is None:
-                        device_id = f"wb-mdali_{device.get('slave_id', '')}"
+                        device_id = f"wb-dali_{device.get('slave_id', '')}"
                     device_ids.add(device_id)
         async with self._config_lock:
             new_gateways = []
@@ -364,9 +364,12 @@ class Gateway:
                 else:
                     await current_gw.stop()
             for did in device_ids:
-                apc_conf = ApplicationControllerConfig(did, 0, [], [], DEFAULT_POLLING_INTERVAL)
-                apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
-                gw = WbDaliGateway(uid=did, buses=[apc])
+                buses = []
+                for bus_index in range(3):
+                    apc_conf = ApplicationControllerConfig(did, bus_index, [], [], DEFAULT_POLLING_INTERVAL)
+                    apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
+                    buses.append(apc)
+                gw = WbDaliGateway(uid=did, buses=buses)
                 new_gateways.append(gw)
                 await gw.start()
             self.wb_dali_gateways = new_gateways

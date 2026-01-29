@@ -13,12 +13,7 @@ from dali.command import Command, Response
 from dali.frame import BackwardFrame, ForwardFrame
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.wbdali import (
-    ERR_TIMEOUT,
-    WBDALIConfig,
-    WBDALIDriver,
-    encode_frame_for_modbus,
-)
+from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver, encode_frame_for_modbus
 
 
 class MockMqttClient:
@@ -100,9 +95,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             index = queue_item_index + i
             index %= self.config.queue_size
             message = mqtt.MQTTMessage(
-                topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{index}".encode()
+                topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{index}".encode()
             )
-            message.payload = str(ERR_TIMEOUT).encode()
+            message.payload = str(0).encode()
             await self.mock_mqtt_dispatcher._dispatch_message(message)
 
     async def prepare_driver(self, driver: WBDALIDriver):
@@ -135,12 +130,39 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         frame_invalid = MagicMock()
         frame_invalid.__len__.return_value = 32
 
-        assert encode_frame_for_modbus(frame_16) == 0x12340000  # pylint: disable=W0212
-        assert encode_frame_for_modbus(frame_24) == 0x12345601  # pylint: disable=W0212
-        assert encode_frame_for_modbus(frame_25) == 0x123453382  # pylint: disable=W0212
+        # Test FF16 frame: priority=4 (bits 31..29), sendtwice=0 (bit 28), size=0 (bits 27..25), data=0x1234 (bits 24..0)
+        # Result: 0x80000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x80001234
+        assert encode_frame_for_modbus(frame_16) == 0x80001234  # pylint: disable=W0212
 
+        # Test FF24 frame: priority=4, sendtwice=0, size=1 (bits 27..25), data=0x123456
+        # Result: 0x80000000 | 0x00000000 | 0x02000000 | 0x00123456 = 0x82123456
+        assert encode_frame_for_modbus(frame_24) == 0x82123456  # pylint: disable=W0212
+
+        # Test FF25 frame: priority=4, sendtwice=0, size=2 (bits 27..25), data=0x1234567
+        # Result: 0x80000000 | 0x00000000 | 0x04000000 | 0x01234567 = 0x85234567
+        assert encode_frame_for_modbus(frame_25) == 0x85234567  # pylint: disable=W0212
+
+        # Test with sendtwice=True: bit 28 should be set
+        # Result: 0x80000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0x90001234
+        assert encode_frame_for_modbus(frame_16, sendtwice=True) == 0x90001234  # pylint: disable=W0212
+
+        # Test with priority=3: bits 31..29 = 0b011 = 0x60000000
+        # Result: 0x60000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x60001234
+        assert encode_frame_for_modbus(frame_16, priority=3) == 0x60001234  # pylint: disable=W0212
+
+        # Test with sendtwice=True and priority=5
+        # Result: 0xA0000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0xB0001234
+        assert (
+            encode_frame_for_modbus(frame_16, sendtwice=True, priority=5) == 0xB0001234
+        )  # pylint: disable=W0212
+
+        # Test invalid frame length
         with self.assertRaises(ValueError):
             encode_frame_for_modbus(frame_invalid)  # pylint: disable=W0212
+
+        # Test invalid priority
+        with self.assertRaises(ValueError):
+            encode_frame_for_modbus(frame_16, priority=6)  # pylint: disable=W0212
 
     async def test_send_command_without_response(self):
         """
@@ -170,24 +192,13 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
         message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply0".encode()
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_0".encode()
         )
-        message.payload = str(0x56).encode()
+        message.payload = str(0x0156).encode()
         await self.mock_mqtt_dispatcher._dispatch_message(message)
         result = (await fut)[0]
         self.assertIsInstance(result, MockResponse)
         self.assertEqual(result.data, 0x56)
-
-    async def test_send_command_sendtwice_with_response_raises_error(self):
-        """Test that sending a command with sendtwice=True and a response raises an error."""
-        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
-
-        cmd = _MockCommand(sendtwice=True, response_class=MockResponse)
-
-        with self.assertRaises(ValueError) as context:
-            await driver.send(cmd)
-
-        self.assertIn("Command with sendtwice=True cannot have a response", str(context.exception))
 
     async def test_send_command_sendtwice_without_response(self):
         """Test sending a command with sendtwice=True and no response."""
@@ -202,8 +213,8 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
 
         payload_data = json.loads(payload)
-        self.assertEqual(payload_data["params"]["count"], 4)
-        self.assertEqual(payload_data["params"]["msg"], "1234000012340000")
+        self.assertEqual(payload_data["params"]["count"], 2)
+        self.assertEqual(payload_data["params"]["msg"], "12349000")
 
         await self.simulate_timeout_response_from_gateway(0, 2)
 
@@ -227,7 +238,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_data["params"]["function"], 16)
         self.assertEqual(payload_data["params"]["address"], self.config.queue_start_modbus_address)
         self.assertEqual(payload_data["params"]["count"], 2)
-        self.assertEqual(payload_data["params"]["msg"], "12340000")
+        self.assertEqual(payload_data["params"]["msg"], "12348000")
         self.assertEqual(payload_data["params"]["format"], "HEX")
         self.assertEqual(payload_data["params"]["frame_timeout"], 0)
 
@@ -246,17 +257,17 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 6)
-        self.assertEqual(payload_data["params"]["msg"], "12340000567800009abc0000")
+        self.assertEqual(payload_data["params"]["msg"], "12348000567880009abc8000")
 
         # Simulate responses
         for i in range(3):
             message = mqtt.MQTTMessage(
-                topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}".encode()
+                topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{i}".encode()
             )
             if i < 2:
-                message.payload = str(0x50 + i).encode()
+                message.payload = str(0x0150 + i).encode()
             else:
-                message.payload = str(ERR_TIMEOUT).encode()
+                message.payload = str(0).encode()
             await self.mock_mqtt_dispatcher._dispatch_message(message)
 
         results = (await fut)[0]
@@ -284,7 +295,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await fut
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 6)
-        self.assertEqual(payload_data["params"]["msg"], "12340000567800009abc0000")
+        self.assertEqual(payload_data["params"]["msg"], "12348000567880009abc8000")
 
     async def test_send_modbus_rpc_increments_counter(self):
         """Test that rpc_id_counter increments correctly with multiple calls."""
@@ -326,11 +337,11 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
 
-        # Simulate framing error (ERR_START_BIT)
+        # Simulate framing error
         message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply0".encode()
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_0".encode()
         )
-        message.payload = str(0x100).encode()
+        message.payload = str(0x0300).encode()
         await self.mock_mqtt_dispatcher._dispatch_message(message)
 
         result = (await fut)[0]
@@ -372,9 +383,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         # Monitor response
         message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply0".encode()
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_0".encode()
         )
-        message.payload = str(0x12).encode()
+        message.payload = str(0x0112).encode()
         await self.mock_mqtt_dispatcher._dispatch_message(message)
         await fut
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
@@ -395,9 +406,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.bus_traffic.register(traffic_callback)
 
         message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward".encode()
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame".encode()
         )
-        message.payload = str(0x123456 << 8).encode()
+        message.payload = str(0x1A900180088863B).encode()
         await self.mock_mqtt_dispatcher._dispatch_message(message)
 
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
@@ -408,7 +419,11 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         await self.prepare_driver(driver)
 
-        commands = [_MockCommand(), _MockCommand(data=[0x56, 0x78]), _MockCommand(data=[0x9A, 0xBC])]
+        commands = [
+            _MockCommand(),
+            _MockCommand(data=[0x56, 0x78]),
+            _MockCommand(data=[0x9A, 0xBC]),
+        ]
 
         fut = asyncio.gather(driver.send_commands(commands))
 
@@ -418,7 +433,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 4)
-        self.assertEqual(payload_data["params"]["msg"], "1234000056780000")
+        self.assertEqual(payload_data["params"]["msg"], "1234800056788000")
         self.assertEqual(driver.batch_start_index, 0)
 
         await self.simulate_timeout_response_from_gateway(0, 2)
@@ -429,7 +444,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 2)
-        self.assertEqual(payload_data["params"]["msg"], "9abc0000")
+        self.assertEqual(payload_data["params"]["msg"], "9abc8000")
 
         await self.simulate_timeout_response_from_gateway(2)
 

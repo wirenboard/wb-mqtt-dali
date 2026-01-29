@@ -28,15 +28,6 @@ from dali.sequences import sleep as seq_sleep
 
 from .mqtt_dispatcher import MQTTDispatcher
 
-ERR_START_BIT = 0x100  # не получен старт бит
-ERR_BIT_TIME = 0x200  # неверное время бита
-ERR_FRAME_LENGTH = 0x400  # неверная длина фрейма
-ERR_STOP_BITS = 0x800  # не получены стоп биты
-ERR_TIMEOUT = 0x1000  # таймаут приёма фрейма
-ERR_LINE_POWER = 0x2000  # линия не запитана
-ERR_LINE_BUSY = 0x4000  # линия занята
-ERR_STILL_SENDING = 0x8000
-
 WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
@@ -48,10 +39,12 @@ MASK = 0xFF
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
-    device_name: str = "wb-mdali_1"
+    device_name: str = "wb-dali_1"
     channel: int = 1
-    queue_size: int = 10
-    queue_start_modbus_address: int = 1920
+    queue_size: int = 16
+    queue_start_modbus_address: int = 1400
+    queue_bulk_send_pointer_modbus_address: int = 1432
+    queue_modbus_channel_offset: int = 1000
 
 
 class BusTrafficCallbacks:
@@ -61,7 +54,6 @@ class BusTrafficCallbacks:
         self._callbacks = set()
 
     def register(self, func: Callable[[Frame, str], None]) -> Callable[[], None]:
-
         def cleanup():
             self._callbacks.discard(func)
 
@@ -86,32 +78,54 @@ class SendQueueItem:
             self.timeout_handler = None
 
 
-def encode_frame_for_modbus(dali_frame: Frame) -> int:
-    """
-    Encode a DALI frame into a 32-bit Modbus register value according to
-    the WB-MDALI gateway specification.
+def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority: int = 4) -> int:
+    """Encode DALI frame for Modbus transmission.
+
+    Format:
+    [24..0]   - frame data, up to 25 bits, right-aligned
+    [27..25]  - frame size: 0=FF16, 1=FF24, 2=FF25
+    [28]      - send twice flag
+    [31..29]  - priority: 0=no send, 1-5=priority level
+
+    Args:
+        dali_frame: DALI frame to encode
+        sendtwice: Whether to send the frame twice
+        priority: Send priority (0=no send, 1-5=priority level)
+
+    Returns:
+        Encoded 32-bit value for Modbus register
     """
     frame_len = len(dali_frame)
     frame_int = dali_frame.as_integer
 
-    if frame_len == 16:
-        return frame_int << 16
-    if frame_len == 24:
-        return (frame_int << 8) | 0x01
-    if frame_len == 25:
-        first_two_bytes = frame_int >> 8
-        last_byte = frame_int & 0xFF
-        # insert the 0x01 bit in the middle
-        dali_25bit_frame = (first_two_bytes << 1) | 0x00
-        dali_25bit_frame = (dali_25bit_frame << 8) | last_byte
-        result = (dali_25bit_frame << 7) | 0x02
-        return result
+    # Bits [24..0] - frame data, right-aligned
+    result = frame_int & 0x1FFFFFF
 
-    raise ValueError(f"Unsupported frame length: {frame_len}")
+    # Bits [27..25] - frame size
+    if frame_len == 16:
+        frame_size = 0
+    elif frame_len == 24:
+        frame_size = 1
+    elif frame_len == 25:
+        frame_size = 2
+    else:
+        raise ValueError(f"Unsupported frame length: {frame_len}")
+
+    result |= (frame_size & 0x7) << 25
+
+    # Bit [28] - send twice
+    if sendtwice:
+        result |= 1 << 28
+
+    # Bits [31..29] - priority (0-5)
+    if not (0 <= priority <= 5):
+        raise ValueError(f"Priority must be 0-5, got {priority}")
+    result |= (priority & 0x7) << 29
+
+    return result
 
 
 class WBDALIDriver:
-
     def __init__(
         self,
         config: WBDALIConfig,
@@ -168,13 +182,15 @@ class WBDALIDriver:
         # Subscribe to all reply topics
         self.logger.debug("Subscribing to reply topics...")
         for i in range(self.config.queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            topic = (
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{i}"
+            )
             await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
 
         # Subscribe to FF24 topic
         self.logger.debug("Subscribing to FF24 topic...")
         await self._mqtt_dispatcher.subscribe(
-            f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+            f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame",
             self._handle_ff24_message,
         )
 
@@ -199,14 +215,16 @@ class WBDALIDriver:
 
         # Unsubscribe from all reply topics
         for i in range(self.config.queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            topic = (
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{i}"
+            )
             if self._mqtt_dispatcher.is_running:
                 await self._mqtt_dispatcher.unsubscribe(topic)
 
         # Unsubscribe from FF24 topic
         if self._mqtt_dispatcher.is_running:
             await self._mqtt_dispatcher.unsubscribe(
-                f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame",
             )
         self.logger.debug("Deinitialized successfully")
 
@@ -244,16 +262,14 @@ class WBDALIDriver:
     async def _reset_queue_in_gateway(self) -> None:
         self.logger.debug("Resetting message queue in gateway")
 
-        await self.send_modbus_rpc_no_response(
-            function=16,
-            address=self.config.queue_start_modbus_address,
-            count=self.config.queue_size * 2,
-            msg="0000fbdf" * self.config.queue_size,
+        pointer_address = (
+            self.config.queue_bulk_send_pointer_modbus_address
+            + (self.config.channel - 1) * self.config.queue_modbus_channel_offset
         )
 
         await self.send_modbus_rpc_no_response(
             function=6,
-            address=1960,
+            address=pointer_address,
             count=1,
             msg="0000",
         )
@@ -267,12 +283,34 @@ class WBDALIDriver:
 
         if message.retain:
             return
-        frame = ForwardFrame(24, int(message.payload) >> 8)
+
+        raw_value = int(message.payload)
+        frame_data = raw_value & 0xFFFFFFFF
+        frame_length = (raw_value >> 32) & 0xFF
+        is_backward = bool((raw_value >> 40) & 0x1)
+        # is_broken = bool((raw_value >> 41) & 0x1)
+        # frame_counter = (raw_value >> 48) & 0xFFFF
+
+        if is_backward or frame_length != 24:
+            return
+
+        frame = ForwardFrame(24, frame_data & 0xFFFFFF)
         cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
         self.logger.debug("Received FF24: %s", cmd)
         self.bus_traffic.invoke(frame, "bus")
 
     async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
+        """Handle reply message from the DALI bus.
+
+        Message payload format:
+        [7..0]   - Backward Frame (8 bit)
+        [15..8]  - status:
+                   0 - no transmission
+                   1 - transmission with backward response
+                   2 - transmission without response
+                   3 - broken response
+                   4 - transmission impossible (no power on bus)
+        """
         self.logger.debug(
             "Received message: %s %s",
             message.topic,
@@ -285,9 +323,14 @@ class WBDALIDriver:
 
         resp = int(message.payload.decode())
 
+        backward_frame_byte = resp & 0xFF
+        status = (resp >> 8) & 0xFF
+
         # Process the message as needed
         resp_pointer = int(
-            str(message.topic).rsplit("/", maxsplit=1)[-1].replace(f"channel{self.config.channel}_reply", "")
+            str(message.topic)
+            .rsplit("/", maxsplit=1)[-1]
+            .replace(f"bus_{self.config.channel}_bulk_send_reply_", "")
         )
 
         resp_waiter = self._waiting_for_responses.get(resp_pointer)
@@ -300,29 +343,57 @@ class WBDALIDriver:
             self.logger.debug("Response future already done for pointer: %d", resp_pointer)
             return
 
-        # порядок важен, потому что может быть framing error + timeout
-        if (
-            ((resp & ERR_START_BIT) != 0)
-            or ((resp & ERR_BIT_TIME) != 0)
-            or ((resp & ERR_FRAME_LENGTH) != 0)
-            or ((resp & ERR_STOP_BITS) != 0)
-        ):
+        self.logger.debug(
+            "Parsed response: pointer=%d, status=%d, backward_frame=0x%02x",
+            resp_pointer,
+            status,
+            backward_frame_byte,
+        )
+
+        if status == 0:
+            # No transmission
+            self.logger.debug("Status 0: No transmission")
+            resp_future.set_result(None)
+            return
+        elif status == 1:
+            # Transmission with backward response
+            self.logger.debug("Status 1: Transmission with backward response")
+            backward_frame = BackwardFrame(backward_frame_byte)
+            resp_future.set_result(backward_frame)
+            self.bus_traffic.invoke(backward_frame, "bus")
+            return
+        elif status == 2:
+            # Transmission without response
+            self.logger.debug("Status 2: Transmission without response")
+            resp_future.set_result(None)
+            return
+        elif status == 3:
+            # Broken response (framing error)
             self.logger.error(
-                "Received error in response: %x (%x)",
-                resp,
-                resp & ~ERR_STILL_SENDING,
+                "Status 3: Broken response for pointer %d (backward_frame=0x%02x)",
+                resp_pointer,
+                backward_frame_byte,
+            )
+            resp_future.set_result(BackwardFrameError(backward_frame_byte))
+            return
+        elif status == 4:
+            # Transmission impossible (no power on bus)
+            self.logger.error(
+                "Status 4: Transmission impossible - no power on bus (pointer=%d)",
+                resp_pointer,
             )
             resp_future.set_result(BackwardFrameError(0))
             return
-
-        if (resp & ERR_TIMEOUT) != 0:
-            self.logger.debug("Timeout waiting for response")
-            resp_future.set_result(None)
+        else:
+            # Unknown status
+            self.logger.error(
+                "Unknown status %d for pointer %d (backward_frame=0x%02x)",
+                status,
+                resp_pointer,
+                backward_frame_byte,
+            )
+            resp_future.set_result(BackwardFrameError(0))
             return
-
-        backward_frame = BackwardFrame(resp & ~ERR_STILL_SENDING)
-        resp_future.set_result(backward_frame)
-        self.bus_traffic.invoke(backward_frame, "bus")
 
     async def run_sequence(self, seq, progress=None) -> Any:
         """
@@ -471,13 +542,26 @@ class WBDALIDriver:
                     timeout_callback,
                 )
                 self._waiting_for_responses[current_index] = item
-                regs_32bit.append(encode_frame_for_modbus(item.command.frame))
 
+                result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice)
+                self.logger.debug(
+                    "Encoded frame: len=%d, result=0x%08x",
+                    len(item.command.frame),
+                    result,
+                )
+                regs_32bit.append(result)
+
+            msg = "".join([f"{((reg & 0xFFFF) << 16) | ((reg >> 16) & 0xFFFF):08x}" for reg in regs_32bit])
+            buffer_address = (
+                self.config.queue_start_modbus_address
+                + (self.config.channel - 1) * self.config.queue_modbus_channel_offset
+                + start_index * 2
+            )
             await self.send_modbus_rpc_no_response(
                 function=16,
-                address=self.config.queue_start_modbus_address + start_index * 2,
+                address=buffer_address,
                 count=len(regs_32bit) * 2,
-                msg="".join([f"{reg:08x}" for reg in regs_32bit]),
+                msg=msg,
             )
 
     async def _send_commands_internal(
@@ -487,20 +571,9 @@ class WBDALIDriver:
             self.logger.debug("send: %s", ", ".join(str(cmd) for cmd in commands))
         commands_to_send = []
         for cmd in commands:
-            if cmd.sendtwice:
-                if cmd.response is not None:
-                    self.logger.warning(
-                        "Command %s has sendtwice=True and a response, this is not supported",
-                        cmd,
-                    )
-                    raise ValueError(f"Command {cmd} with sendtwice=True cannot have a response")
-
-                # A hack to handle sendtwice commands. Remove when proper sendtwice sending is implemented.
-                commands_to_send.extend([cmd, cmd])
-            else:
-                if cmd.devicetype != 0:
-                    commands_to_send.append(EnableDeviceType(cmd.devicetype))
-                commands_to_send.append(cmd)
+            if cmd.devicetype != 0:
+                commands_to_send.append(EnableDeviceType(cmd.devicetype))
+            commands_to_send.append(cmd)
         response_futures: list[asyncio.Future] = []
         if lock_queue:
             await self._send_queue_lock.acquire()
@@ -517,8 +590,8 @@ class WBDALIDriver:
         responses: list[Optional[Response]] = []
         i = 0
         for cmd in commands:
-            # Skip additional EnableDeviceType and second sendtwice commands
-            if cmd.devicetype != 0 or cmd.sendtwice:
+            # Skip additional EnableDeviceType commands
+            if cmd.devicetype != 0:
                 i += 1
             if cmd.response is None:
                 responses.append(None)

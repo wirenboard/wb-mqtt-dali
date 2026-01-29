@@ -19,6 +19,26 @@ class _SwitchingFunctionConfigCommand(_SwitchingFunctionCommand):
     sendtwice = True
 
 
+class SwitchingFunctionFeaturesResponse(command.BitmapResponse):
+    bits = [
+        "load error can be queried",
+        None,
+        None,
+        "adjustable thresholds",
+        "adjustable hold-off time",
+        None,
+        "Reference system power supported",
+        "physical selection supported",
+    ]
+
+
+class QueryFeatures(_SwitchingFunctionCommand):
+    """Query the supported features of the switching function."""
+
+    response = SwitchingFunctionFeaturesResponse
+    _cmdval = 0xF0
+
+
 class QueryUpSwitchOnThreshold(_SwitchingFunctionCommand):
     """Query the up switch on threshold."""
 

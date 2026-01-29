@@ -151,7 +151,7 @@ async def register_common_handlers(
             command = DAPC(short_addr, power)
         except ValueError as exc:
             controller.logger.warning("Invalid DAPC value '%s' for device %s: %s", value_str, device_id, exc)
-            await device_publisher.set_control_error(device_id, "dapc", "r")
+            await device_publisher.set_control_error(device_id, "dapc", "w")
             return
 
         await controller.send_command(command)

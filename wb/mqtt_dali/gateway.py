@@ -279,11 +279,12 @@ class Gateway:
                     ):
                         raise ValueError(f"WebSocket port {new_websocket_config.port} is already in use")
                     await bus.setup_websocket(new_websocket_config)
+                    bus._polling_interval = new_config.get("polling_interval", bus.polling_interval)
                     await self._save_configuration()
                     return {
                         "websocket_enabled": new_websocket_config.enabled,
                         "websocket_port": new_websocket_config.port,
-                        "polling_interval": new_config.get("polling_interval", bus.polling_interval),
+                        "polling_interval": bus.polling_interval,
                     }
         raise ValueError("Bus not found")
 

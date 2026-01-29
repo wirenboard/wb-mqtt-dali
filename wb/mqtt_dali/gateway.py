@@ -283,7 +283,7 @@ class Gateway:
                     return {
                         "websocket_enabled": new_websocket_config.enabled,
                         "websocket_port": new_websocket_config.port,
-                        "poll_interval": bus.polling_interval,
+                        "poll_interval": new_config.get("poll_interval", bus.polling_interval),
                     }
         raise ValueError("Bus not found")
 

@@ -10,13 +10,33 @@ from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_server import get_topic_path
 
 
+async def wait_for_rpc_endpoint(
+    driver: str,
+    service: str,
+    method: str,
+    mqtt_dispatcher: MQTTDispatcher,
+) -> None:
+    fut = asyncio.get_running_loop().create_future()
+
+    async def on_response(_mqtt_message) -> None:
+        if not fut.done():
+            fut.set_result(None)
+
+    topic = get_topic_path(driver, service, method)
+    await mqtt_dispatcher.subscribe(topic, on_response)
+    try:
+        await fut
+    finally:
+        await mqtt_dispatcher.unsubscribe(topic, on_response)
+
+
 async def rpc_call(
     driver: str,
     service: str,
     method: str,
     params: dict,
     mqtt_dispatcher: MQTTDispatcher,
-    timeout: float = 10.0,
+    timeout: float = 2.0,
 ) -> dict:
     """
     Execute a remote procedure call over MQTT using JSON-RPC.
@@ -28,7 +48,7 @@ async def rpc_call(
         method: The RPC method name to invoke.
         params: Dictionary of parameters to pass to the remote method.
         mqtt_dispatcher: MQTT dispatcher client for publishing and subscribing to messages.
-        timeout: Maximum time in seconds to wait for a response (default: 10.0).
+        timeout: Maximum time in seconds to wait for a response (default: 2.0).
 
     Returns:
         dict: The result from the remote procedure call response.
@@ -63,7 +83,7 @@ async def rpc_call(
         logger.debug("RPC response %s: %s", reply_topic, res)
         return res
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("RPC call failed: %s", e)
+        logger.error("RPC call to %s failed: %s", topic_str, str(e))
         raise
     finally:
         await mqtt_dispatcher.unsubscribe(reply_topic, on_response)

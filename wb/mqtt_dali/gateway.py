@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Union
 
@@ -11,7 +12,7 @@ from .application_controller import (
 from .dali_2_device import Dali2Device, make_dali2_device
 from .dali_device import DaliDevice, DaliDeviceAddress, make_dali_device
 from .mqtt_dispatcher import MQTTDispatcher
-from .mqtt_rpc_client import rpc_call
+from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
 
 DEFAULT_POLLING_INTERVAL = 5.0
@@ -112,6 +113,12 @@ class Gateway:
         self._debug = config.get("debug", False)
 
     async def start(self) -> None:
+        await wait_for_rpc_endpoint(
+            "wb-mqtt-serial",
+            "config",
+            "Load",
+            self._mqtt_dispatcher,
+        )
         res = await asyncio.gather(
             *[gw.start() for gw in self.wb_dali_gateways],
             return_exceptions=True,
@@ -336,7 +343,11 @@ class Gateway:
 
     async def _update_gateways(self) -> None:
         device_ids = set()
-        serial_config = await rpc_call("wb-mqtt-serial", "config", "Load", {}, self._mqtt_dispatcher)
+        try:
+            serial_config = await rpc_call("wb-mqtt-serial", "config", "Load", {}, self._mqtt_dispatcher)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logging.debug("Failed to load wb-mqtt-serial configuration")
+            return
         for port in serial_config.get("config", {}).get("ports", []):
             for device in port.get("devices", []):
                 if device.get("device_type") == "WB-MDALI":

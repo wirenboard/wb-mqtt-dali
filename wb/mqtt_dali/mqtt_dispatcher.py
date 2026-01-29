@@ -19,9 +19,14 @@ class MQTTDispatcher:
         async with self._lock:
             if topic not in self._subscriptions:
                 self._subscriptions[topic] = set()
-                await self.client.subscribe(topic)
-
-            self._subscriptions[topic].add(callback)
+                self._subscriptions[topic].add(callback)
+                try:
+                    await self.client.subscribe(topic)
+                except Exception as e:
+                    del self._subscriptions[topic]
+                    raise e
+            else:
+                self._subscriptions[topic].add(callback)
 
     async def unsubscribe(self, topic: str, callback: Optional[MessageCallback] = None) -> None:
         async with self._lock:

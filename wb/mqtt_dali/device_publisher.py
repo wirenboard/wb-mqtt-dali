@@ -312,7 +312,7 @@ class DevicePublisher:
                 handler.control_id,
                 payload,
             )
-            await handler.callback(message)
+            asyncio.create_task(handler.callback(message))
         except Exception as e:
             self.logger.error(
                 "Error handling /on message for %s/%s: %s",

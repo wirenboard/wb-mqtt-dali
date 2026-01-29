@@ -84,6 +84,7 @@ class ApplicationController:
 
         self._polling_interval = config.polling_interval
         self._polling_task: Optional[asyncio.Task] = None
+        self._reschedule_polling_task = True
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 
         self._websocket_task: Optional[asyncio.Task] = None
@@ -147,6 +148,7 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
 
         if self._polling_task:
+            self._reschedule_polling_task = False
             self._polling_task.cancel()
             try:
                 await self._polling_task
@@ -160,8 +162,8 @@ class ApplicationController:
         await self._device_publisher.cleanup()
 
         if self._active_task:
-            self.logger.debug("Cancelling active task: %s", self._active_task_description)
-            self._active_task.cancel()
+            if self._active_task.cancel():
+                self.logger.debug("Cancelling active task: %s", self._active_task_description)
             try:
                 await self._active_task
             except asyncio.CancelledError:
@@ -174,7 +176,7 @@ class ApplicationController:
 
     async def rescan_bus(self) -> None:
         await self._run_task(
-            ApplicationControllerState.COMMISSIONING, self._commissioning_task(), "commissioning"
+            ApplicationControllerState.COMMISSIONING, self._commissioning_task(), "commissioning", 5.0
         )
 
     def is_commissioning(self) -> bool:
@@ -187,6 +189,7 @@ class ApplicationController:
             ApplicationControllerState.GENERIC_TASK,
             device.load_info(self._dev, force_reload),
             f"loading device {device.uid} info",
+            5.0,
         )
 
     async def apply_parameters(self, device: Union[DaliDevice, Dali2Device], new_params: dict) -> None:
@@ -194,11 +197,18 @@ class ApplicationController:
             ApplicationControllerState.GENERIC_TASK,
             device.apply_parameters(self._dev, new_params),
             f"applying parameters to device {device.uid}",
+            5.0,
         )
 
     async def send_command(self, command):
+        if self._active_task:
+            if self._active_task_description == "polling":
+                self._active_task.cancel("command sent")
         return await self._run_task(
-            ApplicationControllerState.GENERIC_TASK, self._dev.send(command), f"sending command {command}"
+            ApplicationControllerState.GENERIC_TASK,
+            self._dev.send(command),
+            f"sending command {command}",
+            3.0,
         )
 
     async def setup_websocket(self, config: WebSocketConfig) -> None:
@@ -235,12 +245,14 @@ class ApplicationController:
                 self.websocket_config = config
                 self._run_websocket()
 
-    async def _run_task(self, new_state: ApplicationControllerState, task, task_description: str) -> None:
+    async def _run_task(
+        self, new_state: ApplicationControllerState, task, task_description: str, timeout: float = 1.0
+    ) -> None:
         try:
             async with self._ready_condition:
                 await asyncio.wait_for(
                     self._ready_condition.wait_for(lambda: self._state == ApplicationControllerState.READY),
-                    timeout=1.0,
+                    timeout=timeout,
                 )
                 self._state = new_state
         except asyncio.TimeoutError as e:
@@ -335,7 +347,6 @@ class ApplicationController:
                 device.add_instance(inst_num, inst_type)
 
     async def _polling_loop(self) -> None:
-        reschedule = True
         try:
             await asyncio.sleep(self._polling_interval)
 
@@ -351,14 +362,14 @@ class ApplicationController:
                     self.logger.debug("Skipping polling cycle: %s", e)
 
         except asyncio.CancelledError:
-            reschedule = False
             self.logger.info("Polling loop cancelled")
-            raise
+            if not self._reschedule_polling_task:
+                raise
         except Exception as e:
             self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
             await asyncio.sleep(1)
         finally:
-            if reschedule and self._state not in (
+            if self._reschedule_polling_task and self._state not in (
                 ApplicationControllerState.STOPPING,
                 ApplicationControllerState.UNINITIALIZED,
             ):

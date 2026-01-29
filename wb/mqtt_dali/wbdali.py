@@ -339,6 +339,9 @@ class WBDALIDriver:
             return
         resp_waiter.cancel_timeout()
         resp_future = resp_waiter.future
+        if resp_future.done():
+            self.logger.debug("Response future already done for pointer: %d", resp_pointer)
+            return
 
         self.logger.debug(
             "Parsed response: pointer=%d, status=%d, backward_frame=0x%02x",

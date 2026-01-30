@@ -97,6 +97,9 @@ class ApplicationController:
     def polling_interval(self) -> float:
         return self._polling_interval
 
+    def set_polling_interval(self, value: float) -> None:
+        self._polling_interval = value
+
     async def start(self) -> None:
         async with self._state_lock:
             if self._state != ApplicationControllerState.UNINITIALIZED:

@@ -18,7 +18,13 @@ def merge_translations(dst: dict, src: dict) -> None:
 
 
 def merge_json_schema_properties(dst: dict, src: dict) -> None:
-    if "properties" not in dst:
-        dst["properties"] = {}
     if "properties" in src:
+        if "properties" not in dst:
+            dst["properties"] = {}
         dst["properties"].update(src["properties"])
+    if "required" in src:
+        if "required" not in dst:
+            dst["required"] = []
+        for req in src["required"]:
+            if req not in dst["required"]:
+                dst["required"].append(req)

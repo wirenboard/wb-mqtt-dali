@@ -400,6 +400,7 @@ class TestDevicePublisher:
         await publisher._handle_on_message("dev1/ctrl1", message)
         if len(publisher._on_topic_running_handlers):
             await asyncio.gather(*publisher._on_topic_running_handlers, return_exceptions=True)
+        assert len(publisher._on_topic_running_handlers) == 0
 
         publisher.logger.error.assert_called_once()
         assert publisher.logger.error.call_args[0][0] == "Error handling /on message for %s/%s: %s"

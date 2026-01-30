@@ -63,7 +63,7 @@ class DevicePublisher:
         self._control_handlers: Dict[str, ControlHandler] = {}
         self._initialized = False
         self._lock = asyncio.Lock()
-        self._on_topic_running_handlers: set[asyncio.Task] = set()
+        self._on_topic_running_handlers: Set[asyncio.Task] = set()
         self.logger = logger.getChild("DevicePublisher")
 
     async def initialize(self) -> None:
@@ -92,6 +92,17 @@ class DevicePublisher:
                         for handler in self._control_handlers.values()
                     ]
                 )
+
+            # Make a copy of the set to avoid modification during iteration
+            tasks_to_cancel = list(self._on_topic_running_handlers)
+            for task in tasks_to_cancel:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    # Task cancellation is expected during cleanup; suppress the exception.
+                    pass
+            self._on_topic_running_handlers.clear()
 
             for task in self._on_topic_running_handlers:
                 task.cancel()

@@ -2,15 +2,16 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from dali.address import DeviceShort, GearShort
+from dali.command import Command, NumericResponse, NumericResponseMask
 from dali.device import general as control_device
 from dali.exceptions import ResponseError
 from dali.gear import general as control_gear
 
 from .dali_device import DaliDeviceAddress
-from .wbdali import WBDALIDriver
+from .wbdali import MASK, WBDALIDriver
 
 log = logging.getLogger("commissioning")
 
@@ -76,33 +77,86 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         return found_addr
 
 
-class Commissioning:
-    def __init__(
-        self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress], dali2: bool = False
-    ) -> None:
-        src = control_device if dali2 else control_gear
-        for name in (
-            "Compare",
-            "ProgramShortAddress",
-            "QueryRandomAddressH",
-            "QueryRandomAddressL",
-            "QueryRandomAddressM",
-            "QueryShortAddress",
-            "Randomise",
-            "Terminate",
-            "VerifyShortAddress",
-            "Withdraw",
-        ):
-            setattr(self, name, getattr(src, name))
+class CommandsCompatibilityLayer:
+    def __init__(self, dali2: bool = False) -> None:
         if dali2:
+            self.Compare = control_device.Compare
+            self.QueryShortAddress = control_device.QueryShortAddress
+            self.Randomise = control_device.Randomise
+            self.Terminate = control_device.Terminate
+            self.VerifyShortAddress = control_device.VerifyShortAddress
+            self.Withdraw = control_device.Withdraw
             self.SetSearchAddrH = control_device.SearchAddrH
             self.SetSearchAddrM = control_device.SearchAddrM
             self.SetSearchAddrL = control_device.SearchAddrL
         else:
+            self.Compare = control_gear.Compare
+            self.QueryShortAddress = control_gear.QueryShortAddress
+            self.Randomise = control_gear.Randomise
+            self.Terminate = control_gear.Terminate
+            self.VerifyShortAddress = control_gear.VerifyShortAddress
+            self.Withdraw = control_gear.Withdraw
             self.SetSearchAddrH = control_gear.SetSearchAddrH
             self.SetSearchAddrM = control_gear.SetSearchAddrM
             self.SetSearchAddrL = control_gear.SetSearchAddrL
 
+        self._is_dali2 = dali2
+
+    def Initialise(self, short_addr: Optional[int]) -> Command:
+        if self._is_dali2:
+            if short_addr is None:
+                return control_device.Initialise(255)
+            return control_device.Initialise(short_addr)
+        if short_addr is None or short_addr == MASK:
+            return control_gear.Initialise(broadcast=True)
+        return control_gear.Initialise(address=short_addr, broadcast=False)
+
+    def ProgramShortAddress(self, short_addr: int) -> Command:
+        if self._is_dali2:
+            return control_device.ProgramShortAddress(short_addr)
+        if isinstance(short_addr, str) and short_addr == MASK:
+            return control_gear.ProgramShortAddress("MASK")
+        return control_gear.ProgramShortAddress(short_addr)
+
+    def QueryShortAddressResponseValue(
+        self, resp: Union[NumericResponse, NumericResponseMask]
+    ) -> Optional[int]:
+        value = resp.value
+        if isinstance(value, int):
+            if self._is_dali2:
+                return value
+            return value >> 1
+        if value == "MASK":
+            return MASK
+        return None
+
+    def QueryRandomAddressH(self, addr: int):
+        if self._is_dali2:
+            return control_device.QueryRandomAddressH(DeviceShort(addr))
+        return control_gear.QueryRandomAddressH(GearShort(addr))
+
+    def QueryRandomAddressM(self, addr: int):
+        if self._is_dali2:
+            return control_device.QueryRandomAddressM(DeviceShort(addr))
+        return control_gear.QueryRandomAddressM(GearShort(addr))
+
+    def QueryRandomAddressL(self, addr: int):
+        if self._is_dali2:
+            return control_device.QueryRandomAddressL(DeviceShort(addr))
+        return control_gear.QueryRandomAddressL(GearShort(addr))
+
+    def QueryRandomAddressResponseValue(self, resp) -> int:
+        if self._is_dali2:
+            # Control device returns NumericResponse where value is int
+            return resp.value
+        # Control gear returns Response where value is BackwardFrame
+        return resp.value.as_integer
+
+
+class Commissioning:
+    def __init__(
+        self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress], dali2: bool = False
+    ) -> None:
         self.driver: WBDALIDriver = driver
         self.last_search_addr = SearchAddress()
         self.found_devices: dict[int, int] = {}  # found this run, not in old_devices
@@ -114,15 +168,7 @@ class Commissioning:
             compare_callback=self.compare, set_search_addr_callback=self.set_search_addr
         )
         self._is_dali2 = dali2
-
-    def _get_initialize_command(self, short_addr: Optional[int]):
-        if self._is_dali2:
-            if short_addr is None:
-                return control_device.Initialise(255)
-            return control_device.Initialise(short_addr)
-        if short_addr is None:
-            return control_gear.Initialise(broadcast=True)
-        return control_gear.Initialise(address=short_addr, broadcast=False)
+        self._cmds = CommandsCompatibilityLayer(dali2)
 
     def _add_device(self, short_addr: int, rand_addr: int) -> None:
         log.debug("Adding device: short %d, random 0x%06x", short_addr, rand_addr)
@@ -134,12 +180,11 @@ class Commissioning:
         new_addr = SearchAddress.from_int(addr)
 
         if self.last_search_addr.high != new_addr.high:
-            yield self.SetSearchAddrH(new_addr.high)
+            yield self._cmds.SetSearchAddrH(new_addr.high)
         if self.last_search_addr.medium != new_addr.medium:
-            yield self.SetSearchAddrM(new_addr.medium)
+            yield self._cmds.SetSearchAddrM(new_addr.medium)
         if self.last_search_addr.low != new_addr.low:
-            yield self.SetSearchAddrL(new_addr.low)
-
+            yield self._cmds.SetSearchAddrL(new_addr.low)
         self.last_search_addr = new_addr
 
     async def set_search_addr(self, addr: int) -> None:
@@ -148,13 +193,16 @@ class Commissioning:
         )
 
     async def compare(self, addr: int) -> bool:
-        """Perform a compare command with the given address,
+        """
+        Perform a compare command with the given address,
         only sending cmd SEARCHADDR if the corresponding address part has changed.
+
+        Returns True if a device responded or framing error occurred, False otherwise.
         """
 
         r = await asyncio.gather(
             *(self.driver.send(cmd) for cmd in self._set_search_addr(addr)),
-            self.driver.send(self.Compare()),
+            self.driver.send(self._cmds.Compare()),
         )
         return r[-1].value is True
 
@@ -183,9 +231,9 @@ class Commissioning:
                 new_addr,
                 found_addr,
             )
-            await self.driver.send(self.ProgramShortAddress(new_addr))
+            await self.driver.send(self._cmds.ProgramShortAddress(new_addr))
             await asyncio.sleep(0.3)  # Wait for flash write
-            r = await self.driver.send(self.VerifyShortAddress(new_addr))
+            r = await self.driver.send(self._cmds.VerifyShortAddress(new_addr))
             if r.value is True:
                 log.info("Short address %d programmed successfully", new_addr)
                 return new_addr
@@ -194,12 +242,9 @@ class Commissioning:
                 "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
                 new_addr,
             )
-            r = await self.driver.send(self.QueryShortAddress())
-            if self._is_dali2:
-                res_is_ok = r.value == new_addr
-            else:
-                res_is_ok = r.value == (new_addr << 1) | 1
-            if res_is_ok:
+            r = await self.driver.send(self._cmds.QueryShortAddress())
+            short_addr = self._cmds.QueryShortAddressResponseValue(r)
+            if short_addr == new_addr:
                 log.info(
                     "Short address %d programmed successfully (QUERY SHORT ADDRESS)",
                     new_addr,
@@ -227,28 +272,24 @@ class Commissioning:
         )
         # "RANDOMISE" accepted by all initialized devices, even the ones which are already withdrawn
         # that's why we'll need to initialise only unaddressed ones
-        await self.driver.send(self.Terminate())
-        await self.driver.send(self._get_initialize_command(short_addr))
-        await self.driver.send(self.Randomise())
+        await self.driver.send(self._cmds.Terminate())
+        await self.driver.send(self._cmds.Initialise(short_addr))
+        await self.driver.send(self._cmds.Randomise())
         await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
 
-    async def _process_found_device(self, found_addr: int, query_short_resp) -> set[int]:
+    async def _process_found_device(
+        self, found_addr: int, query_short_resp: Union[NumericResponseMask, NumericResponse]
+    ) -> set[int]:
         """Returns empty set if no random address conflict,
         or set of short addresses that need to be randomised
         """
 
         random_address_conflicts = set()
-        query_short_resp_value = query_short_resp.value
-        short_addr = None
-        if isinstance(query_short_resp_value, int):
-            if self._is_dali2:
-                short_addr = query_short_resp_value
-            else:
-                short_addr = query_short_resp_value >> 1
+        short_addr = self._cmds.QueryShortAddressResponseValue(query_short_resp)
         log.info(
             "Device found at 0x%06x with short address %s",
             found_addr,
-            (query_short_resp_value if short_addr is None else short_addr),
+            (query_short_resp.value if short_addr is None else short_addr),
         )
 
         if query_short_resp.raw_value is None:
@@ -270,12 +311,12 @@ class Commissioning:
                 found_addr,
             )
             await self.set_search_addr(found_addr)
-            await self.driver.send(self.ProgramShortAddress("MASK"))
+            await self.driver.send(self._cmds.ProgramShortAddress(MASK))
             random_address_conflicts.add(
                 None
             )  # None means "unset short address", so we can use it to mark devices with unset short address
 
-        elif query_short_resp_value == "MASK":
+        elif short_addr == MASK:
             if found_addr == 0xFFFFFF:
                 log.info(
                     "Device with unset random address (0x%06x) and with unset short address. "
@@ -308,7 +349,7 @@ class Commissioning:
                         "Mark 0x%06x for readdressing by resetting its short address",
                         found_addr,
                     )
-                    await self.driver.send(self.ProgramShortAddress("MASK"))
+                    await self.driver.send(self._cmds.ProgramShortAddress(MASK))
                     random_address_conflicts.add(None)
                 else:
                     log.warning(
@@ -393,9 +434,9 @@ class Commissioning:
 
             short_sent_randomise.append(short)
             known_rand_addrs.remove((short, rand))
-            await self.driver.send(self.Terminate())
-            await self.driver.send(self._get_initialize_command(short))
-            await self.driver.send(self.Randomise())
+            await self.driver.send(self._cmds.Terminate())
+            await self.driver.send(self._cmds.Initialise(short))
+            await self.driver.send(self._cmds.Randomise())
 
         if short_sent_randomise:
             await asyncio.sleep(0.1)  # wait for new random addresses to be generated
@@ -414,7 +455,7 @@ class Commissioning:
                     known_rand_addrs.append((short, addr))
 
         await asyncio.gather(
-            self.driver.send(self.Terminate()), self.driver.send(self._get_initialize_command(None))
+            self.driver.send(self._cmds.Terminate()), self.driver.send(self._cmds.Initialise(None))
         )
 
         self.available_addresses = list(range(64))
@@ -450,8 +491,8 @@ class Commissioning:
             # note: number of search cmds can be less than 3, if some of the parts is the same as before
             cmds.extend(list(self._set_search_addr(rand_addr)))
             query_cmd_indicies.append(len(cmds))
-            cmds.append(self.QueryShortAddress())
-            cmds.append(self.Withdraw())
+            cmds.append(self._cmds.QueryShortAddress())
+            cmds.append(self._cmds.Withdraw())
 
         random_address_conflicts = set()
         responses = await asyncio.gather(*[self.driver.send(cmd) for cmd in cmds])
@@ -494,8 +535,8 @@ class Commissioning:
                     log.info("No device found, exiting")
                     break
 
-                resp = await self.driver.send(self.QueryShortAddress())
-                await self.driver.send(self.Withdraw())
+                resp = await self.driver.send(self._cmds.QueryShortAddress())
+                await self.driver.send(self._cmds.Withdraw())
                 random_address_conflicts |= await self._process_found_device(found_addr, resp)
                 low = found_addr
 
@@ -514,7 +555,7 @@ class Commissioning:
                 await self._randomise_by_short(short)
             random_address_conflicts = set()
 
-        await self.driver.send(self.Terminate())
+        await self.driver.send(self._cmds.Terminate())
 
         # Classification based purely on old_devices (from file) and found_devices (current scan)
         # Build reverse maps random -> short
@@ -553,28 +594,21 @@ class Commissioning:
         return res
 
     async def _get_random_address(self, int_address: int) -> Optional[int]:
-        addr = DeviceShort(int_address) if self._is_dali2 else GearShort(int_address)
         responses = await asyncio.gather(
-            self.driver.send(self.QueryRandomAddressH(addr)),
-            self.driver.send(self.QueryRandomAddressM(addr)),
-            self.driver.send(self.QueryRandomAddressL(addr)),
+            self.driver.send(self._cmds.QueryRandomAddressH(int_address)),
+            self.driver.send(self._cmds.QueryRandomAddressM(int_address)),
+            self.driver.send(self._cmds.QueryRandomAddressL(int_address)),
         )
         values = []
         for resp in responses:
             try:
                 if not resp or not resp.value:
-                    log.error("Failed to get random address part for %s - %s", addr, resp)
+                    log.error("Failed to get random address part for %s - %s", int_address, resp)
                     return None
 
-                value = resp.value
-                if self._is_dali2:
-                    # Control device returns NumericResponse where value is int
-                    values.append(value)
-                else:
-                    # Control gear returns Response where value is BackwardFrame
-                    values.append(value.as_integer)
+                values.append(self._cmds.QueryRandomAddressResponseValue(resp))
             except ResponseError as e:
-                log.error("Failed to get random address part for %s - %s", addr, e)
+                log.error("Failed to get random address part for %s - %s", int_address, e)
                 return None
 
         return values[0] << 16 | values[1] << 8 | values[2]
@@ -598,6 +632,80 @@ class Commissioning:
                     short_addr_present.append(i)
                     log.debug("Control gear with short addr %d is present", i)
         return short_addr_present
+
+    def _print_binary_search_iteration_info(self, random_addr: int, query_short_resp):
+        short_addr = self._cmds.QueryShortAddressResponseValue(query_short_resp)
+        if query_short_resp.raw_value is None:
+            log.error(
+                "No response while reading short address of device at 0x%06x. "
+                "Maybe the device doesn't implement the QUERY SHORT ADDRESS command?",
+                random_addr,
+            )
+        elif query_short_resp.raw_value.error:
+            log.warning(
+                "Framing error while reading short address for device at random address 0x%06x. "
+                "Multiple devices share the same random address!",
+                random_addr,
+            )
+        elif short_addr == MASK:
+            if random_addr == 0xFFFFFF:
+                log.info(
+                    "Device with unset random address (0x%06x) and with unset short address.",
+                    random_addr,
+                )
+            else:
+                log.warning(
+                    "Device found at 0x%06x, with unset short address.",
+                    random_addr,
+                )
+        else:
+            log.info(
+                "Device found at 0x%06x with short address %d",
+                random_addr,
+                short_addr,
+            )
+
+    async def binary_search(self):
+        try:
+            await self.driver.send_commands([self._cmds.Terminate(), self._cmds.Initialise(MASK)])
+            low = 0
+            high = 0xFFFFFF
+            while low < high:
+                high = 0xFFFFFF
+                found_addr = await self.find_next_device(low, high)
+                if found_addr is None:
+                    log.info("No device found, exiting")
+                    break
+
+                resp = await self.driver.send_commands(
+                    [self._cmds.QueryShortAddress(), self._cmds.Withdraw()]
+                )
+                self._print_binary_search_iteration_info(found_addr, resp[0])
+                low = found_addr
+        finally:
+            await self.driver.send(self._cmds.Terminate())
+
+
+async def check_presence(driver: WBDALIDriver, dali2: bool) -> bool:
+    """
+    Check if there is at least one device on the bus
+    """
+
+    cmds = CommandsCompatibilityLayer(dali2)
+    try:
+        r = await driver.send_commands(
+            [
+                cmds.Terminate(),
+                cmds.Initialise(MASK),
+                cmds.SetSearchAddrH(0xFF),
+                cmds.SetSearchAddrM(0xFF),
+                cmds.SetSearchAddrL(0xFF),
+                cmds.Compare(),
+            ],
+        )
+        return r[-1].value is True
+    finally:
+        await driver.send(cmds.Terminate())
 
 
 def print_commissioning_summary(res: CommissioningResult) -> None:

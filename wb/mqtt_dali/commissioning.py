@@ -4,14 +4,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Union
 
-from dali.address import DeviceShort, GearShort
+from dali.address import DeviceBroadcast, DeviceShort, GearShort
 from dali.command import Command, NumericResponse, NumericResponseMask
 from dali.device import general as control_device
 from dali.exceptions import ResponseError
 from dali.gear import general as control_gear
 
 from .dali_device import DaliDeviceAddress
-from .wbdali import MASK, WBDALIDriver
+from .wbdali import MASK, AsyncDeviceInstanceTypeMapper, WBDALIDriver
 
 log = logging.getLogger("commissioning")
 
@@ -114,7 +114,7 @@ class CommandsCompatibilityLayer:
     def ProgramShortAddress(self, short_addr: int) -> Command:
         if self._is_dali2:
             return control_device.ProgramShortAddress(short_addr)
-        if isinstance(short_addr, str) and short_addr == MASK:
+        if short_addr == MASK:
             return control_gear.ProgramShortAddress("MASK")
         return control_gear.ProgramShortAddress(short_addr)
 
@@ -684,6 +684,31 @@ class Commissioning:
                 low = found_addr
         finally:
             await self.driver.send(self._cmds.Terminate())
+
+
+async def search_short(driver: WBDALIDriver, dali2: bool):
+    short_addr_present = []
+    cmds = CommandsCompatibilityLayer(dali2)
+    await driver.send(cmds.Terminate())
+    await driver.send(control_device.StartQuiescentMode(DeviceBroadcast()))
+    try:
+        if dali2:
+            mapper = AsyncDeviceInstanceTypeMapper()
+            await mapper.async_autodiscover(driver)
+            sorted_items = sorted(mapper.mapping.items(), key=lambda x: x[0][0] * 100 + x[0][1])
+            for (addr, inst_num), inst_type in sorted_items:
+                logging.info("Control device %d, instance %d: type %d", addr, inst_num, inst_type)
+        else:
+            responses = await asyncio.gather(
+                *[driver.send(control_gear.QueryControlGearPresent(GearShort(i))) for i in range(64)]
+            )
+            for i, resp in enumerate(responses):
+                if resp and resp.value:
+                    short_addr_present.append(i)
+                    logging.info("Control gear %d", i)
+        return short_addr_present
+    finally:
+        await driver.send(control_device.StopQuiescentMode(DeviceBroadcast()))
 
 
 async def check_presence(driver: WBDALIDriver, dali2: bool) -> bool:

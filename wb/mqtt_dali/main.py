@@ -13,7 +13,7 @@ import asyncio_mqtt as aiomqtt
 import jsonschema
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
-from .commissioning import Commissioning, check_presence
+from .commissioning import Commissioning, check_presence, search_short
 from .gateway import Gateway
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbdali import WBDALIConfig, WBDALIDriver
@@ -188,6 +188,25 @@ async def binary_search_service(gateway: str, args, dali2: bool):
     return EXIT_SUCCESS
 
 
+async def short_search_service(gateway: str, args, dali2: bool):
+    client = make_mqtt_client(args.broker_url)
+    mqtt_dispatcher = MQTTDispatcher(client)
+    async with client:
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        driver = WBDALIDriver(
+            WBDALIConfig(device_name=gateway),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
+        await driver.initialize()
+        await search_short(driver, dali2)
+        await driver.deinitialize()
+        dispatcher_task.cancel()
+        await dispatcher_task
+
+    return EXIT_SUCCESS
+
+
 async def main(argv):
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
@@ -244,6 +263,20 @@ async def main(argv):
         help="Binary search of DALI 2.0 devices on specified gateway",
     )
 
+    parser.add_argument(
+        "--search-short",
+        dest="search_short_gateway",
+        type=str,
+        help="Short address search of DALI 1.0 devices on specified gateway",
+    )
+
+    parser.add_argument(
+        "--search-short2",
+        dest="search_short2_gateway",
+        type=str,
+        help="Short address search of DALI 2.0 devices on specified gateway",
+    )
+
     args = parser.parse_args(argv[1:])
 
     logging.basicConfig(level=args.log_level)
@@ -257,6 +290,10 @@ async def main(argv):
         return await binary_search_service(args.binary_search_gateway, args, dali2=False)
     if args.binary_search2_gateway:
         return await binary_search_service(args.binary_search2_gateway, args, dali2=True)
+    if args.search_short_gateway:
+        return await short_search_service(args.search_short_gateway, args, dali2=False)
+    if args.search_short2_gateway:
+        return await short_search_service(args.search_short2_gateway, args, dali2=True)
     return await default_service(args)
 
 

@@ -63,6 +63,7 @@ class DevicePublisher:
         self._control_handlers: Dict[str, ControlHandler] = {}
         self._initialized = False
         self._lock = asyncio.Lock()
+        self._on_topic_running_handlers: Set[asyncio.Task] = set()
         self.logger = logger.getChild("DevicePublisher")
 
     async def initialize(self) -> None:
@@ -91,6 +92,25 @@ class DevicePublisher:
                         for handler in self._control_handlers.values()
                     ]
                 )
+
+            # Make a copy of the set to avoid modification during iteration
+            tasks_to_cancel = list(self._on_topic_running_handlers)
+            for task in tasks_to_cancel:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    # Task cancellation is expected during cleanup; suppress the exception.
+                    pass
+            self._on_topic_running_handlers.clear()
+
+            for task in self._on_topic_running_handlers:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            self._on_topic_running_handlers.clear()
 
             self._control_handlers.clear()
 
@@ -312,7 +332,21 @@ class DevicePublisher:
                 handler.control_id,
                 payload,
             )
-            asyncio.create_task(handler.callback(message))
+
+            def task_finished(fut: asyncio.Task) -> None:
+                self._on_topic_running_handlers.discard(fut)
+                if fut.exception():
+                    self.logger.error(
+                        "Error handling /on message for %s/%s: %s",
+                        handler.device_id,
+                        handler.control_id,
+                        fut.exception(),
+                        exc_info=True,
+                    )
+
+            task = asyncio.create_task(handler.callback(message))
+            self._on_topic_running_handlers.add(task)
+            task.add_done_callback(task_finished)
         except Exception as e:
             self.logger.error(
                 "Error handling /on message for %s/%s: %s",

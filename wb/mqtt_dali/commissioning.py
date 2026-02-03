@@ -686,11 +686,14 @@ class Commissioning:
             await self.driver.send(self._cmds.Terminate())
 
 
-async def search_short(driver: WBDALIDriver, dali2: bool):
-    short_addr_present = []
+async def search_short(driver: WBDALIDriver, dali2: bool) -> None:
     cmds = CommandsCompatibilityLayer(dali2)
-    await driver.send(cmds.Terminate())
-    await driver.send(control_device.StartQuiescentMode(DeviceBroadcast()))
+    await driver.send_commands(
+        [
+            cmds.Terminate(),
+            control_device.StartQuiescentMode(DeviceBroadcast()),
+        ]
+    )
     try:
         if dali2:
             mapper = AsyncDeviceInstanceTypeMapper()
@@ -699,14 +702,12 @@ async def search_short(driver: WBDALIDriver, dali2: bool):
             for (addr, inst_num), inst_type in sorted_items:
                 logging.info("Control device %d, instance %d: type %d", addr, inst_num, inst_type)
         else:
-            responses = await asyncio.gather(
-                *[driver.send(control_gear.QueryControlGearPresent(GearShort(i))) for i in range(64)]
+            responses = await driver.send_commands(
+                [control_gear.QueryControlGearPresent(GearShort(i)) for i in range(64)]
             )
             for i, resp in enumerate(responses):
                 if resp and resp.value:
-                    short_addr_present.append(i)
                     logging.info("Control gear %d", i)
-        return short_addr_present
     finally:
         await driver.send(control_device.StopQuiescentMode(DeviceBroadcast()))
 

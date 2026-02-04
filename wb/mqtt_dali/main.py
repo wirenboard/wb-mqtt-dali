@@ -13,8 +13,10 @@ import asyncio_mqtt as aiomqtt
 import jsonschema
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
+from .commissioning import Commissioning, check_presence, search_short
 from .gateway import Gateway
 from .mqtt_dispatcher import MQTTDispatcher
+from .wbdali import WBDALIConfig, WBDALIDriver
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 WB_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
@@ -92,44 +94,16 @@ def load_config(config_filepath: str) -> dict:
     return config
 
 
-async def main(argv):
-    parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
-    parser.add_argument(
-        "-c",
-        "--config",
-        type=str,
-        default=CONFIG_FILEPATH,
-        help="Path to configuration file",
-    )
-    parser.add_argument(
-        "-d",
-        "--debug",
-        dest="log_level",
-        action="store_const",
-        default=logging.INFO,
-        const=logging.DEBUG,
-        help="Enable debug logging",
-    )
-    parser.add_argument(
-        "-b",
-        "--broker",
-        "--broker_url",
-        dest="broker_url",
-        type=str,
-        help="MQTT broker url",
-        default=DEFAULT_BROKER_URL,
-    )
-    args = parser.parse_args(argv[1:])
-
+async def default_service(args):
     try:
         config = load_config(args.config)
     except Exception as e:  # pylint: disable=broad-exception-caught
         logging.error("Failed to load configuration: %s", e)
         return EXIT_NOTCONFIGURED
 
-    log_level = logging.DEBUG if config.get("debug") else args.log_level
-    logging.basicConfig(level=log_level)
-    logging.getLogger("mqtt_client").setLevel(logging.INFO)
+    if config.get("debug"):
+        logging.basicConfig(level=logging.DEBUG, force=True)
+        logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     client = make_mqtt_client(args.broker_url)
 
@@ -163,6 +137,164 @@ async def main(argv):
             await asyncio.sleep(1)
 
     return EXIT_SUCCESS
+
+
+async def check_presence_service(gateway: str, args, dali2: bool):
+    client = make_mqtt_client(args.broker_url)
+
+    mqtt_dispatcher = MQTTDispatcher(client)
+    async with client:
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        driver = WBDALIDriver(
+            WBDALIConfig(device_name=gateway),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
+        await driver.initialize()
+        if dali2:
+            if await check_presence(driver, True):
+                logging.info("DALI 2.0 devices are present")
+            else:
+                logging.info("DALI 2.0 devices are NOT present")
+        else:
+            if await check_presence(driver, False):
+                logging.info("DALI 1.0 devices are present")
+            else:
+                logging.info("DALI 1.0 devices are NOT present")
+        await driver.deinitialize()
+        dispatcher_task.cancel()
+        await dispatcher_task
+
+    return EXIT_SUCCESS
+
+
+async def binary_search_service(gateway: str, args, dali2: bool):
+    client = make_mqtt_client(args.broker_url)
+    mqtt_dispatcher = MQTTDispatcher(client)
+    async with client:
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        driver = WBDALIDriver(
+            WBDALIConfig(device_name=gateway),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
+        await driver.initialize()
+        commissioning = Commissioning(driver, [], dali2)
+        await commissioning.binary_search()
+        await driver.deinitialize()
+        dispatcher_task.cancel()
+        await dispatcher_task
+
+    return EXIT_SUCCESS
+
+
+async def short_search_service(gateway: str, args, dali2: bool):
+    client = make_mqtt_client(args.broker_url)
+    mqtt_dispatcher = MQTTDispatcher(client)
+    async with client:
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        driver = WBDALIDriver(
+            WBDALIConfig(device_name=gateway),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
+        await driver.initialize()
+        await search_short(driver, dali2)
+        await driver.deinitialize()
+        dispatcher_task.cancel()
+        await dispatcher_task
+
+    return EXIT_SUCCESS
+
+
+async def main(argv):
+    parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=CONFIG_FILEPATH,
+        help="Path to configuration file",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        dest="log_level",
+        action="store_const",
+        default=logging.INFO,
+        const=logging.DEBUG,
+        help="Enable debug logging",
+    )
+    parser.add_argument(
+        "-b",
+        "--broker",
+        "--broker_url",
+        dest="broker_url",
+        type=str,
+        help="MQTT broker url",
+        default=DEFAULT_BROKER_URL,
+    )
+
+    parser.add_argument(
+        "--check-presence",
+        dest="check_presence_gateway",
+        type=str,
+        help="Enable DALI 1.0 device presence checking on specified gateway",
+    )
+
+    parser.add_argument(
+        "--check-presence2",
+        dest="check_presence2_gateway",
+        type=str,
+        help="Enable DALI 2.0 device presence checking on specified gateway",
+    )
+
+    parser.add_argument(
+        "--binary-search",
+        dest="binary_search_gateway",
+        type=str,
+        help="Binary search of DALI 1.0 devices on specified gateway",
+    )
+
+    parser.add_argument(
+        "--binary-search2",
+        dest="binary_search2_gateway",
+        type=str,
+        help="Binary search of DALI 2.0 devices on specified gateway",
+    )
+
+    parser.add_argument(
+        "--search-short",
+        dest="search_short_gateway",
+        type=str,
+        help="Short address search of DALI 1.0 devices on specified gateway",
+    )
+
+    parser.add_argument(
+        "--search-short2",
+        dest="search_short2_gateway",
+        type=str,
+        help="Short address search of DALI 2.0 devices on specified gateway",
+    )
+
+    args = parser.parse_args(argv[1:])
+
+    logging.basicConfig(level=args.log_level)
+    logging.getLogger("mqtt_client").setLevel(logging.INFO)
+
+    if args.check_presence_gateway:
+        return await check_presence_service(args.check_presence_gateway, args, dali2=False)
+    if args.check_presence2_gateway:
+        return await check_presence_service(args.check_presence2_gateway, args, dali2=True)
+    if args.binary_search_gateway:
+        return await binary_search_service(args.binary_search_gateway, args, dali2=False)
+    if args.binary_search2_gateway:
+        return await binary_search_service(args.binary_search2_gateway, args, dali2=True)
+    if args.search_short_gateway:
+        return await short_search_service(args.search_short_gateway, args, dali2=False)
+    if args.search_short2_gateway:
+        return await short_search_service(args.search_short2_gateway, args, dali2=True)
+    return await default_service(args)
 
 
 if __name__ == "__main__":

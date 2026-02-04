@@ -7,12 +7,8 @@ from dali.gear.converter import (
     SelectDimmingCurve,
 )
 
-from .extended_gear_parameters import (
-    GearParamBase,
-    GearParamName,
-    NumberGearParam,
-    TypeParameters,
-)
+from .extended_gear_parameters import NumberGearParam, TypeParameters
+from .settings import SettingsParamName
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: Output range is write only
@@ -23,34 +19,28 @@ class DimmingCurveParam(NumberGearParam):
     set_command_class = SelectDimmingCurve
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Dimming curve"), "type_5_dimming_curve")
+        super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "type_5_dimming_curve")
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name.en,
-                    "type": "integer",
-                    "enum": [0, 1],
-                    "options": {"enum_titles": ["standard", "linear"]},
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name.en: "Кривая диммирования",
-                    "standard": "стандартная",
-                    "linear": "линейная",
-                }
-            },
+    def get_schema(self) -> dict:
+        schema = super().get_schema()
+        schema["properties"][self.property_name]["enum"] = [0, 1]
+        if "options" not in schema["properties"][self.property_name]:
+            schema["properties"][self.property_name]["options"] = {}
+        schema["properties"][self.property_name]["options"] = {
+            "enum_titles": ["standard", "linear"],
         }
+        schema["translations"]["ru"]["standard"] = "стандартная"
+        schema["translations"]["ru"]["linear"] = "линейная"
+        return schema
 
 
 class Type5Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
+    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
         try:
             features = await query_request(driver, QueryConverterFeatures(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if not ((features >> 5) & 1):  # 5th bit: dimming curve selectable
-            return []
-        return [DimmingCurveParam()]
+            return {}
+        self._parameters = [DimmingCurveParam()]
+        return await super().read(driver, address)

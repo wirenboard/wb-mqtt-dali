@@ -1,15 +1,9 @@
 # Type 4 Supply voltage controller for incandescent lamps
 
-from dali.address import GearShort
 from dali.gear.incandescent import QueryDimmingCurve, SelectDimmingCurve
 
-from .extended_gear_parameters import (
-    GearParamBase,
-    GearParamName,
-    NumberGearParam,
-    TypeParameters,
-)
-from .wbdali import WBDALIDriver
+from .extended_gear_parameters import NumberGearParam, TypeParameters
+from .settings import SettingsParamName
 
 
 class DimmingCurveParam(NumberGearParam):
@@ -17,28 +11,22 @@ class DimmingCurveParam(NumberGearParam):
     set_command_class = SelectDimmingCurve
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Dimming curve"), "type_4_dimming_curve")
+        super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "type_4_dimming_curve")
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name.en,
-                    "type": "integer",
-                    "enum": [0, 1],
-                    "options": {"enum_titles": ["standard", "linear"]},
-                }
-            },
-            "translations": {
-                "ru": {
-                    self.name.en: "Кривая диммирования",
-                    "standard": "стандартная",
-                    "linear": "линейная",
-                }
-            },
+    def get_schema(self) -> dict:
+        schema = super().get_schema()
+        schema["properties"][self.property_name]["enum"] = [0, 1]
+        if "options" not in schema["properties"][self.property_name]:
+            schema["properties"][self.property_name]["options"] = {}
+        schema["properties"][self.property_name]["options"] = {
+            "enum_titles": ["standard", "linear"],
         }
+        schema["translations"]["ru"]["standard"] = "стандартная"
+        schema["translations"]["ru"]["linear"] = "линейная"
+        return schema
 
 
 class Type4Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
-        return [DimmingCurveParam()]
+    def __init__(self) -> None:
+        super().__init__()
+        self._parameters = [DimmingCurveParam()]

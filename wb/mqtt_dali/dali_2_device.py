@@ -1,5 +1,5 @@
 import asyncio
-from typing import Callable, Optional
+from typing import Optional
 
 import jsonschema
 from dali.address import DeviceShort, InstanceNumber
@@ -7,167 +7,49 @@ from dali.command import Command
 from dali.device.general import DTR0, QueryEventScheme, SetEventScheme
 
 from .dali_device import DaliDeviceAddress
-from .extended_gear_parameters import GearParamName
-from .utils import merge_json_schema_properties, merge_json_schemas, merge_translations
-from .wbdali import WBDALIDriver, check_query_response, query_request
+from .settings import (
+    InstanceAddress,
+    NumberSettingsParam,
+    SettingsParamAddress,
+    SettingsParamBase,
+    SettingsParamGroup,
+    SettingsParamName,
+)
+from .utils import merge_json_schemas
+from .wbdali import WBDALIDriver
 
 
-class InstanceParamBase:
-    def __init__(self, name: GearParamName) -> None:
-        self.name = name
-
-    async def read(self, driver: WBDALIDriver, address: DeviceShort, instance_number: InstanceNumber) -> dict:
-        return {}
-
-    async def write(
-        self, driver: WBDALIDriver, address: DeviceShort, instance_number: InstanceNumber, value: dict
-    ) -> dict:
-        """
-        Write extended gear parameters to a DALI device.
-
-        Args:
-            driver (WBDALIDriver): The DALI driver instance used to communicate with devices.
-            address (DeviceShort): The address of the DALI control device to write to.
-            instance_number (InstanceNumber): The instance number to write to.
-            value (dict): A dictionary containing the parameter values to write to the device.
-
-        Returns:
-            dict: An empty dictionary if nothing was changed, or a dictionary with the updated parameter values.
-        """
-        return {}
-
-    def get_schema(self) -> dict:
-        return {}
-
-
-class NumberInstanceParam(InstanceParamBase):
-    query_command_class: Optional[Callable[[DeviceShort, InstanceNumber], Command]] = None
-    set_command_class: Optional[Callable[[DeviceShort, InstanceNumber], Command]] = None
-
-    def __init__(self, name: GearParamName, property_name: str) -> None:
-        super().__init__(name)
-        self.property_name = property_name
-        self.minimum = 0
-        self.maximum = 255
-        self.grid_columns = None
-        self.property_order = None
-        self.default: Optional[int] = None
-        self._last_value = None
-
-    async def read(self, driver: WBDALIDriver, address: DeviceShort, instance_number: InstanceNumber) -> dict:
-        if self.query_command_class is not None:
-            self._last_value = await query_request(driver, self.query_command_class(address, instance_number))
-            return {self.property_name: self._last_value}
-        raise RuntimeError(f"Query command class for {self.name.en} is not defined")
-
-    async def write(
-        self, driver: WBDALIDriver, address: DeviceShort, instance_number: InstanceNumber, value: dict
-    ) -> dict:
-        if self.set_command_class is None:
-            raise RuntimeError(f"Set command class for {self.name.en} is not defined")
-        if self.query_command_class is None:
-            raise RuntimeError(f"Query command class for {self.name.en} is not defined")
-        if self.property_name not in value:
-            return {}
-        value_to_set = value[self.property_name]
-        if self._last_value == value_to_set:
-            return {}
-        commands = [
-            DTR0(value_to_set),
-            self.set_command_class(address, instance_number),
-            self.query_command_class(address, instance_number),
-        ]
-        res = (await driver.send_commands(commands))[-1]
-        check_query_response(res)
-        self._last_value = res.raw_value.as_integer
-        return {self.property_name: self._last_value}
-
-    def get_schema(self) -> dict:
-        schema: dict = {
-            "properties": {
-                self.property_name: {
-                    "type": "integer",
-                    "title": self.name.en,
-                    "minimum": self.minimum,
-                    "maximum": self.maximum,
-                }
-            },
-        }
-        has_options = False
-        if self.set_command_class is None:
-            schema["properties"][self.property_name]["options"] = {"wb": {"read_only": True}}
-            has_options = True
-        if self.grid_columns is not None:
-            if not has_options:
-                schema["properties"][self.property_name]["options"] = {}
-            schema["properties"][self.property_name]["options"]["grid_columns"] = self.grid_columns
-        if self.name.ru is not None:
-            schema["translations"] = {"ru": {self.name.en: self.name.ru}}
-        if self.default is not None:
-            schema["properties"][self.property_name]["default"] = self.default
-        if self.property_order is not None:
-            schema["properties"][self.property_name]["propertyOrder"] = self.property_order
-        return schema
-
-
-class InstanceParameters:
+class InstanceParameters(SettingsParamGroup):
     def __init__(self, instance_number: InstanceNumber, instance_type: int) -> None:
-        self.instance_number = instance_number
-        self.instance_type = instance_type
-        self._property_name = f"instance{self.instance_number.value}"
+        super().__init__(
+            SettingsParamName(f"Instance {instance_number.value}"), f"instance{instance_number.value}"
+        )
         self._parameters = [
-            InstanceTypeParam(self.instance_type),
+            InstanceTypeParam(instance_type),
             EventSchemeParam(),
         ]
-
-    async def read(self, driver: WBDALIDriver, address: DeviceShort) -> dict:
-        res = {}
-        awaitables = [param.read(driver, address, self.instance_number) for param in self._parameters]
-        results = await asyncio.gather(*awaitables, return_exceptions=True)
-        for param, result in zip(self._parameters, results):
-            if isinstance(result, BaseException):
-                raise RuntimeError(f'Error reading "{param.name.en}": {result}') from result
-            if result is not None:
-                res.update(result)
-        return {self._property_name: res}
-
-    async def write(self, driver: WBDALIDriver, address: DeviceShort, value: dict) -> dict:
-        if self._property_name not in value:
-            return {}
-        instance_value = value[self._property_name]
-        awaitables = [
-            param.write(driver, address, self.instance_number, instance_value) for param in self._parameters
-        ]
-        results = await asyncio.gather(*awaitables, return_exceptions=True)
-        res = {}
-        for param, result in zip(self._parameters, results):
-            if isinstance(result, BaseException):
-                raise RuntimeError(f'Error writing "{param.name.en}": {result}') from result
-            if result is not None:
-                res.update(result)
-        return {self._property_name: res}
-
-    def get_schema(self) -> dict:
-        res = {
-            "properties": {
-                self._property_name: {
-                    "title": f"Instance {self.instance_number.value}",
-                    "properties": {},
-                }
-            }
-        }
-        for param in self._parameters:
-            merge_json_schema_properties(res["properties"][self._property_name], param.get_schema())
-            merge_translations(res, param.get_schema())
-        return res
+        self.instance_number = instance_number
+        self.instance_type = instance_type
 
 
-class EventSchemeParam(NumberInstanceParam):
-    query_command_class = QueryEventScheme
-    set_command_class = SetEventScheme
+class EventSchemeParam(NumberSettingsParam):
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Event addressing scheme"), "event_scheme")
+        super().__init__(SettingsParamName("Event addressing scheme"), "event_scheme")
+
+    def get_write_commands(self, address: SettingsParamAddress, value_to_set: int) -> list[Command]:
+        if not isinstance(address, InstanceAddress):
+            raise ValueError("Address must be an InstanceAddress")
+        return [
+            DTR0(value_to_set),
+            SetEventScheme(address.device_short, address.instance_number),
+            QueryEventScheme(address.device_short, address.instance_number),
+        ]
+
+    def get_read_command(self, address: SettingsParamAddress) -> Command:
+        if not isinstance(address, InstanceAddress):
+            raise ValueError("Address must be an InstanceAddress")
+        return QueryEventScheme(address.device_short, address.instance_number)
 
     def get_schema(self) -> dict:
         schema = super().get_schema()
@@ -184,7 +66,7 @@ class EventSchemeParam(NumberInstanceParam):
         return schema
 
 
-class InstanceTypeParam(InstanceParamBase):
+class InstanceTypeParam(SettingsParamBase):
     INSTANCE_TYPE_NAMES = {
         0: "Generic (0)",
         1: "Push button (1)",
@@ -195,11 +77,11 @@ class InstanceTypeParam(InstanceParamBase):
     }
 
     def __init__(self, instance_type: int) -> None:
-        super().__init__(GearParamName("Instance type"))
+        super().__init__(SettingsParamName("Instance type"))
         self.instance_type_name = self.INSTANCE_TYPE_NAMES.get(instance_type, f"Unknown ({instance_type})")
         self.property_name = "instance_type"
 
-    async def read(self, driver: WBDALIDriver, address: DeviceShort, instance_number: InstanceNumber) -> dict:
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
         return {self.property_name: self.instance_type_name}
 
     def get_schema(self) -> dict:
@@ -232,17 +114,20 @@ class Dali2Device:
             return
         res = {}
         awaitables = [
-            instance.read(driver, DeviceShort(self.address.short)) for instance in self.instances.values()
+            instance.read(driver, InstanceAddress(DeviceShort(self.address.short), instance.instance_number))
+            for instance in self.instances.values()
         ]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         for instance, result in zip(self.instances.values(), results):
             if isinstance(result, BaseException):
-                raise RuntimeError(
-                    f"Error reading parameters for instance {instance.instance_number.value}: {result}"
-                ) from result
+                raise RuntimeError(f"Error reading parameters for {instance.name.en}: {result}") from result
             if result is not None:
                 res.update(result)
         self.params = res
+        new_schema = {}
+        for instance in self.instances.values():
+            merge_json_schemas(new_schema, instance.get_schema())
+        self.schema = new_schema
 
     async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
         if not self.params:
@@ -253,7 +138,11 @@ class Dali2Device:
         short_addr = DeviceShort(self.address.short)
         updated_parameters = {}
         for instance in self.instances.values():
-            updated_parameters.update(await instance.write(driver, short_addr, new_values))
+            updated_parameters.update(
+                await instance.write(
+                    driver, InstanceAddress(short_addr, instance.instance_number), new_values
+                )
+            )
         self.params.update(updated_parameters)
 
     def add_instance(self, index: int, instance_type: int) -> None:

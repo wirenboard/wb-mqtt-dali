@@ -28,12 +28,11 @@ from dali.gear.general import (
 from dali.memory import info, location, oem
 
 from .extended_gear_parameters import (
-    GearParamBase,
-    GearParamName,
     NumberGearParam,
     TypeParameters,
     merge_json_schemas,
 )
+from .settings import SettingsParamAddress, SettingsParamBase, SettingsParamName
 from .wbdali import MASK, WBDALIDriver, check_query_response
 
 SCENES_TOTAL = 16
@@ -80,7 +79,7 @@ class MaxLevelParam(NumberGearParam):
     set_command_class = SetMaxLevel
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Max level", "Максимальный уровень"), "max_level")
+        super().__init__(SettingsParamName("Max level", "Максимальный уровень"), "max_level")
         self.maximum = 254
         self.default = 254
         self.grid_columns = 6
@@ -92,7 +91,7 @@ class MinLevelParam(NumberGearParam):
     set_command_class = SetMinLevel
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Min level", "Минимальный уровень"), "min_level")
+        super().__init__(SettingsParamName("Min level", "Минимальный уровень"), "min_level")
         self.maximum = 254
         self.grid_columns = 6
         self.property_order = 13
@@ -103,7 +102,9 @@ class PowerOnLevelParam(NumberGearParam):
     set_command_class = SetPowerOnLevel
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Power on level", "Уровень при включении питания"), "power_on_level")
+        super().__init__(
+            SettingsParamName("Power on level", "Уровень при включении питания"), "power_on_level"
+        )
         self.default = 254
         self.grid_columns = 6
         self.property_order = 20
@@ -114,20 +115,24 @@ class SystemFailureLevelParam(NumberGearParam):
     set_command_class = SetSystemFailureLevel
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("System failure level", "Уровень при сбое"), "system_failure_level")
+        super().__init__(
+            SettingsParamName("System failure level", "Уровень при сбое"), "system_failure_level"
+        )
         self.default = 254
         self.grid_columns = 6
         self.property_order = 30
 
 
-class FadeTimeFadeRateParam(GearParamBase):
+class FadeTimeFadeRateParam(SettingsParamBase):
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Fade time and fade rate"))
+        super().__init__(SettingsParamName("Fade time and fade rate"))
         self._fade_time = None
         self._fade_rate = None
 
-    async def read(self, driver: WBDALIDriver, address: GearShort):
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress):
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         value = await driver.send(QueryFadeTimeFadeRate(address))
         check_query_response(value)
         self._fade_time = value.fade_time
@@ -137,7 +142,9 @@ class FadeTimeFadeRateParam(GearParamBase):
             "fade_rate": value.fade_rate,
         }
 
-    async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         fade_rate_to_set = value.get("fade_rate")
         fade_time_to_set = value.get("fade_time")
 
@@ -165,12 +172,14 @@ class FadeTimeFadeRateParam(GearParamBase):
         }
 
 
-class GroupsParam(GearParamBase):
+class GroupsParam(SettingsParamBase):
     def __init__(self) -> None:
-        super().__init__(GearParamName("Groups"))
+        super().__init__(SettingsParamName("Groups"))
         self._groups = [False for _ in range(GROUPS_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, address: GearShort):
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         groups = []
         commands = [QueryGroupsZeroToSeven(address), QueryGroupsEightToFifteen(address)]
         responses = await driver.send_commands(commands)
@@ -180,7 +189,9 @@ class GroupsParam(GearParamBase):
         self._groups = groups
         return {"groups": groups}
 
-    async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         groups_to_set = value.get("groups")
         if groups_to_set is None:
             return {}
@@ -207,12 +218,14 @@ class GroupsParam(GearParamBase):
         return {"groups": groups}
 
 
-class ScenesParam(GearParamBase):
+class ScenesParam(SettingsParamBase):
     def __init__(self) -> None:
-        super().__init__(GearParamName("Scenes", "Сцены"))
+        super().__init__(SettingsParamName("Scenes", "Сцены"))
         self._scenes = [MASK for _ in range(SCENES_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, address: GearShort):
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         commands = [QuerySceneLevel(address, scene_number) for scene_number in range(SCENES_TOTAL)]
         responses = await driver.send_commands(commands)
         res = []
@@ -222,7 +235,9 @@ class ScenesParam(GearParamBase):
         self._scenes = res
         return self._scenes_to_json()
 
-    async def write(self, driver: WBDALIDriver, address: GearShort, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         scenes = value.get("scenes")
         if scenes is None:
             return {}
@@ -249,7 +264,7 @@ class ScenesParam(GearParamBase):
             self._scenes[scene_index] = response.raw_value.as_integer
         return self._scenes_to_json()
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
+    def get_schema(self) -> dict:
         return {
             "properties": {
                 "scenes": {
@@ -306,7 +321,7 @@ class ScenesParam(GearParamBase):
         return {"scenes": result_scenes}
 
 
-class GeneralMemoryParams(GearParamBase):
+class GeneralMemoryParams(SettingsParamBase):
     memory_fields_to_json_params = {
         info.GTIN: "gtin",
         info.FirmwareVersion: "firmware_version",
@@ -321,9 +336,11 @@ class GeneralMemoryParams(GearParamBase):
     }
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("General memory parameters"))
+        super().__init__(SettingsParamName("General memory parameters"))
 
-    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         res = {}
         try:
             v = await driver.send(QueryVersionNumber(address))
@@ -350,27 +367,28 @@ class GeneralMemoryParams(GearParamBase):
 
 class CommonParameters(TypeParameters):
 
-    def __init__(self, exclude_scenes: bool) -> None:
+    def __init__(self, exclude_scenes_and_levels: bool) -> None:
         super().__init__()
-        self._include_scenes = not exclude_scenes
+        self._include_scenes_and_levels = not exclude_scenes_and_levels
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
+    def get_schema(self) -> dict:
         schema_path = Path("/usr/share/wb-mqtt-dali/schemas/control_gear.schema.json")
         with open(schema_path, "r", encoding="utf-8") as f:
             schema = json.load(f)
-        merge_json_schemas(schema, await super().get_schema(driver, address))
+        merge_json_schemas(schema, super().get_schema())
         return schema
 
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list:
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         res = [
             GeneralMemoryParams(),
             GroupsParam(),
             MaxLevelParam(),
             MinLevelParam(),
-            PowerOnLevelParam(),
-            SystemFailureLevelParam(),
             FadeTimeFadeRateParam(),
         ]
-        if self._include_scenes:
-            res.append(ScenesParam())
-        return res
+        if self._include_scenes_and_levels:
+            res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
+        self._parameters = res
+        return await super().read(driver, address)

@@ -2,12 +2,7 @@
 
 from dali.address import GearShort
 
-from .extended_gear_parameters import (
-    GearParamBase,
-    GearParamName,
-    NumberGearParam,
-    TypeParameters,
-)
+from .extended_gear_parameters import NumberGearParam, TypeParameters
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,
@@ -21,6 +16,7 @@ from .gear.switching_function import (
     StoreDTRAsUpSwitchOffThreshold,
     StoreDTRAsUpSwitchOnThreshold,
 )
+from .settings import SettingsParamName
 from .wbdali import WBDALIDriver, query_request
 
 
@@ -30,7 +26,7 @@ class UpSwitchOnThresholdParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Up switch on threshold", "Верхний порог включения переключателя"),
+            SettingsParamName("Up switch on threshold", "Верхний порог включения переключателя"),
             "type_7_up_switch_on_threshold",
         )
         self.minimum = 1
@@ -42,7 +38,7 @@ class UpSwitchOffThresholdParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Up switch off threshold", "Верхний порог выключения переключателя"),
+            SettingsParamName("Up switch off threshold", "Верхний порог выключения переключателя"),
             "type_7_up_switch_off_threshold",
         )
         self.minimum = 1
@@ -54,7 +50,7 @@ class DownSwitchOnThresholdParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Down switch on threshold", "Нижний порог включения переключателя"),
+            SettingsParamName("Down switch on threshold", "Нижний порог включения переключателя"),
             "type_7_down_switch_on_threshold",
         )
 
@@ -65,7 +61,7 @@ class DownSwitchOffThresholdParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Down switch off threshold", "Нижний порог выключения переключателя"),
+            SettingsParamName("Down switch off threshold", "Нижний порог выключения переключателя"),
             "type_7_down_switch_off_threshold",
         )
 
@@ -76,12 +72,12 @@ class ErrorHoldOffTimeParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Error holdoff time", "Время задержки ошибки"), "type_7_error_holdoff_time"
+            SettingsParamName("Error holdoff time", "Время задержки ошибки"), "type_7_error_holdoff_time"
         )
 
 
 class Type7Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
+    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
         try:
             features = await query_request(driver, QueryFeatures(address))
         except RuntimeError as e:
@@ -94,4 +90,5 @@ class Type7Parameters(TypeParameters):
             res.append(DownSwitchOffThresholdParam())
         if (features >> 4) & 1:  # bit 4: adjustable hold-off time
             res.append(ErrorHoldOffTimeParam())
-        return res
+        self._parameters = res
+        return await super().read(driver, address)

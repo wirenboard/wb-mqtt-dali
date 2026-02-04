@@ -9,12 +9,8 @@ from dali.gear.emergency import (
     StoreDTRAsEmergencyLevel,
 )
 
-from .extended_gear_parameters import (
-    GearParamBase,
-    GearParamName,
-    NumberGearParam,
-    TypeParameters,
-)
+from .extended_gear_parameters import NumberGearParam, TypeParameters
+from .settings import SettingsParamAddress, SettingsParamName
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: prolong time is write only
@@ -26,10 +22,11 @@ class EmergencyLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Emergency level", "Уровень аварийного освещения"), "type_1_emergency_level"
+            SettingsParamName("Emergency level", "Уровень аварийного освещения"), "type_1_emergency_level"
         )
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+        res = await super().read(driver, address)
         try:
             self.minimum = await query_request(driver, QueryEmergencyMinLevel(address))
         except RuntimeError as e:
@@ -38,15 +35,18 @@ class EmergencyLevelParam(NumberGearParam):
             self.maximum = await query_request(driver, QueryEmergencyMaxLevel(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency max level: {e}") from e
-        return await super().get_schema(driver, address)
+        return res
 
 
 class Type1Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
+    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+        if not isinstance(address, GearShort):
+            raise ValueError("Address must be a GearShort")
         try:
             features = await query_request(driver, QueryEmergencyFeatures(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency features: {e}") from e
         if not ((features >> 4) & 1):  # bit 4: type 1 emergency lighting support
-            return []
-        return [EmergencyLevelParam()]
+            return {}
+        self._parameters = [EmergencyLevelParam()]
+        return await super().read(driver, address)

@@ -272,7 +272,7 @@ def query_colour_with_level(
         raise RuntimeError(f"Failed to get colour type for {cmd}")
 
     colour_type = resp[-1].raw_value.as_integer
-    # Colour type is set to MASK, so all colour are also MASK
+    # Colour type is set to MASK, so all colours are also MASK
     if MASK == colour_type:
         return ColourSettings(default_colour_type, level)
 
@@ -444,7 +444,8 @@ class SceneSettings(ColourState):
             values_to_set["level"] = value.get("level", 0)
         else:
             values_to_set["level"] = MASK
-        return await super().write(driver, address, {self.property_name: values_to_set})
+        res = await super().write(driver, address, {self.property_name: values_to_set})
+        return res.get(self.property_name, {})
 
 
 class ScenesSettings(SettingsParamBase):

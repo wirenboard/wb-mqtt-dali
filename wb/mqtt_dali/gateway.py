@@ -351,12 +351,13 @@ class Gateway:
             logging.debug("Failed to load wb-mqtt-serial configuration")
             return
         for port in serial_config.get("config", {}).get("ports", []):
-            for device in port.get("devices", []):
-                if device.get("device_type") == "WB-MDALI":
-                    device_id = device.get("id")
-                    if device_id is None:
-                        device_id = f"wb-dali_{device.get('slave_id', '')}"
-                    device_ids.add(device_id)
+            if port.get("enabled", True):
+                for device in port.get("devices", []):
+                    if device.get("device_type") == "WB-MDALI" and device.get("enabled", True):
+                        device_id = device.get("id")
+                        if device_id is None:
+                            device_id = f"wb-dali_{device.get('slave_id', '')}"
+                        device_ids.add(device_id)
         async with self._config_lock:
             new_gateways = []
             for current_gw in self.wb_dali_gateways:

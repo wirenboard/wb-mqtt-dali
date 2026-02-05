@@ -1,13 +1,6 @@
 # Type 20 Demand response
 
-from dali.address import GearShort
-
-from .extended_gear_parameters import (
-    GearParamBase,
-    GearParamName,
-    NumberGearParam,
-    TypeParameters,
-)
+from .extended_gear_parameters import NumberGearParam, TypeParameters
 from .gear.demand_response import (
     QueryLoadSheddingCondition,
     QueryReductionFactor1,
@@ -18,7 +11,8 @@ from .gear.demand_response import (
     SetReductionFactor2,
     SetReductionFactor3,
 )
-from .wbdali import WBDALIDriver
+from .settings import SettingsParamName
+from .utils import add_enum, add_translations
 
 
 class LoadSheddingConditionParam(NumberGearParam):
@@ -26,35 +20,33 @@ class LoadSheddingConditionParam(NumberGearParam):
     set_command_class = SetLoadSheddingCondition
 
     def __init__(self) -> None:
-        super().__init__(GearParamName("Load shedding condition"), "type_20_load_shedding_condition")
+        super().__init__(
+            SettingsParamName("Load shedding condition", "Условие снижения нагрузки"),
+            "type_20_load_shedding_condition",
+        )
 
-    async def get_schema(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "title": self.name.en,
-                    "type": "integer",
-                    "enum": [0, 1, 2, 3],
-                    "options": {
-                        "enum_titles": [
-                            "no reduction",
-                            "use reduction factor 1",
-                            "use reduction factor 2",
-                            "use reduction factor 3",
-                        ]
-                    },
-                }
+    def get_schema(self) -> dict:
+        schema = super().get_schema()
+        add_enum(
+            schema["properties"][self.property_name],
+            [
+                (0, "no reduction"),
+                (1, "use reduction factor 1"),
+                (2, "use reduction factor 2"),
+                (3, "use reduction factor 3"),
+            ],
+        )
+        add_translations(
+            schema,
+            "ru",
+            {
+                "no reduction": "не использовать коэффициент снижения",
+                "use reduction factor 1": "использовать коэффициент снижения 1",
+                "use reduction factor 2": "использовать коэффициент снижения 2",
+                "use reduction factor 3": "использовать коэффициент снижения 3",
             },
-            "translations": {
-                "ru": {
-                    self.name.en: "Условие снижения нагрузки",
-                    "no reduction": "не использовать коэффициент снижения",
-                    "use reduction factor 1": "использовать коэффициент снижения 1",
-                    "use reduction factor 2": "использовать коэффициент снижения 2",
-                    "use reduction factor 3": "использовать коэффициент снижения 3",
-                }
-            },
-        }
+        )
+        return schema
 
 
 class ReductionFactor1Param(NumberGearParam):
@@ -63,7 +55,7 @@ class ReductionFactor1Param(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Reduction factor 1", "Коэффициент снижения 1"), "type_20_reduction_factor_1"
+            SettingsParamName("Reduction factor 1", "Коэффициент снижения 1"), "type_20_reduction_factor_1"
         )
         self.maximum = 100
 
@@ -74,7 +66,7 @@ class ReductionFactor2Param(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Reduction factor 2", "Коэффициент снижения 2"), "type_20_reduction_factor_2"
+            SettingsParamName("Reduction factor 2", "Коэффициент снижения 2"), "type_20_reduction_factor_2"
         )
         self.maximum = 100
 
@@ -85,14 +77,15 @@ class ReductionFactor3Param(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            GearParamName("Reduction factor 3", "Коэффициент снижения 3"), "type_20_reduction_factor_3"
+            SettingsParamName("Reduction factor 3", "Коэффициент снижения 3"), "type_20_reduction_factor_3"
         )
         self.maximum = 100
 
 
 class Type20Parameters(TypeParameters):
-    async def get_parameters(self, driver: WBDALIDriver, address: GearShort) -> list[GearParamBase]:
-        return [
+    def __init__(self) -> None:
+        super().__init__()
+        self._parameters = [
             LoadSheddingConditionParam(),
             ReductionFactor1Param(),
             ReductionFactor2Param(),

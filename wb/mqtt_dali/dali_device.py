@@ -1,11 +1,13 @@
 import asyncio
 from dataclasses import dataclass
+from enum import IntEnum
 
 import jsonschema
 from dali.address import GearShort
 from dali.sequences import QueryDeviceTypes
 
 from .common_gear_parameters import CommonParameters
+from .extended_gear_parameters import TypeParameters
 from .type1_parameters import Type1Parameters
 from .type4_parameters import Type4Parameters
 from .type5_parameters import Type5Parameters
@@ -24,25 +26,25 @@ class DaliDeviceAddress:
     random: int
 
 
-# Type 0 fluorescent lamp ballast has no custom parameters
-# Type 1 type1_parameters.py
-# Type 2 Discharge lamps has no custom parameters
-# Type 3 Low voltage halogen lamps has no custom parameters
-# Type 4 type4_parameters.py
-# Type 5 type5_parameters.py
-# Type 6 type6_parameters.py
-# Type 7 type7_parameters.py
-# Type 8 type8_parameters.py
-# Type 9 Sequencer
-# TODO: implement
-# Type 15 Load referencing has no custom parameters
-# Type 16 Thermal gear protection has no custom parameters, only reset command
-# Type 17 type17_parameters.py
-# Type 20 type20_parameters.py
-# Type 21 Thermal lamp protection has no custom parameters
-# Type 22 Non-replaceable lamp source has no custom parameters
-# Type 49 Integrated power supply has no custom parameters
-# Type 51 Energy reporting device has no custom parameters
+class DaliDeviceType(IntEnum):
+    FLUORESCENT_LAMP_BALLAST = 0
+    SELF_CONTAINED_EMERGENCY_LIGHTING = 1
+    DISCHARGE_LAMPS = 2
+    LOW_VOLTAGE_HALOGEN_LAMPS = 3
+    SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS = 4
+    CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE = 5
+    LED_MODULES = 6
+    SWITCHING_FUNCTION = 7
+    COLOUR_CONTROL = 8
+    SEQUENCER = 9
+    LOAD_REFERENCING = 15
+    THERMAL_GEAR_PROTECTION = 16
+    DIMMING_CURVE_SELECTION = 17
+    DEMAND_RESPONSE = 20
+    THERMAL_LAMP_PROTECTION = 21
+    NON_REPLACEABLE_LAMP_SOURCE = 22
+    INTEGRATED_POWER_SUPPLY = 49
+    ENERGY_REPORTING_DEVICE = 51
 
 
 class DaliDevice:
@@ -77,10 +79,8 @@ class DaliDevice:
         for _ in parameter_handlers:
             type_params = next(results_iterable)
             params.update(type_params)
-        awaitables = [param_handler.get_schema(driver, short_addr) for param_handler in parameter_handlers]
-        results_iterable = iter(await asyncio.gather(*awaitables))
-        for _ in parameter_handlers:
-            type_schema = next(results_iterable)
+        schemas = [param_handler.get_schema() for param_handler in parameter_handlers]
+        for type_schema in schemas:
             if type_schema is not None:
                 merge_json_schemas(schema, type_schema)
         self._parameter_handlers = parameter_handlers
@@ -100,24 +100,26 @@ class DaliDevice:
             updated_parameters.update(await param_handler.write(driver, short_addr, new_values))
         self.params.update(updated_parameters)
 
-    def _get_parameters(self, types: list[int]) -> list:
-        # Type 8 Colour control has own scenes parameter, so exclude common scenes parameter
-        exclude_scenes = 8 in types
-        res = [CommonParameters(exclude_scenes)]
+    def _get_parameters(self, types: list[int]) -> list[TypeParameters]:
+        # Colour control has own scenes, power on level and system failure level parameters,
+        # so exclude common alternatives
+        exclude_scenes_and_levels = DaliDeviceType.COLOUR_CONTROL.value in types
+        res: list[TypeParameters] = [CommonParameters(exclude_scenes_and_levels)]
         gear_type_params = {
-            1: Type1Parameters(),
-            4: Type4Parameters(),
-            5: Type5Parameters(),
-            6: Type6Parameters(),
-            7: Type7Parameters(),
-            8: Type8Parameters(),
-            17: Type17Parameters(),
-            20: Type20Parameters(),
+            DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
+            DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(),
+            DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(),
+            DaliDeviceType.LED_MODULES: Type6Parameters(),
+            DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
+            DaliDeviceType.COLOUR_CONTROL: Type8Parameters(),
+            DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(),
+            DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
         }
         for gear_type in types:
-            param_handler = gear_type_params.get(gear_type)
-            if param_handler is not None:
-                res.append(param_handler)
+            try:
+                res.append(gear_type_params[DaliDeviceType(gear_type)])
+            except (ValueError, KeyError):
+                continue
         return res
 
 

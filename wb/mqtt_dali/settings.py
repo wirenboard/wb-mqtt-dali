@@ -153,12 +153,9 @@ class SettingsParamGroup(SettingsParamBase):
                     "properties": {},
                 }
             },
-            "translations": {
-                "ru": {
-                    self.name.en: self.name.ru,
-                }
-            },
         }
+        if self.name.ru is not None:
+            res["translations"] = {"ru": {self.name.en: self.name.ru}}
         for param in self._parameters:
             merge_json_schema_properties(res["properties"][self._property_name], param.get_schema())
             merge_translations(res, param.get_schema())

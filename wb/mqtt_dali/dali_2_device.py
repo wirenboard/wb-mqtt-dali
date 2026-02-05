@@ -43,7 +43,6 @@ class EventSchemeParam(NumberSettingsParam):
         return [
             DTR0(value_to_set),
             SetEventScheme(address.device_short, address.instance_number),
-            QueryEventScheme(address.device_short, address.instance_number),
         ]
 
     def get_read_command(self, address: SettingsParamAddress) -> Command:

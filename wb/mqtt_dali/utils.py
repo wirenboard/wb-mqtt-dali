@@ -5,26 +5,34 @@ def merge_json_schemas(dst: dict, src: dict) -> None:
 
 def merge_translations(dst: dict, src: dict) -> None:
     if "translations" in src:
-        if "translations" not in dst:
-            dst["translations"] = {}
         if "ru" in src["translations"]:
-            if "ru" not in dst["translations"]:
-                dst["translations"]["ru"] = {}
-            dst["translations"]["ru"].update(src["translations"]["ru"])
+            dst_translations = dst.setdefault("translations", {}).setdefault("ru", {})
+            dst_translations.update(src["translations"]["ru"])
         if "en" in src["translations"]:
-            if "en" not in dst["translations"]:
-                dst["translations"]["en"] = {}
-            dst["translations"]["en"].update(src["translations"]["en"])
+            dst_translations = dst.setdefault("translations", {}).setdefault("en", {})
+            dst_translations.update(src["translations"]["en"])
 
 
 def merge_json_schema_properties(dst: dict, src: dict) -> None:
     if "properties" in src:
-        if "properties" not in dst:
-            dst["properties"] = {}
-        dst["properties"].update(src["properties"])
+        properties = dst.setdefault("properties", {})
+        properties.update(src["properties"])
     if "required" in src:
-        if "required" not in dst:
-            dst["required"] = []
+        required = dst.setdefault("required", [])
         for req in src["required"]:
-            if req not in dst["required"]:
-                dst["required"].append(req)
+            if req not in required:
+                required.append(req)
+
+
+def add_translations(schema: dict, lang: str, translations: dict[str, str]) -> None:
+    translations_dict = schema.setdefault("translations", {}).setdefault(lang, {})
+    translations_dict.update(translations)
+
+
+def add_enum(schema: dict, enum_values: list[tuple[int, str]]) -> None:
+    schema["enum"] = []
+    options = schema.setdefault("options", {})
+    options["enum_titles"] = []
+    for value, title in enum_values:
+        schema["enum"].append(value)
+        options["enum_titles"].append(title)

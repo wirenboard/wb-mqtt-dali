@@ -8,29 +8,17 @@ from dali.gear.led import (
     StoreDTRAsFastFadeTime,
 )
 
-from .extended_gear_parameters import NumberGearParam, TypeParameters
+from .extended_gear_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
 from .settings import SettingsParamAddress, SettingsParamName
 from .wbdali import WBDALIDriver, query_request
 
 
-class DimmingCurveParam(NumberGearParam):
+class Type6DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "type_6_dimming_curve")
-
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
-        schema["properties"][self.property_name]["enum"] = [0, 1]
-        if "options" not in schema["properties"][self.property_name]:
-            schema["properties"][self.property_name]["options"] = {}
-        schema["properties"][self.property_name]["options"] = {
-            "enum_titles": ["standard", "linear"],
-        }
-        schema["translations"]["ru"]["standard"] = "стандартная"
-        schema["translations"]["ru"]["linear"] = "линейная"
-        return schema
+        super().__init__("type_6_dimming_curve")
 
 
 class FastFadeTimeParam(NumberGearParam):
@@ -55,6 +43,6 @@ class Type6Parameters(TypeParameters):
     def __init__(self) -> None:
         super().__init__()
         self._parameters = [
-            DimmingCurveParam(),
+            Type6DimmingCurveParam(),
             FastFadeTimeParam(),
         ]

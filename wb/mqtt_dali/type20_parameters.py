@@ -12,6 +12,7 @@ from .gear.demand_response import (
     SetReductionFactor3,
 )
 from .settings import SettingsParamName
+from .utils import add_enum, add_translations
 
 
 class LoadSheddingConditionParam(NumberGearParam):
@@ -26,25 +27,25 @@ class LoadSheddingConditionParam(NumberGearParam):
 
     def get_schema(self) -> dict:
         schema = super().get_schema()
-        schema["properties"][self.property_name]["enum"] = [0, 1, 2, 3]
-        if "options" not in schema["properties"][self.property_name]:
-            schema["properties"][self.property_name]["options"] = {}
-        schema["properties"][self.property_name]["options"] = {
-            "enum_titles": [
-                "no reduction",
-                "use reduction factor 1",
-                "use reduction factor 2",
-                "use reduction factor 3",
-            ]
-        }
-        schema["translations"] = {
-            "ru": {
+        add_enum(
+            schema["properties"][self.property_name],
+            [
+                (0, "no reduction"),
+                (1, "use reduction factor 1"),
+                (2, "use reduction factor 2"),
+                (3, "use reduction factor 3"),
+            ],
+        )
+        add_translations(
+            schema,
+            "ru",
+            {
                 "no reduction": "не использовать коэффициент снижения",
                 "use reduction factor 1": "использовать коэффициент снижения 1",
                 "use reduction factor 2": "использовать коэффициент снижения 2",
                 "use reduction factor 3": "использовать коэффициент снижения 3",
-            }
-        }
+            },
+        )
         return schema
 
 

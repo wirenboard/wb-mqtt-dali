@@ -175,7 +175,8 @@ class ColourTemperatureValue:
 
     def get_write_commands(self, address: GearShort) -> List[command.Command]:
         return [
-            DTR0(self.tc),
+            DTR0((self.tc >> 8) & 0xFF),
+            DTR1((self.tc & 0xFF)),
             SetTemporaryColourTemperature(address),
         ]
 
@@ -197,7 +198,7 @@ class PrimaryNColourValues:
             index = int(colour.value[-1])  # primary_n0 -> 0
             res.extend(
                 [
-                    DTR0((value >> 16) & 0xFF),
+                    DTR0((value >> 8) & 0xFF),
                     DTR1((value & 0xFF)),
                     DTR2(index),
                     SetTemporaryPrimaryNDimLevel(address),
@@ -214,10 +215,10 @@ class XYColourValues:
 
     def get_write_commands(self, address: GearShort) -> List[command.Command]:
         res = [
-            DTR0((self.x_coordinate >> 16) & 0xFF),
+            DTR0((self.x_coordinate >> 8) & 0xFF),
             DTR1((self.x_coordinate & 0xFF)),
             SetTemporaryXCoordinate(address),
-            DTR0((self.y_coordinate >> 16) & 0xFF),
+            DTR0((self.y_coordinate >> 8) & 0xFF),
             DTR1((self.y_coordinate & 0xFF)),
             SetTemporaryYCoordinate(address),
         ]

@@ -7,31 +7,18 @@ from dali.gear.converter import (
     SelectDimmingCurve,
 )
 
-from .extended_gear_parameters import NumberGearParam, TypeParameters
-from .settings import SettingsParamName
+from .extended_gear_parameters import DimmingCurveParam, TypeParameters
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: Output range is write only
 
 
-class DimmingCurveParam(NumberGearParam):
+class Type5DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "type_5_dimming_curve")
-
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
-        schema["properties"][self.property_name]["enum"] = [0, 1]
-        if "options" not in schema["properties"][self.property_name]:
-            schema["properties"][self.property_name]["options"] = {}
-        schema["properties"][self.property_name]["options"] = {
-            "enum_titles": ["standard", "linear"],
-        }
-        schema["translations"]["ru"]["standard"] = "стандартная"
-        schema["translations"]["ru"]["linear"] = "линейная"
-        return schema
+        super().__init__("type_5_dimming_curve")
 
 
 class Type5Parameters(TypeParameters):
@@ -42,5 +29,5 @@ class Type5Parameters(TypeParameters):
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if not ((features >> 5) & 1):  # 5th bit: dimming curve selectable
             return {}
-        self._parameters = [DimmingCurveParam()]
+        self._parameters = [Type5DimmingCurveParam()]
         return await super().read(driver, address)

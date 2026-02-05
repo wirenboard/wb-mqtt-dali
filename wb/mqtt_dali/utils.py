@@ -5,12 +5,8 @@ def merge_json_schemas(dst: dict, src: dict) -> None:
 
 def merge_translations(dst: dict, src: dict) -> None:
     if "translations" in src:
-        if "ru" in src["translations"]:
-            dst_translations = dst.setdefault("translations", {}).setdefault("ru", {})
-            dst_translations.update(src["translations"]["ru"])
-        if "en" in src["translations"]:
-            dst_translations = dst.setdefault("translations", {}).setdefault("en", {})
-            dst_translations.update(src["translations"]["en"])
+        for lang, translations in src["translations"].items():
+            add_translations(dst, lang, translations)
 
 
 def merge_json_schema_properties(dst: dict, src: dict) -> None:

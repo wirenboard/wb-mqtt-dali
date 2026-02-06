@@ -4,7 +4,7 @@ from typing import Optional
 import jsonschema
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
-from dali.device.general import DTR0, QueryEventScheme, SetEventScheme
+from dali.device.general import DTR0, QueryEventScheme, SetEventScheme, SetShortAddress
 
 from .dali_device import DaliDeviceAddress
 from .settings import (
@@ -98,24 +98,29 @@ class InstanceTypeParam(SettingsParamBase):
         }
 
 
-class Dali2Device:
+class Dali2Device(DaliDeviceBase):
 
-    def __init__(self, uid: str, name: str, address: DaliDeviceAddress) -> None:
-        self.uid = uid
-        self.name = name
-        self.address = address
-        self.params: Optional[dict] = None
-        self.schema: dict = {}
+    def __init__(
+        self,
+        address: DaliDeviceAddress,
+        bus_id: str,
+        mqtt_id: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> None:
+        super().__init__(address, bus_id, "DALI 2.0", "dali2_", mqtt_id, name)
+
         self.instances: dict[int, InstanceParameters] = {}
+
+        self._parameter_handlers: list = []
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         if self.params and not force_reload:
             return
-        res = {}
         awaitables = [
             instance.read(driver, InstanceAddress(DeviceShort(self.address.short), instance.instance_number))
             for instance in self.instances.values()
         ]
+        res = self._get_common_parameters()
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         for instance, result in zip(self.instances.values(), results):
             if isinstance(result, BaseException):
@@ -143,16 +148,16 @@ class Dali2Device:
                 )
             )
         self.params.update(updated_parameters)
+        await self._apply_common_parameters(driver, new_values)
+
+    async def _set_short_address(self, driver: WBDALIDriver, new_short_address: int) -> None:
+        if new_short_address < 0 or new_short_address > 63:
+            raise ValueError("Short address must be between 0 and 63")
+        short_addr = DeviceShort(self.address.short)
+        await driver.send_commands([DTR0(new_short_address), SetShortAddress(short_addr)])
+        self.address.short = new_short_address
 
     def add_instance(self, index: int, instance_type: int) -> None:
         instance_parameters = InstanceParameters(InstanceNumber(index), instance_type)
         self.instances[index] = instance_parameters
         merge_json_schemas(self.schema, instance_parameters.get_schema())
-
-
-def make_dali2_device(bus_uid: str, address: DaliDeviceAddress) -> Dali2Device:
-    return Dali2Device(
-        uid=f"{bus_uid}_dali2_{address.short}",
-        name=f"DALI-2 {address.short}:{address.random:#x}",
-        address=address,
-    )

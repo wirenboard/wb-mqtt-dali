@@ -83,7 +83,7 @@ class MaxLevelParam(NumberGearParam):
         self.maximum = 254
         self.default = 254
         self.grid_columns = 6
-        self.property_order = 14
+        self.property_order = 15
 
 
 class MinLevelParam(NumberGearParam):
@@ -94,7 +94,7 @@ class MinLevelParam(NumberGearParam):
         super().__init__(SettingsParamName("Min level", "Минимальный уровень"), "min_level")
         self.maximum = 254
         self.grid_columns = 6
-        self.property_order = 13
+        self.property_order = 14
 
 
 class PowerOnLevelParam(NumberGearParam):

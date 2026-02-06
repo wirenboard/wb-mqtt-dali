@@ -147,8 +147,9 @@ class TestDevicePublisher:
     async def test_add_device_duplicate(self, publisher, mock_client):
         device_info = DeviceInfo("dev1", "Device 1")
         await publisher.add_device(device_info)
-        await publisher.add_device(device_info)
-        publisher.logger.warning.assert_called_with("Device %s already exists, skipping", "dev1")
+        with pytest.raises(RuntimeError) as e:
+            await publisher.add_device(device_info)
+        assert str(e.value) == "Device dev1 already exists"
 
     @pytest.mark.asyncio
     async def test_remove_device(self, publisher, mock_client):
@@ -185,7 +186,7 @@ class TestDevicePublisher:
             ],
         )
 
-        await publisher.update_device("dev1", updated_info)
+        await publisher.update_device(updated_info)
 
         device = publisher._devices["dev1"]
         assert device._device_title == "Updated Device"
@@ -216,7 +217,7 @@ class TestDevicePublisher:
             ],
         )
 
-        await publisher.update_device("dev1", updated_info)
+        await publisher.update_device(updated_info)
 
         device = publisher._devices["dev1"]
         assert "ctrl1" in device._controls
@@ -248,7 +249,7 @@ class TestDevicePublisher:
             ],
         )
 
-        await publisher.update_device("dev1", updated_info)
+        await publisher.update_device(updated_info)
 
         device = publisher._devices["dev1"]
         assert "ctrl1" in device._controls
@@ -304,6 +305,35 @@ class TestDevicePublisher:
     @pytest.mark.asyncio
     async def test_set_control_value_nonexistent_device(self, publisher):
         await publisher.set_control_value("nonexistent", "ctrl1", "1")
+        publisher.logger.warning.assert_called_with("Device %s not found", "nonexistent")
+
+    @pytest.mark.asyncio
+    async def test_set_control_title(self, publisher, mock_client):
+        device_info = DeviceInfo(
+            "dev1",
+            "Device 1",
+            [
+                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+            ],
+        )
+
+        await publisher.add_device(device_info)
+        with patch(
+            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
+            new_callable=AsyncMock,
+        ):
+            await publisher.initialize()
+        mock_client.publish.reset_mock()
+
+        await publisher.set_control_title("dev1", "ctrl1", "New Title")
+
+        device = publisher._devices["dev1"]
+        assert device._controls["ctrl1"].meta.title == "New Title"
+        mock_client.publish.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_set_control_title_nonexistent_device(self, publisher):
+        await publisher.set_control_title("nonexistent", "ctrl1", "New Title")
         publisher.logger.warning.assert_called_with("Device %s not found", "nonexistent")
 
     @pytest.mark.asyncio
@@ -495,7 +525,7 @@ class TestDevicePublisher:
             for i in range(10)
         ]
 
-        await asyncio.gather(*[publisher.update_device(info.id, info) for info in updated_infos])
+        await asyncio.gather(*[publisher.update_device(info) for info in updated_infos])
 
         await asyncio.gather(*[publisher.remove_device(f"dev{i}") for i in range(10)])
 

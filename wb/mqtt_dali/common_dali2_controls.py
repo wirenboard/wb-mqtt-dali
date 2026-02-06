@@ -107,7 +107,7 @@ async def publish_event(
     mqtt_client: aiomqtt.Client, device: Dali2Device, control_id: str, value: str, retain: bool = True
 ) -> None:
     await mqtt_client.publish(
-        f"/devices/{device.uid}/controls/{control_id}",
+        f"/devices/{device.mqtt_id}/controls/{control_id}",
         value,
         retain=retain,
         qos=2,

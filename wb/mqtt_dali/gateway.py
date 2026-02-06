@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Union
 
@@ -9,8 +11,9 @@ from .application_controller import (
     ApplicationControllerConfig,
     WebSocketConfig,
 )
-from .dali_2_device import Dali2Device, make_dali2_device
-from .dali_device import DaliDevice, DaliDeviceAddress, make_dali_device
+from .common_dali_device import DaliDeviceAddress
+from .dali_2_device import Dali2Device
+from .dali_device import DaliDevice
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
@@ -47,13 +50,23 @@ def bus_from_json(
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
     dali2_devices: list[Dali2Device] = []
-    uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
+    bus_uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
     for dev_conf in data.get("devices", []):
         if dev_conf.get("dali2", False):
-            device = make_dali2_device(uid, DaliDeviceAddress(dev_conf["short"], dev_conf["random"]))
+            device = Dali2Device(
+                DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
+                bus_uid,
+                dev_conf.get("mqtt_id"),
+                dev_conf.get("name"),
+            )
             dali2_devices.append(device)
         else:
-            device = make_dali_device(uid, DaliDeviceAddress(dev_conf["short"], dev_conf["random"]))
+            device = DaliDevice(
+                DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
+                bus_uid,
+                dev_conf.get("mqtt_id"),
+                dev_conf.get("name"),
+            )
             dali_devices.append(device)
 
     websocket_conf = WebSocketConfig(
@@ -314,34 +327,7 @@ class Gateway:
 
     async def _save_configuration(self) -> None:
         async with self._config_lock:
-            with open(self._config_path, "w", encoding="utf-8") as f:
-                config: dict = {
-                    "gateways": [
-                        {
-                            "device_id": gw.uid,
-                            "buses": [
-                                {
-                                    "websocket_enabled": bus.websocket_config.enabled,
-                                    "websocket_port": bus.websocket_config.port,
-                                    "polling_interval": bus.polling_interval,
-                                    "devices": [
-                                        {
-                                            "short": dev.address.short,
-                                            "random": dev.address.random,
-                                            "dali2": isinstance(dev, Dali2Device),
-                                        }
-                                        for dev in bus.dali_devices + bus.dali2_devices
-                                    ],
-                                }
-                                for bus in gw.buses
-                            ],
-                        }
-                        for gw in self.wb_dali_gateways
-                    ]
-                }
-                if self._debug:
-                    config["debug"] = True
-                json.dump(config, f, indent=4)
+            save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
 
     async def _update_gateways(self) -> None:
         device_ids = set()
@@ -377,3 +363,50 @@ class Gateway:
                 await gw.start()
             self.wb_dali_gateways = new_gateways
         await self._save_configuration()
+
+
+def get_dict_for_device_config(device: Union[DaliDevice, Dali2Device]) -> dict:
+    res: dict = {
+        "short": device.address.short,
+        "random": device.address.random,
+    }
+    if isinstance(device, Dali2Device):
+        res["dali2"] = True
+    if device.has_custom_mqtt_id:
+        res["mqtt_id"] = device.mqtt_id
+    if device.has_custom_name:
+        res["name"] = device.name
+    return res
+
+
+def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGateway]) -> None:
+    temp_fd, temp_path = tempfile.mkstemp(suffix=".json")
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_f:
+            config: dict = {
+                "gateways": [
+                    {
+                        "device_id": gw.uid,
+                        "buses": [
+                            {
+                                "websocket_enabled": bus.websocket_config.enabled,
+                                "websocket_port": bus.websocket_config.port,
+                                "polling_interval": bus.polling_interval,
+                                "devices": [
+                                    get_dict_for_device_config(dev)
+                                    for dev in bus.dali_devices + bus.dali2_devices
+                                ],
+                            }
+                            for bus in gw.buses
+                        ],
+                    }
+                    for gw in gateways
+                ]
+            }
+            if debug:
+                config["debug"] = True
+            json.dump(config, temp_f, indent=4)
+        os.replace(temp_path, config_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)

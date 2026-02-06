@@ -4,8 +4,12 @@ from typing import Optional
 import jsonschema
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
+from dali.device import light, occupancy, pushbutton
 from dali.device.general import DTR0, QueryEventScheme, SetEventScheme
 
+from .dali2_type1_parameters import build_type1_push_button_parameters
+from .dali2_type3_parameters import build_type3_occupancy_parameters
+from .dali2_type4_parameters import build_type4_light_sensor_parameters
 from .dali_device import DaliDeviceAddress
 from .settings import (
     InstanceAddress,
@@ -28,6 +32,12 @@ class InstanceParameters(SettingsParamGroup):
             InstanceTypeParam(instance_type),
             EventSchemeParam(),
         ]
+        if instance_type == pushbutton.instance_type:
+            self._parameters.extend(build_type1_push_button_parameters())
+        elif instance_type == occupancy.instance_type:
+            self._parameters.extend(build_type3_occupancy_parameters())
+        elif instance_type == light.instance_type:
+            self._parameters.extend(build_type4_light_sensor_parameters())
         self.instance_number = instance_number
         self.instance_type = instance_type
 

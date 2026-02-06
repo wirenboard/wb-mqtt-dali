@@ -42,8 +42,9 @@ async def test_read(number_settings_param):
     mock_query_request = AsyncMock()
     mock_query_request.return_value = 100
     mock_commands_list = MagicMock()
-    with patch.object(number_settings_param, "get_read_command", return_value=mock_commands_list), patch(
-        "wb.mqtt_dali.settings.query_request", mock_query_request
+    with (
+        patch.object(number_settings_param, "get_read_command", return_value=mock_commands_list),
+        patch("wb.mqtt_dali.settings.query_request", mock_query_request),
     ):
         result = await number_settings_param.read(mock_driver, mock_address)
         mock_query_request.assert_called_once_with(mock_driver, mock_commands_list)
@@ -64,9 +65,10 @@ async def test_write(number_settings_param):
     mock_write_command = MagicMock()
     mock_read_command = MagicMock()
 
-    with patch.object(
-        number_settings_param, "get_write_commands", return_value=[mock_write_command]
-    ), patch.object(number_settings_param, "get_read_command", return_value=mock_read_command):
+    with (
+        patch.object(number_settings_param, "get_write_commands", return_value=[mock_write_command]),
+        patch.object(number_settings_param, "get_read_command", return_value=mock_read_command),
+    ):
         result = await number_settings_param.write(mock_driver, mock_address, value_to_set)
         mock_driver.send_commands.assert_called_once_with([mock_write_command, mock_read_command])
         assert result == {"test_property": 100}

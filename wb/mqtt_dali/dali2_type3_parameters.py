@@ -66,7 +66,7 @@ class ReportTimerParam(_OccupancySensorParam):
         super().__init__("Report timer", "report_timer", QueryReportTimer, SetReportTimer)
 
 
-def build_type3_occupancy_parameters() -> List[NumberSettingsParam]:
+def build_type3_occupancy_sensor_parameters() -> List[NumberSettingsParam]:
     return [
         DeadtimeTimerParam(),
         HoldTimerParam(),

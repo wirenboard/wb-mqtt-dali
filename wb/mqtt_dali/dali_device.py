@@ -1,6 +1,6 @@
 import asyncio
-from dataclasses import dataclass
 from enum import IntEnum
+from typing import Optional
 
 import jsonschema
 from dali.address import GearShort
@@ -20,12 +20,6 @@ from .type17_parameters import Type17Parameters
 from .type20_parameters import Type20Parameters
 from .utils import merge_json_schemas
 from .wbdali import WBDALIDriver
-
-
-@dataclass
-class DaliDeviceAddress:
-    short: int
-    random: int
 
 
 class DaliDeviceType(IntEnum):
@@ -109,7 +103,6 @@ class DaliDevice(DaliDeviceBase):
         short_addr = GearShort(self.address.short)
         new_short_address = (new_short_address << 1) | 1  # Convert to gear short address format
         await driver.send_commands([DTR0(new_short_address), SetShortAddress(short_addr)])
-        self.address.short = new_short_address
 
     def _get_parameters(self, types: list[int]) -> list[TypeParameters]:
         # Colour control has own scenes, power on level and system failure level parameters,

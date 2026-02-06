@@ -6,6 +6,7 @@ from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
 from dali.device.general import DTR0, QueryEventScheme, SetEventScheme, SetShortAddress
 
+from .common_dali_device import DaliDeviceBase
 from .dali_device import DaliDeviceAddress
 from .settings import (
     InstanceAddress,
@@ -155,7 +156,6 @@ class Dali2Device(DaliDeviceBase):
             raise ValueError("Short address must be between 0 and 63")
         short_addr = DeviceShort(self.address.short)
         await driver.send_commands([DTR0(new_short_address), SetShortAddress(short_addr)])
-        self.address.short = new_short_address
 
     def add_instance(self, index: int, instance_type: int) -> None:
         instance_parameters = InstanceParameters(InstanceNumber(index), instance_type)

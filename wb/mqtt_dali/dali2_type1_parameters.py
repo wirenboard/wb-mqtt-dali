@@ -13,7 +13,7 @@ from dali.device.pushbutton import (
     SetStuckTimer,
 )
 
-from .dali_2_device import InstanceParam
+from .device_parameters import InstanceParam
 
 
 class DoubleTimerParam(InstanceParam):

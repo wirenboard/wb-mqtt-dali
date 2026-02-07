@@ -11,7 +11,7 @@ from dali.device.occupancy import (
     SetReportTimer,
 )
 
-from .dali_2_device import InstanceParam
+from .device_parameters import InstanceParam
 
 
 class DeadtimeTimerParam(InstanceParam):

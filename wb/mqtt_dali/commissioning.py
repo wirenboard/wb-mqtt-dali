@@ -602,7 +602,7 @@ class Commissioning:
         values = []
         for resp in responses:
             try:
-                if not resp or not resp.value:
+                if not resp or not resp.value or resp.value.error:
                     log.error("Failed to get random address part for %s - %s", int_address, resp)
                     return None
 

@@ -5,11 +5,7 @@ from dali.address import GearShort
 from dali.command import Command
 from dali.gear.general import DTR0
 
-from .settings import (
-    NumberSettingsParam,
-    SettingsParamBase,
-    SettingsParamName,
-)
+from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
 from .utils import add_enum, add_translations, merge_json_schemas
 from .wbdali import WBDALIDriver
 

@@ -37,10 +37,32 @@
         }
       }
     },
+    "brand_name": {
+      "type": "string",
+      "title": "Brand Name",
+      "propertyOrder": 3,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "product_name": {
+      "type": "string",
+      "title": "Product Name",
+      "propertyOrder": 4,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
     "gtin": {
       "type": "number",
       "title": "Global Trade Item Number",
-      "propertyOrder": 3,
+      "propertyOrder": 5,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -51,7 +73,7 @@
     "identification_number": {
       "type": "number",
       "title": "Identification Number",
-      "propertyOrder": 4,
+      "propertyOrder": 6,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -62,7 +84,7 @@
     "firmware_version": {
       "type": "string",
       "title": "Firmware Version",
-      "propertyOrder": 5,
+      "propertyOrder": 7,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -73,7 +95,7 @@
     "hardware_version": {
       "type": "string",
       "title": "Hardware Version",
-      "propertyOrder": 6,
+      "propertyOrder": 8,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -84,7 +106,7 @@
     "part101_version": {
       "type": "string",
       "title": "DALI Part 101 Version",
-      "propertyOrder": 7,
+      "propertyOrder": 9,
       "options": {
         "grid_columns": 4,
         "wb": {
@@ -95,7 +117,7 @@
     "part102_version": {
       "type": "string",
       "title": "DALI Part 102 Version",
-      "propertyOrder": 8,
+      "propertyOrder": 10,
       "options": {
         "grid_columns": 4,
         "wb": {
@@ -106,7 +128,7 @@
     "part103_version": {
       "type": "string",
       "title": "DALI Part 103 Version",
-      "propertyOrder": 9,
+      "propertyOrder": 11,
       "options": {
         "grid_columns": 4,
         "wb": {
@@ -117,7 +139,7 @@
     "oem_gtin": {
       "type": "number",
       "title": "OEM Global Trade Item Number",
-      "propertyOrder": 10,
+      "propertyOrder": 12,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -128,7 +150,7 @@
     "oem_identification_number": {
       "type": "number",
       "title": "OEM Identification Number",
-      "propertyOrder": 11,
+      "propertyOrder": 13,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -139,7 +161,7 @@
     "short_address": {
       "type": "number",
       "title": "Short Address",
-      "propertyOrder": 12,
+      "propertyOrder": 14,
       "minimum": 0,
       "maximum": 63,
       "default": 0,
@@ -150,7 +172,7 @@
     "random_address": {
       "type": "number",
       "title": "Random Address",
-      "propertyOrder": 13,
+      "propertyOrder": 15,
       "options": {
         "grid_columns": 6,
         "wb": {
@@ -161,7 +183,7 @@
     "groups": {
       "type": "array",
       "title": "Groups",
-      "propertyOrder": 16,
+      "propertyOrder": 18,
       "minItems": 16,
       "maxItems": 16,
       "items": {
@@ -172,7 +194,7 @@
     "fade_time": {
       "type": "number",
       "title": "Fade Time",
-      "propertyOrder": 17,
+      "propertyOrder": 19,
       "minimum": 0,
       "maximum": 15,
       "default": 1,
@@ -183,7 +205,7 @@
     "fade_rate": {
       "type": "number",
       "title": "Fade Rate",
-      "propertyOrder": 18,
+      "propertyOrder": 20,
       "minimum": 1,
       "maximum": 15,
       "default": 1,

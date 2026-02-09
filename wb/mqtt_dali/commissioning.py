@@ -5,11 +5,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Union
 
 from dali.address import DeviceBroadcast, DeviceShort, GearShort
-from dali.command import Command, NumericResponse, NumericResponseMask
+from dali.command import NumericResponse, NumericResponseMask
 from dali.device import general as control_device
 from dali.exceptions import ResponseError
 from dali.gear import general as control_gear
 
+from .dali2_compat import Dali2CommandsCompatibilityLayer
+from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDeviceAddress
 from .wbdali import MASK, AsyncDeviceInstanceTypeMapper, WBDALIDriver
 
@@ -77,84 +79,6 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         return found_addr
 
 
-class CommandsCompatibilityLayer:
-    def __init__(self, dali2: bool = False) -> None:
-        if dali2:
-            self.Compare = control_device.Compare
-            self.QueryShortAddress = control_device.QueryShortAddress
-            self.Randomise = control_device.Randomise
-            self.Terminate = control_device.Terminate
-            self.VerifyShortAddress = control_device.VerifyShortAddress
-            self.Withdraw = control_device.Withdraw
-            self.SetSearchAddrH = control_device.SearchAddrH
-            self.SetSearchAddrM = control_device.SearchAddrM
-            self.SetSearchAddrL = control_device.SearchAddrL
-        else:
-            self.Compare = control_gear.Compare
-            self.QueryShortAddress = control_gear.QueryShortAddress
-            self.Randomise = control_gear.Randomise
-            self.Terminate = control_gear.Terminate
-            self.VerifyShortAddress = control_gear.VerifyShortAddress
-            self.Withdraw = control_gear.Withdraw
-            self.SetSearchAddrH = control_gear.SetSearchAddrH
-            self.SetSearchAddrM = control_gear.SetSearchAddrM
-            self.SetSearchAddrL = control_gear.SetSearchAddrL
-
-        self._is_dali2 = dali2
-
-    def Initialise(self, short_addr: Optional[int]) -> Command:
-        if self._is_dali2:
-            if short_addr is None:
-                return control_device.Initialise(255)
-            return control_device.Initialise(short_addr)
-        if short_addr is None or short_addr == MASK:
-            return control_gear.Initialise(broadcast=True)
-        return control_gear.Initialise(address=short_addr, broadcast=False)
-
-    def ProgramShortAddress(self, short_addr: int) -> Command:
-        if self._is_dali2:
-            return control_device.ProgramShortAddress(short_addr)
-        if short_addr == MASK:
-            return control_gear.ProgramShortAddress("MASK")
-        return control_gear.ProgramShortAddress(short_addr)
-
-    def QueryShortAddressResponseValue(
-        self, resp: Union[NumericResponse, NumericResponseMask]
-    ) -> Optional[int]:
-        value = resp.value
-        if isinstance(value, int):
-            if self._is_dali2:
-                return value
-            return value >> 1
-        if value == "MASK":
-            return MASK
-        return None
-
-    def QueryRandomAddressH(self, addr: int):
-        if self._is_dali2:
-            return control_device.QueryRandomAddressH(DeviceShort(addr))
-        return control_gear.QueryRandomAddressH(GearShort(addr))
-
-    def QueryRandomAddressM(self, addr: int):
-        if self._is_dali2:
-            return control_device.QueryRandomAddressM(DeviceShort(addr))
-        return control_gear.QueryRandomAddressM(GearShort(addr))
-
-    def QueryRandomAddressL(self, addr: int):
-        if self._is_dali2:
-            return control_device.QueryRandomAddressL(DeviceShort(addr))
-        return control_gear.QueryRandomAddressL(GearShort(addr))
-
-    def QueryRandomAddressResponseValue(self, resp) -> Optional[int]:
-        if not resp or not resp.value or resp.raw_value.error:
-            return None
-        if self._is_dali2:
-            # Control device returns NumericResponse where value is int
-            return resp.value
-        # Control gear returns Response where value is BackwardFrame
-        return resp.value.as_integer
-
-
 class Commissioning:
     def __init__(
         self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress], dali2: bool = False
@@ -170,7 +94,10 @@ class Commissioning:
             compare_callback=self.compare, set_search_addr_callback=self.set_search_addr
         )
         self._is_dali2 = dali2
-        self._cmds = CommandsCompatibilityLayer(dali2)
+        if dali2:
+            self._cmds = Dali2CommandsCompatibilityLayer()
+        else:
+            self._cmds = DaliCommandsCompatibilityLayer()
 
     def _add_device(self, short_addr: int, rand_addr: int) -> None:
         log.debug("Adding device: short %d, random 0x%06x", short_addr, rand_addr)
@@ -603,17 +530,12 @@ class Commissioning:
         )
         values = []
         for resp in responses:
-            try:
-                resp_value = self._cmds.QueryRandomAddressResponseValue(resp)
-                if resp_value is None:
-                    log.error("Failed to get random address part for %s - %s", int_address, resp)
-                    return None
-
-                values.append(resp_value)
-            except ResponseError as e:
-                log.error("Failed to get random address part for %s - %s", int_address, e)
+            resp_value = self._cmds.QueryRandomAddressResponseValue(resp)
+            if resp_value is None:
+                log.error("Failed to get random address part for %s - %s", int_address, resp)
                 return None
 
+            values.append(resp_value)
         return values[0] << 16 | values[1] << 8 | values[2]
 
     async def _get_present_short_addresses(self) -> list[int]:
@@ -690,7 +612,10 @@ class Commissioning:
 
 
 async def search_short(driver: WBDALIDriver, dali2: bool) -> None:
-    cmds = CommandsCompatibilityLayer(dali2)
+    if dali2:
+        cmds = Dali2CommandsCompatibilityLayer()
+    else:
+        cmds = DaliCommandsCompatibilityLayer()
     await driver.send_commands(
         [
             cmds.Terminate(),
@@ -720,7 +645,10 @@ async def check_presence(driver: WBDALIDriver, dali2: bool) -> bool:
     Check if there is at least one device on the bus
     """
 
-    cmds = CommandsCompatibilityLayer(dali2)
+    if dali2:
+        cmds = Dali2CommandsCompatibilityLayer()
+    else:
+        cmds = DaliCommandsCompatibilityLayer()
     try:
         r = await driver.send_commands(
             [

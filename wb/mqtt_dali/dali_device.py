@@ -1,24 +1,30 @@
-import asyncio
 from enum import IntEnum
 from typing import Optional
 
-import jsonschema
 from dali.address import GearShort
-from dali.gear.general import DTR0, SetShortAddress
 from dali.sequences import QueryDeviceTypes
 
-from .common_dali_device import DaliDeviceAddress, DaliDeviceBase
-from .common_gear_parameters import CommonParameters
-from .extended_gear_parameters import TypeParameters
-from .type1_parameters import Type1Parameters
-from .type4_parameters import Type4Parameters
-from .type5_parameters import Type5Parameters
-from .type6_parameters import Type6Parameters
-from .type7_parameters import Type7Parameters
-from .type8_parameters import Type8Parameters
-from .type17_parameters import Type17Parameters
-from .type20_parameters import Type20Parameters
-from .utils import merge_json_schemas
+from .common_dali_device import DaliDeviceAddress, DaliDeviceBase, GeneralMemoryParams
+from .dali_common_parameters import (
+    FadeTimeFadeRateParam,
+    GroupsParam,
+    MaxLevelParam,
+    MinLevelParam,
+    PowerOnLevelParam,
+    ScenesParam,
+    SystemFailureLevelParam,
+)
+from .dali_compat import DaliCommandsCompatibilityLayer
+from .dali_type1_parameters import Type1Parameters
+from .dali_type4_parameters import Type4Parameters
+from .dali_type5_parameters import Type5Parameters
+from .dali_type6_parameters import Type6Parameters
+from .dali_type7_parameters import Type7Parameters
+from .dali_type8_parameters import Type8Parameters
+from .dali_type17_parameters import Type17Parameters
+from .dali_type20_parameters import Type20Parameters
+from .gtin_db import DaliDatabase
+from .settings import SettingsParamBase
 from .wbdali import WBDALIDriver
 
 
@@ -49,65 +55,30 @@ class DaliDevice(DaliDeviceBase):
         self,
         address: DaliDeviceAddress,
         bus_id: str,
+        gtin_db: DaliDatabase,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
-        super().__init__(address, bus_id, "DALI", "", mqtt_id, name)
-
+        super().__init__(address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), mqtt_id, name)
         self.types: list[int] = []
+        self._gtin_db = gtin_db
 
-        self._parameter_handlers: list = []
-
-    async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
-        if self.params and not force_reload:
-            return
-        short_addr = GearShort(self.address.short)
-        types = await driver.run_sequence(QueryDeviceTypes(short_addr))
-        if types is None:
+    async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
+        self.types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
+        if self.types is None:
             raise RuntimeError(
-                f"Device at short address {short_addr.address} did not respond to QueryDeviceTypes"
+                f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
             )
-        parameter_handlers = self._get_parameters(types)
-        schema = {}
-        params = self._get_common_parameters()
-        params["types"] = types
-        awaitables = [param_handler.read(driver, short_addr) for param_handler in parameter_handlers]
-        results_iterable = iter(await asyncio.gather(*awaitables))
-        for _ in parameter_handlers:
-            type_params = next(results_iterable)
-            params.update(type_params)
-        schemas = [param_handler.get_schema() for param_handler in parameter_handlers]
-        for type_schema in schemas:
-            if type_schema is not None:
-                merge_json_schemas(schema, type_schema)
-        self._parameter_handlers = parameter_handlers
-        self.params = params
-        self.schema = schema
-        self.types = types
-
-    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
-        if not self.params:
-            await self.load_info(driver)
-        jsonschema.validate(
-            instance=new_values, schema=self.schema, format_checker=jsonschema.draft4_format_checker
-        )
-        short_addr = GearShort(self.address.short)
-        updated_parameters = {}
-        for param_handler in self._parameter_handlers:
-            updated_parameters.update(await param_handler.write(driver, short_addr, new_values))
-        self.params.update(updated_parameters)
-        await self._apply_common_parameters(driver, new_values)
-
-    async def _set_short_address(self, driver: WBDALIDriver, new_short_address: int) -> None:
-        short_addr = GearShort(self.address.short)
-        new_short_address = (new_short_address << 1) | 1  # Convert to gear short address format
-        await driver.send_commands([DTR0(new_short_address), SetShortAddress(short_addr)])
-
-    def _get_parameters(self, types: list[int]) -> list[TypeParameters]:
-        # Colour control has own scenes, power on level and system failure level parameters,
-        # so exclude common alternatives
-        exclude_scenes_and_levels = DaliDeviceType.COLOUR_CONTROL.value in types
-        res: list[TypeParameters] = [CommonParameters(exclude_scenes_and_levels)]
+        res: list[SettingsParamBase] = [
+            GeneralMemoryParams(DaliCommandsCompatibilityLayer(), self._gtin_db),
+            GroupsParam(),
+            MaxLevelParam(),
+            MinLevelParam(),
+            FadeTimeFadeRateParam(),
+        ]
+        # Colour control has own scenes, power on level and system failure level parameters
+        if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
+            res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
         gear_type_params = {
             DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
             DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(),
@@ -118,7 +89,7 @@ class DaliDevice(DaliDeviceBase):
             DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(),
             DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
         }
-        for gear_type in types:
+        for gear_type in self.types:
             try:
                 res.append(gear_type_params[DaliDeviceType(gear_type)])
             except (ValueError, KeyError):

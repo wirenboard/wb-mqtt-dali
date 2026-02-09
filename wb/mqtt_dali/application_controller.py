@@ -11,17 +11,18 @@ from dali.device.general import StartQuiescentMode, StopQuiescentMode
 from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning, CommissioningResult
-from .common_dali2_controls import get_dali2_controls, publish_dali2_event
-from .common_gear_controls import (
+from .dali2_controls import get_dali2_controls, publish_dali2_event
+from .dali2_device import Dali2Device
+from .dali_controls import (
     build_polling_queries,
     get_common_controls,
     publish_polling_results,
     register_common_handlers,
 )
-from .dali_2_device import Dali2Device
 from .dali_device import DaliDevice
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
+from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
 
@@ -57,6 +58,7 @@ class ApplicationController:
         self,
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
+        gtin_db: DaliDatabase,
     ) -> None:
         self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus_index}"
         self.bus_name = f"Bus {config.bus_index}"
@@ -92,6 +94,8 @@ class ApplicationController:
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
         self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
+
+        self._gtin_db = gtin_db
 
     @property
     def polling_interval(self) -> float:
@@ -304,8 +308,8 @@ class ApplicationController:
 
     async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [DaliDevice(d.new, self.uid) for d in commissioning_result.changed]
-        new_devices = [DaliDevice(addr, self.uid) for addr in commissioning_result.new]
+        changed_devices = [DaliDevice(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
+        new_devices = [DaliDevice(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
         old_device_ids = {d.mqtt_id for d in self.dali_devices}
 
@@ -330,8 +334,8 @@ class ApplicationController:
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [Dali2Device(d.new, self.uid) for d in commissioning_result.changed]
-        new_devices = [Dali2Device(addr, self.uid) for addr in commissioning_result.new]
+        changed_devices = [Dali2Device(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
+        new_devices = [Dali2Device(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
         old_device_ids = {d.mqtt_id for d in self.dali2_devices}
         self.dali2_devices = unchanged_devices + changed_devices + new_devices

@@ -34,9 +34,9 @@ from dali.gear.general import (
     SetSystemFailureLevel,
 )
 
-from .common_gear_parameters import SCENES_TOTAL
-from .extended_gear_parameters import TypeParameters
-from .settings import SettingsParamAddress, SettingsParamBase, SettingsParamName
+from .dali_common_parameters import SCENES_TOTAL
+from .dali_parameters import TypeParameters
+from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import MASK, WBDALIDriver, query_request
 
 
@@ -333,9 +333,8 @@ class ColourState(SettingsParamBase):
         self._read_after_save = read_after_save
         self._default_colour_type = default_colour_type
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        address = GearShort(short_address)
         resp = await driver.run_sequence(
             query_colour_with_level(
                 address, self._query_command_class(address), self._colour_tags, self._default_colour_type
@@ -348,11 +347,9 @@ class ColourState(SettingsParamBase):
         res["level"] = resp.level
         return {self.property_name: res}
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self.property_name not in value:
             return {}
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
         if self.value is None or self.value.colour is None:
             raise RuntimeError(f"Cannot write {self.name.en} before reading it")
         values = value.get(self.property_name, {})
@@ -363,11 +360,12 @@ class ColourState(SettingsParamBase):
         new_state.level = values.get("level", self.value.level)
         if new_state == self.value:
             return {}
+        address = GearShort(short_address)
         cmds = new_state.colour.get_write_commands(address)
         cmds.extend([DTR0(new_state.level), self._setup_command_class(address)])
         await driver.send_commands(cmds)
         if self._read_after_save:
-            return await self.read(driver, address)
+            return await self.read(driver, short_address)
         self.value = new_state
         res = asdict(new_state.colour)
         res["level"] = new_state.level
@@ -432,19 +430,19 @@ class SceneSettings(ColourState):
         )
         self._scene_number = scene_number
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        res = await super().read(driver, address)
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        res = await super().read(driver, short_address)
         value = res[self.property_name]
         value["enabled"] = value.get("level") != MASK
         return value
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         values_to_set = deepcopy(value)
         if value.get("enabled", True):
             values_to_set["level"] = value.get("level", 0)
         else:
             values_to_set["level"] = MASK
-        res = await super().write(driver, address, {self.property_name: values_to_set})
+        res = await super().write(driver, short_address, {self.property_name: values_to_set})
         return res.get(self.property_name, {})
 
 
@@ -456,22 +454,20 @@ class ScenesSettings(SettingsParamBase):
         self._scenes = [SceneSettings(i, default_colour_type) for i in range(SCENES_TOTAL)]
         self._scene_values = [{} for _ in range(SCENES_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
-        self._scene_values = await asyncio.gather(*[scene.read(driver, address) for scene in self._scenes])
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        self._scene_values = await asyncio.gather(
+            *[scene.read(driver, short_address) for scene in self._scenes]
+        )
         return {self.property_name: self._scene_values}
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self._scenes[0].value is None:
             raise RuntimeError("Cannot write scenes before reading them")
         if self.property_name not in value:
             return {}
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
         results = await asyncio.gather(
             *[
-                scene.write(driver, address, scene_value)
+                scene.write(driver, short_address, scene_value)
                 for scene, scene_value in zip(self._scenes, value.get(self.property_name, []))
             ]
         )
@@ -541,11 +537,9 @@ class ScenesSettings(SettingsParamBase):
 
 
 class Type8Parameters(TypeParameters):
-    def __init__(self) -> None:
-        super().__init__()
 
-    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
-        res = await query_request(driver, QueryColourStatus(address))
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        res = await query_request(driver, QueryColourStatus(GearShort(short_address)))
         default_colour_type = ColourType.RGBWAF
         if (res >> 4) & 0x01 == 1:
             default_colour_type = ColourType.XY
@@ -585,4 +579,4 @@ class Type8Parameters(TypeParameters):
             ScenesSettings(default_colour_type),
         ]
         self._parameters = parameters
-        return await super().read(driver, address)
+        return await super().read(driver, short_address)

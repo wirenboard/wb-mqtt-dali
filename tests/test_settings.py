@@ -106,7 +106,7 @@ async def test_write_no_write_commands(number_settings_param):
     number_settings_param.value = 50
     value_to_set = {"test_property": 100}
 
-    with pytest.raises(RuntimeError, match="Set commands for test_name are not defined"):
+    with pytest.raises(RuntimeError, match="Write commands for test_name are not defined"):
         await number_settings_param.write(mock_driver, mock_address, value_to_set)
 
 

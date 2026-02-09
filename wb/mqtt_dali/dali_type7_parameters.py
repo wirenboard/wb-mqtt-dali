@@ -2,7 +2,7 @@
 
 from dali.address import GearShort
 
-from .extended_gear_parameters import NumberGearParam, TypeParameters
+from .dali_parameters import NumberGearParam, TypeParameters
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,
@@ -77,9 +77,9 @@ class ErrorHoldOffTimeParam(NumberGearParam):
 
 
 class Type7Parameters(TypeParameters):
-    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         try:
-            features = await query_request(driver, QueryFeatures(address))
+            features = await query_request(driver, QueryFeatures(GearShort(short_address)))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read switching function features: {e}") from e
         res = []
@@ -91,4 +91,4 @@ class Type7Parameters(TypeParameters):
         if (features >> 4) & 1:  # bit 4: adjustable hold-off time
             res.append(ErrorHoldOffTimeParam())
         self._parameters = res
-        return await super().read(driver, address)
+        return await super().read(driver, short_address)

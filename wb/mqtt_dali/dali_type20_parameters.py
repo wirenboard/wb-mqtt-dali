@@ -1,6 +1,6 @@
 # Type 20 Demand response
 
-from .extended_gear_parameters import NumberGearParam, TypeParameters
+from .dali_parameters import NumberGearParam, TypeParameters
 from .gear.demand_response import (
     QueryLoadSheddingCondition,
     QueryReductionFactor1,

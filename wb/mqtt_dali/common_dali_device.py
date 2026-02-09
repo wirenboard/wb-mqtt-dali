@@ -30,6 +30,9 @@ class DaliDeviceBase:
         self._bus_id = bus_id
         self._default_name_prefix = default_name_prefix
         self._default_mqtt_id_part = default_mqtt_id_part
+        self._mqtt_id: Optional[str] = None
+        self._name: Optional[str] = None
+
         if mqtt_id != self.default_mqtt_id:
             self._mqtt_id = mqtt_id
         if name != self.default_name:

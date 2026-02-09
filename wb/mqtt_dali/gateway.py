@@ -380,7 +380,11 @@ def get_dict_for_device_config(device: Union[DaliDevice, Dali2Device]) -> dict:
 
 
 def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGateway]) -> None:
-    temp_fd, temp_path = tempfile.mkstemp(suffix=".json")
+    temp_fd, temp_path = tempfile.mkstemp(
+        prefix="wb-mqtt-dali",
+        suffix=".cfg.tmp",
+        dir=os.path.dirname(os.path.abspath(config_path)),
+    )
     try:
         with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_f:
             config: dict = {

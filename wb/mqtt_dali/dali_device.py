@@ -70,6 +70,7 @@ class DaliDevice(DaliDeviceBase):
         parameter_handlers = self._get_parameters(types)
         schema = {}
         params = self._get_common_parameters()
+        params["types"] = types
         awaitables = [param_handler.read(driver, short_addr) for param_handler in parameter_handlers]
         results_iterable = iter(await asyncio.gather(*awaitables))
         for _ in parameter_handlers:
@@ -98,8 +99,6 @@ class DaliDevice(DaliDeviceBase):
         await self._apply_common_parameters(driver, new_values)
 
     async def _set_short_address(self, driver: WBDALIDriver, new_short_address: int) -> None:
-        if new_short_address < 0 or new_short_address > 63:
-            raise ValueError("Short address must be between 0 and 63")
         short_addr = GearShort(self.address.short)
         new_short_address = (new_short_address << 1) | 1  # Convert to gear short address format
         await driver.send_commands([DTR0(new_short_address), SetShortAddress(short_addr)])

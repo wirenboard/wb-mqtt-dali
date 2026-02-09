@@ -92,12 +92,12 @@ class MQTTRPCServer:
             result = await handler(request.params)
             return MQTTRPC10Response(_id=request._id, result=result).json  # pylint: disable=protected-access
         except JSONRPCDispatchException as e:
-            self.logger.error("Error processing RPC request: %s", e)
+            self.logger.exception("Error processing RPC request: %s", e)
             return MQTTRPC10Response(
                 _id=request._id, error=e.error._data  # pylint: disable=protected-access
             ).json
         except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.error("Error processing RPC request: %s", e)
+            self.logger.exception("Error processing RPC request: %s", e)
             return MQTTRPC10Response(
                 _id=request._id,  # pylint: disable=protected-access
                 error=JSONRPCServerError(data=str(e))._data,  # pylint: disable=protected-access

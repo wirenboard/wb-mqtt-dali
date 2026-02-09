@@ -140,7 +140,7 @@ class DevicePublisher:
                 update_tasks = []
                 for device_info in changes.updated:
                     if device_info.id in self._devices:
-                        update_tasks.append(self._update_device_internal(device_info.id, device_info))
+                        update_tasks.append(self._update_device_internal(device_info))
                     else:
                         self.logger.warning("Device %s marked for update but not found", device_info.id)
                 if update_tasks:
@@ -161,9 +161,9 @@ class DevicePublisher:
         async with self._lock:
             await self._remove_device_internal(device_id)
 
-    async def update_device(self, device_id: str, device_info: DeviceInfo) -> None:
+    async def update_device(self, device_info: DeviceInfo) -> None:
         async with self._lock:
-            await self._update_device_internal(device_id, device_info)
+            await self._update_device_internal(device_info)
 
     async def set_control_value(self, device_id: str, control_id: str, value: str) -> None:
         async with self._lock:
@@ -237,8 +237,7 @@ class DevicePublisher:
         device_id = device_info.id
 
         if device_id in self._devices:
-            self.logger.warning("Device %s already exists, skipping", device_id)
-            return
+            raise RuntimeError(f"Device {device_id} already exists")
 
         device = Device(
             mqtt_client=self._mqtt_dispatcher.client,
@@ -274,7 +273,9 @@ class DevicePublisher:
         del self._devices[device_id]
         self.logger.info("Removed device %s", device_id)
 
-    async def _update_device_internal(self, device_id: str, device_info: DeviceInfo) -> None:
+    async def _update_device_internal(self, device_info: DeviceInfo) -> None:
+        device_id = device_info.id
+
         if device_id not in self._devices:
             self.logger.warning("Device %s not found for update", device_id)
             return

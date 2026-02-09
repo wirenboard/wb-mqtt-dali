@@ -18,8 +18,8 @@ from .common_gear_controls import (
     publish_polling_results,
     register_common_handlers,
 )
-from .dali_2_device import Dali2Device, make_dali2_device
-from .dali_device import DaliDevice, make_dali_device
+from .dali_2_device import Dali2Device
+from .dali_device import DaliDevice
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .mqtt_dispatcher import MQTTDispatcher
@@ -44,7 +44,7 @@ class WebSocketConfig:
 
 @dataclass
 class ApplicationControllerConfig:
-    mqtt_device_id: str
+    gateway_mqtt_device_id: str
     bus_index: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
@@ -58,7 +58,7 @@ class ApplicationController:
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
     ) -> None:
-        self.uid = f"{config.mqtt_device_id}_bus_{config.bus_index}"
+        self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus_index}"
         self.bus_name = f"Bus {config.bus_index}"
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
@@ -78,7 +78,7 @@ class ApplicationController:
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
         cfg = WBDALIConfig(
-            device_name=config.mqtt_device_id,
+            device_name=config.gateway_mqtt_device_id,
             channel=config.bus_index + 1,
         )
 
@@ -117,13 +117,13 @@ class ApplicationController:
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
         for device in self.dali_devices:
-            device_info = DeviceInfo(device.uid, device.name, get_common_controls())
+            device_info = DeviceInfo(device.mqtt_id, device.name, get_common_controls())
             await self._device_publisher.add_device(device_info)
             await register_common_handlers(device, self, self._device_publisher)
 
         self._update_dali2_devices_instances({d.address.short: d for d in self.dali2_devices})
         for device in self.dali2_devices:
-            device_info = DeviceInfo(device.uid, device.name, get_dali2_controls(device))
+            device_info = DeviceInfo(device.mqtt_id, device.name, get_dali2_controls(device))
             await self._device_publisher.add_device(device_info)
 
         await self._device_publisher.initialize()
@@ -191,17 +191,31 @@ class ApplicationController:
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK,
             device.load_info(self._dev, force_reload),
-            f"loading device {device.uid} info",
+            f"loading device {device.name} info",
             5.0,
         )
 
     async def apply_parameters(self, device: Union[DaliDevice, Dali2Device], new_params: dict) -> None:
+        old_mqtt_id = device.mqtt_id
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK,
             device.apply_parameters(self._dev, new_params),
-            f"applying parameters to device {device.uid}",
+            f"applying parameters to device {device.name}",
             5.0,
         )
+
+        device_info = DeviceInfo(
+            device.mqtt_id,
+            device.name,
+            get_dali2_controls(device) if isinstance(device, Dali2Device) else get_common_controls(),
+        )
+        if old_mqtt_id != device.mqtt_id:
+            await self._device_publisher.add_device(device_info)
+            if isinstance(device, DaliDevice):
+                await register_common_handlers(device, self, self._device_publisher)
+            await self._device_publisher.remove_device(old_mqtt_id)
+        else:
+            await self._device_publisher.update_device(device_info)
 
     async def send_command(self, command):
         if self._active_task:
@@ -290,18 +304,18 @@ class ApplicationController:
 
     async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [make_dali_device(self.uid, d.new) for d in commissioning_result.changed]
-        new_devices = [make_dali_device(self.uid, addr) for addr in commissioning_result.new]
+        changed_devices = [DaliDevice(d.new, self.uid) for d in commissioning_result.changed]
+        new_devices = [DaliDevice(addr, self.uid) for addr in commissioning_result.new]
 
-        old_device_ids = {d.uid for d in self.dali_devices}
+        old_device_ids = {d.mqtt_id for d in self.dali_devices}
 
         self.dali_devices = unchanged_devices + changed_devices + new_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
 
-        new_device_ids = {d.uid for d in self.dali_devices}
+        new_device_ids = {d.mqtt_id for d in self.dali_devices}
         removed_ids = list(old_device_ids - new_device_ids)
-        added_devices = [DeviceInfo(d.uid, d.name, get_common_controls()) for d in new_devices]
-        updated_devices = [DeviceInfo(d.uid, d.name, get_common_controls()) for d in changed_devices]
+        added_devices = [DeviceInfo(d.mqtt_id, d.name, get_common_controls()) for d in new_devices]
+        updated_devices = [DeviceInfo(d.mqtt_id, d.name, get_common_controls()) for d in changed_devices]
 
         changes = DeviceChange(
             added=added_devices,
@@ -316,10 +330,10 @@ class ApplicationController:
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [make_dali2_device(self.uid, d.new) for d in commissioning_result.changed]
-        new_devices = [make_dali2_device(self.uid, addr) for addr in commissioning_result.new]
+        changed_devices = [Dali2Device(d.new, self.uid) for d in commissioning_result.changed]
+        new_devices = [Dali2Device(addr, self.uid) for addr in commissioning_result.new]
 
-        old_device_ids = {d.uid for d in self.dali2_devices}
+        old_device_ids = {d.mqtt_id for d in self.dali2_devices}
         self.dali2_devices = unchanged_devices + changed_devices + new_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
@@ -327,10 +341,10 @@ class ApplicationController:
         await self._dev_inst_map.async_autodiscover(self._dev, [d.address.short for d in self.dali2_devices])
         self._update_dali2_devices_instances({d.address.short: d for d in changed_devices + new_devices})
 
-        new_device_ids = {d.uid for d in self.dali2_devices}
+        new_device_ids = {d.mqtt_id for d in self.dali2_devices}
         removed_ids = list(old_device_ids - new_device_ids)
-        added_devices = [DeviceInfo(d.uid, d.name, get_dali2_controls(d)) for d in new_devices]
-        updated_devices = [DeviceInfo(d.uid, d.name, get_dali2_controls(d)) for d in changed_devices]
+        added_devices = [DeviceInfo(d.mqtt_id, d.name, get_dali2_controls(d)) for d in new_devices]
+        updated_devices = [DeviceInfo(d.mqtt_id, d.name, get_dali2_controls(d)) for d in changed_devices]
 
         changes = DeviceChange(
             added=added_devices,
@@ -345,7 +359,7 @@ class ApplicationController:
             device = dali2_devices_by_addr.get(addr)
             if device is not None:
                 self.logger.debug(
-                    "Adding instance %d of type %d to DALI 2 device %s", inst_num, inst_type, device.uid
+                    "Adding instance %d of type %d to DALI 2 device %s", inst_num, inst_type, device.name
                 )
                 device.add_instance(inst_num, inst_type)
 

@@ -1,11 +1,13 @@
 import asyncio
-from dataclasses import dataclass
 from enum import IntEnum
+from typing import Optional
 
 import jsonschema
 from dali.address import GearShort
+from dali.gear.general import DTR0, SetShortAddress
 from dali.sequences import QueryDeviceTypes
 
+from .common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from .common_gear_parameters import CommonParameters
 from .extended_gear_parameters import TypeParameters
 from .type1_parameters import Type1Parameters
@@ -18,12 +20,6 @@ from .type17_parameters import Type17Parameters
 from .type20_parameters import Type20Parameters
 from .utils import merge_json_schemas
 from .wbdali import WBDALIDriver
-
-
-@dataclass
-class DaliDeviceAddress:
-    short: int
-    random: int
 
 
 class DaliDeviceType(IntEnum):
@@ -47,15 +43,19 @@ class DaliDeviceType(IntEnum):
     ENERGY_REPORTING_DEVICE = 51
 
 
-class DaliDevice:
+class DaliDevice(DaliDeviceBase):
 
-    def __init__(self, uid: str, name: str, address: DaliDeviceAddress) -> None:
-        self.uid = uid
-        self.name = name
-        self.address = address
+    def __init__(
+        self,
+        address: DaliDeviceAddress,
+        bus_id: str,
+        mqtt_id: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> None:
+        super().__init__(address, bus_id, "DALI", "", mqtt_id, name)
+
         self.types: list[int] = []
-        self.params: dict = {}
-        self.schema: dict = {}
+
         self._parameter_handlers: list = []
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
@@ -69,11 +69,8 @@ class DaliDevice:
             )
         parameter_handlers = self._get_parameters(types)
         schema = {}
-        params = {
-            "short_address": self.address.short,
-            "random_address": self.address.random,
-            "types": types,
-        }
+        params = self._get_common_parameters()
+        params["types"] = types
         awaitables = [param_handler.read(driver, short_addr) for param_handler in parameter_handlers]
         results_iterable = iter(await asyncio.gather(*awaitables))
         for _ in parameter_handlers:
@@ -99,6 +96,12 @@ class DaliDevice:
         for param_handler in self._parameter_handlers:
             updated_parameters.update(await param_handler.write(driver, short_addr, new_values))
         self.params.update(updated_parameters)
+        await self._apply_common_parameters(driver, new_values)
+
+    async def _set_short_address(self, driver: WBDALIDriver, new_short_address: int) -> None:
+        short_addr = GearShort(self.address.short)
+        new_short_address = (new_short_address << 1) | 1  # Convert to gear short address format
+        await driver.send_commands([DTR0(new_short_address), SetShortAddress(short_addr)])
 
     def _get_parameters(self, types: list[int]) -> list[TypeParameters]:
         # Colour control has own scenes, power on level and system failure level parameters,
@@ -121,11 +124,3 @@ class DaliDevice:
             except (ValueError, KeyError):
                 continue
         return res
-
-
-def make_dali_device(bus_uid: str, address: DaliDeviceAddress) -> DaliDevice:
-    return DaliDevice(
-        uid=f"{bus_uid}_{address.short}",
-        name=f"DALI {address.short}:{address.random:#x}",
-        address=address,
-    )

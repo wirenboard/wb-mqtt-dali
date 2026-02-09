@@ -145,7 +145,9 @@ class CommandsCompatibilityLayer:
             return control_device.QueryRandomAddressL(DeviceShort(addr))
         return control_gear.QueryRandomAddressL(GearShort(addr))
 
-    def QueryRandomAddressResponseValue(self, resp) -> int:
+    def QueryRandomAddressResponseValue(self, resp) -> Optional[int]:
+        if not resp or not resp.value or resp.raw_value.error:
+            return None
         if self._is_dali2:
             # Control device returns NumericResponse where value is int
             return resp.value
@@ -602,11 +604,12 @@ class Commissioning:
         values = []
         for resp in responses:
             try:
-                if not resp or not resp.value:
+                resp_value = self._cmds.QueryRandomAddressResponseValue(resp)
+                if resp_value is None:
                     log.error("Failed to get random address part for %s - %s", int_address, resp)
                     return None
 
-                values.append(self._cmds.QueryRandomAddressResponseValue(resp))
+                values.append(resp_value)
             except ResponseError as e:
                 log.error("Failed to get random address part for %s - %s", int_address, e)
                 return None

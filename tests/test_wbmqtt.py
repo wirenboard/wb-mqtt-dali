@@ -517,7 +517,7 @@ class TestRetainHack:
     @pytest.mark.asyncio
     async def test_retain_hack_success(self, mock_dispatcher):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.12345):
-            mock_dispatcher.client.add_message("/wbretainhack/0.12345", b"2")
+            mock_dispatcher.client.add_message("/wbretainhack/1234500", b"2")
 
             await retain_hack(mock_dispatcher)
 
@@ -529,7 +529,7 @@ class TestRetainHack:
     async def test_retain_hack_timeout(self, mock_dispatcher, caplog):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.54321):
             with caplog.at_level(logging.WARNING):
-                await retain_hack(mock_dispatcher)
+                await retain_hack(mock_dispatcher, timeout=1)
 
             assert "Retain hack timeout" in caplog.text
 
@@ -553,9 +553,9 @@ class TestRemoveTopicsByDriver:
             mock_dispatcher.client.add_message("/devices/other_device/meta", other_device_meta.encode())
             mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
 
-            mock_dispatcher.client.add_message("/wbretainhack/0.99999", b"2")
+            mock_dispatcher.client.add_message("/wbretainhack/9999900", b"2")
 
-            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali")
+            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali", timeout=1)
 
             mock_dispatcher.client.subscribe.assert_any_call("/devices/#")
             mock_dispatcher.client.unsubscribe.assert_called()
@@ -579,9 +579,9 @@ class TestRemoveTopicsByDriver:
             mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
             device_meta = json.dumps({"driver": "other-driver"})
             mock_dispatcher.client.add_message("/devices/other_device/meta", device_meta.encode())
-            mock_dispatcher.client.add_message("/wbretainhack/0.11111", b"2")
+            mock_dispatcher.client.add_message("/wbretainhack/1111100", b"2")
 
-            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali")
+            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali", timeout=1)
 
             mock_dispatcher.client.subscribe.assert_called()
             mock_dispatcher.client.unsubscribe.assert_called()

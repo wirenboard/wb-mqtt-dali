@@ -2,6 +2,7 @@
 
 from typing import List
 
+from dali.address import InstanceNumber
 from dali.device.occupancy import (
     QueryDeadtimeTimer,
     QueryHoldTimer,
@@ -11,27 +12,46 @@ from dali.device.occupancy import (
     SetReportTimer,
 )
 
-from .device_parameters import InstanceParam
+from .dali2_parameters import InstanceParam
+from .settings import SettingsParamName
 
 
 class DeadtimeTimerParam(InstanceParam):
-    def __init__(self) -> None:
-        super().__init__("Deadtime timer", "deadtime_timer", QueryDeadtimeTimer, SetDeadtimeTimer)
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__(
+            SettingsParamName("Deadtime timer"),
+            "deadtime_timer",
+            instance_number,
+            QueryDeadtimeTimer,
+            SetDeadtimeTimer,
+        )
 
 
 class HoldTimerParam(InstanceParam):
-    def __init__(self) -> None:
-        super().__init__("Hold timer", "hold_timer", QueryHoldTimer, SetHoldTimer)
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__(
+            SettingsParamName("Hold timer"),
+            "hold_timer",
+            instance_number,
+            QueryHoldTimer,
+            SetHoldTimer,
+        )
 
 
 class ReportTimerParam(InstanceParam):
-    def __init__(self) -> None:
-        super().__init__("Report timer", "report_timer", QueryReportTimer, SetReportTimer)
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__(
+            SettingsParamName("Report timer"),
+            "report_timer",
+            instance_number,
+            QueryReportTimer,
+            SetReportTimer,
+        )
 
 
-def build_type3_occupancy_sensor_parameters() -> List[InstanceParam]:
+def build_type3_occupancy_sensor_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:
     return [
-        DeadtimeTimerParam(),
-        HoldTimerParam(),
-        ReportTimerParam(),
+        DeadtimeTimerParam(instance_number),
+        HoldTimerParam(instance_number),
+        ReportTimerParam(instance_number),
     ]

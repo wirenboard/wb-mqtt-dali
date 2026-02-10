@@ -61,6 +61,7 @@ def bus_from_json(
             device = Dali2Device(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
+                gtin_db,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
             )
@@ -69,6 +70,7 @@ def bus_from_json(
             device = DaliDevice(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
+                gtin_db,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
             )

@@ -5,7 +5,7 @@ from dali.command import Command
 from dali.device import light, occupancy, pushbutton
 from dali.device.general import DTR0, QueryEventScheme, SetEventScheme
 
-from .common_dali_device import DaliDeviceBase, GeneralMemoryParams
+from .common_dali_device import DaliDeviceBase
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_type1_parameters import build_type1_push_button_parameters
 from .dali2_type3_parameters import build_type3_occupancy_sensor_parameters
@@ -114,15 +114,13 @@ class Dali2Device(DaliDeviceBase):
         name: Optional[str] = None,
     ) -> None:
         super().__init__(
-            address, bus_id, "DALI 2.0", "dali2_", Dali2CommandsCompatibilityLayer(), mqtt_id, name
+            address, bus_id, "DALI 2.0", "dali2_", Dali2CommandsCompatibilityLayer(), gtin_db, mqtt_id, name
         )
         self.instances: dict[int, InstanceParameters] = {}
         self._gtin_db = gtin_db
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        res: list[SettingsParamBase] = list(self.instances.values())
-        res.append(GeneralMemoryParams(Dali2CommandsCompatibilityLayer(), self._gtin_db))
-        return res
+        return list(self.instances.values())
 
     def add_instance(self, index: int, instance_type: int) -> None:
         self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)

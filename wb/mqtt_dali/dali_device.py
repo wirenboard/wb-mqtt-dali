@@ -4,7 +4,7 @@ from typing import Optional
 from dali.address import GearShort
 from dali.sequences import QueryDeviceTypes
 
-from .common_dali_device import DaliDeviceAddress, DaliDeviceBase, GeneralMemoryParams
+from .common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from .dali_common_parameters import (
     FadeTimeFadeRateParam,
     GroupsParam,
@@ -59,9 +59,10 @@ class DaliDevice(DaliDeviceBase):
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
-        super().__init__(address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), mqtt_id, name)
+        super().__init__(
+            address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
+        )
         self.types: list[int] = []
-        self._gtin_db = gtin_db
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         self.types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
@@ -70,7 +71,6 @@ class DaliDevice(DaliDeviceBase):
                 f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
             )
         res: list[SettingsParamBase] = [
-            GeneralMemoryParams(DaliCommandsCompatibilityLayer(), self._gtin_db),
             GroupsParam(),
             MaxLevelParam(),
             MinLevelParam(),

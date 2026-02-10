@@ -99,12 +99,14 @@ class GeneralMemoryParams(SettingsParamBase):
                 res, await driver.run_sequence(read_memory_bank(bank0, short_address, self._compat))
             )
         except MemoryLocationNotImplemented:
+            # Some devices do not implement this general information memory bank
             pass
         try:
             self._update_info(
                 res, await driver.run_sequence(read_memory_bank(oem.BANK_1, short_address, self._compat))
             )
         except MemoryLocationNotImplemented:
+            # OEM memory bank may be absent on some devices
             pass
 
         product_info = None
@@ -148,6 +150,7 @@ class DaliDeviceBase:
         default_name_prefix: str,
         default_mqtt_id_part: str,
         compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+        gtin_db: DaliDatabase,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -175,6 +178,8 @@ class DaliDeviceBase:
             schema_path = Path("/usr/share/wb-mqtt-dali/schemas/common_device.schema.json")
             with open(schema_path, "r", encoding="utf-8") as f:
                 self._common_schema = json.load(f)
+
+        self._gtin_db = gtin_db
 
     @property
     def mqtt_id(self) -> str:
@@ -217,7 +222,8 @@ class DaliDeviceBase:
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         if self.params and not force_reload:
             return
-        parameter_handlers = await self._get_parameter_handlers(driver)
+        parameter_handlers: list[SettingsParamBase] = [GeneralMemoryParams(self._compat, self._gtin_db)]
+        parameter_handlers.extend(await self._get_parameter_handlers(driver))
         params = {
             "short_address": self.address.short,
             "random_address": self.address.random,

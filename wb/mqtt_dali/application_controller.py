@@ -201,6 +201,7 @@ class ApplicationController:
 
     async def apply_parameters(self, device: Union[DaliDevice, Dali2Device], new_params: dict) -> None:
         old_mqtt_id = device.mqtt_id
+        old_short_address = device.address.short
         await self._run_task(
             ApplicationControllerState.GENERIC_TASK,
             device.apply_parameters(self._dev, new_params),
@@ -220,6 +221,11 @@ class ApplicationController:
             await self._device_publisher.remove_device(old_mqtt_id)
         else:
             await self._device_publisher.update_device(device_info)
+
+        if isinstance(device, Dali2Device) and old_short_address != device.address.short:
+            self._dev_inst_map.update_mapping(old_short_address, device.address.short)
+            self._dali2_devices_by_addr.pop(old_short_address, None)
+            self._dali2_devices_by_addr[device.address.short] = device
 
     async def send_command(self, command):
         if self._active_task:

@@ -113,10 +113,6 @@ class GeneralMemoryParams(SettingsParamBase):
         gtin = res.get("gtin") or res.get("oem_gtin")
         if gtin is not None:
             product_info = self._gtin_db.get_info_by_gtin(gtin)
-        else:
-            product_id = res.get("identification_number") or res.get("oem_identification_number")
-            if product_id is not None:
-                product_info = self._gtin_db.get_info_by_product_id(product_id)
 
         if product_info is not None:
             res["brand_name"] = product_info.get("brand_name")
@@ -257,6 +253,9 @@ class DaliDeviceBase:
         await self._apply_common_parameters(driver, new_values)
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
+        self.name = new_values.get("name", self.name)
+        self.mqtt_id = new_values.get("mqtt_id", self.mqtt_id)
+
         new_short_address = new_values.get("short_address", self.address.short)
         if new_short_address != self.address.short:
             await driver.send_commands(
@@ -264,8 +263,6 @@ class DaliDeviceBase:
             )
             self.address.short = new_short_address
 
-        self.name = new_values.get("name", self.name)
-        self.mqtt_id = new_values.get("mqtt_id", self.mqtt_id)
         self.params["short_address"] = self.address.short
         self.params["name"] = self.name
         self.params["mqtt_id"] = self.mqtt_id

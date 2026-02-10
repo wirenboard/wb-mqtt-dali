@@ -714,6 +714,11 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
             )
         await driver.send(StopQuiescentMode(DeviceBroadcast()))
 
+    def update_mapping(self, short_address: int, new_short_address: int) -> None:
+        """Update the mapping for a device that has changed short address."""
+        if short_address in self._mapping:
+            self._mapping[new_short_address] = self._mapping.pop(short_address)
+
 
 async def query_request(driver: WBDALIDriver, cmd: Command) -> int:
     resp = await driver.send(cmd)

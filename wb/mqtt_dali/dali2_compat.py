@@ -55,10 +55,10 @@ class Dali2CommandsCompatibilityLayer:
         return control_device.DTR0(value)
 
     def ReadMemoryLocation(self, short_address: int) -> Command:
-        return control_device.ReadMemoryLocation(GearShort(short_address))
+        return control_device.ReadMemoryLocation(DeviceShort(short_address))
 
     def QueryVersionNumber(self, short_address: int) -> Command:
-        return control_device.QueryVersionNumber(GearShort(short_address))
+        return control_device.QueryVersionNumber(DeviceShort(short_address))
 
     def getAddress(self, short_address: int) -> Union[GearShort, DeviceShort]:
         return DeviceShort(short_address)

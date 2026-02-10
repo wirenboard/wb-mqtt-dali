@@ -234,7 +234,9 @@
       "Fade Rate": "Скорость затухания",
       "Device name": "Название устройства",
       "MQTT id of the device": "Идентификатор устройства в MQTT",
-      "Used as part of the topic": "Используется как часть топика в MQTT"
+      "Used as part of the topic": "Используется как часть топика в MQTT",
+      "Brand Name": "Производитель",
+      "Product Name": "Модель"
     }
   }
 }

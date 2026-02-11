@@ -320,25 +320,21 @@ class ApplicationController:
 
         old_device_ids = {d.mqtt_id for d in self.dali_devices}
 
-        self.dali_devices = unchanged_devices + changed_devices + new_devices
+        created_devices = changed_devices + new_devices
+
+        self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
 
         new_device_ids = {d.mqtt_id for d in self.dali_devices}
-        unchanged_device_ids = {d.mqtt_id for d in unchanged_devices}
         removed_ids = list(old_device_ids - new_device_ids)
-        added_device_ids = list(new_device_ids - old_device_ids)
-        updated_device_ids = list((old_device_ids & new_device_ids) - unchanged_device_ids)
 
         changes = DeviceChange(removed=removed_ids)
-        for d in self.dali_devices:
-            if d.mqtt_id in added_device_ids:
-                changes.added.append(DeviceInfo(d.mqtt_id, d.name, get_common_controls()))
-            elif d.mqtt_id in updated_device_ids:
-                changes.updated.append(DeviceInfo(d.mqtt_id, d.name, get_common_controls()))
+        for device in created_devices:
+            changes.added.append(DeviceInfo(device.mqtt_id, device.name, get_common_controls()))
 
         await self._device_publisher.rebuild(changes)
 
-        for device in new_devices + changed_devices:
+        for device in created_devices:
             await register_common_handlers(device, self, self._device_publisher)
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
@@ -347,7 +343,10 @@ class ApplicationController:
         new_devices = [Dali2Device(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
         old_device_ids = {d.mqtt_id for d in self.dali2_devices}
-        self.dali2_devices = unchanged_devices + changed_devices + new_devices
+
+        created_devices = changed_devices + new_devices
+
+        self.dali2_devices = unchanged_devices + created_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
@@ -355,20 +354,14 @@ class ApplicationController:
             await self._dev_inst_map.async_autodiscover(
                 self._dev, [d.address.short for d in self.dali2_devices]
             )
-            self._update_dali2_devices_instances({d.address.short: d for d in changed_devices + new_devices})
+            self._update_dali2_devices_instances({d.address.short: d for d in created_devices})
 
         new_device_ids = {d.mqtt_id for d in self.dali_devices}
-        unchanged_device_ids = {d.mqtt_id for d in unchanged_devices}
         removed_ids = list(old_device_ids - new_device_ids)
-        added_device_ids = list(new_device_ids - old_device_ids)
-        updated_device_ids = list((old_device_ids & new_device_ids) - unchanged_device_ids)
 
         changes = DeviceChange(removed=removed_ids)
-        for d in self.dali2_devices:
-            if d.mqtt_id in added_device_ids:
-                changes.added.append(DeviceInfo(d.mqtt_id, d.name, get_dali2_controls(d)))
-            elif d.mqtt_id in updated_device_ids:
-                changes.updated.append(DeviceInfo(d.mqtt_id, d.name, get_dali2_controls(d)))
+        for device in created_devices:
+            changes.added.append(DeviceInfo(device.mqtt_id, device.name, get_dali2_controls(device)))
 
         await self._device_publisher.rebuild(changes)
 

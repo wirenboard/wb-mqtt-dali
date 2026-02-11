@@ -172,7 +172,7 @@ class Device:
         await self._mqtt_client.publish(topic, value, retain=True)
 
 
-async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
+async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -> None:
     random.seed()
     retain_hack_topic = f"/wbretainhack/{random.random()*10000000:.0f}"
 
@@ -186,14 +186,16 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
     await mqtt_dispatcher.client.publish(retain_hack_topic, "2", qos=2)
 
     try:
-        await asyncio.wait_for(event.wait(), timeout=40)
+        await asyncio.wait_for(event.wait(), timeout)
     except asyncio.TimeoutError:
         logging.warning("Retain hack timeout")
     finally:
         await mqtt_dispatcher.unsubscribe(retain_hack_topic)
 
 
-async def remove_topics_by_driver(mqtt_dispatcher: MQTTDispatcher, driver_name: str) -> None:
+async def remove_topics_by_driver(
+    mqtt_dispatcher: MQTTDispatcher, driver_name: str, timeout: float = 120.0
+) -> None:
     all_topics = []
     devices_to_remove = []
     devices_pattern = "/devices/#"
@@ -212,7 +214,7 @@ async def remove_topics_by_driver(mqtt_dispatcher: MQTTDispatcher, driver_name: 
                 logging.debug("Failed to parse meta for %s: %s", topic, e)
 
     await mqtt_dispatcher.subscribe(devices_pattern, collect_devices)
-    await retain_hack(mqtt_dispatcher)
+    await retain_hack(mqtt_dispatcher, timeout)
     await asyncio.sleep(0.05)
     await mqtt_dispatcher.unsubscribe(devices_pattern)
 

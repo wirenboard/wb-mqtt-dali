@@ -97,12 +97,13 @@ class MQTTRPCServer:
                 _id=request._id, error=e.error._data  # pylint: disable=protected-access
             ).json
         except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.exception("Error processing RPC request: %s", e)
+            exception_message = str(e)
+            if not exception_message:
+                exception_message = type(e).__name__
+            self.logger.exception("Error processing RPC request: %s", exception_message)
             return MQTTRPC10Response(
                 _id=request._id,  # pylint: disable=protected-access
-                error=JSONRPCServerError(
-                    data=f"{type(e).__name__}: {e}"
-                )._data,  # pylint: disable=protected-access
+                error=JSONRPCServerError(data=exception_message)._data,  # pylint: disable=protected-access
             ).json
 
     async def _process_callback(self, mqtt_message: mqtt.MQTTMessage) -> None:

@@ -83,7 +83,10 @@ async def rpc_call(
         logger.debug("RPC response %s: %s", reply_topic, res)
         return res
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("RPC call to %s failed: %s %s", topic_str, type(e).__name__, str(e))
+        exception_message = str(e)
+        if not exception_message:
+            exception_message = type(e).__name__
+        logger.error("RPC call to %s failed: %s", topic_str, exception_message)
         raise
     finally:
         await mqtt_dispatcher.unsubscribe(reply_topic, on_response)

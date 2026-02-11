@@ -112,9 +112,10 @@ class ApplicationController:
 
         try:
             await self._dev.initialize()
-            await self._dev_inst_map.async_autodiscover(
-                self._dev, [d.address.short for d in self.dali2_devices]
-            )
+            if self.dali2_devices:
+                await self._dev_inst_map.async_autodiscover(
+                    self._dev, [d.address.short for d in self.dali2_devices]
+                )
         except Exception as e:
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED
@@ -345,6 +346,9 @@ class ApplicationController:
 
         old_device_ids = {d.mqtt_id for d in self.dali2_devices}
         self.dali2_devices = unchanged_devices + changed_devices + new_devices
+        if not self.dali2_devices:
+            return
+
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 

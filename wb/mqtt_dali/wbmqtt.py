@@ -174,7 +174,7 @@ class Device:
 
 async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
     random.seed()
-    retain_hack_topic = f"/wbretainhack/{random.random()}"
+    retain_hack_topic = f"/wbretainhack/{random.random()*10000000:.0f}"
 
     event = asyncio.Event()
 
@@ -186,7 +186,7 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
     await mqtt_dispatcher.client.publish(retain_hack_topic, "2", qos=2)
 
     try:
-        await asyncio.wait_for(event.wait(), timeout=10)
+        await asyncio.wait_for(event.wait(), timeout=40)
     except asyncio.TimeoutError:
         logging.warning("Retain hack timeout")
     finally:

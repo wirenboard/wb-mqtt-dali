@@ -18,6 +18,7 @@ from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
+from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_POLLING_INTERVAL = 5.0
 
@@ -143,6 +144,7 @@ class Gateway:
         self._gtin_db = gtin_db
 
     async def start(self) -> None:
+        await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
         await wait_for_rpc_endpoint(
             "wb-mqtt-serial",
             "config",

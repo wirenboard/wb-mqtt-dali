@@ -121,6 +121,8 @@ class ApplicationController:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
+        await self._device_publisher.initialize()
+
         for device in self.dali_devices:
             device_info = DeviceInfo(device.mqtt_id, device.name, get_common_controls())
             await self._device_publisher.add_device(device_info)
@@ -130,8 +132,6 @@ class ApplicationController:
         for device in self.dali2_devices:
             device_info = DeviceInfo(device.mqtt_id, device.name, get_dali2_controls(device))
             await self._device_publisher.add_device(device_info)
-
-        await self._device_publisher.initialize()
 
         self._polling_task = asyncio.create_task(self._polling_loop())
 

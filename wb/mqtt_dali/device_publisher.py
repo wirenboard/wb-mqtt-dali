@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional, Set
 import paho.mqtt.client as mqtt
 
 from .mqtt_dispatcher import MQTTDispatcher
-from .wbmqtt import ControlMeta, Device, remove_topics_by_driver
+from .wbmqtt import ControlMeta, Device
 
 
 @dataclass
@@ -70,8 +70,6 @@ class DevicePublisher:
         async with self._lock:
             if self._initialized:
                 return
-
-            await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
 
             if self._devices:
                 await asyncio.gather(*[device.initialize() for device in self._devices.values()])

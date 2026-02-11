@@ -218,10 +218,10 @@ class DevicePublisher:
         if handler_key not in self._control_handlers:
             return
 
-        topic = self._get_control_on_topic(device_id, control_id)
-
-        await self._mqtt_dispatcher.unsubscribe(topic)
         del self._control_handlers[handler_key]
+
+        topic = self._get_control_on_topic(device_id, control_id)
+        await self._mqtt_dispatcher.unsubscribe(topic)
 
         self.logger.debug("Unregistered handler for %s", topic)
 

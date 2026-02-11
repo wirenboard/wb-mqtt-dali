@@ -311,17 +311,13 @@ class WBDALIDriver:
                    3 - broken response
                    4 - transmission impossible (no power on bus)
         """
-        self.logger.debug(
-            "Received message: %s %s",
-            message.topic,
-            message.payload.decode(),
-        )
+        resp = int(message.payload.decode())
+
+        self.logger.debug("Received message: %s %d", message.topic, resp)
 
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
             return  # Ignore retained messages
-
-        resp = int(message.payload.decode())
 
         backward_frame_byte = resp & 0xFF
         status = (resp >> 8) & 0xFF
@@ -355,19 +351,19 @@ class WBDALIDriver:
             self.logger.debug("Status 0: No transmission")
             resp_future.set_result(None)
             return
-        elif status == 1:
+        if status == 1:
             # Transmission with backward response
             self.logger.debug("Status 1: Transmission with backward response")
             backward_frame = BackwardFrame(backward_frame_byte)
             resp_future.set_result(backward_frame)
             self.bus_traffic.invoke(backward_frame, "bus")
             return
-        elif status == 2:
+        if status == 2:
             # Transmission without response
             self.logger.debug("Status 2: Transmission without response")
             resp_future.set_result(None)
             return
-        elif status == 3:
+        if status == 3:
             # Broken response (framing error)
             self.logger.error(
                 "Status 3: Broken response for pointer %d (backward_frame=0x%02x)",
@@ -376,7 +372,7 @@ class WBDALIDriver:
             )
             resp_future.set_result(BackwardFrameError(backward_frame_byte))
             return
-        elif status == 4:
+        if status == 4:
             # Transmission impossible (no power on bus)
             self.logger.error(
                 "Status 4: Transmission impossible - no power on bus (pointer=%d)",
@@ -384,16 +380,15 @@ class WBDALIDriver:
             )
             resp_future.set_result(BackwardFrameError(0))
             return
-        else:
-            # Unknown status
-            self.logger.error(
-                "Unknown status %d for pointer %d (backward_frame=0x%02x)",
-                status,
-                resp_pointer,
-                backward_frame_byte,
-            )
-            resp_future.set_result(BackwardFrameError(0))
-            return
+        # Unknown status
+        self.logger.error(
+            "Unknown status %d for pointer %d, backward_frame=0x%02x, full response=%d",
+            status,
+            resp_pointer,
+            backward_frame_byte,
+            resp,
+        )
+        resp_future.set_result(BackwardFrameError(0))
 
     async def run_sequence(self, seq, progress=None) -> Any:
         """

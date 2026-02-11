@@ -7,7 +7,6 @@ from typing import Callable, Optional, Union
 from dali.address import DeviceBroadcast, DeviceShort, GearShort
 from dali.command import NumericResponse, NumericResponseMask
 from dali.device import general as control_device
-from dali.exceptions import ResponseError
 from dali.gear import general as control_gear
 
 from .dali2_compat import Dali2CommandsCompatibilityLayer
@@ -26,9 +25,16 @@ class ChangedDevice:
 
 @dataclass
 class CommissioningResult:
+    # Same short AND same random
     unchanged: list[DaliDeviceAddress] = field(default_factory=list)
+
+    # Random present both runs but short differs
     changed: list[ChangedDevice] = field(default_factory=list)
+
+    # Random present before, absent now
     missing: list[DaliDeviceAddress] = field(default_factory=list)
+
+    # Random present now, absent before
     new: list[DaliDeviceAddress] = field(default_factory=list)
 
 
@@ -532,7 +538,7 @@ class Commissioning:
         for resp in responses:
             resp_value = self._cmds.QueryRandomAddressResponseValue(resp)
             if resp_value is None:
-                log.error("Failed to get random address part for %s - %s", int_address, resp)
+                log.error("Failed to get random address part for %s", int_address)
                 return None
 
             values.append(resp_value)

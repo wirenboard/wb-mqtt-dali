@@ -19,8 +19,17 @@ class Dali2CommandsCompatibilityLayer:
         self.ProgramShortAddress = control_device.ProgramShortAddress
 
     def Initialise(self, short_address: Optional[int]) -> Command:
+        """
+        Initialise the DALI control gear.
+        Parameters
+        ----------
+        short_address : Optional[int]
+            The short (0-63) address of the control gear to initialise.
+            If None, the command will be sent to all control gear without a short address.
+            If MASK (255), the command will be sent to all control gear regardless of their short address.
+        """
         if short_address is None:
-            return control_device.Initialise(255)
+            return control_device.Initialise(0x7F)
         return control_device.Initialise(short_address)
 
     def QueryShortAddressResponseValue(

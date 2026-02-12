@@ -20,7 +20,16 @@ class DaliCommandsCompatibilityLayer:
         self.SetSearchAddrL = control_gear.SetSearchAddrL
 
     def Initialise(self, short_address: Optional[int]) -> Command:
-        if short_address is None or short_address == MASK:
+        """
+        Initialise the DALI control gear.
+        Parameters
+        ----------
+        short_address : Optional[int]
+            The short (0-63) address of the control gear to initialise.
+            If None, the command will be sent to all control gear without a short address.
+            If MASK (255), the command will be sent to all control gear regardless of their short address.
+        """
+        if short_address == MASK:
             return control_gear.Initialise(broadcast=True)
         return control_gear.Initialise(address=short_address, broadcast=False)
 

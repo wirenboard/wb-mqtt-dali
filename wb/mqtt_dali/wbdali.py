@@ -313,8 +313,6 @@ class WBDALIDriver:
         """
         resp = int(message.payload.decode())
 
-        self.logger.debug("Received message: %s %d", message.topic, resp)
-
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
             return  # Ignore retained messages
@@ -339,34 +337,35 @@ class WBDALIDriver:
             self.logger.debug("Response future already done for pointer: %d", resp_pointer)
             return
 
-        self.logger.debug(
-            "Parsed response: pointer=%d, status=%d, backward_frame=0x%02x",
-            resp_pointer,
-            status,
-            backward_frame_byte,
-        )
-
         if status == 0:
             # No transmission
-            self.logger.debug("Status 0: No transmission")
+            self.logger.debug("%s (%d) status 0: No transmission", resp_waiter.command, resp_pointer)
             resp_future.set_result(None)
             return
         if status == 1:
             # Transmission with backward response
-            self.logger.debug("Status 1: Transmission with backward response")
+            self.logger.debug(
+                "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
+                resp_waiter.command,
+                resp_pointer,
+                backward_frame_byte,
+            )
             backward_frame = BackwardFrame(backward_frame_byte)
             resp_future.set_result(backward_frame)
             self.bus_traffic.invoke(backward_frame, "bus")
             return
         if status == 2:
             # Transmission without response
-            self.logger.debug("Status 2: Transmission without response")
+            self.logger.debug(
+                "%s (%d) status 2: Transmission without response", resp_waiter.command, resp_pointer
+            )
             resp_future.set_result(None)
             return
         if status == 3:
             # Broken response (framing error)
             self.logger.error(
-                "Status 3: Broken response for pointer %d (backward_frame=0x%02x)",
+                "%s (%d) status 3: Broken response, backward_frame=0x%02x",
+                resp_waiter.command,
                 resp_pointer,
                 backward_frame_byte,
             )
@@ -375,16 +374,18 @@ class WBDALIDriver:
         if status == 4:
             # Transmission impossible (no power on bus)
             self.logger.error(
-                "Status 4: Transmission impossible - no power on bus (pointer=%d)",
+                "%s (%d) status 4: Transmission impossible - no power on bus",
+                resp_waiter.command,
                 resp_pointer,
             )
             resp_future.set_result(BackwardFrameError(0))
             return
         # Unknown status
         self.logger.error(
-            "Unknown status %d for pointer %d, backward_frame=0x%02x, full response=%d",
-            status,
+            "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
+            resp_waiter.command,
             resp_pointer,
+            status,
             backward_frame_byte,
             resp,
         )
@@ -539,11 +540,6 @@ class WBDALIDriver:
                 self._waiting_for_responses[current_index] = item
 
                 result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice)
-                self.logger.debug(
-                    "Encoded frame: len=%d, result=0x%08x",
-                    len(item.command.frame),
-                    result,
-                )
                 regs_32bit.append(result)
 
             msg = "".join([f"{((reg & 0xFFFF) << 16) | ((reg >> 16) & 0xFFFF):08x}" for reg in regs_32bit])

@@ -394,7 +394,7 @@ class Commissioning:
                     known_rand_addrs.append((short, addr))
 
         await asyncio.gather(
-            self.driver.send(self._cmds.Terminate()), self.driver.send(self._cmds.Initialise(None))
+            self.driver.send(self._cmds.Terminate()), self.driver.send(self._cmds.Initialise(MASK))
         )
 
         self.available_addresses = list(range(64))

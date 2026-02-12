@@ -135,8 +135,9 @@ class Device:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
     async def set_device_title(self, title: Optional[str]) -> None:
-        self._device_title = title
-        await self._publish_device_meta()
+        if self._device_title != title:
+            self._device_title = title
+            await self._publish_device_meta()
 
     def _get_control_base_topic(self, mqtt_control_name: str) -> str:
         return f"{self._base_topic}/controls/{mqtt_control_name}"

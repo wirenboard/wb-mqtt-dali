@@ -215,13 +215,13 @@ class ApplicationController:
             device.name,
             get_dali2_controls(device) if isinstance(device, Dali2Device) else get_common_controls(),
         )
-        if old_mqtt_id != device.mqtt_id:
+        if old_mqtt_id != device_info.id:
             await self._device_publisher.add_device(device_info)
             if isinstance(device, DaliDevice):
                 await register_common_handlers(device, self, self._device_publisher)
             await self._device_publisher.remove_device(old_mqtt_id)
         else:
-            await self._device_publisher.update_device(device_info)
+            await self._device_publisher.set_device_title(device_info.id, device_info.title)
 
         if isinstance(device, Dali2Device) and old_short_address != device.address.short:
             self._dev_inst_map.update_mapping(old_short_address, device.address.short)
@@ -353,7 +353,7 @@ class ApplicationController:
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
-        if not self.dali2_devices:
+        if self.dali2_devices:
             await self._dev_inst_map.async_autodiscover(
                 self._dev, [d.address.short for d in self.dali2_devices]
             )

@@ -15,12 +15,14 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .commissioning import Commissioning, check_presence, search_short
 from .gateway import Gateway
+from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .wbdali import WBDALIConfig, WBDALIDriver
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 WB_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
 DEV_SCHEMA_FILEPATH = "./wb-mqtt-dali.schema.json"
+GTIN_DB_FILEPATH = "/usr/share/wb-mqtt-dali/products.csv"
 
 
 EXIT_SUCCESS = 0
@@ -105,10 +107,12 @@ async def default_service(args):
         logging.basicConfig(level=logging.DEBUG, force=True)
         logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
+    gtin_db = DaliDatabase(GTIN_DB_FILEPATH)
+
     client = make_mqtt_client(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
-    gateway = Gateway(config, mqtt_dispatcher, args.config)
+    gateway = Gateway(config, mqtt_dispatcher, args.config, gtin_db)
     is_first_connection = True
     while True:
         try:

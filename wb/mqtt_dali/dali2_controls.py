@@ -16,7 +16,7 @@ from dali.device.pushbutton import (
     ShortPress,
 )
 
-from .dali_2_device import Dali2Device
+from .dali2_device import Dali2Device
 from .device_publisher import ControlInfo
 
 

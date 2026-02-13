@@ -135,8 +135,9 @@ class Device:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
     async def set_device_title(self, title: Optional[str]) -> None:
-        self._device_title = title
-        await self._publish_device_meta()
+        if self._device_title != title:
+            self._device_title = title
+            await self._publish_device_meta()
 
     def _get_control_base_topic(self, mqtt_control_name: str) -> str:
         return f"{self._base_topic}/controls/{mqtt_control_name}"
@@ -172,9 +173,9 @@ class Device:
         await self._mqtt_client.publish(topic, value, retain=True)
 
 
-async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
+async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -> None:
     random.seed()
-    retain_hack_topic = f"/wbretainhack/{random.random()}"
+    retain_hack_topic = f"/wbretainhack/{random.random()*10000000:.0f}"
 
     event = asyncio.Event()
 
@@ -186,14 +187,16 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher) -> None:
     await mqtt_dispatcher.client.publish(retain_hack_topic, "2", qos=2)
 
     try:
-        await asyncio.wait_for(event.wait(), timeout=10)
+        await asyncio.wait_for(event.wait(), timeout)
     except asyncio.TimeoutError:
         logging.warning("Retain hack timeout")
     finally:
         await mqtt_dispatcher.unsubscribe(retain_hack_topic)
 
 
-async def remove_topics_by_driver(mqtt_dispatcher: MQTTDispatcher, driver_name: str) -> None:
+async def remove_topics_by_driver(
+    mqtt_dispatcher: MQTTDispatcher, driver_name: str, timeout: float = 120.0
+) -> None:
     all_topics = []
     devices_to_remove = []
     devices_pattern = "/devices/#"
@@ -212,7 +215,7 @@ async def remove_topics_by_driver(mqtt_dispatcher: MQTTDispatcher, driver_name: 
                 logging.debug("Failed to parse meta for %s: %s", topic, e)
 
     await mqtt_dispatcher.subscribe(devices_pattern, collect_devices)
-    await retain_hack(mqtt_dispatcher)
+    await retain_hack(mqtt_dispatcher, timeout)
     await asyncio.sleep(0.05)
     await mqtt_dispatcher.unsubscribe(devices_pattern)
 

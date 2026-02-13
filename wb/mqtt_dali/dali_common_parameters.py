@@ -1,8 +1,4 @@
-import json
-from pathlib import Path
-
 from dali.address import GearShort
-from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.gear.general import (
     DTR0,
     AddToGroup,
@@ -14,8 +10,6 @@ from dali.gear.general import (
     QueryPowerOnLevel,
     QuerySceneLevel,
     QuerySystemFailureLevel,
-    QueryVersionNumber,
-    ReadMemoryLocation,
     RemoveFromGroup,
     SetFadeRate,
     SetFadeTime,
@@ -25,53 +19,13 @@ from dali.gear.general import (
     SetScene,
     SetSystemFailureLevel,
 )
-from dali.memory import info, location, oem
 
-from .extended_gear_parameters import (
-    NumberGearParam,
-    TypeParameters,
-    merge_json_schemas,
-)
-from .settings import SettingsParamAddress, SettingsParamBase, SettingsParamName
+from .dali_parameters import NumberGearParam
+from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import MASK, WBDALIDriver, check_query_response
 
 SCENES_TOTAL = 16
 GROUPS_TOTAL = 16
-
-
-def read_memory_bank(bank: info.MemoryBank, address: GearShort):
-    last_address = yield from bank.LastAddress.read(address)
-    if isinstance(last_address, location.FlagValue):
-        raise ResponseError(
-            f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
-        )
-    # Reading the last address also sets DTR1 appropriately
-
-    # Bank 0 has a useful value at address 0x02; all other banks
-    # use this for the lock/latch byte
-    start_address = 0x02 if bank.address == 0 else 0x03
-    yield DTR0(start_address)
-    raw_data = [None] * start_address
-    commands_count = last_address - start_address + 1
-    r = yield [ReadMemoryLocation(address) for _ in range(commands_count)]
-    for i in range(commands_count):
-        if r[i].raw_value is not None:
-            if r[i].raw_value.error:
-                raise ResponseError(
-                    f"Framing error while reading memory bank " f"{address} location {i + start_address}"
-                )
-            raw_data.append(r[i].raw_value.as_integer)
-        else:
-            raw_data.append(None)
-    result = {}
-    for memory_value in bank.values:
-        try:
-            r = memory_value.from_list(raw_data)
-        except MemoryLocationNotImplemented:
-            pass
-        else:
-            result[memory_value] = r
-    return result
 
 
 class MaxLevelParam(NumberGearParam):
@@ -83,7 +37,7 @@ class MaxLevelParam(NumberGearParam):
         self.maximum = 254
         self.default = 254
         self.grid_columns = 6
-        self.property_order = 15
+        self.property_order = 16
 
 
 class MinLevelParam(NumberGearParam):
@@ -94,7 +48,7 @@ class MinLevelParam(NumberGearParam):
         super().__init__(SettingsParamName("Min level", "Минимальный уровень"), "min_level")
         self.maximum = 254
         self.grid_columns = 6
-        self.property_order = 14
+        self.property_order = 17
 
 
 class PowerOnLevelParam(NumberGearParam):
@@ -107,7 +61,7 @@ class PowerOnLevelParam(NumberGearParam):
         )
         self.default = 254
         self.grid_columns = 6
-        self.property_order = 20
+        self.property_order = 21
 
 
 class SystemFailureLevelParam(NumberGearParam):
@@ -130,10 +84,8 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         self._fade_time = None
         self._fade_rate = None
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress):
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
-        value = await driver.send(QueryFadeTimeFadeRate(address))
+    async def read(self, driver: WBDALIDriver, short_address: int):
+        value = await driver.send(QueryFadeTimeFadeRate(GearShort(short_address)))
         check_query_response(value)
         self._fade_time = value.fade_time
         self._fade_rate = value.fade_rate
@@ -142,9 +94,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             "fade_rate": value.fade_rate,
         }
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         fade_rate_to_set = value.get("fade_rate")
         fade_time_to_set = value.get("fade_time")
 
@@ -152,6 +102,8 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             return {}
         if self._fade_time == fade_time_to_set and self._fade_rate == fade_rate_to_set:
             return {}
+
+        address = GearShort(short_address)
 
         commands = []
         if fade_time_to_set is not None:
@@ -177,10 +129,9 @@ class GroupsParam(SettingsParamBase):
         super().__init__(SettingsParamName("Groups"))
         self._groups = [False for _ in range(GROUPS_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         groups = []
+        address = GearShort(short_address)
         commands = [QueryGroupsZeroToSeven(address), QueryGroupsEightToFifteen(address)]
         responses = await driver.send_commands(commands)
         for response in responses:
@@ -189,15 +140,14 @@ class GroupsParam(SettingsParamBase):
         self._groups = groups
         return {"groups": groups}
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         groups_to_set = value.get("groups")
         if groups_to_set is None:
             return {}
         if self._groups == groups_to_set:
             return {}
 
+        address = GearShort(short_address)
         commands = []
         for i in range(GROUPS_TOTAL):
             if groups_to_set[i] != self._groups[i]:
@@ -223,9 +173,8 @@ class ScenesParam(SettingsParamBase):
         super().__init__(SettingsParamName("Scenes", "Сцены"))
         self._scenes = [MASK for _ in range(SCENES_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        address = GearShort(short_address)
         commands = [QuerySceneLevel(address, scene_number) for scene_number in range(SCENES_TOTAL)]
         responses = await driver.send_commands(commands)
         res = []
@@ -235,9 +184,7 @@ class ScenesParam(SettingsParamBase):
         self._scenes = res
         return self._scenes_to_json()
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         scenes = value.get("scenes")
         if scenes is None:
             return {}
@@ -249,6 +196,7 @@ class ScenesParam(SettingsParamBase):
             else:
                 values_to_set[i] = scene.get("level", MASK)
 
+        address = GearShort(short_address)
         commands = []
         modified_scene_indexes = []
         for i in range(SCENES_TOTAL):
@@ -319,76 +267,3 @@ class ScenesParam(SettingsParamBase):
             else:
                 result_scenes.append({"enabled": True, "level": scene_value})
         return {"scenes": result_scenes}
-
-
-class GeneralMemoryParams(SettingsParamBase):
-    memory_fields_to_json_params = {
-        info.GTIN: "gtin",
-        info.FirmwareVersion: "firmware_version",
-        info.IdentificationNumber: "identification_number",
-        info.IdentifictionNumber_legacy: "identification_number",
-        info.HardwareVersion: "hardware_version",
-        info.Part101Version: "part101_version",
-        info.Part102Version: "part102_version",
-        info.Part103Version: "part103_version",
-        oem.ManufacturerGTIN: "oem_gtin",
-        oem.LuminaireID: "oem_identification_number",
-    }
-
-    def __init__(self) -> None:
-        super().__init__(SettingsParamName("General memory parameters"))
-
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
-        res = {}
-        try:
-            v = await driver.send(QueryVersionNumber(address))
-            if v is None or v.raw_value is None or v.value == 1:
-                bank0 = info.BANK_0_legacy
-            else:
-                bank0 = info.BANK_0
-            self._update_info(res, await driver.run_sequence(read_memory_bank(bank0, address)))
-        except MemoryLocationNotImplemented:
-            pass
-        try:
-            self._update_info(res, await driver.run_sequence(read_memory_bank(oem.BANK_1, address)))
-        except MemoryLocationNotImplemented:
-            pass
-
-        return res
-
-    def _update_info(self, dst: dict, values) -> None:
-        for field, param in self.memory_fields_to_json_params.items():
-            value = values.get(field)
-            if value is not None:
-                dst[param] = value
-
-
-class CommonParameters(TypeParameters):
-
-    def __init__(self, exclude_scenes_and_levels: bool) -> None:
-        super().__init__()
-        self._include_scenes_and_levels = not exclude_scenes_and_levels
-
-    def get_schema(self) -> dict:
-        schema_path = Path("/usr/share/wb-mqtt-dali/schemas/control_gear.schema.json")
-        with open(schema_path, "r", encoding="utf-8") as f:
-            schema = json.load(f)
-        merge_json_schemas(schema, super().get_schema())
-        return schema
-
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
-        res = [
-            GeneralMemoryParams(),
-            GroupsParam(),
-            MaxLevelParam(),
-            MinLevelParam(),
-            FadeTimeFadeRateParam(),
-        ]
-        if self._include_scenes_and_levels:
-            res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
-        self._parameters = res
-        return await super().read(driver, address)

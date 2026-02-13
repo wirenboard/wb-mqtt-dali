@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional, Set
 import paho.mqtt.client as mqtt
 
 from .mqtt_dispatcher import MQTTDispatcher
-from .wbmqtt import ControlMeta, Device, remove_topics_by_driver
+from .wbmqtt import ControlMeta, Device
 
 
 @dataclass
@@ -40,10 +40,6 @@ class DeviceChange:
     # List of device IDs matching DeviceInfo.id
     removed: List[str] = field(default_factory=list)
 
-    # Updated devices
-    # id must match existing device IDs
-    updated: List[DeviceInfo] = field(default_factory=list)
-
 
 class ControlHandler:  # pylint: disable=R0903
     def __init__(self, device_id: str, control_id: str, callback: Callable):
@@ -70,8 +66,6 @@ class DevicePublisher:
         async with self._lock:
             if self._initialized:
                 return
-
-            await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
 
             if self._devices:
                 await asyncio.gather(*[device.initialize() for device in self._devices.values()])
@@ -125,26 +119,15 @@ class DevicePublisher:
     async def rebuild(self, changes: DeviceChange) -> None:
         async with self._lock:
             self.logger.info(
-                "Rebuilding devices: %d added, %d removed, %d updated",
+                "Rebuilding devices: %d added, %d removed",
                 len(changes.added),
                 len(changes.removed),
-                len(changes.updated),
             )
 
             if len(changes.removed):
                 await asyncio.gather(
                     *[self._remove_device_internal(device_id) for device_id in changes.removed]
                 )
-
-            if len(changes.updated):
-                update_tasks = []
-                for device_info in changes.updated:
-                    if device_info.id in self._devices:
-                        update_tasks.append(self._update_device_internal(device_info))
-                    else:
-                        self.logger.warning("Device %s marked for update but not found", device_info.id)
-                if update_tasks:
-                    await asyncio.gather(*update_tasks)
 
             if len(changes.added):
                 await asyncio.gather(
@@ -161,9 +144,14 @@ class DevicePublisher:
         async with self._lock:
             await self._remove_device_internal(device_id)
 
-    async def update_device(self, device_info: DeviceInfo) -> None:
+    async def set_device_title(self, device_id: str, title: str) -> None:
         async with self._lock:
-            await self._update_device_internal(device_info)
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+
+            device = self._devices[device_id]
+            await device.set_device_title(title)
 
     async def set_control_value(self, device_id: str, control_id: str, value: str) -> None:
         async with self._lock:
@@ -197,8 +185,7 @@ class DevicePublisher:
             handler_key = f"{device_id}/{control_id}"
 
             if handler_key in self._control_handlers:
-                self.logger.warning("Handler already registered for %s/%s", device_id, control_id)
-                return
+                raise RuntimeError(f"Handler already registered for {device_id}/{control_id}")
 
             topic = self._get_control_on_topic(device_id, control_id)
             handler = ControlHandler(device_id, control_id, callback)
@@ -220,10 +207,10 @@ class DevicePublisher:
         if handler_key not in self._control_handlers:
             return
 
-        topic = self._get_control_on_topic(device_id, control_id)
-
-        await self._mqtt_dispatcher.unsubscribe(topic)
         del self._control_handlers[handler_key]
+
+        topic = self._get_control_on_topic(device_id, control_id)
+        await self._mqtt_dispatcher.unsubscribe(topic)
 
         self.logger.debug("Unregistered handler for %s", topic)
 
@@ -273,33 +260,6 @@ class DevicePublisher:
         del self._devices[device_id]
         self.logger.info("Removed device %s", device_id)
 
-    async def _update_device_internal(self, device_info: DeviceInfo) -> None:
-        device_id = device_info.id
-
-        if device_id not in self._devices:
-            self.logger.warning("Device %s not found for update", device_id)
-            return
-
-        device = self._devices[device_id]
-
-        existing_controls = device.control_ids
-        new_controls = {c.id for c in device_info.controls}
-
-        for control_id in existing_controls - new_controls:
-            await device.remove_control(control_id)
-            await self._unregister_control_handler_internal(device_id, control_id)
-
-        for control_info in device_info.controls:
-            if control_info.id in existing_controls:
-                await self._update_control(device, control_info.id, control_info)
-            else:
-                await self._add_control(device, control_info)
-
-        if device_info.title != device.title:
-            await device.set_device_title(device_info.title)
-
-        self.logger.info("Updated device %s", device_id)
-
     async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
         meta = ControlMeta(
             title=control_info.title,
@@ -309,12 +269,6 @@ class DevicePublisher:
         )
         value = control_info.value if control_info.value is not None else ""
         await device.create_control(control_info.id, meta, value)
-
-    async def _update_control(self, device: Device, control_id: str, control_info: ControlInfo) -> None:
-        await device.set_control_value(control_id, control_info.value)
-        if control_info.title is not None:
-            await device.set_control_title(control_id, control_info.title)
-        await device.set_control_read_only(control_id, control_info.read_only)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

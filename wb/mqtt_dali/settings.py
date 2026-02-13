@@ -1,8 +1,7 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 
-from dali.address import DeviceShort, GearShort, InstanceNumber
 from dali.command import Command
 
 from .utils import merge_json_schema_properties, merge_translations
@@ -15,23 +14,14 @@ class SettingsParamName:
     ru: Optional[str] = None
 
 
-@dataclass
-class InstanceAddress:
-    device_short: DeviceShort
-    instance_number: InstanceNumber
-
-
-SettingsParamAddress = Union[GearShort, DeviceShort, InstanceAddress]
-
-
 class SettingsParamBase:
     def __init__(self, name: SettingsParamName) -> None:
         self.name = name
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         return {}
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         """
         Write extended gear parameters to a DALI device.
 
@@ -61,20 +51,18 @@ class NumberSettingsParam(SettingsParamBase):
         self.value = None
         self._is_read_only = False
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        self.value = await query_request(driver, self.get_read_command(address))
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        self.value = await query_request(driver, self.get_read_command(short_address))
         return {self.property_name: self.value}
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self.property_name not in value:
             return {}
         value_to_set = value[self.property_name]
         if self.value == value_to_set:
             return {}
-        commands = self.get_write_commands(address, value_to_set)
-        if not commands:
-            raise RuntimeError(f"Set commands for {self.name.en} are not defined")
-        commands.append(self.get_read_command(address))
+        commands = self.get_write_commands(short_address, value_to_set)
+        commands.append(self.get_read_command(short_address))
         res = (await driver.send_commands(commands))[-1]
         check_query_response(res)
         self.value = res.raw_value.as_integer
@@ -107,11 +95,11 @@ class NumberSettingsParam(SettingsParamBase):
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
         return schema
 
-    def get_write_commands(self, address: SettingsParamAddress, value_to_set: int) -> list[Command]:
-        return []
+    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+        raise NotImplementedError(f"Write commands for {self.name.en} are not defined")
 
-    def get_read_command(self, address: SettingsParamAddress) -> Command:
-        raise NotImplementedError()
+    def get_read_command(self, short_address: int) -> Command:
+        raise NotImplementedError(f"Read commands for {self.name.en} are not defined")
 
 
 class SettingsParamGroup(SettingsParamBase):
@@ -120,9 +108,9 @@ class SettingsParamGroup(SettingsParamBase):
         self._property_name = property_name
         self._parameters: list[SettingsParamBase] = []
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         res = {}
-        awaitables = [param.read(driver, address) for param in self._parameters]
+        awaitables = [param.read(driver, short_address) for param in self._parameters]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         for param, result in zip(self._parameters, results):
             if isinstance(result, BaseException):
@@ -131,11 +119,11 @@ class SettingsParamGroup(SettingsParamBase):
                 res.update(result)
         return {self._property_name: res}
 
-    async def write(self, driver: WBDALIDriver, address: SettingsParamAddress, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self._property_name not in value:
             return {}
         instance_value = value[self._property_name]
-        awaitables = [param.write(driver, address, instance_value) for param in self._parameters]
+        awaitables = [param.write(driver, short_address, instance_value) for param in self._parameters]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         res = {}
         for param, result in zip(self._parameters, results):

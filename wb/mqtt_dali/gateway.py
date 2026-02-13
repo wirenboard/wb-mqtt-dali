@@ -12,11 +12,13 @@ from .application_controller import (
     WebSocketConfig,
 )
 from .common_dali_device import DaliDeviceAddress
-from .dali_2_device import Dali2Device
+from .dali2_device import Dali2Device
 from .dali_device import DaliDevice
+from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
+from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_POLLING_INTERVAL = 5.0
 
@@ -46,7 +48,11 @@ class WbDaliGateway:
 
 
 def bus_from_json(
-    gateway_mqtt_device_id: str, bus_index: int, data: dict, mqtt_dispatcher: MQTTDispatcher
+    gateway_mqtt_device_id: str,
+    bus_index: int,
+    data: dict,
+    mqtt_dispatcher: MQTTDispatcher,
+    gtin_db: DaliDatabase,
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
     dali2_devices: list[Dali2Device] = []
@@ -56,6 +62,7 @@ def bus_from_json(
             device = Dali2Device(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
+                gtin_db,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
             )
@@ -64,6 +71,7 @@ def bus_from_json(
             device = DaliDevice(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
+                gtin_db,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
             )
@@ -78,7 +86,7 @@ def bus_from_json(
         gateway_mqtt_device_id, bus_index, dali_devices, dali2_devices, polling_interval, websocket_conf
     )
 
-    res = ApplicationController(ap_conf, mqtt_dispatcher)
+    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
     return res
 
 
@@ -102,7 +110,13 @@ def bus_to_json(bus: ApplicationController) -> dict:
 
 
 class Gateway:
-    def __init__(self, config: dict, mqtt_dispatcher: MQTTDispatcher, config_path: str) -> None:
+    def __init__(
+        self,
+        config: dict,
+        mqtt_dispatcher: MQTTDispatcher,
+        config_path: str,
+        gtin_db: DaliDatabase,
+    ) -> None:
         self.rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
         self.wb_dali_gateways: list[WbDaliGateway] = list(
             map(
@@ -110,7 +124,9 @@ class Gateway:
                     uid=gw_conf["device_id"],
                     buses=list(
                         map(
-                            lambda bus: bus_from_json(gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher),
+                            lambda bus: bus_from_json(
+                                gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher, gtin_db
+                            ),
                             enumerate(gw_conf.get("buses", [])),
                         )
                     ),
@@ -125,7 +141,10 @@ class Gateway:
         self._config_path = config_path
         self._debug = config.get("debug", False)
 
+        self._gtin_db = gtin_db
+
     async def start(self) -> None:
+        await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
         await wait_for_rpc_endpoint(
             "wb-mqtt-serial",
             "config",
@@ -356,7 +375,7 @@ class Gateway:
                 buses = []
                 for bus_index in range(3):
                     apc_conf = ApplicationControllerConfig(did, bus_index, [], [], DEFAULT_POLLING_INTERVAL)
-                    apc = ApplicationController(apc_conf, self._mqtt_dispatcher)
+                    apc = ApplicationController(apc_conf, self._mqtt_dispatcher, self._gtin_db)
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)
                 new_gateways.append(gw)

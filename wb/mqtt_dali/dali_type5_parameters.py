@@ -7,7 +7,7 @@ from dali.gear.converter import (
     SelectDimmingCurve,
 )
 
-from .extended_gear_parameters import DimmingCurveParam, TypeParameters
+from .dali_parameters import DimmingCurveParam, TypeParameters
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: Output range is write only
@@ -22,12 +22,12 @@ class Type5DimmingCurveParam(DimmingCurveParam):
 
 
 class Type5Parameters(TypeParameters):
-    async def read(self, driver: WBDALIDriver, address: GearShort) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         try:
-            features = await query_request(driver, QueryConverterFeatures(address))
+            features = await query_request(driver, QueryConverterFeatures(GearShort(short_address)))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if not ((features >> 5) & 1):  # 5th bit: dimming curve selectable
             return {}
         self._parameters = [Type5DimmingCurveParam()]
-        return await super().read(driver, address)
+        return await super().read(driver, short_address)

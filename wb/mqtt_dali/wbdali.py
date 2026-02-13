@@ -311,17 +311,11 @@ class WBDALIDriver:
                    3 - broken response
                    4 - transmission impossible (no power on bus)
         """
-        self.logger.debug(
-            "Received message: %s %s",
-            message.topic,
-            message.payload.decode(),
-        )
+        resp = int(message.payload.decode())
 
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
             return  # Ignore retained messages
-
-        resp = int(message.payload.decode())
 
         backward_frame_byte = resp & 0xFF
         status = (resp >> 8) & 0xFF
@@ -343,57 +337,59 @@ class WBDALIDriver:
             self.logger.debug("Response future already done for pointer: %d", resp_pointer)
             return
 
-        self.logger.debug(
-            "Parsed response: pointer=%d, status=%d, backward_frame=0x%02x",
-            resp_pointer,
-            status,
-            backward_frame_byte,
-        )
-
         if status == 0:
             # No transmission
-            self.logger.debug("Status 0: No transmission")
+            self.logger.debug("%s (%d) status 0: No transmission", resp_waiter.command, resp_pointer)
             resp_future.set_result(None)
             return
-        elif status == 1:
+        if status == 1:
             # Transmission with backward response
-            self.logger.debug("Status 1: Transmission with backward response")
+            self.logger.debug(
+                "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
+                resp_waiter.command,
+                resp_pointer,
+                backward_frame_byte,
+            )
             backward_frame = BackwardFrame(backward_frame_byte)
             resp_future.set_result(backward_frame)
             self.bus_traffic.invoke(backward_frame, "bus")
             return
-        elif status == 2:
+        if status == 2:
             # Transmission without response
-            self.logger.debug("Status 2: Transmission without response")
+            self.logger.debug(
+                "%s (%d) status 2: Transmission without response", resp_waiter.command, resp_pointer
+            )
             resp_future.set_result(None)
             return
-        elif status == 3:
+        if status == 3:
             # Broken response (framing error)
             self.logger.error(
-                "Status 3: Broken response for pointer %d (backward_frame=0x%02x)",
+                "%s (%d) status 3: Broken response, backward_frame=0x%02x",
+                resp_waiter.command,
                 resp_pointer,
                 backward_frame_byte,
             )
             resp_future.set_result(BackwardFrameError(backward_frame_byte))
             return
-        elif status == 4:
+        if status == 4:
             # Transmission impossible (no power on bus)
             self.logger.error(
-                "Status 4: Transmission impossible - no power on bus (pointer=%d)",
+                "%s (%d) status 4: Transmission impossible - no power on bus",
+                resp_waiter.command,
                 resp_pointer,
             )
             resp_future.set_result(BackwardFrameError(0))
             return
-        else:
-            # Unknown status
-            self.logger.error(
-                "Unknown status %d for pointer %d (backward_frame=0x%02x)",
-                status,
-                resp_pointer,
-                backward_frame_byte,
-            )
-            resp_future.set_result(BackwardFrameError(0))
-            return
+        # Unknown status
+        self.logger.error(
+            "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
+            resp_waiter.command,
+            resp_pointer,
+            status,
+            backward_frame_byte,
+            resp,
+        )
+        resp_future.set_result(BackwardFrameError(0))
 
     async def run_sequence(self, seq, progress=None) -> Any:
         """
@@ -544,11 +540,6 @@ class WBDALIDriver:
                 self._waiting_for_responses[current_index] = item
 
                 result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice)
-                self.logger.debug(
-                    "Encoded frame: len=%d, result=0x%08x",
-                    len(item.command.frame),
-                    result,
-                )
                 regs_32bit.append(result)
 
             msg = "".join([f"{((reg & 0xFFFF) << 16) | ((reg >> 16) & 0xFFFF):08x}" for reg in regs_32bit])
@@ -713,6 +704,11 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
                 instance_type=type_rsp.value,
             )
         await driver.send(StopQuiescentMode(DeviceBroadcast()))
+
+    def update_mapping(self, short_address: int, new_short_address: int) -> None:
+        """Update the mapping for a device that has changed short address."""
+        if short_address in self._mapping:
+            self._mapping[new_short_address] = self._mapping.pop(short_address)
 
 
 async def query_request(driver: WBDALIDriver, cmd: Command) -> int:

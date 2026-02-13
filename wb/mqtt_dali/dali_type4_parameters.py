@@ -2,7 +2,7 @@
 
 from dali.gear.incandescent import QueryDimmingCurve, SelectDimmingCurve
 
-from .extended_gear_parameters import DimmingCurveParam, TypeParameters
+from .dali_parameters import DimmingCurveParam, TypeParameters
 
 
 class Type4DimmingCurveParam(DimmingCurveParam):

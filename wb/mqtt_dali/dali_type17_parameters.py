@@ -1,7 +1,7 @@
 # Type 17 Dimming curve selection
 
 
-from .extended_gear_parameters import DimmingCurveParam, TypeParameters
+from .dali_parameters import DimmingCurveParam, TypeParameters
 from .gear.dimming_curve import QueryDimmingCurve, SelectDimmingCurve
 
 

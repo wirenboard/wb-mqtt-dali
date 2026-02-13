@@ -9,8 +9,8 @@ from dali.gear.emergency import (
     StoreDTRAsEmergencyLevel,
 )
 
-from .extended_gear_parameters import NumberGearParam, TypeParameters
-from .settings import SettingsParamAddress, SettingsParamName
+from .dali_parameters import NumberGearParam, TypeParameters
+from .settings import SettingsParamName
 from .wbdali import WBDALIDriver, query_request
 
 # TODO: prolong time is write only
@@ -25,8 +25,9 @@ class EmergencyLevelParam(NumberGearParam):
             SettingsParamName("Emergency level", "Уровень аварийного освещения"), "type_1_emergency_level"
         )
 
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        res = await super().read(driver, address)
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        res = await super().read(driver, short_address)
+        address = GearShort(short_address)
         try:
             self.minimum = await query_request(driver, QueryEmergencyMinLevel(address))
         except RuntimeError as e:
@@ -39,9 +40,8 @@ class EmergencyLevelParam(NumberGearParam):
 
 
 class Type1Parameters(TypeParameters):
-    async def read(self, driver: WBDALIDriver, address: SettingsParamAddress) -> dict:
-        if not isinstance(address, GearShort):
-            raise ValueError("Address must be a GearShort")
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        address = GearShort(short_address)
         try:
             features = await query_request(driver, QueryEmergencyFeatures(address))
         except RuntimeError as e:
@@ -49,4 +49,4 @@ class Type1Parameters(TypeParameters):
         if not ((features >> 4) & 1):  # bit 4: type 1 emergency lighting support
             return {}
         self._parameters = [EmergencyLevelParam()]
-        return await super().read(driver, address)
+        return await super().read(driver, short_address)

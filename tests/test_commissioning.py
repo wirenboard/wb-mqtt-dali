@@ -332,6 +332,13 @@ class FakeDALIBus:
 
         return MockResponse(value=None)
 
+    async def send_commands(self, cmds):
+        responses = []
+        for cmd in cmds:
+            resp = await self.send(cmd)
+            responses.append(resp)
+        return responses
+
 
 class TestCommissioning(unittest.TestCase):
     def setUp(self):

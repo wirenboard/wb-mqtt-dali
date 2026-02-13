@@ -73,18 +73,15 @@ class TestDeviceChange:
         change = DeviceChange()
         assert change.added == []
         assert change.removed == []
-        assert change.updated == []
 
     def test_with_parameters(self):
         added = [DeviceInfo("dev1", "Device 1")]
         removed = ["dev2"]
-        updated = [DeviceInfo("dev3", "Device 3")]
 
-        change = DeviceChange(added=added, removed=removed, updated=updated)
+        change = DeviceChange(added=added, removed=removed)
 
         assert change.added == added
         assert change.removed == removed
-        assert change.updated == updated
 
 
 class TestControlHandler:
@@ -110,12 +107,7 @@ class TestDevicePublisher:
     async def test_initialize(self, publisher: DevicePublisher, mock_client):
         device_info = DeviceInfo("dev1", "Device 1")
         await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
-
+        await publisher.initialize()
         assert publisher._initialized is True
         assert mock_client.publish.call_count > 0
 
@@ -167,95 +159,6 @@ class TestDevicePublisher:
         publisher.logger.warning.assert_called_with("Device %s not found for removal", "nonexistent")
 
     @pytest.mark.asyncio
-    async def test_update_device(self, publisher, mock_client):
-        device_info = DeviceInfo(
-            "dev1",
-            "Device 1",
-            [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
-            ],
-        )
-
-        await publisher.add_device(device_info)
-
-        updated_info = DeviceInfo(
-            "dev1",
-            "Updated Device",
-            [
-                ControlInfo("ctrl1", "Updated Control", "switch", "1"),
-            ],
-        )
-
-        await publisher.update_device(updated_info)
-
-        device = publisher._devices["dev1"]
-        assert device._device_title == "Updated Device"
-
-    @pytest.mark.asyncio
-    async def test_update_device_add_control(self, publisher, mock_client):
-        device_info = DeviceInfo(
-            "dev1",
-            "Device 1",
-            [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
-            ],
-        )
-
-        await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
-
-        updated_info = DeviceInfo(
-            "dev1",
-            "Device 1",
-            [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
-                ControlInfo("ctrl2", "Control 2", "text", "test"),
-            ],
-        )
-
-        await publisher.update_device(updated_info)
-
-        device = publisher._devices["dev1"]
-        assert "ctrl1" in device._controls
-        assert "ctrl2" in device._controls
-
-    @pytest.mark.asyncio
-    async def test_update_device_remove_control(self, publisher, mock_client):
-        device_info = DeviceInfo(
-            "dev1",
-            "Device 1",
-            [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
-                ControlInfo("ctrl2", "Control 2", "text", "test"),
-            ],
-        )
-
-        await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
-
-        updated_info = DeviceInfo(
-            "dev1",
-            "Device 1",
-            [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
-            ],
-        )
-
-        await publisher.update_device(updated_info)
-
-        device = publisher._devices["dev1"]
-        assert "ctrl1" in device._controls
-        assert "ctrl2" not in device._controls
-
-    @pytest.mark.asyncio
     async def test_rebuild_with_changes(self, publisher, mock_client):
         initial_devices = [
             DeviceInfo("dev1", "Device 1"),
@@ -268,7 +171,6 @@ class TestDevicePublisher:
         changes = DeviceChange(
             added=[DeviceInfo("dev3", "Device 3")],
             removed=["dev1"],
-            updated=[DeviceInfo("dev2", "Updated Device 2")],
         )
 
         await publisher.rebuild(changes)
@@ -276,7 +178,6 @@ class TestDevicePublisher:
         assert "dev1" not in publisher._devices
         assert "dev2" in publisher._devices
         assert "dev3" in publisher._devices
-        assert publisher._devices["dev2"]._device_title == "Updated Device 2"
 
     @pytest.mark.asyncio
     async def test_set_control_value(self, publisher, mock_client):
@@ -289,11 +190,7 @@ class TestDevicePublisher:
         )
 
         await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
+        await publisher.initialize()
         mock_client.publish.reset_mock()
 
         await publisher.set_control_value("dev1", "ctrl1", "1")
@@ -318,11 +215,7 @@ class TestDevicePublisher:
         )
 
         await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
+        await publisher.initialize()
         mock_client.publish.reset_mock()
 
         await publisher.set_control_title("dev1", "ctrl1", "New Title")
@@ -368,9 +261,9 @@ class TestDevicePublisher:
 
         callback = AsyncMock()
         await publisher.register_control_handler("dev1", "ctrl1", callback)
-        await publisher.register_control_handler("dev1", "ctrl1", callback)
-
-        publisher.logger.warning.assert_called_with("Handler already registered for %s/%s", "dev1", "ctrl1")
+        with pytest.raises(RuntimeError) as e:
+            await publisher.register_control_handler("dev1", "ctrl1", callback)
+        assert str(e.value) == "Handler already registered for dev1/ctrl1"
 
     @pytest.mark.asyncio
     async def test_unregister_control_handler(self, publisher, mock_dispatcher):
@@ -477,20 +370,11 @@ class TestDevicePublisher:
             ],
         )
         await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
+        await publisher.initialize()
 
         callback = AsyncMock()
         await publisher.register_control_handler("dev1", "ctrl1", callback)
-
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.cleanup()
+        await publisher.cleanup()
 
         assert len(publisher._devices) == 0
         assert len(publisher._control_handlers) == 0
@@ -515,17 +399,6 @@ class TestDevicePublisher:
         await asyncio.gather(*[publisher.add_device(info) for info in device_infos])
 
         assert len(publisher._devices) == 10
-
-        updated_infos = [
-            DeviceInfo(
-                f"dev{i}",
-                f"Updated Device {i}",
-                [ControlInfo("ctrl1", "Control 1", "switch", "1")],
-            )
-            for i in range(10)
-        ]
-
-        await asyncio.gather(*[publisher.update_device(info) for info in updated_infos])
 
         await asyncio.gather(*[publisher.remove_device(f"dev{i}") for i in range(10)])
 
@@ -566,11 +439,7 @@ class TestDevicePublisher:
         )
 
         await publisher.add_device(device_info)
-        with patch(
-            "wb.mqtt_dali.device_publisher.remove_topics_by_driver",
-            new_callable=AsyncMock,
-        ):
-            await publisher.initialize()
+        await publisher.initialize()
 
         device = publisher._devices["dev1"]
         control = device._controls["ctrl1"]

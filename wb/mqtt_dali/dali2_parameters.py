@@ -1,10 +1,15 @@
-from typing import Callable
+from typing import Callable, Sequence
 
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
 from dali.device.general import DTR0
 
-from .settings import NumberSettingsParam, SettingsParamName
+from .settings import (
+    CommandWriteItem,
+    DelayHint,
+    NumberSettingsParam,
+    SettingsParamName,
+)
 
 
 class InstanceParam(NumberSettingsParam):
@@ -24,8 +29,10 @@ class InstanceParam(NumberSettingsParam):
     def get_read_command(self, short_address: int) -> Command:
         return self._query_command(DeviceShort(short_address), self._instance_number)
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         return [
             DTR0(value_to_set),
+            DelayHint(0.3),
             self._set_command(DeviceShort(short_address), self._instance_number),
+            DelayHint(0.3),
         ]

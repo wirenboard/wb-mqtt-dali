@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Sequence
 
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
@@ -13,6 +13,8 @@ from .dali2_type4_parameters import build_type4_light_sensor_parameters
 from .dali_device import DaliDeviceAddress
 from .gtin_db import DaliDatabase
 from .settings import (
+    CommandWriteItem,
+    DelayHint,
     NumberSettingsParam,
     SettingsParamBase,
     SettingsParamGroup,
@@ -46,10 +48,12 @@ class EventSchemeParam(NumberSettingsParam):
         super().__init__(SettingsParamName("Event addressing scheme"), "event_scheme")
         self._instance_number = instance_number
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         return [
             DTR0(value_to_set),
+            DelayHint(0.3),
             SetEventScheme(DeviceShort(short_address), self._instance_number),
+            DelayHint(0.3),
         ]
 
     def get_read_command(self, short_address: int) -> Command:

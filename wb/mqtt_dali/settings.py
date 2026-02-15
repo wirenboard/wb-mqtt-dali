@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 from dali.command import Command
 
@@ -12,6 +12,14 @@ from .wbdali import WBDALIDriver, check_query_response, query_request
 class SettingsParamName:
     en: str
     ru: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DelayHint:
+    seconds: float
+
+
+CommandWriteItem = Union[Command, DelayHint]
 
 
 class SettingsParamBase:
@@ -61,12 +69,42 @@ class NumberSettingsParam(SettingsParamBase):
         value_to_set = value[self.property_name]
         if self.value == value_to_set:
             return {}
-        commands = self.get_write_commands(short_address, value_to_set)
-        commands.append(self.get_read_command(short_address))
-        res = (await driver.send_commands(commands))[-1]
+
+        sequence = list(self.get_write_commands(short_address, value_to_set))
+        if not sequence:
+            sequence = []
+        sequence.append(self.get_read_command(short_address))
+
+        responses = await self._send_sequence(driver, sequence)
+        res = responses[-1]
         check_query_response(res)
         self.value = res.raw_value.as_integer
         return {self.property_name: self.value}
+
+    async def _send_sequence(
+        self,
+        driver: WBDALIDriver,
+        sequence: Sequence[CommandWriteItem],
+    ) -> list:
+        responses: list = []
+        batch: list[Command] = []
+
+        async def flush_batch() -> None:
+            nonlocal responses, batch
+            if batch:
+                responses.extend(await driver.send_commands(batch))
+                batch = []
+
+        for item in sequence:
+            if isinstance(item, DelayHint):
+                await flush_batch()
+                if item.seconds > 0:
+                    await asyncio.sleep(item.seconds)
+                continue
+            batch.append(item)
+
+        await flush_batch()
+        return responses
 
     def get_schema(self) -> dict:
         schema: dict = {
@@ -95,7 +133,7 @@ class NumberSettingsParam(SettingsParamBase):
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
         return schema
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         raise NotImplementedError(f"Write commands for {self.name.en} are not defined")
 
     def get_read_command(self, short_address: int) -> Command:
@@ -123,12 +161,12 @@ class SettingsParamGroup(SettingsParamBase):
         if self._property_name not in value:
             return {}
         instance_value = value[self._property_name]
-        awaitables = [param.write(driver, short_address, instance_value) for param in self._parameters]
-        results = await asyncio.gather(*awaitables, return_exceptions=True)
-        res = {}
-        for param, result in zip(self._parameters, results):
-            if isinstance(result, BaseException):
-                raise RuntimeError(f'Error writing "{param.name.en}": {result}') from result
+        res: dict = {}
+        for param in self._parameters:
+            try:
+                result = await param.write(driver, short_address, instance_value)
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f'Error writing "{param.name.en}": {exc}') from exc
             if result is not None:
                 res.update(result)
         return {self._property_name: res}

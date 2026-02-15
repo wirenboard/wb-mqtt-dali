@@ -1,11 +1,16 @@
 import asyncio
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from dali.address import GearShort
 from dali.command import Command
 from dali.gear.general import DTR0
 
-from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
+from .settings import (
+    CommandWriteItem,
+    NumberSettingsParam,
+    SettingsParamBase,
+    SettingsParamName,
+)
 from .utils import add_enum, add_translations, merge_json_schemas
 from .wbdali import WBDALIDriver
 
@@ -23,7 +28,7 @@ class NumberGearParam(NumberSettingsParam):
             return self.query_command_class(GearShort(short_address))
         raise RuntimeError(f"Query command class for {self.name.en} is not defined")
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         if self.set_command_class is not None:
             if self.query_command_class is not None:
                 return [

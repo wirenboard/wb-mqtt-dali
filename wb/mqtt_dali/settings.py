@@ -53,18 +53,24 @@ class BooleanSettingsParam(SettingsParamBase):
         self._query_factory = query_command_factory
         self._enable_factory = enable_command_factory
         self._disable_factory = disable_command_factory
+        self.value = None
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         response = await driver.send(self._query_factory(short_address))
         if response is None or response.value is None:
             raise RuntimeError(f"Failed to read {self.property_name} state")
-        return {self.property_name: bool(response.value)}
+        self.value = bool(response.value)
+        return {self.property_name: self.value}
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self.property_name not in value:
             return {}
 
-        command_factory = self._enable_factory if bool(value[self.property_name]) else self._disable_factory
+        value_to_set = value[self.property_name]
+        if self.value == value_to_set:
+            return {}
+
+        command_factory = self._enable_factory if bool(value_to_set) else self._disable_factory
         await driver.send(command_factory(short_address))
         return await self.read(driver, short_address)
 

@@ -53,7 +53,11 @@ class BooleanSettingsParam(SettingsParamBase):
         self._query_factory = query_command_factory
         self._enable_factory = enable_command_factory
         self._disable_factory = disable_command_factory
+        self.grid_columns = None
+        self.property_order = None
+        self.default: Optional[bool] = None
         self.value = None
+        self._is_read_only = False
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         response = await driver.send(self._query_factory(short_address))
@@ -75,7 +79,7 @@ class BooleanSettingsParam(SettingsParamBase):
         return await self.read(driver, short_address)
 
     def get_schema(self) -> dict:
-        return {
+        schema: dict = {
             "properties": {
                 self.property_name: {
                     "type": "boolean",
@@ -83,6 +87,21 @@ class BooleanSettingsParam(SettingsParamBase):
                 }
             }
         }
+        has_options = False
+        if self._is_read_only:
+            schema["properties"][self.property_name]["options"] = {"wb": {"read_only": True}}
+            has_options = True
+        if self.grid_columns is not None:
+            if not has_options:
+                schema["properties"][self.property_name]["options"] = {}
+            schema["properties"][self.property_name]["options"]["grid_columns"] = self.grid_columns
+        if self.name.ru is not None:
+            schema["translations"] = {"ru": {self.name.en: self.name.ru}}
+        if self.default is not None:
+            schema["properties"][self.property_name]["default"] = self.default
+        if self.property_order is not None:
+            schema["properties"][self.property_name]["propertyOrder"] = self.property_order
+        return schema
 
 
 class NumberSettingsParam(SettingsParamBase):

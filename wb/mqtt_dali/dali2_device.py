@@ -15,9 +15,15 @@ from dali.device.general import (
     QueryEventPriority,
     QueryEventScheme,
     QueryInstanceEnabled,
+    QueryInstanceGroup1,
+    QueryInstanceGroup2,
     QueryPowerCycleNotification,
+    QueryPrimaryInstanceGroup,
     SetEventPriority,
     SetEventScheme,
+    SetInstanceGroup1,
+    SetInstanceGroup2,
+    SetPrimaryInstanceGroup,
 )
 
 from .common_dali_device import DaliDeviceBase
@@ -69,6 +75,9 @@ class InstanceParameters(SettingsParamGroup):
             InstanceTypeParam(instance_type),
             EventPriorityParam(instance_number),
             EventSchemeParam(instance_number),
+            InstanceGroup0Param(instance_number),
+            InstanceGroup1Param(instance_number),
+            InstanceGroup2Param(instance_number),
         ]
         if instance_type == pushbutton.instance_type:
             self._parameters.extend(build_type1_push_button_parameters(instance_number))
@@ -129,6 +138,59 @@ class EventPriorityParam(NumberSettingsParam):
         if "options" not in schema["properties"][self.property_name]:
             schema["properties"][self.property_name]["options"] = {}
         return schema
+
+
+class InstanceGroupParamBase(NumberSettingsParam):
+    def __init__(self, name: str, property_name: str, instance_number: InstanceNumber) -> None:
+        super().__init__(SettingsParamName(name), property_name)
+        self._instance_number = instance_number
+
+    def get_schema(self) -> dict:
+        schema = super().get_schema()
+        schema["properties"][self.property_name]["enum"] = list(range(32)) + [255]
+        return schema
+
+
+class InstanceGroup0Param(InstanceGroupParamBase):
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__("Instance group 0", "instance_group_0", instance_number)
+
+    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+        return [
+            DTR0(value_to_set),
+            SetPrimaryInstanceGroup(DeviceShort(short_address), self._instance_number),
+        ]
+
+    def get_read_command(self, short_address: int) -> Command:
+        return QueryPrimaryInstanceGroup(DeviceShort(short_address), self._instance_number)
+
+
+class InstanceGroup1Param(InstanceGroupParamBase):
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__("Instance group 1", "instance_group_1", instance_number)
+
+    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+        return [
+            DTR0(value_to_set),
+            SetInstanceGroup1(DeviceShort(short_address), self._instance_number),
+        ]
+
+    def get_read_command(self, short_address: int) -> Command:
+        return QueryInstanceGroup1(DeviceShort(short_address), self._instance_number)
+
+
+class InstanceGroup2Param(InstanceGroupParamBase):
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__("Instance group 2", "instance_group_2", instance_number)
+
+    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+        return [
+            DTR0(value_to_set),
+            SetInstanceGroup2(DeviceShort(short_address), self._instance_number),
+        ]
+
+    def get_read_command(self, short_address: int) -> Command:
+        return QueryInstanceGroup2(DeviceShort(short_address), self._instance_number)
 
 
 class InstanceActiveParam(BooleanSettingsParam):

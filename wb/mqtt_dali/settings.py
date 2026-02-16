@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from dali.command import Command
 
@@ -37,6 +37,46 @@ class SettingsParamBase:
 
     def get_schema(self) -> dict:
         return {}
+
+
+class BooleanSettingsParam(SettingsParamBase):
+    def __init__(
+        self,
+        name: SettingsParamName,
+        property_name: str,
+        query_command_factory: Callable[[int], Command],
+        enable_command_factory: Callable[[int], Command],
+        disable_command_factory: Callable[[int], Command],
+    ) -> None:
+        super().__init__(name)
+        self.property_name = property_name
+        self._query_factory = query_command_factory
+        self._enable_factory = enable_command_factory
+        self._disable_factory = disable_command_factory
+
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        response = await driver.send(self._query_factory(short_address))
+        if response is None or response.value is None:
+            raise RuntimeError(f"Failed to read {self.property_name} state")
+        return {self.property_name: bool(response.value)}
+
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+        if self.property_name not in value:
+            return {}
+
+        command_factory = self._enable_factory if bool(value[self.property_name]) else self._disable_factory
+        await driver.send(command_factory(short_address))
+        return await self.read(driver, short_address)
+
+    def get_schema(self) -> dict:
+        return {
+            "properties": {
+                self.property_name: {
+                    "type": "boolean",
+                    "title": self.name.en,
+                }
+            }
+        }
 
 
 class NumberSettingsParam(SettingsParamBase):

@@ -5,11 +5,17 @@ from dali.command import Command
 from dali.device import light, occupancy, pushbutton
 from dali.device.general import (
     DTR0,
+    DisableApplicationController,
     DisableInstance,
+    DisablePowerCycleNotification,
+    EnableApplicationController,
     EnableInstance,
+    EnablePowerCycleNotification,
+    QueryApplicationControlEnabled,
     QueryEventPriority,
     QueryEventScheme,
     QueryInstanceEnabled,
+    QueryPowerCycleNotification,
     SetEventPriority,
     SetEventScheme,
 )
@@ -22,12 +28,35 @@ from .dali2_type4_parameters import build_type4_light_sensor_parameters
 from .dali_device import DaliDeviceAddress
 from .gtin_db import DaliDatabase
 from .settings import (
+    BooleanSettingsParam,
     NumberSettingsParam,
     SettingsParamBase,
     SettingsParamGroup,
     SettingsParamName,
 )
 from .wbdali import WBDALIDriver
+
+
+class ApplicationActiveParam(BooleanSettingsParam):
+    def __init__(self) -> None:
+        super().__init__(
+            SettingsParamName("Application controller"),
+            "application_active",
+            lambda short_address: QueryApplicationControlEnabled(DeviceShort(short_address)),
+            lambda short_address: EnableApplicationController(DeviceShort(short_address)),
+            lambda short_address: DisableApplicationController(DeviceShort(short_address)),
+        )
+
+
+class PowerCycleNotificationParam(BooleanSettingsParam):
+    def __init__(self) -> None:
+        super().__init__(
+            SettingsParamName("Power cycle notification"),
+            "power_cycle_notification",
+            lambda short_address: QueryPowerCycleNotification(DeviceShort(short_address)),
+            lambda short_address: EnablePowerCycleNotification(DeviceShort(short_address)),
+            lambda short_address: DisablePowerCycleNotification(DeviceShort(short_address)),
+        )
 
 
 class InstanceParameters(SettingsParamGroup):
@@ -52,7 +81,6 @@ class InstanceParameters(SettingsParamGroup):
 
 
 class EventSchemeParam(NumberSettingsParam):
-
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(SettingsParamName("Event addressing scheme"), "event_scheme")
         self._instance_number = instance_number
@@ -103,40 +131,17 @@ class EventPriorityParam(NumberSettingsParam):
         return schema
 
 
-class InstanceActiveParam(SettingsParamBase):
+class InstanceActiveParam(BooleanSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Enable Event Messages"))
-        self.property_name = "instance_active"
-        self._instance_number = instance_number
-
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        response = await driver.send(QueryInstanceEnabled(DeviceShort(short_address), self._instance_number))
-        if response is None or response.value is None:
-            raise RuntimeError("Failed to read instance active state")
-        value = bool(response.value)
-        return {self.property_name: value}
-
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
-        if self.property_name not in value:
-            return {}
-        command: Command
-        if bool(value[self.property_name]):
-            command = EnableInstance(DeviceShort(short_address), self._instance_number)
-        else:
-            command = DisableInstance(DeviceShort(short_address), self._instance_number)
-
-        await driver.send(command)
-        return await self.read(driver, short_address)
-
-    def get_schema(self) -> dict:
-        return {
-            "properties": {
-                self.property_name: {
-                    "type": "boolean",
-                    "title": self.name.en,
-                }
-            }
-        }
+        super().__init__(
+            SettingsParamName("Enable Event Messages"),
+            "instance_active",
+            lambda short_address, inst=instance_number: QueryInstanceEnabled(
+                DeviceShort(short_address), inst
+            ),
+            lambda short_address, inst=instance_number: EnableInstance(DeviceShort(short_address), inst),
+            lambda short_address, inst=instance_number: DisableInstance(DeviceShort(short_address), inst),
+        )
 
 
 class InstanceTypeParam(SettingsParamBase):
@@ -173,7 +178,6 @@ class InstanceTypeParam(SettingsParamBase):
 
 
 class Dali2Device(DaliDeviceBase):
-
     def __init__(
         self,
         address: DaliDeviceAddress,
@@ -189,7 +193,12 @@ class Dali2Device(DaliDeviceBase):
         self._gtin_db = gtin_db
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        return list(self.instances.values())
+        handlers: list[SettingsParamBase] = [
+            ApplicationActiveParam(),
+            PowerCycleNotificationParam(),
+        ]
+        handlers.extend(self.instances.values())
+        return handlers
 
     def add_instance(self, index: int, instance_type: int) -> None:
         self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)

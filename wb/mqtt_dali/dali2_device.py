@@ -3,7 +3,16 @@ from typing import Optional
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
 from dali.device import light, occupancy, pushbutton
-from dali.device.general import DTR0, QueryEventScheme, SetEventScheme
+from dali.device.general import (
+    DTR0,
+    DisableInstance,
+    EnableInstance,
+    QueryEventPriority,
+    QueryEventScheme,
+    QueryInstanceEnabled,
+    SetEventPriority,
+    SetEventScheme,
+)
 
 from .common_dali_device import DaliDeviceBase
 from .dali2_compat import Dali2CommandsCompatibilityLayer
@@ -27,7 +36,9 @@ class InstanceParameters(SettingsParamGroup):
             SettingsParamName(f"Instance {instance_number.value}"), f"instance{instance_number.value}"
         )
         self._parameters = [
+            InstanceActiveParam(instance_number),
             InstanceTypeParam(instance_type),
+            EventPriorityParam(instance_number),
             EventSchemeParam(instance_number),
         ]
         if instance_type == pushbutton.instance_type:
@@ -68,6 +79,64 @@ class EventSchemeParam(NumberSettingsParam):
             "instance group and type",
         ]
         return schema
+
+
+class EventPriorityParam(NumberSettingsParam):
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__(SettingsParamName("Event priority"), "event_priority")
+        self._instance_number = instance_number
+
+    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+        return [
+            DTR0(value_to_set),
+            SetEventPriority(DeviceShort(short_address), self._instance_number),
+        ]
+
+    def get_read_command(self, short_address: int) -> Command:
+        return QueryEventPriority(DeviceShort(short_address), self._instance_number)
+
+    def get_schema(self) -> dict:
+        schema = super().get_schema()
+        schema["properties"][self.property_name]["enum"] = [2, 3, 4, 5]
+        if "options" not in schema["properties"][self.property_name]:
+            schema["properties"][self.property_name]["options"] = {}
+        return schema
+
+
+class InstanceActiveParam(SettingsParamBase):
+    def __init__(self, instance_number: InstanceNumber) -> None:
+        super().__init__(SettingsParamName("Enable Event Messages"))
+        self.property_name = "instance_active"
+        self._instance_number = instance_number
+
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        response = await driver.send(QueryInstanceEnabled(DeviceShort(short_address), self._instance_number))
+        if response is None or response.value is None:
+            raise RuntimeError("Failed to read instance active state")
+        value = bool(response.value)
+        return {self.property_name: value}
+
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+        if self.property_name not in value:
+            return {}
+        command: Command
+        if bool(value[self.property_name]):
+            command = EnableInstance(DeviceShort(short_address), self._instance_number)
+        else:
+            command = DisableInstance(DeviceShort(short_address), self._instance_number)
+
+        await driver.send(command)
+        return await self.read(driver, short_address)
+
+    def get_schema(self) -> dict:
+        return {
+            "properties": {
+                self.property_name: {
+                    "type": "boolean",
+                    "title": self.name.en,
+                }
+            }
+        }
 
 
 class InstanceTypeParam(SettingsParamBase):

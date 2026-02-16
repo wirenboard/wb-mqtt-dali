@@ -1,10 +1,14 @@
-from typing import Optional
+from typing import Optional, Type
 
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
 from dali.device import light, occupancy, pushbutton
 from dali.device.general import (
     DTR0,
+    DTR1,
+    DTR2,
+    AddToDeviceGroupsSixteenToThirtyOne,
+    AddToDeviceGroupsZeroToFifteen,
     DisableApplicationController,
     DisableInstance,
     DisablePowerCycleNotification,
@@ -12,6 +16,10 @@ from dali.device.general import (
     EnableInstance,
     EnablePowerCycleNotification,
     QueryApplicationControlEnabled,
+    QueryDeviceGroupsEightToFifteen,
+    QueryDeviceGroupsSixteenToTwentyThree,
+    QueryDeviceGroupsTwentyFourToThirtyOne,
+    QueryDeviceGroupsZeroToSeven,
     QueryEventPriority,
     QueryEventScheme,
     QueryInstanceEnabled,
@@ -19,6 +27,8 @@ from dali.device.general import (
     QueryInstanceGroup2,
     QueryPowerCycleNotification,
     QueryPrimaryInstanceGroup,
+    RemoveFromDeviceGroupsSixteenToThirtyOne,
+    RemoveFromDeviceGroupsZeroToFifteen,
     SetEventPriority,
     SetEventScheme,
     SetInstanceGroup1,
@@ -40,7 +50,7 @@ from .settings import (
     SettingsParamGroup,
     SettingsParamName,
 )
-from .wbdali import WBDALIDriver
+from .wbdali import WBDALIDriver, check_query_response
 
 
 class ApplicationActiveParam(BooleanSettingsParam):
@@ -239,6 +249,123 @@ class InstanceTypeParam(SettingsParamBase):
         }
 
 
+class DeviceGroupsParam(SettingsParamBase):
+    TOTAL_GROUPS = 32
+    HALF_RANGE = 16
+
+    def __init__(self) -> None:
+        super().__init__(SettingsParamName("Device groups"))
+        self.property_name = "device_groups"
+        self._groups = [False] * self.TOTAL_GROUPS
+
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        updated_groups = await self._query_all_groups(driver, short_address)
+        self._groups = updated_groups
+        return {self.property_name: updated_groups}
+
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+        groups_to_set = value.get(self.property_name)
+        if groups_to_set is None:
+            return {}
+        desired_groups = [bool(item) for item in groups_to_set]
+        if len(desired_groups) != self.TOTAL_GROUPS:
+            raise ValueError(f"{self.property_name} must contain {self.TOTAL_GROUPS} items")
+        if desired_groups == self._groups:
+            return {}
+
+        address = DeviceShort(short_address)
+        current_lower = self._mask_for_slice(self._groups[: self.HALF_RANGE])
+        current_upper = self._mask_for_slice(self._groups[self.HALF_RANGE :])
+        desired_lower = self._mask_for_slice(desired_groups[: self.HALF_RANGE])
+        desired_upper = self._mask_for_slice(desired_groups[self.HALF_RANGE :])
+
+        remove_lower = current_lower & ~desired_lower
+        remove_upper = current_upper & ~desired_upper
+        add_lower = desired_lower & ~current_lower
+        add_upper = desired_upper & ~current_upper
+
+        commands: list[Command] = []
+        if remove_lower:
+            commands.extend(
+                self._build_group_command_sequence(address, remove_lower, RemoveFromDeviceGroupsZeroToFifteen)
+            )
+        if remove_upper:
+            commands.extend(
+                self._build_group_command_sequence(
+                    address, remove_upper, RemoveFromDeviceGroupsSixteenToThirtyOne
+                )
+            )
+        if add_lower:
+            commands.extend(
+                self._build_group_command_sequence(address, add_lower, AddToDeviceGroupsZeroToFifteen)
+            )
+        if add_upper:
+            commands.extend(
+                self._build_group_command_sequence(address, add_upper, AddToDeviceGroupsSixteenToThirtyOne)
+            )
+        if not commands:
+            return {}
+
+        query_commands = self._build_query_commands(address)
+        responses = await driver.send_commands(commands + query_commands)
+        updated_groups = self._parse_group_responses(responses[-len(query_commands) :])
+        self._groups = updated_groups
+        return {self.property_name: updated_groups}
+
+    def get_schema(self) -> dict:
+        return {
+            "properties": {
+                self.property_name: {
+                    "type": "array",
+                    "title": self.name.en,
+                    "items": {"type": "boolean", "format": "button"},
+                    "minItems": self.TOTAL_GROUPS,
+                    "maxItems": self.TOTAL_GROUPS,
+                }
+            }
+        }
+
+    async def _query_all_groups(self, driver: WBDALIDriver, short_address: int) -> list[bool]:
+        responses = await driver.send_commands(self._build_query_commands(DeviceShort(short_address)))
+        return self._parse_group_responses(responses)
+
+    def _build_query_commands(self, address: DeviceShort) -> list[Command]:
+        return [
+            QueryDeviceGroupsZeroToSeven(address),
+            QueryDeviceGroupsEightToFifteen(address),
+            QueryDeviceGroupsSixteenToTwentyThree(address),
+            QueryDeviceGroupsTwentyFourToThirtyOne(address),
+        ]
+
+    def _parse_group_responses(self, responses: list) -> list[bool]:
+        groups: list[bool] = []
+        for response in responses:
+            check_query_response(response)
+            raw_value = response.raw_value.as_integer
+            groups.extend(((raw_value >> bit) & 1) == 1 for bit in range(8))
+        return groups[: self.TOTAL_GROUPS]
+
+    def _build_group_command_sequence(
+        self,
+        address: DeviceShort,
+        mask: int,
+        command_factory: Type[Command],
+    ) -> list[Command]:
+        return [
+            DTR1(mask & 0xFF),
+            DTR2((mask >> 8) & 0xFF),
+            command_factory(address),
+        ]
+
+    @staticmethod
+    def _mask_for_slice(values: list[bool]) -> int:
+        mask = 0
+        for index, enabled in enumerate(values):
+            if enabled:
+                mask |= 1 << index
+        return mask
+
+
 class Dali2Device(DaliDeviceBase):
     def __init__(
         self,
@@ -256,6 +383,7 @@ class Dali2Device(DaliDeviceBase):
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         handlers: list[SettingsParamBase] = [
+            DeviceGroupsParam(),
             ApplicationActiveParam(),
             PowerCycleNotificationParam(),
         ]

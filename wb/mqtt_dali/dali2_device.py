@@ -137,10 +137,12 @@ class EventPriorityParam(NumberSettingsParam):
         super().__init__(SettingsParamName("Event priority"), "event_priority")
         self._instance_number = instance_number
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         return [
             DTR0(value_to_set),
+            DelayHint(0.3),
             SetEventPriority(DeviceShort(short_address), self._instance_number),
+            DelayHint(0.3),
         ]
 
     def get_read_command(self, short_address: int) -> Command:
@@ -169,10 +171,12 @@ class InstanceGroup0Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__("Instance group 0", "instance_group_0", instance_number)
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         return [
             DTR0(value_to_set),
+            DelayHint(0.3),
             SetPrimaryInstanceGroup(DeviceShort(short_address), self._instance_number),
+            DelayHint(0.3),
         ]
 
     def get_read_command(self, short_address: int) -> Command:
@@ -183,10 +187,12 @@ class InstanceGroup1Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__("Instance group 1", "instance_group_1", instance_number)
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         return [
             DTR0(value_to_set),
+            DelayHint(0.3),
             SetInstanceGroup1(DeviceShort(short_address), self._instance_number),
+            DelayHint(0.3),
         ]
 
     def get_read_command(self, short_address: int) -> Command:
@@ -197,10 +203,12 @@ class InstanceGroup2Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__("Instance group 2", "instance_group_2", instance_number)
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: int, value_to_set: int) -> Sequence[CommandWriteItem]:
         return [
             DTR0(value_to_set),
+            DelayHint(0.3),
             SetInstanceGroup2(DeviceShort(short_address), self._instance_number),
+            DelayHint(0.3),
         ]
 
     def get_read_command(self, short_address: int) -> Command:

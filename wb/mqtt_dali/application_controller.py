@@ -123,6 +123,12 @@ class ApplicationController:
         for device in self.dali_devices + self.dali2_devices:
             device_info = DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
             await self._device_publisher.add_device(device_info)
+            await self._device_publisher.register_control_handler(
+                device.mqtt_id,
+                "+",
+                self._handle_on_topic,
+            )
+            self._devices_by_mqtt_id[device.mqtt_id] = device
 
         self._polling_task = asyncio.create_task(self._polling_loop())
 
@@ -373,8 +379,12 @@ class ApplicationController:
             )
 
     async def _handle_on_topic(self, message: mqtt.MQTTMessage) -> None:
-        device_id = message.topic.split("/")[2]
-        control_id = message.topic.split("/")[4]
+        topic_parts = message.topic.split("/")
+        if len(topic_parts) < 5:
+            self.logger.warning("Received MQTT message with invalid topic format: %s", message.topic)
+            return
+        device_id = topic_parts[2]
+        control_id = topic_parts[4]
         payload = message.payload.decode("utf-8") if getattr(message, "payload", None) else ""
 
         device = self._devices_by_mqtt_id.get(device_id)

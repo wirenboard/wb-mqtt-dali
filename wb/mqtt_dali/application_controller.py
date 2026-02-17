@@ -5,22 +5,17 @@ from enum import Enum, auto
 from timeit import default_timer
 from typing import Optional, Sequence, Union
 
+import paho.mqtt.client as mqtt
 from dali.address import DeviceBroadcast
 from dali.command import from_frame
-from dali.device.general import StartQuiescentMode, StopQuiescentMode
+from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
 
 from .commissioning import Commissioning, CommissioningResult
-from .dali2_controls import get_dali2_controls, publish_dali2_event
+from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
-from .dali_controls import (
-    build_polling_queries,
-    get_common_controls,
-    publish_polling_results,
-    register_common_handlers,
-)
 from .dali_device import DaliDevice
-from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
+from .device_publisher import ControlInfo, DeviceChange, DeviceInfo, DevicePublisher
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
@@ -94,8 +89,11 @@ class ApplicationController:
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
         self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
+        self._devices_by_mqtt_id: dict[str, Union[DaliDevice, Dali2Device]] = {}
 
         self._gtin_db = gtin_db
+
+        self._action_control_by_device_id: dict[str, list[ControlInfo]] = {}
 
     @property
     def polling_interval(self) -> float:
@@ -121,16 +119,14 @@ class ApplicationController:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
-        await self._device_publisher.initialize()
-
-        for device in self.dali_devices:
-            device_info = DeviceInfo(device.mqtt_id, device.name, get_common_controls())
-            await self._device_publisher.add_device(device_info)
-            await register_common_handlers(device, self, self._device_publisher)
-
         self._update_dali2_devices_instances({d.address.short: d for d in self.dali2_devices})
-        for device in self.dali2_devices:
-            device_info = DeviceInfo(device.mqtt_id, device.name, get_dali2_controls(device))
+
+        await self._device_publisher.initialize()
+        for device in self.dali_devices + self.dali2_devices:
+            action_controls = await device.get_action_controls(self._dev)
+            controls = await device.get_polling_controls(self._dev) + action_controls
+            device_info = DeviceInfo(device.mqtt_id, device.name, controls)
+            self._action_control_by_device_id[device.mqtt_id] = action_controls
             await self._device_publisher.add_device(device_info)
 
         self._polling_task = asyncio.create_task(self._polling_loop())
@@ -210,34 +206,31 @@ class ApplicationController:
             5.0,
         )
 
-        device_info = DeviceInfo(
-            device.mqtt_id,
-            device.name,
-            get_dali2_controls(device) if isinstance(device, Dali2Device) else get_common_controls(),
-        )
-        if old_mqtt_id != device_info.id:
+        new_mqtt_id = device.mqtt_id
+        if old_mqtt_id != new_mqtt_id:
+            polling_controls = await device.get_polling_controls(self._dev)
+            action_controls = await device.get_action_controls(self._dev)
+            device_info = DeviceInfo(
+                new_mqtt_id,
+                device.name,
+                polling_controls + action_controls,
+            )
             await self._device_publisher.add_device(device_info)
-            if isinstance(device, DaliDevice):
-                await register_common_handlers(device, self, self._device_publisher)
+            self._action_control_by_device_id[device.mqtt_id] = action_controls
+            await self._device_publisher.register_control_handler(
+                device.mqtt_id,
+                "+",
+                self._handle_on_topic,
+            )
             await self._device_publisher.remove_device(old_mqtt_id)
+            self._action_control_by_device_id.pop(old_mqtt_id, None)
         else:
-            await self._device_publisher.set_device_title(device_info.id, device_info.title)
+            await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
         if isinstance(device, Dali2Device) and old_short_address != device.address.short:
             self._dev_inst_map.update_mapping(old_short_address, device.address.short)
             self._dali2_devices_by_addr.pop(old_short_address, None)
             self._dali2_devices_by_addr[device.address.short] = device
-
-    async def send_command(self, command):
-        if self._active_task:
-            if self._active_task_description == "polling":
-                self._active_task.cancel("command sent")
-        return await self._run_task(
-            ApplicationControllerState.GENERIC_TASK,
-            self._dev.send(command),
-            f"sending command {command}",
-            3.0,
-        )
 
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
@@ -330,12 +323,18 @@ class ApplicationController:
 
         changes = DeviceChange(removed=removed_ids)
         for device in created_devices:
-            changes.added.append(DeviceInfo(device.mqtt_id, device.name, get_common_controls()))
+            polling_controls = await device.get_polling_controls(self._dev)
+            action_controls = await device.get_action_controls(self._dev)
+            self._action_control_by_device_id[device.mqtt_id] = action_controls
+            changes.added.append(DeviceInfo(device.mqtt_id, device.name, polling_controls + action_controls))
 
         await self._device_publisher.rebuild(changes)
-
         for device in created_devices:
-            await register_common_handlers(device, self, self._device_publisher)
+            await self._device_publisher.register_control_handler(
+                device.mqtt_id,
+                "+",
+                self._handle_on_topic,
+            )
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
@@ -361,9 +360,41 @@ class ApplicationController:
 
         changes = DeviceChange(removed=removed_ids)
         for device in created_devices:
-            changes.added.append(DeviceInfo(device.mqtt_id, device.name, get_dali2_controls(device)))
+            polling_controls = await device.get_polling_controls(self._dev)
+            action_controls = await device.get_action_controls(self._dev)
+            self._action_control_by_device_id[device.mqtt_id] = action_controls
+            changes.added.append(DeviceInfo(device.mqtt_id, device.name, polling_controls + action_controls))
 
         await self._device_publisher.rebuild(changes)
+        for device in created_devices:
+            await self._device_publisher.register_control_handler(
+                device.mqtt_id,
+                "+",
+                self._handle_on_topic,
+            )
+
+    async def _handle_on_topic(self, message: mqtt.MQTTMessage) -> None:
+        device_id = message.topic.split("/")[2]
+        control_id = message.topic.split("/")[4]
+        payload = message.payload.decode("utf-8") if getattr(message, "payload", None) else ""
+
+        device = self._devices_by_mqtt_id.get(device_id)
+        if device is None:
+            return
+        if self._active_task:
+            if self._active_task_description == "polling":
+                self._active_task.cancel("command sent")
+        try:
+            await self._run_task(
+                ApplicationControllerState.GENERIC_TASK,
+                device.execute_control(self._dev, control_id, payload),
+                "sending command",
+                3.0,
+            )
+            await self._device_publisher.set_control_error(device_id, control_id, "")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
+            await self._device_publisher.set_control_error(device_id, control_id, "w")
 
     def _update_dali2_devices_instances(self, dali2_devices_by_addr: dict[int, Dali2Device]) -> None:
         for (addr, inst_num), inst_type in self._dev_inst_map.mapping.items():
@@ -393,7 +424,7 @@ class ApplicationController:
             self.logger.info("Polling loop cancelled")
             if not self._reschedule_polling_task:
                 raise
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
             await asyncio.sleep(1)
         finally:
@@ -404,31 +435,29 @@ class ApplicationController:
                 self._polling_task = asyncio.create_task(self._polling_loop())
 
     async def _poll_devices(self, devices: Sequence[DaliDevice]) -> None:
-        queries = build_polling_queries(devices)
-        if not queries:
-            return
-        batch_failed = False
-        try:
-            responses = await self._dev.send_commands(queries, source="polling")
-        except asyncio.TimeoutError:
-            self.logger.warning("Batch poll timeout")
-            responses = [None] * len(queries)
-            batch_failed = True
-        except Exception as e:
-            self.logger.error("Batch poll failed: %s", e)
-            responses = [None] * len(queries)
-            batch_failed = True
-
-        if not batch_failed:
-            for device, response in zip(devices, responses):
-                if response is None:
-                    self.logger.warning("No response during polling for device %s", device.name)
-
-        await publish_polling_results(
-            devices,
-            responses,
-            self._device_publisher,
-        )
+        queries = [device.poll_controls(self._dev) for device in devices]
+        responses = await asyncio.gather(*queries)
+        tasks = []
+        for device_responses in responses:
+            for response in device_responses:
+                if response.error is not None:
+                    tasks.append(
+                        self._device_publisher.set_control_error(response.device_id, response.control_id, "r")
+                    )
+                    continue
+                if response.title is not None:
+                    tasks.append(
+                        self._device_publisher.set_control_title(
+                            response.device_id, response.control_id, response.title
+                        )
+                    )
+                tasks.append(
+                    self._device_publisher.set_control_value(
+                        response.device_id, response.control_id, response.value
+                    )
+                )
+        if tasks:
+            await asyncio.gather(*tasks)
 
     def _run_websocket(self) -> None:
         self._websocket_task = asyncio.create_task(
@@ -486,17 +515,29 @@ class ApplicationController:
 
     def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:
         if isinstance(frame, ForwardFrame):
-            command = from_frame(frame, dev_inst_map=self._dev_inst_map)
+            incoming_command = from_frame(frame, dev_inst_map=self._dev_inst_map)
             if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
                 try:
-                    if isinstance(command, StartQuiescentMode):
+                    if isinstance(incoming_command, StartQuiescentMode):
                         asyncio.create_task(self._handle_start_quiescent_mode())
                         return
-                    if isinstance(command, StopQuiescentMode):
+                    if isinstance(incoming_command, StopQuiescentMode):
                         asyncio.create_task(self._handle_stop_quiescent_mode())
                         return
-                except Exception:
+                except Exception:  # pylint: disable=broad-exception-caught
                     pass  # Ignore errors in bus traffic handling
-            asyncio.create_task(
-                publish_dali2_event(command, self._dali2_devices_by_addr, self._mqtt_dispatcher.client)
-            )
+
+            if (
+                isinstance(incoming_command, _Event)
+                and incoming_command.instance_number is not None
+                and incoming_command.short_address is not None
+            ):
+                device = self._dali2_devices_by_addr.get(incoming_command.short_address.address)
+                if device is not None:
+                    instance = device.instances.get(incoming_command.instance_number)
+                    if instance is not None:
+                        asyncio.create_task(
+                            publish_dali2_event(
+                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client
+                            )
+                        )

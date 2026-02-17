@@ -1,6 +1,10 @@
 # Type 20 Demand response
 
+from dali.address import GearShort
+
+from .common_dali_device import MqttControl
 from .dali_parameters import NumberGearParam, TypeParameters
+from .device_publisher import ControlInfo
 from .gear.demand_response import (
     QueryLoadSheddingCondition,
     QueryReductionFactor1,
@@ -13,6 +17,8 @@ from .gear.demand_response import (
 )
 from .settings import SettingsParamName
 from .utils import add_enum, add_translations
+from .wbdali import WBDALIDriver
+from .wbmqtt import ControlMeta, TranslatedTitle
 
 
 class LoadSheddingConditionParam(NumberGearParam):
@@ -90,4 +96,26 @@ class Type20Parameters(TypeParameters):
             ReductionFactor1Param(),
             ReductionFactor2Param(),
             ReductionFactor3Param(),
+        ]
+
+    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+        return [
+            MqttControl(
+                control_info=ControlInfo(
+                    "load_shedding_condition",
+                    ControlMeta(
+                        title="Load Shedding Condition",
+                        read_only=True,
+                        enum={
+                            "0": TranslatedTitle("no reduction"),
+                            "1": TranslatedTitle("reduction factor 1"),
+                            "2": TranslatedTitle("reduction factor 2"),
+                            "3": TranslatedTitle("reduction factor 3"),
+                        },
+                    ),
+                    "0",
+                ),
+                query_builder=lambda short_address: QueryLoadSheddingCondition(GearShort(short_address)),
+                value_formatter=lambda response: str(response.value),
+            ),
         ]

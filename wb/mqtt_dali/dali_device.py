@@ -4,7 +4,12 @@ from typing import Optional
 from dali.address import GearShort
 from dali.sequences import QueryDeviceTypes
 
-from .common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from .common_dali_device import (
+    ControlPollResult,
+    DaliDeviceAddress,
+    DaliDeviceBase,
+    MqttControl,
+)
 from .dali_common_parameters import (
     FadeTimeFadeRateParam,
     GroupsParam,
@@ -15,6 +20,7 @@ from .dali_common_parameters import (
     SystemFailureLevelParam,
 )
 from .dali_compat import DaliCommandsCompatibilityLayer
+from .dali_controls import ACTION_CONTROLS, POLLING_CONTROLS
 from .dali_type1_parameters import Type1Parameters
 from .dali_type4_parameters import Type4Parameters
 from .dali_type5_parameters import Type5Parameters
@@ -64,12 +70,25 @@ class DaliDevice(DaliDeviceBase):
         )
         self.types: list[int] = []
 
-    async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        self.types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
-        if self.types is None:
-            raise RuntimeError(
-                f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
+        self._type8_handler: Optional[Type8Parameters] = None
+
+    async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
+        res = await super().poll_controls(driver)
+        if self._type8_handler is not None:
+            res.extend(
+                ControlPollResult(self.mqtt_id, control_id, value)
+                for control_id, value in (
+                    await self._type8_handler.poll_controls(driver, self.address.short)
+                ).items()
             )
+        return res
+
+    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
+        await self._read_types(driver)
+        return POLLING_CONTROLS + ACTION_CONTROLS
+
+    async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
+        await self._read_types(driver)
         res: list[SettingsParamBase] = [
             GroupsParam(),
             MaxLevelParam(),
@@ -85,13 +104,27 @@ class DaliDevice(DaliDeviceBase):
             DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(),
             DaliDeviceType.LED_MODULES: Type6Parameters(),
             DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
-            DaliDeviceType.COLOUR_CONTROL: Type8Parameters(),
             DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(),
             DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
         }
         for gear_type in self.types:
             try:
-                res.append(gear_type_params[DaliDeviceType(gear_type)])
+                dali_device_type = DaliDeviceType(gear_type)
+                if dali_device_type == DaliDeviceType.COLOUR_CONTROL:
+                    self._type8_handler = Type8Parameters()
+                    res.append(self._type8_handler)
+                else:
+                    res.append(gear_type_params[dali_device_type])
             except (ValueError, KeyError):
                 continue
         return res
+
+    async def _read_types(self, driver: WBDALIDriver) -> None:
+        if self.types:
+            return
+        types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
+        if types is None:
+            raise RuntimeError(
+                f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
+            )
+        self.types = types

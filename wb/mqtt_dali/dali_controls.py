@@ -1,12 +1,9 @@
-import asyncio
-from dataclasses import dataclass
-from typing import Callable, Iterable, Optional, Sequence
-
 from dali.address import GearShort
-from dali.command import Response
+from dali.command import Command, Response
 from dali.gear.general import (
     DAPC,
     Down,
+    GoToScene,
     Off,
     OnAndStepUp,
     QueryActualLevel,
@@ -19,30 +16,22 @@ from dali.gear.general import (
     Up,
 )
 
-from .dali_device import DaliDevice
-from .device_publisher import ControlInfo, DevicePublisher
+from .common_dali_device import MqttControl
+from .dali_common_parameters import SCENES_TOTAL
+from .device_publisher import ControlInfo
+from .wbmqtt import ControlMeta, TranslatedTitle
 
 
-@dataclass(frozen=True)
-class PollingControl:
-    control_id: str
-    title: str
-    default_value: str
-    query_builder: Callable[[DaliDevice], object]
-    value_formatter: Callable[[Response], str]
-    control_type: str = "value"
-
-
-def _build_actual_level_query(device: DaliDevice) -> QueryActualLevel:
-    return QueryActualLevel(GearShort(device.address.short))
+def _build_actual_level_query(short_address: int) -> QueryActualLevel:
+    return QueryActualLevel(GearShort(short_address))
 
 
 def _format_actual_level(response: Response) -> str:
     return str(response.raw_value.as_integer)
 
 
-def _build_error_status_query(device: DaliDevice) -> QueryStatus:
-    return QueryStatus(GearShort(device.address.short))
+def _build_error_status_query(short_address: int) -> QueryStatus:
+    return QueryStatus(GearShort(short_address))
 
 
 def _format_error_status(response: Response) -> str:
@@ -60,168 +49,79 @@ def _format_error_status(response: Response) -> str:
     return ", ".join(details)
 
 
-POLLING_CONTROLS: tuple[PollingControl, ...] = (
-    PollingControl(
-        control_id="actual_level",
-        title="Actual Level",
-        default_value="0",
+POLLING_CONTROLS: list[MqttControl] = [
+    MqttControl(
+        ControlInfo("actual_level", ControlMeta(title="Actual Level", read_only=True), "0"),
         query_builder=_build_actual_level_query,
         value_formatter=_format_actual_level,
-        control_type="value",
     ),
-    PollingControl(
-        control_id="error_status",
-        title="Error Status",
-        default_value="0",
+    MqttControl(
+        ControlInfo("error_status", ControlMeta("alarm", "Error Status", read_only=True), "0"),
         query_builder=_build_error_status_query,
         value_formatter=_format_error_status,
-        control_type="alarm",
     ),
-)
-
-
-def get_polling_control_count() -> int:
-    return len(POLLING_CONTROLS)
-
-
-PUSHBUTTON_CONTROLS: list[ControlInfo] = [
-    ControlInfo("off", "Off", "pushbutton"),
-    ControlInfo("up", "Up", "pushbutton"),
-    ControlInfo("down", "Down", "pushbutton"),
-    ControlInfo("step_up", "Step Up", "pushbutton"),
-    ControlInfo("step_down", "Step Down", "pushbutton"),
-    ControlInfo("recall_max_level", "Recall Max Level", "pushbutton"),
-    ControlInfo("recall_min_level", "Recall Min Level", "pushbutton"),
-    ControlInfo("step_down_and_off", "Step Down And Off", "pushbutton"),
-    ControlInfo("on_and_step_up", "On And Step Up", "pushbutton"),
-    ControlInfo("dapc", "Direct Arc Power Control", "text", value=""),
 ]
 
 
-def get_common_controls() -> list[ControlInfo]:
-    controls = [
+def handle_dapc(short_address: int, value: str) -> list[Command]:
+    try:
+        power = int(value, 0)
+    except ValueError:
+        power = value
+
+    return [DAPC(GearShort(short_address), power)]
+
+
+ACTION_CONTROLS: list[MqttControl] = [
+    MqttControl(
+        ControlInfo("off", ControlMeta("pushbutton", "Off")),
+        commands_builder=lambda short_address, _: [Off(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("up", ControlMeta("pushbutton", "Up")),
+        commands_builder=lambda short_address, _: [Up(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("down", ControlMeta("pushbutton", "Down")),
+        commands_builder=lambda short_address, _: [Down(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("step_up", ControlMeta("pushbutton", "Step Up")),
+        commands_builder=lambda short_address, _: [StepUp(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("step_down", ControlMeta("pushbutton", "Step Down")),
+        commands_builder=lambda short_address, _: [StepDown(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("recall_max_level", ControlMeta("pushbutton", "Recall Max Level")),
+        commands_builder=lambda short_address, _: [RecallMaxLevel(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("recall_min_level", ControlMeta("pushbutton", "Recall Min Level")),
+        commands_builder=lambda short_address, _: [RecallMinLevel(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("step_down_and_off", ControlMeta("pushbutton", "Step Down And Off")),
+        commands_builder=lambda short_address, _: [StepDownAndOff(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("on_and_step_up", ControlMeta("pushbutton", "On And Step Up")),
+        commands_builder=lambda short_address, _: [OnAndStepUp(GearShort(short_address))],
+    ),
+    MqttControl(
+        ControlInfo("dapc", ControlMeta("text", "Direct Arc Power Control"), ""),
+        commands_builder=handle_dapc,
+    ),
+    MqttControl(
         ControlInfo(
-            id=descriptor.control_id,
-            title=descriptor.title,
-            type=descriptor.control_type,
-            value=descriptor.default_value,
-            read_only=True,
-        )
-        for descriptor in POLLING_CONTROLS
-    ]
-    controls.extend(PUSHBUTTON_CONTROLS)
-    return controls
-
-
-async def register_common_handlers(
-    device: DaliDevice,
-    controller: "ApplicationController",
-    device_publisher: DevicePublisher,
-) -> None:
-    device_id = device.mqtt_id
-    short_addr = GearShort(device.address.short)
-
-    command_mapping = {
-        "off": Off,
-        "up": Up,
-        "down": Down,
-        "step_up": StepUp,
-        "step_down": StepDown,
-        "recall_max_level": RecallMaxLevel,
-        "recall_min_level": RecallMinLevel,
-        "step_down_and_off": StepDownAndOff,
-        "on_and_step_up": OnAndStepUp,
-    }
-
-    def make_handler(cmd_class):
-        async def handler(_msg):
-            await controller.send_command(cmd_class(short_addr))
-
-        return handler
-
-    async def handle_dapc(message) -> None:
-        payload = message.payload.decode("utf-8") if getattr(message, "payload", None) else ""
-        value_str = payload.strip()
-        try:
-            power = int(value_str, 0)
-        except ValueError:
-            power = value_str
-
-        try:
-            command = DAPC(short_addr, power)
-        except ValueError as exc:
-            controller.logger.warning("Invalid DAPC value '%s' for device %s: %s", value_str, device_id, exc)
-            await device_publisher.set_control_error(device_id, "dapc", "w")
-            return
-
-        await controller.send_command(command)
-        await device_publisher.set_control_value(device_id, "dapc", "")
-
-    handlers: dict[str, Callable] = {
-        control_id: make_handler(command_class) for control_id, command_class in command_mapping.items()
-    }
-    handlers["dapc"] = handle_dapc
-
-    await asyncio.gather(
-        *[
-            device_publisher.register_control_handler(device_id, control_id, handler)
-            for control_id, handler in handlers.items()
-        ]
-    )
-
-
-def build_polling_queries(devices: Iterable[DaliDevice]) -> list:
-    if not POLLING_CONTROLS:
-        return []
-    queries: list = []
-    for device in devices:
-        for descriptor in POLLING_CONTROLS:
-            queries.append(descriptor.query_builder(device))
-    return queries
-
-
-async def publish_polling_results(
-    devices: Sequence[DaliDevice],
-    responses: Sequence[Optional[Response]],
-    device_publisher: DevicePublisher,
-) -> None:
-    per_device = get_polling_control_count()
-    if per_device == 0:
-        return
-
-    tasks = []
-    response_iter = iter(responses)
-
-    for device in devices:
-        device_responses = [next(response_iter, None) for _ in range(per_device)]
-
-        for descriptor, response in zip(POLLING_CONTROLS, device_responses):
-            if response is None or response.raw_value is None:
-                tasks.append(device_publisher.set_control_error(device.mqtt_id, descriptor.control_id, "r"))
-                continue
-
-            if descriptor.control_type == "alarm":
-                alarm_title = descriptor.value_formatter(response)
-                alarm_active = "1" if getattr(response, "error", False) else "0"
-                tasks.append(
-                    device_publisher.set_control_title(device.mqtt_id, descriptor.control_id, alarm_title)
-                )
-                tasks.append(
-                    device_publisher.set_control_value(
-                        device.mqtt_id,
-                        descriptor.control_id,
-                        alarm_active,
-                    )
-                )
-                continue
-
-            tasks.append(
-                device_publisher.set_control_value(
-                    device.mqtt_id,
-                    descriptor.control_id,
-                    descriptor.value_formatter(response),
-                )
-            )
-
-    if tasks:
-        await asyncio.gather(*tasks)
+            "go_to_scene",
+            ControlMeta(
+                "Go To Scene",
+                enum={str(i): TranslatedTitle(str(i)) for i in range(SCENES_TOTAL)},
+            ),
+            "0",
+        ),
+        commands_builder=lambda short_address, value: [GoToScene(GearShort(short_address), int(value, 0))],
+    ),
+]

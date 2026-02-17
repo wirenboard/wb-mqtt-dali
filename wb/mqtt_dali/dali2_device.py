@@ -36,12 +36,18 @@ from dali.device.general import (
     SetPrimaryInstanceGroup,
 )
 
-from .common_dali_device import DaliDeviceBase
+from .common_dali_device import DaliDeviceBase, MqttControl
 from .dali2_compat import Dali2CommandsCompatibilityLayer
+from .dali2_controls import (
+    get_button_controls,
+    get_light_controls,
+    get_occupancy_controls,
+)
 from .dali2_type1_parameters import build_type1_push_button_parameters
 from .dali2_type3_parameters import build_type3_occupancy_sensor_parameters
 from .dali2_type4_parameters import build_type4_light_sensor_parameters
 from .dali_device import DaliDeviceAddress
+from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import (
     BooleanSettingsParam,
@@ -381,6 +387,9 @@ class Dali2Device(DaliDeviceBase):
         self.instances: dict[int, InstanceParameters] = {}
         self._gtin_db = gtin_db
 
+    def add_instance(self, index: int, instance_type: int) -> None:
+        self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
+
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         handlers: list[SettingsParamBase] = [
             DeviceGroupsParam(),
@@ -390,5 +399,13 @@ class Dali2Device(DaliDeviceBase):
         handlers.extend(self.instances.values())
         return handlers
 
-    def add_instance(self, index: int, instance_type: int) -> None:
-        self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
+    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
+        return_controls: list[MqttControl] = []
+        for instance in self.instances.values():
+            if instance.instance_type == occupancy.instance_type:
+                return_controls.extend(get_occupancy_controls(instance.instance_number.value))
+            elif instance.instance_type == light.instance_type:
+                return_controls.extend(get_light_controls(instance.instance_number.value))
+            elif instance.instance_type == pushbutton.instance_type:
+                return_controls.extend(get_button_controls(instance.instance_number.value))
+        return return_controls

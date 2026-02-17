@@ -2,8 +2,9 @@ import asyncio
 import json
 import logging
 import random
-from dataclasses import dataclass
-from typing import Any, Optional
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from typing import Any, Optional, Union
 
 import asyncio_mqtt as aiomqtt
 
@@ -11,11 +12,35 @@ from .mqtt_dispatcher import MQTTDispatcher
 
 
 @dataclass
+class TranslatedTitle:
+    en: Optional[str] = None
+    ru: Optional[str] = None
+
+    def is_empty(self) -> bool:
+        return not self.en and not self.ru
+
+
 class ControlMeta:
-    control_type: str = "value"
-    read_only: bool = False
-    title: Optional[str] = None
-    order: Optional[int] = None
+    def __init__(
+        self,
+        control_type: str = "value",
+        title: Optional[Union[str, TranslatedTitle]] = None,
+        read_only: bool = False,
+        order: Optional[int] = None,
+        enum: Optional[dict[str, TranslatedTitle]] = None,
+        minimum: Optional[Union[int, float]] = None,
+        maximum: Optional[Union[int, float]] = None,
+    ) -> None:
+        self.control_type = control_type
+        if isinstance(title, str):
+            self.title: Optional[TranslatedTitle] = TranslatedTitle(en=title)
+        else:
+            self.title: Optional[TranslatedTitle] = title
+        self.read_only = read_only
+        self.order = order
+        self.enum = enum
+        self.minimum = minimum
+        self.maximum = maximum
 
 
 @dataclass
@@ -25,12 +50,9 @@ class ControlState:
     error: Optional[str] = None
 
     def __post_init__(self):
-        self.meta = ControlMeta(
-            control_type=self.meta.control_type,
-            read_only=self.meta.read_only,
-            title=self.meta.title,
-            order=self.meta.order,
-        )
+        # meta can be changed during runtime with set_control_read_only and set_control_title,
+        # so we need to make a copy of it to not modify the original meta passed to the constructor
+        self.meta = deepcopy(self.meta)
 
 
 class Device:
@@ -39,13 +61,16 @@ class Device:
         mqtt_client: aiomqtt.Client,
         device_mqtt_name: str,
         driver_name: str,
-        device_title: Optional[str] = None,
+        device_title: Optional[Union[str, TranslatedTitle]] = None,
     ) -> None:
         self._mqtt_client = mqtt_client
         self._base_topic = f"/devices/{device_mqtt_name}"
         self._device_mqtt_name = device_mqtt_name
         self._driver_name = driver_name
-        self._device_title = device_title
+        if isinstance(device_title, str):
+            self._device_title: Optional[TranslatedTitle] = TranslatedTitle(en=device_title)
+        else:
+            self._device_title: Optional[TranslatedTitle] = device_title
         self._controls: dict[str, ControlState] = {}
         self._initialized = False
 
@@ -54,7 +79,7 @@ class Device:
         return set(self._controls.keys())
 
     @property
-    def title(self) -> Optional[str]:
+    def title(self) -> Optional[TranslatedTitle]:
         return self._device_title
 
     async def initialize(self) -> None:
@@ -116,11 +141,15 @@ class Device:
                 mqtt_control_name,
             )
 
-    async def set_control_title(self, mqtt_control_name: str, title: str) -> None:
+    async def set_control_title(self, mqtt_control_name: str, title: Union[str, TranslatedTitle]) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
-            if control.meta.title != title:
-                control.meta.title = title
+            if isinstance(title, str):
+                title_obj = TranslatedTitle(en=title)
+            else:
+                title_obj = title
+            if control.meta.title != title_obj:
+                control.meta.title = title_obj
                 await self._publish_control_meta(mqtt_control_name, control.meta)
         else:
             logging.debug("Can't set title of undeclared control %s", mqtt_control_name)
@@ -128,15 +157,21 @@ class Device:
     async def set_control_error(self, mqtt_control_name: str, error: str) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
-            control.error = error if error else None
-            error_topic = self._get_control_base_topic(mqtt_control_name) + "/meta/error"
-            await self._publish(error_topic, error if error else None)
+            error_to_set = error if error else None
+            if control.error != error_to_set:
+                control.error = error_to_set
+                error_topic = self._get_control_base_topic(mqtt_control_name) + "/meta/error"
+                await self._publish(error_topic, error_to_set)
         else:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
-    async def set_device_title(self, title: Optional[str]) -> None:
-        if self._device_title != title:
-            self._device_title = title
+    async def set_device_title(self, title: Optional[Union[str, TranslatedTitle]]) -> None:
+        if isinstance(title, str):
+            title_obj = TranslatedTitle(en=title)
+        else:
+            title_obj = title
+        if self._device_title != title_obj:
+            self._device_title = title_obj
             await self._publish_device_meta()
 
     def _get_control_base_topic(self, mqtt_control_name: str) -> str:
@@ -146,8 +181,8 @@ class Device:
         meta_dict: dict[str, Any] = {
             "driver": self._driver_name,
         }
-        if self._device_title is not None:
-            meta_dict["title"] = {"en": self._device_title}
+        if self._device_title is not None and not self._device_title.is_empty():
+            meta_dict["title"] = asdict(self._device_title)
         meta_json = json.dumps(meta_dict)
         await self._publish(self._base_topic + "/meta", meta_json)
 
@@ -156,11 +191,25 @@ class Device:
             "type": meta.control_type,
             "readonly": meta.read_only,
         }
-        if meta.title is not None:
-            meta_dict["title"] = {"en": meta.title}
+        if meta.title is not None and not meta.title.is_empty():
+            meta_dict["title"] = asdict(meta.title)
         if meta.order is not None:
             meta_dict["order"] = meta.order
-
+        if meta.minimum is not None:
+            meta_dict["min"] = meta.minimum
+        if meta.maximum is not None:
+            meta_dict["max"] = meta.maximum
+        if meta.enum is not None:
+            enum = {}
+            for key, value in meta.enum.items():
+                if not value.is_empty():
+                    translations = {}
+                    for lang, translation in asdict(value).items():
+                        if translation:
+                            translations[lang] = translation
+                    enum[key] = translations
+            if enum:
+                meta_dict["enum"] = enum
         if meta_dict:
             meta_json = json.dumps(meta_dict)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", meta_json)

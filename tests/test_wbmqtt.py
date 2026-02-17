@@ -9,6 +9,7 @@ from wb.mqtt_dali.wbmqtt import (
     ControlMeta,
     ControlState,
     Device,
+    TranslatedTitle,
     remove_topics_by_driver,
     retain_hack,
 )
@@ -106,14 +107,14 @@ class TestControlMeta:
 
     def test_full_initialization(self):
         meta = ControlMeta(title="Test Control", control_type="switch", order=1, read_only=True)
-        assert meta.title == "Test Control"
+        assert meta.title.en == "Test Control"
         assert meta.control_type == "switch"
         assert meta.order == 1
         assert meta.read_only is True
 
     def test_partial_initialization(self):
         meta = ControlMeta(title="Partial", order=5)
-        assert meta.title == "Partial"
+        assert meta.title.en == "Partial"
         assert meta.control_type == "value"
         assert meta.order == 5
         assert meta.read_only is False
@@ -121,22 +122,33 @@ class TestControlMeta:
 
 class TestControlState:
     def test_initialization(self):
-        meta = ControlMeta(title="Test", control_type="text", order=2, read_only=True)
+        meta = ControlMeta(
+            title="Test",
+            control_type="text",
+            order=2,
+            read_only=True,
+            enum={"100": TranslatedTitle("aaa")},
+            minimum=200,
+            maximum=100,
+        )
         state = ControlState(meta, "test_value")
 
         assert state.value == "test_value"
-        assert state.meta.title == "Test"
+        assert state.meta.title.en == "Test"
         assert state.meta.control_type == "text"
         assert state.meta.order == 2
         assert state.meta.read_only is True
+        assert state.meta.enum == {"100": TranslatedTitle("aaa")}
+        assert state.meta.minimum == 200
+        assert state.meta.maximum == 100
 
     def test_meta_is_copied(self):
         meta = ControlMeta(title="Original")
         state = ControlState(meta, "value")
 
-        meta.title = "Modified"
+        meta.title.en = "Modified"
 
-        assert state.meta.title == "Original"
+        assert state.meta.title.en == "Original"
 
 
 class TestDevice:
@@ -146,7 +158,7 @@ class TestDevice:
         await device.initialize()
 
         assert device._base_topic == "/devices/test_device"
-        assert device._device_title == "Test Device"
+        assert device._device_title.en == "Test Device"
         assert device._driver_name == "test_driver"
         assert len(device._controls) == 0
 
@@ -172,7 +184,7 @@ class TestDevice:
 
         assert "ctrl1" in device._controls
         assert device._controls["ctrl1"].value == "1"
-        assert device._controls["ctrl1"].meta.title == "Test Control"
+        assert device._controls["ctrl1"].meta.title.en == "Test Control"
         assert device._controls["ctrl1"].meta.control_type == "switch"
 
         assert mock_client.publish.call_count == 2
@@ -272,7 +284,7 @@ class TestDevice:
 
         await device.set_control_title("ctrl1", "New Title")
 
-        assert device._controls["ctrl1"].meta.title == "New Title"
+        assert device._controls["ctrl1"].meta.title.en == "New Title"
         assert mock_client.publish.call_count == 1
 
     @pytest.mark.asyncio
@@ -427,7 +439,15 @@ class TestDevice:
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
-        meta = ControlMeta(title="Full Control", control_type="temperature", order=3, read_only=True)
+        meta = ControlMeta(
+            title="Full Control",
+            control_type="temperature",
+            order=3,
+            read_only=True,
+            enum={"100": TranslatedTitle("aaa")},
+            minimum=200,
+            maximum=100,
+        )
         await device.create_control("ctrl1", meta, "25")
 
         meta_calls = [
@@ -442,6 +462,9 @@ class TestDevice:
         assert meta_json["readonly"] is True
         assert meta_json["title"]["en"] == "Full Control"
         assert meta_json["order"] == 3
+        assert meta_json["enum"] == {"100": {"en": "aaa"}}
+        assert meta_json["min"] == 200
+        assert meta_json["max"] == 100
 
     @pytest.mark.asyncio
     async def test_publish_control_meta_minimal(self, mock_client):

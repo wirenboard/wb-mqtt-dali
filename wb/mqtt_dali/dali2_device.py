@@ -47,7 +47,6 @@ from .dali2_type1_parameters import build_type1_push_button_parameters
 from .dali2_type3_parameters import build_type3_occupancy_sensor_parameters
 from .dali2_type4_parameters import build_type4_light_sensor_parameters
 from .dali_device import DaliDeviceAddress
-from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import (
     BooleanSettingsParam,

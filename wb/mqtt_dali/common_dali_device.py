@@ -36,9 +36,8 @@ class MqttControl:
 
 @dataclass
 class ControlPollResult:
-    device_id: str
     control_id: str
-    value: str
+    value: Optional[str] = None
     error: Optional[str] = None
     title: Optional[str] = None
 
@@ -301,11 +300,7 @@ class DaliDeviceBase:
         res = []
         for descriptor, response in zip(self._polling_controls, responses):
             if response is None or response.raw_value is None or response.raw_value.error:
-                res.append(
-                    ControlPollResult(
-                        device_id=self.mqtt_id, control_id=descriptor.control_info.id, value="", error="r"
-                    )
-                )
+                res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
                 continue
 
             if descriptor.control_info.meta.control_type == "alarm":
@@ -313,7 +308,6 @@ class DaliDeviceBase:
                 alarm_active = "1" if getattr(response, "error", False) else "0"
                 res.append(
                     ControlPollResult(
-                        device_id=self.mqtt_id,
                         control_id=descriptor.control_info.id,
                         value=alarm_active,
                         title=alarm_title,
@@ -323,7 +317,6 @@ class DaliDeviceBase:
 
             res.append(
                 ControlPollResult(
-                    device_id=self.mqtt_id,
                     control_id=descriptor.control_info.id,
                     value=descriptor.value_formatter(response),
                 )

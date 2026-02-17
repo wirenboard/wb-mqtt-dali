@@ -40,7 +40,7 @@ from dali.gear.general import (
     SetSystemFailureLevel,
 )
 
-from .common_dali_device import MqttControl
+from .common_dali_device import ControlPollResult, MqttControl
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
@@ -654,14 +654,14 @@ class Type8Parameters(TypeParameters):
                     ControlInfo(
                         "current_rgb",
                         ControlMeta(title="Current RGB", read_only=True),
-                        "",
+                        "0;0;0",
                     ),
                 ),
                 MqttControl(
                     ControlInfo(
                         "current_white",
                         ControlMeta(title="Current White", read_only=True),
-                        "",
+                        "0",
                     ),
                 ),
                 MqttControl(
@@ -701,14 +701,14 @@ class Type8Parameters(TypeParameters):
                     ControlInfo(
                         "current_colour_temperature",
                         ControlMeta(title="Colour Temperature", read_only=True),
-                        "",
+                        "0",
                     ),
                 ),
                 MqttControl(
                     ControlInfo(
                         "colour_temperature_step_warmer",
-                        ControlMeta(title="Colour Temperature Step Warmer"),
-                        "",
+                        ControlMeta("pushbutton", "Colour Temperature Step Warmer"),
+                        "0",
                     ),
                     commands_builder=lambda short_address, _: [
                         ColourTemperatureTcStepWarmer(GearShort(short_address))
@@ -717,8 +717,8 @@ class Type8Parameters(TypeParameters):
                 MqttControl(
                     ControlInfo(
                         "colour_temperature_step_cooler",
-                        ControlMeta(title="Colour Temperature Step Cooler"),
-                        "",
+                        ControlMeta("pushbutton", "Colour Temperature Step Cooler"),
+                        "0",
                     ),
                     commands_builder=lambda short_address, _: [
                         ColourTemperatureTcStepCooler(GearShort(short_address))
@@ -748,16 +748,17 @@ class Type8Parameters(TypeParameters):
                     Activate(GearShort(short_address)),
                 ]
 
-            res = [
-                MqttControl(
-                    ControlInfo(
-                        "current_colour",
-                        ControlMeta(title="Current Colour", read_only=True),
-                        "",
-                    ),
-                ),
-            ]
+            res = []
             for i in range(6):
+                res.append(
+                    MqttControl(
+                        ControlInfo(
+                            "current_primary_n{i}",
+                            ControlMeta(title=f"Current Primary N{i}", read_only=True),
+                            "0",
+                        ),
+                    ),
+                )
                 res.append(
                     MqttControl(
                         ControlInfo(
@@ -799,45 +800,45 @@ class Type8Parameters(TypeParameters):
                     ControlInfo(
                         "current_x_coordinate",
                         ControlMeta(title="Current X Coordinate", read_only=True),
-                        "",
+                        "0",
                     ),
                 ),
                 MqttControl(
                     ControlInfo(
                         "current_y_coordinate",
                         ControlMeta(title="Current Y Coordinate", read_only=True),
-                        "",
+                        "0",
                     ),
                 ),
                 MqttControl(
                     ControlInfo(
                         "x_coordinate_step_up",
-                        ControlMeta(title="X Coordinate Step Up"),
-                        "",
+                        ControlMeta("pushbutton", "X Coordinate Step Up"),
+                        "0",
                     ),
                     commands_builder=lambda short_address, _: [XCoordinateStepUp(GearShort(short_address))],
                 ),
                 MqttControl(
                     ControlInfo(
                         "x_coordinate_step_down",
-                        ControlMeta(title="X Coordinate Step Down"),
-                        "",
+                        ControlMeta("pushbutton", "X Coordinate Step Down"),
+                        "0",
                     ),
                     commands_builder=lambda short_address, _: [XCoordinateStepDown(GearShort(short_address))],
                 ),
                 MqttControl(
                     ControlInfo(
                         "y_coordinate_step_up",
-                        ControlMeta(title="Y Coordinate Step Up"),
-                        "",
+                        ControlMeta("pushbutton", "Y Coordinate Step Up"),
+                        "0",
                     ),
                     commands_builder=lambda short_address, _: [YCoordinateStepUp(GearShort(short_address))],
                 ),
                 MqttControl(
                     ControlInfo(
                         "y_coordinate_step_down",
-                        ControlMeta(title="Y Coordinate Step Down"),
-                        "",
+                        ControlMeta("pushbutton", "Y Coordinate Step Down"),
+                        "0",
                     ),
                     commands_builder=lambda short_address, _: [YCoordinateStepDown(GearShort(short_address))],
                 ),
@@ -861,48 +862,80 @@ class Type8Parameters(TypeParameters):
 
         return []
 
-    async def poll_controls(self, driver: WBDALIDriver, short_address: int) -> dict[str, str]:
+    async def poll_controls(self, driver: WBDALIDriver, short_address: int) -> list[ControlPollResult]:
         """
         Poll controls that require multiple commands to get their value, like current colour.
         Return a dict with control names and their values, e.g. {"current_rgb": "1;2;3"}
         """
 
         if self._current_colour_type is None:
-            raise RuntimeError("Current colour type is not known, cannot poll colour controls")
+            return {}
         address = GearShort(short_address)
-        resp = await driver.run_sequence(
-            query_colour_with_level(
-                address, QueryActualLevel(address), ACTUAL_LEVEL_COLOUR_TAGS, self._current_colour_type
+        set_error = False
+        try:
+            resp = await driver.run_sequence(
+                query_colour_with_level(
+                    address, QueryActualLevel(address), ACTUAL_LEVEL_COLOUR_TAGS, self._current_colour_type
+                )
             )
-        )
-        if resp is None:
-            raise RuntimeError("Error reading colour components")
-        if resp.colour_type != self._current_colour_type:
-            raise RuntimeError("Colour type changed, controls need to be updated")
-        if resp.colour_type == ColourType.RGBWAF:
-            return {
-                "current_rgb": ";".join(
-                    getattr(resp.colour, colour.value) for colour in RGBW_COLOUR_COMPONENTS
+        except Exception:
+            set_error = True
+        if not set_error and resp.colour_type != self._current_colour_type:
+            set_error = True
+        if self._current_colour_type == ColourType.RGBWAF:
+            return [
+                ControlPollResult(
+                    "current_rgb",
+                    (
+                        None
+                        if set_error
+                        else ";".join(
+                            str(getattr(resp.colour, colour.value)) for colour in RGBW_COLOUR_COMPONENTS
+                        )
+                    ),
+                    error="r" if set_error else None,
                 ),
-                "current_white": str(resp.colour.white),
-            }
+                ControlPollResult(
+                    "current_white",
+                    None if set_error else str(resp.colour.white),
+                    error="r" if set_error else None,
+                ),
+            ]
 
-        if resp.colour_type == ColourType.COLOUR_TEMPERATURE:
-            return {"current_colour_temperature": str(resp.colour.tc)}
+        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+            return [
+                ControlPollResult(
+                    "current_colour_temperature",
+                    None if set_error else str(resp.colour.tc),
+                    error="r" if set_error else None,
+                )
+            ]
 
-        if resp.colour_type == ColourType.PRIMARY_N:
-            return {
-                f"current_primary_n{i}": str(getattr(resp.colour, f"primary_n{i}"))
+        if self._current_colour_type == ColourType.PRIMARY_N:
+            return [
+                ControlPollResult(
+                    f"current_primary_n{i}",
+                    None if set_error else str(getattr(resp.colour, f"primary_n{i}")),
+                    error="r" if set_error else None,
+                )
                 for i, _ in enumerate(PRIMARY_N_COLOUR_COMPONENTS)
-            }
+            ]
 
-        if resp.colour_type == ColourType.XY:
-            return {
-                "current_x_coordinate": str(resp.colour.x_coordinate),
-                "current_y_coordinate": str(resp.colour.y_coordinate),
-            }
+        if self._current_colour_type == ColourType.XY:
+            return [
+                ControlPollResult(
+                    "current_x_coordinate",
+                    None if set_error else str(resp.colour.x_coordinate),
+                    error="r" if set_error else None,
+                ),
+                ControlPollResult(
+                    "current_y_coordinate",
+                    None if set_error else str(resp.colour.y_coordinate),
+                    error="r" if set_error else None,
+                ),
+            ]
 
-        return {}
+        return []
 
     async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: int) -> ColourType:
         res = await query_request(driver, QueryColourStatus(GearShort(short_address)))

@@ -82,12 +82,7 @@ class DaliDevice(DaliDeviceBase):
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         res = await super().poll_controls(driver)
         if self._type8_handler is not None:
-            res.extend(
-                ControlPollResult(self.mqtt_id, control_id, value)
-                for control_id, value in (
-                    await self._type8_handler.poll_controls(driver, self.address.short)
-                ).items()
-            )
+            res.extend(await self._type8_handler.poll_controls(driver, self.address.short))
         return res
 
     async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:

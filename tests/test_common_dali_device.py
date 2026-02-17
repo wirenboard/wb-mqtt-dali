@@ -434,7 +434,6 @@ async def test_poll_controls_returns_error_when_response_is_none():
     d._update_mqtt_controls_list.assert_awaited_once_with(driver)
     driver.send_commands.assert_awaited_once_with(["Q1"], source="polling")
     assert len(res) == 1
-    assert res[0].device_id == "dev_custom"
     assert res[0].control_id == "c1"
     assert res[0].value == ""
     assert res[0].error == "r"
@@ -526,7 +525,6 @@ async def test_poll_controls_formats_regular_control_value():
     control.query_builder.assert_called_once_with(d.address.short)
     control.value_formatter.assert_called_once_with(response)
     assert len(res) == 1
-    assert res[0].device_id == "dev42"
     assert res[0].control_id == "brightness"
     assert res[0].value == "77"
     assert res[0].error is None

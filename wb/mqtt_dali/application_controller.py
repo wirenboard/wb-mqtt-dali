@@ -215,6 +215,8 @@ class ApplicationController:
                 self._handle_on_topic,
             )
             await self._device_publisher.remove_device(old_mqtt_id)
+            self._devices_by_mqtt_id.pop(old_mqtt_id, None)
+            self._devices_by_mqtt_id[new_mqtt_id] = device
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
@@ -433,26 +435,30 @@ class ApplicationController:
 
     async def _poll_devices(self, devices: Sequence[DaliDevice]) -> None:
         queries = [device.poll_controls(self._dev) for device in devices]
-        responses = await asyncio.gather(*queries)
+        responses = await asyncio.gather(*queries, return_exceptions=True)
         tasks = []
-        for device_responses in responses:
+        for device_responses, device in zip(responses, devices):
+            if isinstance(device_responses, BaseException):
+                self.logger.warning("Error polling device %s", device.name)
+                continue
             for response in device_responses:
                 if response.error is not None:
                     tasks.append(
-                        self._device_publisher.set_control_error(response.device_id, response.control_id, "r")
+                        self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
                     )
                     continue
                 if response.title is not None:
                     tasks.append(
                         self._device_publisher.set_control_title(
-                            response.device_id, response.control_id, response.title
+                            device.mqtt_id, response.control_id, response.title
                         )
                     )
-                tasks.append(
-                    self._device_publisher.set_control_value(
-                        response.device_id, response.control_id, response.value
+                if response.value is not None:
+                    tasks.append(
+                        self._device_publisher.set_control_value(
+                            device.mqtt_id, response.control_id, response.value
+                        )
                     )
-                )
         if tasks:
             await asyncio.gather(*tasks)
 

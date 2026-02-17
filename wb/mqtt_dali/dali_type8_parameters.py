@@ -753,7 +753,7 @@ class Type8Parameters(TypeParameters):
                 res.append(
                     MqttControl(
                         ControlInfo(
-                            "current_primary_n{i}",
+                            f"current_primary_n{i}",
                             ControlMeta(title=f"Current Primary N{i}", read_only=True),
                             "0",
                         ),
@@ -865,11 +865,11 @@ class Type8Parameters(TypeParameters):
     async def poll_controls(self, driver: WBDALIDriver, short_address: int) -> list[ControlPollResult]:
         """
         Poll controls that require multiple commands to get their value, like current colour.
-        Return a dict with control names and their values, e.g. {"current_rgb": "1;2;3"}
+        Return a list of ControlPollResult objects, e.g. [ControlPollResult("current_rgb", "1;2;3")].
         """
 
         if self._current_colour_type is None:
-            return {}
+            return []
         address = GearShort(short_address)
         set_error = False
         try:

@@ -282,7 +282,7 @@ class DaliDeviceBase:
         await self._apply_common_parameters(driver, new_values)
 
     async def get_mqtt_controls(self, driver: WBDALIDriver) -> list[ControlInfo]:
-        await self._get_mqtt_controls(driver)
+        await self._update_mqtt_controls_list(driver)
         return [descriptor.control_info for descriptor in self._controls.values()]
 
     async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:

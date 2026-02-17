@@ -207,7 +207,8 @@ class Device:
                     for lang, translation in asdict(value).items():
                         if translation:
                             translations[lang] = translation
-                    enum[key] = translations
+                    if translations:
+                        enum[key] = translations
             if enum:
                 meta_dict["enum"] = enum
         if meta_dict:

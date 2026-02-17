@@ -354,7 +354,7 @@ class DaliDeviceBase:
                 for control in controls:
                     if control.query_builder is not None and control.value_formatter is not None:
                         self._polling_controls.append(control)
-                        self._controls[control.control_info.id] = control
+                    self._controls[control.control_info.id] = control
 
     # Must be implemented by subclasses
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:

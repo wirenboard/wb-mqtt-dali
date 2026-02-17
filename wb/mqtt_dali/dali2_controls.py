@@ -12,90 +12,105 @@ from dali.device.pushbutton import (
     ShortPress,
 )
 
+from .common_dali_device import MqttControl
 from .device_publisher import ControlInfo
 from .wbmqtt import ControlMeta
 
 
-def get_occupancy_controls(instance_index: int) -> list[ControlInfo]:
+def get_occupancy_controls(instance_index: int) -> list[MqttControl]:
     return [
-        ControlInfo(
-            id=f"occupied{instance_index}",
-            meta=ControlMeta(
-                "switch",
-                f"Occupied {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 2,
-            ),
-            value="0",
+        MqttControl(
+            ControlInfo(
+                id=f"occupied{instance_index}",
+                meta=ControlMeta(
+                    "switch",
+                    f"Occupied {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 2,
+                ),
+                value="0",
+            )
         ),
-        ControlInfo(
-            id=f"movement{instance_index}",
-            meta=ControlMeta(
-                "switch",
-                f"Movement {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 3,
-            ),
-            value="0",
+        MqttControl(
+            ControlInfo(
+                id=f"movement{instance_index}",
+                meta=ControlMeta(
+                    "switch",
+                    f"Movement {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 3,
+                ),
+                value="0",
+            )
         ),
     ]
 
 
-def get_light_controls(instance_index: int) -> list[ControlInfo]:
+def get_light_controls(instance_index: int) -> list[MqttControl]:
     return [
-        ControlInfo(
-            id=f"illuminance{instance_index}",
-            meta=ControlMeta(
-                title=f"Illuminance {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 1,
+        MqttControl(
+            ControlInfo(
+                id=f"illuminance{instance_index}",
+                meta=ControlMeta(
+                    title=f"Illuminance {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
             ),
-            value="0",
-        ),
+        )
     ]
 
 
-def get_button_controls(instance_index: int) -> list[ControlInfo]:
+def get_button_controls(instance_index: int) -> list[MqttControl]:
     return [
-        ControlInfo(
-            id=f"button{instance_index}",
-            meta=ControlMeta(
-                "switch",
-                f"Button {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 1,
-            ),
-            value="0",
+        MqttControl(
+            ControlInfo(
+                id=f"button{instance_index}",
+                meta=ControlMeta(
+                    "switch",
+                    f"Button {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            )
         ),
-        ControlInfo(
-            id=f"button{instance_index}",
-            meta=ControlMeta(
-                "switch",
-                f"Long Press {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 2,
-            ),
-            value="0",
+        MqttControl(
+            ControlInfo(
+                id=f"long_press{instance_index}",
+                meta=ControlMeta(
+                    "switch",
+                    f"Long Press {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 2,
+                ),
+                value="0",
+            )
         ),
-        ControlInfo(
-            id=f"short_press{instance_index}",
-            meta=ControlMeta(
-                "pushbutton",
-                f"Short Press {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 3,
-            ),
-            value="0",
+        MqttControl(
+            ControlInfo(
+                id=f"short_press{instance_index}",
+                meta=ControlMeta(
+                    "pushbutton",
+                    f"Short Press {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 3,
+                ),
+                value="0",
+            )
         ),
-        ControlInfo(
-            id=f"double_press{instance_index}",
-            meta=ControlMeta(
-                "pushbutton",
-                f"Double Press {instance_index}",
-                read_only=True,
-                order=instance_index * 10 + 4,
-            ),
-            value="0",
+        MqttControl(
+            ControlInfo(
+                id=f"double_press{instance_index}",
+                meta=ControlMeta(
+                    "pushbutton",
+                    f"Double Press {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 4,
+                ),
+                value="0",
+            )
         ),
     ]
 

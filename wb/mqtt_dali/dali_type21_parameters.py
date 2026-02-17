@@ -20,7 +20,7 @@ def _format_failure_status(value: Response) -> str:
     return "0"
 
 
-class Type49Parameters(TypeParameters):
+class Type21Parameters(TypeParameters):
 
     async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
         return [

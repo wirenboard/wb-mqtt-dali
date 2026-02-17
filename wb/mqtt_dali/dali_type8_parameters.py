@@ -575,25 +575,6 @@ class ScenesSettings(SettingsParamBase):
         return schema
 
 
-def _set_rgb_commands_builder(short_address: int, value: str) -> list[command.Command]:
-    components = value.split(";")
-    if len(components) != 3:
-        raise ValueError("RGB value must be in format 'R;G;B'")
-    try:
-        red, green, blue = (int(c) for c in components)
-    except ValueError as e:
-        raise ValueError("RGB components must be integers") from e
-    return set_rgb_commands_builder(GearShort(short_address), red, green, blue)
-
-
-def _set_white_commands_builder(short_address: int, value: str) -> list[command.Command]:
-    try:
-        white = int(value)
-    except ValueError as e:
-        raise ValueError("white component must be integer") from e
-    return set_waf_commands_builder(GearShort(short_address), white, MASK, MASK)
-
-
 class Type8Parameters(TypeParameters):
     def __init__(self) -> None:
         super().__init__()

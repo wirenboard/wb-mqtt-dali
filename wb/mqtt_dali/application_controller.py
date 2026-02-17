@@ -15,7 +15,7 @@ from .commissioning import Commissioning, CommissioningResult
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_device import DaliDevice
-from .device_publisher import ControlInfo, DeviceChange, DeviceInfo, DevicePublisher
+from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
@@ -93,8 +93,6 @@ class ApplicationController:
 
         self._gtin_db = gtin_db
 
-        self._action_control_by_device_id: dict[str, list[ControlInfo]] = {}
-
     @property
     def polling_interval(self) -> float:
         return self._polling_interval
@@ -123,10 +121,7 @@ class ApplicationController:
 
         await self._device_publisher.initialize()
         for device in self.dali_devices + self.dali2_devices:
-            action_controls = await device.get_action_controls(self._dev)
-            controls = await device.get_polling_controls(self._dev) + action_controls
-            device_info = DeviceInfo(device.mqtt_id, device.name, controls)
-            self._action_control_by_device_id[device.mqtt_id] = action_controls
+            device_info = DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
             await self._device_publisher.add_device(device_info)
 
         self._polling_task = asyncio.create_task(self._polling_loop())
@@ -208,22 +203,18 @@ class ApplicationController:
 
         new_mqtt_id = device.mqtt_id
         if old_mqtt_id != new_mqtt_id:
-            polling_controls = await device.get_polling_controls(self._dev)
-            action_controls = await device.get_action_controls(self._dev)
             device_info = DeviceInfo(
                 new_mqtt_id,
                 device.name,
-                polling_controls + action_controls,
+                await device.get_mqtt_controls(self._dev),
             )
             await self._device_publisher.add_device(device_info)
-            self._action_control_by_device_id[device.mqtt_id] = action_controls
             await self._device_publisher.register_control_handler(
                 device.mqtt_id,
                 "+",
                 self._handle_on_topic,
             )
             await self._device_publisher.remove_device(old_mqtt_id)
-            self._action_control_by_device_id.pop(old_mqtt_id, None)
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
@@ -321,12 +312,15 @@ class ApplicationController:
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
 
+        for removed_id in removed_ids:
+            self._devices_by_mqtt_id.pop(removed_id, None)
+        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
+
         changes = DeviceChange(removed=removed_ids)
         for device in created_devices:
-            polling_controls = await device.get_polling_controls(self._dev)
-            action_controls = await device.get_action_controls(self._dev)
-            self._action_control_by_device_id[device.mqtt_id] = action_controls
-            changes.added.append(DeviceInfo(device.mqtt_id, device.name, polling_controls + action_controls))
+            changes.added.append(
+                DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
+            )
 
         await self._device_publisher.rebuild(changes)
         for device in created_devices:
@@ -352,6 +346,10 @@ class ApplicationController:
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
+        for removed_id in removed_ids:
+            self._devices_by_mqtt_id.pop(removed_id, None)
+        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
+
         if self.dali2_devices:
             await self._dev_inst_map.async_autodiscover(
                 self._dev, [d.address.short for d in self.dali2_devices]
@@ -360,10 +358,9 @@ class ApplicationController:
 
         changes = DeviceChange(removed=removed_ids)
         for device in created_devices:
-            polling_controls = await device.get_polling_controls(self._dev)
-            action_controls = await device.get_action_controls(self._dev)
-            self._action_control_by_device_id[device.mqtt_id] = action_controls
-            changes.added.append(DeviceInfo(device.mqtt_id, device.name, polling_controls + action_controls))
+            changes.added.append(
+                DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
+            )
 
         await self._device_publisher.rebuild(changes)
         for device in created_devices:

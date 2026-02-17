@@ -1,3 +1,4 @@
+import asyncio
 from enum import IntEnum
 from typing import Optional
 
@@ -20,15 +21,19 @@ from .dali_common_parameters import (
     SystemFailureLevelParam,
 )
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_controls import ACTION_CONTROLS, POLLING_CONTROLS
+from .dali_controls import CONTROLS
+from .dali_parameters import TypeParameters
 from .dali_type1_parameters import Type1Parameters
 from .dali_type4_parameters import Type4Parameters
 from .dali_type5_parameters import Type5Parameters
 from .dali_type6_parameters import Type6Parameters
 from .dali_type7_parameters import Type7Parameters
 from .dali_type8_parameters import Type8Parameters
+from .dali_type16_parameters import Type16Parameters
 from .dali_type17_parameters import Type17Parameters
 from .dali_type20_parameters import Type20Parameters
+from .dali_type21_parameters import Type21Parameters
+from .dali_type49_parameters import Type49Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
 from .wbdali import WBDALIDriver
@@ -71,6 +76,8 @@ class DaliDevice(DaliDeviceBase):
         self.types: list[int] = []
 
         self._type8_handler: Optional[Type8Parameters] = None
+        self._types_lock = asyncio.Lock()
+        self._type_handlers: list[TypeParameters] = []
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         res = await super().poll_controls(driver)
@@ -85,7 +92,11 @@ class DaliDevice(DaliDeviceBase):
 
     async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
         await self._read_types(driver)
-        return POLLING_CONTROLS + ACTION_CONTROLS
+        res = []
+        res.extend(CONTROLS)
+        for type_handler in self._type_handlers:
+            res.extend(await type_handler.get_mqtt_controls(driver, self.address.short))
+        return res
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         await self._read_types(driver)
@@ -98,33 +109,42 @@ class DaliDevice(DaliDeviceBase):
         # Colour control has own scenes, power on level and system failure level parameters
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
             res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
-        gear_type_params = {
-            DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
-            DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(),
-            DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(),
-            DaliDeviceType.LED_MODULES: Type6Parameters(),
-            DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
-            DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(),
-            DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
-        }
-        for gear_type in self.types:
-            try:
-                dali_device_type = DaliDeviceType(gear_type)
-                if dali_device_type == DaliDeviceType.COLOUR_CONTROL:
-                    self._type8_handler = Type8Parameters()
-                    res.append(self._type8_handler)
-                else:
-                    res.append(gear_type_params[dali_device_type])
-            except (ValueError, KeyError):
-                continue
+        for type_handler in self._type_handlers:
+            res.append(type_handler)
         return res
 
     async def _read_types(self, driver: WBDALIDriver) -> None:
-        if self.types:
-            return
-        types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
-        if types is None:
-            raise RuntimeError(
-                f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
-            )
-        self.types = types
+        async with self._types_lock:
+            if self.types:
+                return
+            types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
+            if types is None:
+                raise RuntimeError(
+                    f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
+                )
+            self.types = types
+
+            gear_type_params = {
+                DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
+                DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(),
+                DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(),
+                DaliDeviceType.LED_MODULES: Type6Parameters(),
+                DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
+                DaliDeviceType.THERMAL_GEAR_PROTECTION: Type16Parameters(),
+                DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(),
+                DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
+                DaliDeviceType.THERMAL_LAMP_PROTECTION: Type21Parameters(),
+                DaliDeviceType.INTEGRATED_POWER_SUPPLY: Type49Parameters(),
+            }
+            self._type_handlers = []
+            for gear_type in types:
+                try:
+                    dali_device_type = DaliDeviceType(gear_type)
+                    if dali_device_type == DaliDeviceType.COLOUR_CONTROL:
+                        self._type8_handler = Type8Parameters()
+                        type_handler = self._type8_handler
+                    else:
+                        type_handler = gear_type_params[dali_device_type]
+                    self._type_handlers.append(type_handler)
+                except (ValueError, KeyError):
+                    continue

@@ -49,7 +49,16 @@ def _format_error_status(response: Response) -> str:
     return ", ".join(details)
 
 
-POLLING_CONTROLS: list[MqttControl] = [
+def handle_dapc(short_address: int, value: str) -> list[Command]:
+    try:
+        power = int(value, 0)
+    except ValueError:
+        power = value
+
+    return [DAPC(GearShort(short_address), power)]
+
+
+CONTROLS: list[MqttControl] = [
     MqttControl(
         ControlInfo("actual_level", ControlMeta(title="Actual Level", read_only=True), "0"),
         query_builder=_build_actual_level_query,
@@ -60,19 +69,6 @@ POLLING_CONTROLS: list[MqttControl] = [
         query_builder=_build_error_status_query,
         value_formatter=_format_error_status,
     ),
-]
-
-
-def handle_dapc(short_address: int, value: str) -> list[Command]:
-    try:
-        power = int(value, 0)
-    except ValueError:
-        power = value
-
-    return [DAPC(GearShort(short_address), power)]
-
-
-ACTION_CONTROLS: list[MqttControl] = [
     MqttControl(
         ControlInfo("off", ControlMeta("pushbutton", "Off")),
         commands_builder=lambda short_address, _: [Off(GearShort(short_address))],
@@ -117,7 +113,7 @@ ACTION_CONTROLS: list[MqttControl] = [
         ControlInfo(
             "go_to_scene",
             ControlMeta(
-                "Go To Scene",
+                title="Go To Scene",
                 enum={str(i): TranslatedTitle(str(i)) for i in range(SCENES_TOTAL)},
             ),
             "0",

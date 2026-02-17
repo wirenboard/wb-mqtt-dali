@@ -884,22 +884,22 @@ class Type8Parameters(TypeParameters):
                 "current_rgb": ";".join(
                     getattr(resp.colour, colour.value) for colour in RGBW_COLOUR_COMPONENTS
                 ),
-                "current_white": resp.colour.white,
+                "current_white": str(resp.colour.white),
             }
 
         if resp.colour_type == ColourType.COLOUR_TEMPERATURE:
-            return {"current_colour_temperature": resp.colour.tc}
+            return {"current_colour_temperature": str(resp.colour.tc)}
 
         if resp.colour_type == ColourType.PRIMARY_N:
             return {
-                f"current_primary_n{i}": getattr(resp.colour, f"primary_n{i}")
+                f"current_primary_n{i}": str(getattr(resp.colour, f"primary_n{i}"))
                 for i, _ in enumerate(PRIMARY_N_COLOUR_COMPONENTS)
             }
 
         if resp.colour_type == ColourType.XY:
             return {
-                "current_x_coordinate": resp.colour.x_coordinate,
-                "current_y_coordinate": resp.colour.y_coordinate,
+                "current_x_coordinate": str(resp.colour.x_coordinate),
+                "current_y_coordinate": str(resp.colour.y_coordinate),
             }
 
         return {}
@@ -913,6 +913,3 @@ class Type8Parameters(TypeParameters):
         if getattr(res, "colour type primary N active") is True:
             return ColourType.PRIMARY_N
         return ColourType.RGBWAF
-
-
-# ACTIVATE

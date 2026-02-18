@@ -65,7 +65,7 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         logging.debug("Starting autodiscover with addresses: %s", addresses)
 
         if isinstance(addresses, int):
-            addresses = list(range(0, addresses))
+            addresses = list(range(0, addresses + 1))
         elif isinstance(addresses, tuple) and len(addresses) == 2:
             addresses = list(range(addresses[0], addresses[1] + 1))
 

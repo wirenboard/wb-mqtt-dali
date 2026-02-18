@@ -356,7 +356,7 @@ class Gateway:
 
     async def _update_gateways(self) -> None:
         device_ids = set()
-        # device_id to whether it's a old WB-MDALI (True) or  actual WB-DALI device (False)
+        # device_id to whether it's an old WB-MDALI (True) or actual WB-DALI device (False)
         old_gateway: dict[str, bool] = {}
         try:
             serial_config = await rpc_call("wb-mqtt-serial", "config", "Load", {}, self._mqtt_dispatcher)

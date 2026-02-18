@@ -50,7 +50,7 @@ from .settings import (
     SettingsParamGroup,
     SettingsParamName,
 )
-from .wbdali import WBDALIDriver, check_query_response
+from .wbdali_utils import WBDALIDriver, check_query_response
 
 
 class ApplicationActiveParam(BooleanSettingsParam):

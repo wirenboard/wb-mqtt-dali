@@ -25,7 +25,7 @@ from .dali_type17_parameters import Type17Parameters
 from .dali_type20_parameters import Type20Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 
 
 class DaliDeviceType(IntEnum):

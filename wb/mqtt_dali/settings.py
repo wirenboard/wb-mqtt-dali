@@ -5,7 +5,7 @@ from typing import Callable, Optional
 from dali.command import Command
 
 from .utils import merge_json_schema_properties, merge_translations
-from .wbdali import WBDALIDriver, check_query_response, query_request
+from .wbdali_utils import WBDALIDriver, check_query_response, query_request
 
 
 @dataclass

@@ -26,10 +26,36 @@
     },
     "types": {
       "type": "array",
-      "title": "Control Gear Types",
+      "title": "Control Gear Type",
       "propertyOrder": 2,
       "items": {
-        "type": "number"
+        "type": "number",
+        "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 19, 20, 21, 23, 49, 50, 51, 52],
+        "options": {
+          "enum_titles": [
+            "fluorescent lamp (0)",
+            "self contained emergency lighting (1)",
+            "discharge lamps (2)",
+            "low voltage halogen lamps (3)",
+            "supply voltage controller for incandescent lamps (4)",
+            "conversion from digital signal into DC voltage (5)",
+            "LED modules (6)",
+            "switching function (7)",
+            "colour control (8)",
+            "sequencer (9)",
+            "load referencing (15)",
+            "thermal gear protection (16)",
+            "dimming curve selection (17)",
+            "centrally supplied emergency operation (19)",
+            "demand response (20)",
+            "thermal lamp protection (21)",
+            "non replaceable lamp source (23)",
+            "integrated power supply (49)",
+            "memory bank 1 extension (50)",
+            "energy reporting device (51)",
+            "diagnostics and maintenance (52)"
+          ]
+        }
       },
       "options": {
         "wb": {
@@ -227,7 +253,7 @@
       "OEM Global Trade Item Number": "Глобальный номер торговой единицы OEM (GTIN)",
       "OEM Identification Number": "Идентификационный номер OEM",
       "Groups": "Группы",
-      "Control Gear Types": "Типы оборудования",
+      "Control Gear Type": "Тип оборудования",
       "Short Address": "Короткий адрес",
       "Random Address": "Случайный адрес",
       "Fade Time": "Время затухания",
@@ -236,7 +262,28 @@
       "MQTT id of the device": "Идентификатор устройства в MQTT",
       "Used as part of the topic": "Используется как часть топика в MQTT",
       "Brand Name": "Производитель",
-      "Product Name": "Модель"
+      "Product Name": "Модель",
+      "fluorescent lamp (0)": "люминесцентная лампа (0)",
+      "self contained emergency lighting (1)": "автономное аварийное освещение (1)",
+      "discharge lamps (2)": "разрядные лампы (2)",
+      "low voltage halogen lamps (3)": "галогенные лампы низкого напряжения (3)",
+      "supply voltage controller for incandescent lamps (4)": "регулятор напряжения для ламп накаливания (4)",
+      "conversion from digital signal into DC voltage (5)": "преобразование цифрового сигнала в постоянное напряжение (5)",
+      "LED modules (6)": "светодиодные модули (6)",
+      "switching function (7)": "функция переключения (7)",
+      "colour control (8)": "управление цветом (8)",
+      "sequencer (9)": "последовательность действий (9)",
+      "load referencing (15)": "измерение нагрузки (15)",
+      "thermal gear protection (16)": "температурная защита (16)",
+      "dimming curve selection (17)": "выбор кривой затухания (17)",
+      "centrally supplied emergency operation (19)": "централизованное аварийное питание (19)",
+      "demand response (20)": "управление нагрузкой (20)",
+      "thermal lamp protection (21)": "температурная защита лампы (21)",
+      "non replaceable lamp source (23)": "незаменяемый источник света (23)",
+      "integrated power supply (49)": "интегрированный блок питания (49)",
+      "memory bank 1 extension (50)": "расширение банка памяти 1 (50)",
+      "energy reporting device (51)": "измеритель энергопотребления (51)",
+      "diagnostics and maintenance (52)": "диагностика и обслуживание (52)"
     }
   }
 }

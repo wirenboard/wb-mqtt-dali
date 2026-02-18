@@ -24,7 +24,10 @@ from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
-from .wbdali import AsyncDeviceInstanceTypeMapper, WBDALIConfig, WBDALIDriver
+from .wbdali import WBDALIConfig, WBDALIDriver
+from .wbdali_utils import AsyncDeviceInstanceTypeMapper
+from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
+from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
 
 class ApplicationControllerState(Enum):
@@ -51,6 +54,8 @@ class ApplicationControllerConfig:
     dali2_devices: list[Dali2Device]
     polling_interval: float
     websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
+    # Whether to use the old WB-MDALI gateway (True) or the new WB-DALI gateway (False)
+    old_gateway: bool = False
 
 
 class ApplicationController:
@@ -66,6 +71,7 @@ class ApplicationController:
         self.dali2_devices = config.dali2_devices
         self.websocket_config = config.websocket_config
         self.logger = logging.getLogger(self.uid)
+        self.old_gateway = config.old_gateway
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
@@ -79,15 +85,22 @@ class ApplicationController:
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
-        cfg = WBDALIConfig(
-            device_name=config.gateway_mqtt_device_id,
-            channel=config.bus_index + 1,
-        )
 
         self._polling_interval = config.polling_interval
         self._polling_task: Optional[asyncio.Task] = None
         self._reschedule_polling_task = True
-        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+
+        if config.old_gateway:
+            cfg = WBDALIDriverOldConfig(
+                device_name=config.gateway_mqtt_device_id,
+            )
+            self._dev = WBDALIDriverOld(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+        else:
+            cfg = WBDALIConfig(
+                device_name=config.gateway_mqtt_device_id,
+                channel=config.bus_index + 1,
+            )
+            self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()

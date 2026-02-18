@@ -7,7 +7,7 @@ from dali.gear.general import DTR0
 
 from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
 from .utils import add_enum, add_translations, merge_json_schemas
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 
 
 class NumberGearParam(NumberSettingsParam):

@@ -17,7 +17,7 @@ from .gear.switching_function import (
     StoreDTRAsUpSwitchOnThreshold,
 )
 from .settings import SettingsParamName
-from .wbdali import WBDALIDriver, query_request
+from .wbdali_utils import WBDALIDriver, query_request
 
 
 class UpSwitchOnThresholdParam(NumberGearParam):

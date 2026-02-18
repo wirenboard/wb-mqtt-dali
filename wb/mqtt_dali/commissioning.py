@@ -12,7 +12,7 @@ from dali.gear import general as control_gear
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDeviceAddress
-from .wbdali import MASK, AsyncDeviceInstanceTypeMapper, WBDALIDriver
+from .wbdali_utils import MASK, AsyncDeviceInstanceTypeMapper, WBDALIDriver
 
 log = logging.getLogger("commissioning")
 

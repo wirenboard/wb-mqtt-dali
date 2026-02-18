@@ -29,7 +29,7 @@ from websockets.http import Headers
 from websockets.server import HTTPResponse, WebSocketServerProtocol, serve
 from websockets.typing import Data
 
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 
 LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE = "lunatone-iot-emulator"
 

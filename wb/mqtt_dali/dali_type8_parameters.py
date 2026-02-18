@@ -37,7 +37,7 @@ from dali.gear.general import (
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import MASK, WBDALIDriver, query_request
+from .wbdali_utils import MASK, WBDALIDriver, query_request
 
 
 class ColourType(enum.Enum):

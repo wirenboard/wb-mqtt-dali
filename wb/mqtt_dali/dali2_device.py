@@ -384,7 +384,6 @@ class Dali2Device(DaliDeviceBase):
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         handlers: list[SettingsParamBase] = [
             DeviceGroupsParam(),
-            ApplicationActiveParam(),
             PowerCycleNotificationParam(),
         ]
         handlers.extend(self.instances.values())

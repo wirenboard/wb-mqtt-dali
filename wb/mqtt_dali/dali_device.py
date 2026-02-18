@@ -64,6 +64,10 @@ class DaliDevice(DaliDeviceBase):
         )
         self.types: list[int] = []
 
+    async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
+        await super().load_info(driver, force_reload)
+        self.params["types"] = self.types
+
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         self.types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
         if self.types is None:

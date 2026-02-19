@@ -389,14 +389,14 @@ class Gateway:
                     await current_gw.stop()
             for did in device_ids:
                 buses = []
-                for bus_index in range(3):
+                bus_count = 3
+                is_old_gateway = old_gateway.get(did, False)
+                if is_old_gateway:
+                    # old gateway supports only one bus
+                    bus_count = 1
+                for bus_index in range(bus_count):
                     apc_conf = ApplicationControllerConfig(
-                        did,
-                        bus_index,
-                        [],
-                        [],
-                        DEFAULT_POLLING_INTERVAL,
-                        old_gateway=old_gateway.get(did, False),
+                        did, bus_index, [], [], DEFAULT_POLLING_INTERVAL, old_gateway=is_old_gateway
                     )
                     apc = ApplicationController(apc_conf, self._mqtt_dispatcher, self._gtin_db)
                     buses.append(apc)

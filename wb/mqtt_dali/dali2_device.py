@@ -55,7 +55,7 @@ from .settings import (
     SettingsParamGroup,
     SettingsParamName,
 )
-from .wbdali import WBDALIDriver, check_query_response
+from .wbdali_utils import WBDALIDriver, check_query_response
 
 
 class ApplicationActiveParam(BooleanSettingsParam):
@@ -392,7 +392,6 @@ class Dali2Device(DaliDeviceBase):
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         handlers: list[SettingsParamBase] = [
             DeviceGroupsParam(),
-            ApplicationActiveParam(),
             PowerCycleNotificationParam(),
         ]
         handlers.extend(self.instances.values())

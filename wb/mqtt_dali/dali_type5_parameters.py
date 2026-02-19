@@ -8,7 +8,7 @@ from dali.gear.converter import (
 )
 
 from .dali_parameters import DimmingCurveParam, TypeParameters
-from .wbdali import WBDALIDriver, query_request
+from .wbdali_utils import WBDALIDriver, query_request
 
 # TODO: Output range is write only
 

@@ -17,7 +17,7 @@ from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schemas
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 
 
 @dataclass(frozen=True)

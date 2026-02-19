@@ -22,7 +22,7 @@ from dali.gear.general import (
 
 from .dali_parameters import NumberGearParam
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import MASK, WBDALIDriver, check_query_response
+from .wbdali_utils import MASK, WBDALIDriver, check_query_response
 
 SCENES_TOTAL = 16
 GROUPS_TOTAL = 16

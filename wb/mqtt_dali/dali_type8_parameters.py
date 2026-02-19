@@ -45,8 +45,7 @@ from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import MASK, WBDALIDriver, query_request
-from .wbmqtt import ControlMeta
+from .wbdali_utils import MASK, WBDALIDriver, query_request
 
 
 class ColourType(enum.Enum):

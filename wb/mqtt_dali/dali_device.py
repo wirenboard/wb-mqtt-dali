@@ -36,7 +36,7 @@ from .dali_type21_parameters import Type21Parameters
 from .dali_type49_parameters import Type49Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 
 
 class DaliDeviceType(IntEnum):
@@ -55,7 +55,7 @@ class DaliDeviceType(IntEnum):
     DIMMING_CURVE_SELECTION = 17
     DEMAND_RESPONSE = 20
     THERMAL_LAMP_PROTECTION = 21
-    NON_REPLACEABLE_LAMP_SOURCE = 22
+    NON_REPLACEABLE_LAMP_SOURCE = 23
     INTEGRATED_POWER_SUPPLY = 49
     ENERGY_REPORTING_DEVICE = 51
 
@@ -78,6 +78,10 @@ class DaliDevice(DaliDeviceBase):
         self._type8_handler: Optional[Type8Parameters] = None
         self._types_lock = asyncio.Lock()
         self._type_handlers: list[TypeParameters] = []
+
+    async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
+        await super().load_info(driver, force_reload)
+        self.params["types"] = self.types
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         res = await super().poll_controls(driver)

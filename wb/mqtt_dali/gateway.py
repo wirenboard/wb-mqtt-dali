@@ -83,7 +83,13 @@ def bus_from_json(
     )
     polling_interval = data.get("polling_interval", DEFAULT_POLLING_INTERVAL)
     ap_conf = ApplicationControllerConfig(
-        gateway_mqtt_device_id, bus_index, dali_devices, dali2_devices, polling_interval, websocket_conf
+        gateway_mqtt_device_id,
+        bus_index,
+        dali_devices,
+        dali2_devices,
+        polling_interval,
+        websocket_conf,
+        data.get("old_gateway", False),
     )
 
     res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
@@ -350,6 +356,8 @@ class Gateway:
 
     async def _update_gateways(self) -> None:
         device_ids = set()
+        # device_id to whether it's an old WB-MDALI (True) or actual WB-DALI device (False)
+        old_gateway: dict[str, bool] = {}
         try:
             serial_config = await rpc_call("wb-mqtt-serial", "config", "Load", {}, self._mqtt_dispatcher)
         except Exception:  # pylint: disable=broad-exception-caught
@@ -358,11 +366,19 @@ class Gateway:
         for port in serial_config.get("config", {}).get("ports", []):
             if port.get("enabled", True):
                 for device in port.get("devices", []):
-                    if device.get("device_type") == "WB-MDALI" and device.get("enabled", True):
-                        device_id = device.get("id")
+                    if not device.get("enabled", True):
+                        continue
+                    device_id = device.get("id")
+                    if device.get("device_type") == "WB-DALI":
                         if device_id is None:
                             device_id = f"wb-dali_{device.get('slave_id', '')}"
                         device_ids.add(device_id)
+                        old_gateway[device_id] = False
+                    elif device.get("device_type") == "WB-MDALI":
+                        if device_id is None:
+                            device_id = f"wb-mdali_{device.get('slave_id', '')}"
+                        device_ids.add(device_id)
+                        old_gateway[device_id] = True
         async with self._config_lock:
             new_gateways = []
             for current_gw in self.wb_dali_gateways:
@@ -373,8 +389,15 @@ class Gateway:
                     await current_gw.stop()
             for did in device_ids:
                 buses = []
-                for bus_index in range(3):
-                    apc_conf = ApplicationControllerConfig(did, bus_index, [], [], DEFAULT_POLLING_INTERVAL)
+                bus_count = 3
+                is_old_gateway = old_gateway.get(did, False)
+                if is_old_gateway:
+                    # old gateway supports only one bus
+                    bus_count = 1
+                for bus_index in range(bus_count):
+                    apc_conf = ApplicationControllerConfig(
+                        did, bus_index, [], [], DEFAULT_POLLING_INTERVAL, old_gateway=is_old_gateway
+                    )
                     apc = ApplicationController(apc_conf, self._mqtt_dispatcher, self._gtin_db)
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)
@@ -419,6 +442,7 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                                     get_dict_for_device_config(dev)
                                     for dev in bus.dali_devices + bus.dali2_devices
                                 ],
+                                "old_gateway": bus.old_gateway,
                             }
                             for bus in gw.buses
                         ],

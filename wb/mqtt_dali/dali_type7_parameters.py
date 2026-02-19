@@ -5,7 +5,7 @@ from dali.command import Response
 
 from .common_dali_device import MqttControl
 from .dali_parameters import NumberGearParam, TypeParameters
-from .device_publisher import ControlInfo
+from .device_publisher import ControlInfo, ControlMeta, TranslatedTitle
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,

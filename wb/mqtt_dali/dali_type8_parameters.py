@@ -43,7 +43,7 @@ from dali.gear.general import (
 from .common_dali_device import ControlPollResult, MqttControl
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
-from .device_publisher import ControlInfo
+from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali_utils import MASK, WBDALIDriver, query_request
 

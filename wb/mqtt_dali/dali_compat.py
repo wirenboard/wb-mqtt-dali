@@ -4,7 +4,7 @@ from dali.address import DeviceShort, GearShort
 from dali.command import Command, NumericResponse, NumericResponseMask, Response
 from dali.gear import general as control_gear
 
-from .wbdali import MASK
+from .wbdali_utils import MASK
 
 
 class DaliCommandsCompatibilityLayer:

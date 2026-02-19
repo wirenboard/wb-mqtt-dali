@@ -6,7 +6,7 @@ from .common_dali_device import MqttControl
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.integrated_power_supply import QueryActivePowerSupply
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 from .wbmqtt import ControlMeta
 
 

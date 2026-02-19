@@ -17,7 +17,7 @@ from .gear.demand_response import (
 )
 from .settings import SettingsParamName
 from .utils import add_enum, add_translations
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 from .wbmqtt import ControlMeta, TranslatedTitle
 
 

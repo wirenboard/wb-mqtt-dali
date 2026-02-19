@@ -1,12 +1,12 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, Union
 
 import paho.mqtt.client as mqtt
 
-from .mqtt_dispatcher import MQTTDispatcher
-from .wbmqtt import ControlMeta, Device
+from .mqtt_dispatcher import MessageCallback, MQTTDispatcher
+from .wbmqtt import ControlMeta, Device, TranslatedTitle
 
 
 @dataclass
@@ -15,11 +15,8 @@ class ControlInfo:  # pylint: disable=R0903
     # Must be unique per device
     # Control topic /devices/{device_mqtt_name}/controls/{id}
     id: str
-    title: Optional[str] = None
-    type: str = "value"
+    meta: ControlMeta
     value: Optional[str] = None
-    read_only: bool = False
-    order: Optional[int] = None
 
 
 @dataclass
@@ -144,7 +141,7 @@ class DevicePublisher:
         async with self._lock:
             await self._remove_device_internal(device_id)
 
-    async def set_device_title(self, device_id: str, title: str) -> None:
+    async def set_device_title(self, device_id: str, title: Optional[Union[str, TranslatedTitle]]) -> None:
         async with self._lock:
             if device_id not in self._devices:
                 self.logger.warning("Device %s not found", device_id)
@@ -162,7 +159,9 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_value(control_id, value)
 
-    async def set_control_title(self, device_id: str, control_id: str, title: str) -> None:
+    async def set_control_title(
+        self, device_id: str, control_id: str, title: Union[str, TranslatedTitle]
+    ) -> None:
         async with self._lock:
             if device_id not in self._devices:
                 self.logger.warning("Device %s not found", device_id)
@@ -180,7 +179,24 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_error(control_id, error)
 
-    async def register_control_handler(self, device_id: str, control_id: str, callback: Callable) -> None:
+    async def register_control_handler(
+        self, device_id: str, control_id: str, callback: MessageCallback
+    ) -> None:
+        """
+        Register a handler to receive "on" control messages for a specific device/control.
+        The handler is executed in a separate asyncio Task,
+        so it can perform asynchronous operations without blocking MQTT message dispatching.
+
+        Parameters
+        ----------
+        device_id : str
+                Identifier of the device for which to register the control handler.
+        control_id : str
+                Identifier of the control (within the device) to listen for "on" messages.
+        callback : MessageCallback
+                Callable to be invoked when a message is received for the subscribed topic.
+        """
+
         async with self._lock:
             handler_key = f"{device_id}/{control_id}"
 
@@ -261,14 +277,8 @@ class DevicePublisher:
         self.logger.info("Removed device %s", device_id)
 
     async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
-        meta = ControlMeta(
-            title=control_info.title,
-            control_type=control_info.type,
-            order=control_info.order,
-            read_only=control_info.read_only,
-        )
         value = control_info.value if control_info.value is not None else ""
-        await device.create_control(control_info.id, meta, value)
+        await device.create_control(control_info.id, control_info.meta, value)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

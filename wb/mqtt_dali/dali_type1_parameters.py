@@ -13,8 +13,6 @@ from .dali_parameters import NumberGearParam, TypeParameters
 from .settings import SettingsParamName
 from .wbdali_utils import WBDALIDriver, query_request
 
-# TODO: prolong time is write only
-
 
 class EmergencyLevelParam(NumberGearParam):
     query_command_class = QueryEmergencyLevel
@@ -46,7 +44,7 @@ class Type1Parameters(TypeParameters):
             features = await query_request(driver, QueryEmergencyFeatures(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency features: {e}") from e
-        if not ((features >> 4) & 1):  # bit 4: type 1 emergency lighting support
-            return {}
-        self._parameters = [EmergencyLevelParam()]
-        return await super().read(driver, short_address)
+        if getattr(features, "adjustable emergency level") is True:
+            self._parameters = [EmergencyLevelParam()]
+            return await super().read(driver, short_address)
+        return {}

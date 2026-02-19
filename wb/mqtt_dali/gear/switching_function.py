@@ -1,5 +1,5 @@
 """
-Commands and responses from IEC 62386 part 221, Device Type 7
+Commands and responses from IEC 62386 part 208, Device Type 7
 Switching function
 """
 
@@ -37,6 +37,57 @@ class QueryFeatures(_SwitchingFunctionCommand):
 
     response = SwitchingFunctionFeaturesResponse
     _cmdval = 0xF0
+
+
+class SwitchingFunctionSwitchStatusResponse(command.NumericResponse):
+    @property
+    def load_error_detected(self) -> bool:
+        if self._value:
+            return self._value.as_integer & 0x01 == 0x01
+        return False
+
+    @property
+    def error_detection_in_hold_off(self) -> bool:
+        if self._value:
+            return (self._value.as_integer >> 1) & 0x01 == 0x01
+        return False
+
+    @property
+    def last_acted_up_switch_on(self) -> bool:
+        if self._value:
+            return (self._value.as_integer >> 2) & 0x03 == 0x00
+        return False
+
+    @property
+    def last_acted_up_switch_off(self) -> bool:
+        if self._value:
+            return (self._value.as_integer >> 2) & 0x03 == 0x01
+        return False
+
+    @property
+    def last_acted_down_switch_on(self) -> bool:
+        if self._value:
+            return (self._value.as_integer >> 2) & 0x03 == 0x02
+        return False
+
+    @property
+    def last_acted_down_switch_off(self) -> bool:
+        if self._value:
+            return (self._value.as_integer >> 2) & 0x03 == 0x03
+        return False
+
+    @property
+    def reference_measurement_failed(self) -> bool:
+        if self._value:
+            return (self._value.as_integer >> 7) & 0x01 == 0x01
+        return False
+
+
+class QuerySwitchStatus(_SwitchingFunctionCommand):
+    """Query the current status of the switching function."""
+
+    response = SwitchingFunctionSwitchStatusResponse
+    _cmdval = 0xF1
 
 
 class QueryUpSwitchOnThreshold(_SwitchingFunctionCommand):

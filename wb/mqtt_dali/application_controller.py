@@ -134,7 +134,12 @@ class ApplicationController:
 
         await self._device_publisher.initialize()
         for device in self.dali_devices + self.dali2_devices:
-            device_info = DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
+            try:
+                controls = await device.get_mqtt_controls(self._dev)
+            except Exception as e:
+                self.logger.error("Failed to get controls for device %s: %s", device.name, e)
+                controls = []
+            device_info = DeviceInfo(device.mqtt_id, device.name, controls)
             await self._device_publisher.add_device(device_info)
             await self._device_publisher.register_control_handler(
                 device.mqtt_id,
@@ -142,6 +147,7 @@ class ApplicationController:
                 self._handle_on_topic,
             )
             self._devices_by_mqtt_id[device.mqtt_id] = device
+            device.setLogger(self.logger)
 
         self._polling_task = asyncio.create_task(self._polling_loop())
 
@@ -152,12 +158,10 @@ class ApplicationController:
 
     async def stop(self) -> None:
         async with self._state_lock:
-            if self._state in (
-                ApplicationControllerState.UNINITIALIZED,
-                ApplicationControllerState.INITIALIZING,
-                ApplicationControllerState.STOPPING,
-            ):
-                raise RuntimeError("ApplicationController must be initialized to stop")
+            if self._state in (ApplicationControllerState.UNINITIALIZED, ApplicationControllerState.STOPPING):
+                return
+            if self._state == ApplicationControllerState.INITIALIZING:
+                raise RuntimeError("ApplicationController %s must be initialized to stop" % self.uid)
             self._state = ApplicationControllerState.STOPPING
 
         self._bus_traffic_cleanup()
@@ -236,6 +240,7 @@ class ApplicationController:
             await self._device_publisher.remove_device(old_mqtt_id)
             self._devices_by_mqtt_id.pop(old_mqtt_id, None)
             self._devices_by_mqtt_id[new_mqtt_id] = device
+            device.setLogger(self.logger)
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
@@ -320,8 +325,12 @@ class ApplicationController:
 
     async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [DaliDevice(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
-        new_devices = [DaliDevice(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
+        changed_devices = [
+            DaliDevice(d.new, self.uid, self._gtin_db, self.logger) for d in commissioning_result.changed
+        ]
+        new_devices = [
+            DaliDevice(addr, self.uid, self._gtin_db, self.logger) for addr in commissioning_result.new
+        ]
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
             d.short for d in commissioning_result.missing
@@ -342,6 +351,7 @@ class ApplicationController:
             changes.added.append(
                 DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
             )
+            device.setLogger(self.logger)
 
         await self._device_publisher.rebuild(changes)
         for device in created_devices:
@@ -382,6 +392,7 @@ class ApplicationController:
             changes.added.append(
                 DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
             )
+            device.setLogger(self.logger)
 
         await self._device_publisher.rebuild(changes)
         for device in created_devices:

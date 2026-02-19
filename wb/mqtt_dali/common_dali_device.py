@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -178,6 +179,7 @@ class DaliDeviceBase:
         self.address = address
         self.params: dict = {}
         self.schema: dict = {}
+        self.logger = logging.getLogger()
 
         self._bus_id = bus_id
         self._default_name_prefix = default_name_prefix
@@ -322,6 +324,9 @@ class DaliDeviceBase:
                 )
             )
         return res
+
+    def setLogger(self, logger: logging.Logger) -> None:
+        self.logger = logger
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
         self.name = new_values.get("name", self.name)

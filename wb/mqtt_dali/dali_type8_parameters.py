@@ -283,6 +283,17 @@ class ColourSettings:
         else:
             raise RuntimeError(f"Unsupported colour type: {colour_type}")
 
+    def to_json(self) -> dict:
+        if self.colour_type == ColourType.RGBWAF:
+            res = {
+                "rgb": f"{self.colour.red};{self.colour.green};{self.colour.blue}",
+                "white": self.colour.white,
+            }
+        else:
+            res = asdict(self.colour)
+        res["level"] = self.level
+        return res
+
 
 def get_max_colour_value(colour_type: ColourType) -> int:
     if colour_type == ColourType.RGBWAF:
@@ -381,15 +392,7 @@ class ColourState(SettingsParamBase):
         if resp is None:
             raise RuntimeError(f"Error reading {self.name.en}")
         self.value = resp
-        if resp.colour_type == ColourType.RGBWAF:
-            res = {
-                "rgb": f"{resp.colour.red};{resp.colour.green};{resp.colour.blue}",
-                "white": resp.colour.white,
-            }
-        else:
-            res = asdict(resp.colour)
-        res["level"] = resp.level
-        return {self.property_name: res}
+        return {self.property_name: resp.to_json()}
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self.property_name not in value:
@@ -423,9 +426,7 @@ class ColourState(SettingsParamBase):
         if self._read_after_save:
             return await self.read(driver, short_address)
         self.value = new_state
-        res = asdict(new_state.colour)
-        res["level"] = new_state.level
-        return {self.property_name: res}
+        return {self.property_name: new_state.to_json()}
 
     def get_schema(self) -> dict:
         schema = {

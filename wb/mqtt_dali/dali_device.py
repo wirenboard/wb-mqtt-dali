@@ -90,7 +90,10 @@ class DaliDevice(DaliDeviceBase):
         return res
 
     async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
-        await self._read_types(driver)
+        try:
+            await self._read_types(driver)
+        except Exception as e:
+            self.logger.error("Failed to read gear types for device %s: %s", self.name, e)
         res = []
         res.extend(CONTROLS)
         for type_handler in self._type_handlers:

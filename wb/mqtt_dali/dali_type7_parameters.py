@@ -1,13 +1,17 @@
 # Type 7 Switching function
 
 from dali.address import GearShort
+from dali.command import Response
 
+from .common_dali_device import MqttControl
 from .dali_parameters import NumberGearParam, TypeParameters
+from .device_publisher import ControlInfo, ControlMeta, TranslatedTitle
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,
     QueryErrorHoldOffTime,
     QueryFeatures,
+    QuerySwitchStatus,
     QueryUpSwitchOffThreshold,
     QueryUpSwitchOnThreshold,
     StoreDTRAsDownSwitchOffThreshold,
@@ -15,9 +19,10 @@ from .gear.switching_function import (
     StoreDTRAsErrorHoldOffTime,
     StoreDTRAsUpSwitchOffThreshold,
     StoreDTRAsUpSwitchOnThreshold,
+    SwitchingFunctionSwitchStatusResponse,
 )
 from .settings import SettingsParamName
-from .wbdali import WBDALIDriver, query_request
+from .wbdali_utils import WBDALIDriver, query_request
 
 
 class UpSwitchOnThresholdParam(NumberGearParam):
@@ -83,12 +88,48 @@ class Type7Parameters(TypeParameters):
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read switching function features: {e}") from e
         res = []
-        if (features >> 3) & 1:  # bit 3: adjustable thresholds
+        if getattr(features, "adjustable thresholds") is True:
             res.append(UpSwitchOnThresholdParam())
             res.append(UpSwitchOffThresholdParam())
             res.append(DownSwitchOnThresholdParam())
             res.append(DownSwitchOffThresholdParam())
-        if (features >> 4) & 1:  # bit 4: adjustable hold-off time
+        if getattr(features, "adjustable hold-off time") is True:
             res.append(ErrorHoldOffTimeParam())
         self._parameters = res
         return await super().read(driver, short_address)
+
+    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+
+        def format_last_acted(value: Response) -> str:
+            if isinstance(value, SwitchingFunctionSwitchStatusResponse):
+                if value.last_acted_up_switch_on:
+                    return "1"
+                if value.last_acted_up_switch_off:
+                    return "2"
+                if value.last_acted_down_switch_on:
+                    return "3"
+                if value.last_acted_down_switch_off:
+                    return "4"
+            return "0"
+
+        return [
+            MqttControl(
+                control_info=ControlInfo(
+                    "last_acted",
+                    ControlMeta(
+                        title="Last Acted",
+                        read_only=True,
+                        enum={
+                            "0": TranslatedTitle("unknown"),
+                            "1": TranslatedTitle("up switch on"),
+                            "2": TranslatedTitle("up switch off"),
+                            "3": TranslatedTitle("down switch on"),
+                            "4": TranslatedTitle("down switch off"),
+                        },
+                    ),
+                    "0",
+                ),
+                query_builder=lambda short_address: QuerySwitchStatus(GearShort(short_address)),
+                value_formatter=format_last_acted,
+            ),
+        ]

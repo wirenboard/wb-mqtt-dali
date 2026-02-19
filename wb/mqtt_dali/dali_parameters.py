@@ -5,6 +5,7 @@ from dali.address import GearShort
 from dali.command import Command
 from dali.gear.general import DTR0
 
+from .common_dali_device import MqttControl
 from .settings import (
     CommandWriteItem,
     NumberSettingsParam,
@@ -12,7 +13,7 @@ from .settings import (
     SettingsParamName,
 )
 from .utils import add_enum, add_translations, merge_json_schemas
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
 
 
 class NumberGearParam(NumberSettingsParam):
@@ -73,6 +74,9 @@ class TypeParameters(SettingsParamBase):
         for param in self._parameters:
             merge_json_schemas(res, param.get_schema())
         return res
+
+    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+        return []
 
 
 class DimmingCurveParam(NumberGearParam):

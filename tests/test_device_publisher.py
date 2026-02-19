@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,6 +10,7 @@ from wb.mqtt_dali.device_publisher import (
     DeviceInfo,
     DevicePublisher,
 )
+from wb.mqtt_dali.wbmqtt import ControlMeta
 
 
 class MockMessage:
@@ -117,7 +118,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -185,7 +186,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -210,7 +211,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -221,7 +222,7 @@ class TestDevicePublisher:
         await publisher.set_control_title("dev1", "ctrl1", "New Title")
 
         device = publisher._devices["dev1"]
-        assert device._controls["ctrl1"].meta.title == "New Title"
+        assert device._controls["ctrl1"].meta.title.en == "New Title"
         mock_client.publish.assert_called()
 
     @pytest.mark.asyncio
@@ -235,7 +236,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -253,7 +254,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -271,7 +272,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -290,7 +291,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -310,7 +311,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -334,7 +335,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
         device_info2 = DeviceInfo("dev2", "Device 2")
@@ -351,7 +352,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
 
@@ -366,7 +367,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
             ],
         )
         await publisher.add_device(device_info)
@@ -391,7 +392,9 @@ class TestDevicePublisher:
             DeviceInfo(
                 f"dev{i}",
                 f"Device {i}",
-                [ControlInfo("ctrl1", "Control 1", "switch", "0")],
+                [
+                    ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ],
             )
             for i in range(10)
         ]
@@ -410,8 +413,8 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", "Control 1", "switch", "0"),
-                ControlInfo("ctrl2", "Control 2", "text", "test"),
+                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl2", ControlMeta("text", "Control 2"), "test"),
             ],
         )
 
@@ -435,7 +438,7 @@ class TestDevicePublisher:
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
-            [ControlInfo("ctrl1", "Full Control", "temperature", "23.5", True, 1)],
+            [ControlInfo("ctrl1", ControlMeta("temperature", "Full Control", True, 1), "23.5")],
         )
 
         await publisher.add_device(device_info)
@@ -444,7 +447,7 @@ class TestDevicePublisher:
         device = publisher._devices["dev1"]
         control = device._controls["ctrl1"]
 
-        assert control.meta.title == "Full Control"
+        assert control.meta.title.en == "Full Control"
         assert control.meta.control_type == "temperature"
         assert control.meta.order == 1
         assert control.meta.read_only is True

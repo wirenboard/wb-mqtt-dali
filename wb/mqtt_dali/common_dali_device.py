@@ -4,18 +4,42 @@ import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import jsonschema
+from dali.command import Command, Response
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import info, location, oem
 
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
+from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schemas
-from .wbdali import WBDALIDriver
+from .wbdali_utils import WBDALIDriver
+
+
+@dataclass(frozen=True)
+class MqttControl:
+    # the property value is used as default value for the control
+    control_info: ControlInfo
+
+    query_builder: Optional[Callable[[int], object]] = None
+
+    value_formatter: Optional[Callable[[Response], str]] = None
+
+    # Callable first parameter is short address, second parameter is desired control value in string format.
+    # Returns list of DALI commands to execute
+    commands_builder: Optional[Callable[[int, str], list[Command]]] = None
+
+
+@dataclass
+class ControlPollResult:
+    control_id: str
+    value: Optional[str] = None
+    error: Optional[str] = None
+    title: Optional[str] = None
 
 
 @dataclass
@@ -168,6 +192,10 @@ class DaliDeviceBase:
 
         self._parameter_handlers: list[SettingsParamBase] = []
 
+        self._controls_lock = asyncio.Lock()
+        self._controls: dict[str, MqttControl] = {}
+        self._polling_controls: list[MqttControl] = []
+
         self._compat = compat
 
         if not self._common_schema:
@@ -252,6 +280,49 @@ class DaliDeviceBase:
         self.params.update(updated_parameters)
         await self._apply_common_parameters(driver, new_values)
 
+    async def get_mqtt_controls(self, driver: WBDALIDriver) -> list[ControlInfo]:
+        await self._update_mqtt_controls_list(driver)
+        return [descriptor.control_info for descriptor in self._controls.values()]
+
+    async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:
+        control = self._controls.get(control_id)
+        if control is not None and control.commands_builder is not None:
+            await driver.send_commands(control.commands_builder(self.address.short, value), source="control")
+            return
+
+    async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
+        await self._update_mqtt_controls_list(driver)
+        queries = []
+        for descriptor in self._polling_controls:
+            queries.append(descriptor.query_builder(self.address.short))
+        responses = await driver.send_commands(queries, source="polling")
+
+        res = []
+        for descriptor, response in zip(self._polling_controls, responses):
+            if response is None or response.raw_value is None or response.raw_value.error:
+                res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
+                continue
+
+            if descriptor.control_info.meta.control_type == "alarm":
+                alarm_title = descriptor.value_formatter(response)
+                alarm_active = "1" if getattr(response, "error", False) else "0"
+                res.append(
+                    ControlPollResult(
+                        control_id=descriptor.control_info.id,
+                        value=alarm_active,
+                        title=alarm_title,
+                    )
+                )
+                continue
+
+            res.append(
+                ControlPollResult(
+                    control_id=descriptor.control_info.id,
+                    value=descriptor.value_formatter(response),
+                )
+            )
+        return res
+
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
         self.name = new_values.get("name", self.name)
         self.mqtt_id = new_values.get("mqtt_id", self.mqtt_id)
@@ -267,5 +338,21 @@ class DaliDeviceBase:
         self.params["name"] = self.name
         self.params["mqtt_id"] = self.mqtt_id
 
+    async def _update_mqtt_controls_list(self, driver: WBDALIDriver) -> None:
+        async with self._controls_lock:
+            if not self._controls:
+                controls = await self._get_mqtt_controls(driver)
+                self._polling_controls = []
+                self._controls = {}
+                for control in controls:
+                    if control.query_builder is not None and control.value_formatter is not None:
+                        self._polling_controls.append(control)
+                    self._controls[control.control_info.id] = control
+
+    # Must be implemented by subclasses
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         raise NotImplementedError()
+
+    # Can be implemented by subclasses to provide controls for MQTT topics
+    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
+        return []

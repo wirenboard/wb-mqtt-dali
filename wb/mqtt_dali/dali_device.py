@@ -3,7 +3,8 @@ from enum import IntEnum
 from typing import Optional
 
 from dali.address import GearShort
-from dali.sequences import QueryDeviceTypes
+from dali.gear.general import QueryDeviceType, QueryNextDeviceType
+from dali.sequences import sleep as seq_sleep
 
 from .common_dali_device import (
     ControlPollResult,
@@ -58,6 +59,40 @@ class DaliDeviceType(IntEnum):
     NON_REPLACEABLE_LAMP_SOURCE = 23
     INTEGRATED_POWER_SUPPLY = 49
     ENERGY_REPORTING_DEVICE = 51
+
+
+def request_with_retry_sequence(cmd):
+    """Helper function to perform a sequence with retries on failure"""
+    for attempt in range(3):
+        result = yield cmd
+        if result is not None and result.raw_value is not None and not result.raw_value.error:
+            return result
+        if attempt > 1:
+            yield seq_sleep(0.3)
+    raise RuntimeError(f"No response to {cmd}")
+
+
+def query_device_types_sequence(addr):
+    """Obtain a list of part 2xx device types supported by control gear"""
+    r = yield request_with_retry_sequence(QueryDeviceType(addr))
+    if r.raw_value.as_integer < 254:
+        return [r.raw_value.as_integer]
+    if r.raw_value.as_integer == 254:
+        return []
+    assert r.raw_value.as_integer == 255
+    last_seen = 0
+    result = []
+    while True:
+        r = yield request_with_retry_sequence(QueryNextDeviceType(addr))
+        if r.raw_value.as_integer == 254:
+            if len(result) == 0:
+                raise RuntimeError("No device types returned by QueryNextDeviceType")
+            return result
+        if r.raw_value.as_integer <= last_seen:
+            # The gear is required to return device types in
+            # ascending order, without repeats
+            raise RuntimeError("Device type received out of order")
+        result.append(r.raw_value.as_integer)
 
 
 class DaliDevice(DaliDeviceBase):
@@ -119,7 +154,7 @@ class DaliDevice(DaliDeviceBase):
         async with self._types_lock:
             if self.types:
                 return
-            types = await driver.run_sequence(QueryDeviceTypes(GearShort(self.address.short)))
+            types = await driver.run_sequence(query_device_types_sequence(GearShort(self.address.short)))
             if types is None:
                 raise RuntimeError(
                     f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"

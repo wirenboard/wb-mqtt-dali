@@ -27,7 +27,7 @@ class ControlMeta:
         title: Optional[Union[str, TranslatedTitle]] = None,
         read_only: bool = False,
         order: Optional[int] = None,
-        enum: Optional[dict[str, TranslatedTitle]] = None,
+        enum: Optional[dict[str, Optional[TranslatedTitle]]] = None,
         minimum: Optional[Union[int, float]] = None,
         maximum: Optional[Union[int, float]] = None,
     ) -> None:
@@ -202,13 +202,14 @@ class Device:
         if meta.enum is not None:
             enum = {}
             for key, value in meta.enum.items():
-                if not value.is_empty():
-                    translations = {}
+                translations = {}
+                if value is not None:
                     for lang, translation in asdict(value).items():
                         if translation:
                             translations[lang] = translation
-                    if translations:
-                        enum[key] = translations
+                if not translations:
+                    translations["en"] = key
+                enum[key] = translations
             if enum:
                 meta_dict["enum"] = enum
         if meta_dict:

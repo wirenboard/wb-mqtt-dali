@@ -467,6 +467,31 @@ class TestDevice:
         assert meta_json["max"] == 100
 
     @pytest.mark.asyncio
+    async def test_publish_control_meta_empty_enum(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+
+        meta = ControlMeta(
+            title="Full Control",
+            enum={
+                "100": TranslatedTitle(),
+                "200": None,
+            },
+        )
+        await device.create_control("ctrl1", meta, "25")
+
+        meta_calls = [
+            c
+            for c in mock_client.publish.call_args_list
+            if "/meta" in str(c[0][0]) and "controls" in str(c[0][0])
+        ]
+        assert len(meta_calls) > 0
+
+        meta_json = json.loads(meta_calls[0][0][1])
+        assert meta_json["title"]["en"] == "Full Control"
+        assert meta_json["enum"] == {"100": {"en": "100"}, "200": {"en": "200"}}
+
+    @pytest.mark.asyncio
     async def test_publish_control_meta_minimal(self, mock_client):
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()

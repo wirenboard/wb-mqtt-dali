@@ -25,6 +25,8 @@ class DeadtimeTimerParam(InstanceParam):
             QueryDeadtimeTimer,
             SetDeadtimeTimer,
         )
+        self.grid_columns = 4
+        self.property_order = 10
 
 
 class HoldTimerParam(InstanceParam):
@@ -36,6 +38,8 @@ class HoldTimerParam(InstanceParam):
             QueryHoldTimer,
             SetHoldTimer,
         )
+        self.grid_columns = 4
+        self.property_order = 11
 
 
 class ReportTimerParam(InstanceParam):
@@ -47,6 +51,8 @@ class ReportTimerParam(InstanceParam):
             QueryReportTimer,
             SetReportTimer,
         )
+        self.grid_columns = 4
+        self.property_order = 12
 
 
 def build_type3_occupancy_sensor_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:

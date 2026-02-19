@@ -96,9 +96,6 @@ class GeneralMemoryParams(SettingsParamBase):
         info.IdentificationNumber: "identification_number",
         info.IdentifictionNumber_legacy: "identification_number",
         info.HardwareVersion: "hardware_version",
-        info.Part101Version: "part101_version",
-        info.Part102Version: "part102_version",
-        info.Part103Version: "part103_version",
         oem.ManufacturerGTIN: "oem_gtin",
         oem.LuminaireID: "oem_identification_number",
     }
@@ -252,7 +249,7 @@ class DaliDeviceBase:
         parameter_handlers.extend(await self._get_parameter_handlers(driver))
         params = {
             "short_address": self.address.short,
-            "random_address": self.address.random,
+            "random_address": hex(self.address.random),
             "name": self.name,
             "mqtt_id": self.mqtt_id,
         }

@@ -85,6 +85,7 @@ class InstanceParameters(SettingsParamGroup):
         super().__init__(
             SettingsParamName(f"Instance {instance_number.value}"), f"instance{instance_number.value}"
         )
+        self.property_order = instance_number.value + 100
         self._parameters = [
             InstanceActiveParam(instance_number),
             InstanceTypeParam(instance_type),
@@ -108,6 +109,8 @@ class EventSchemeParam(NumberSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(SettingsParamName("Event addressing scheme"), "event_scheme")
         self._instance_number = instance_number
+        self.property_order = 2
+        self.grid_columns = 6
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
         return [
@@ -137,6 +140,8 @@ class EventPriorityParam(NumberSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(SettingsParamName("Event priority"), "event_priority")
         self._instance_number = instance_number
+        self.property_order = 3
+        self.grid_columns = 6
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
         return [
@@ -159,6 +164,7 @@ class InstanceGroupParamBase(NumberSettingsParam):
     def __init__(self, name: str, property_name: str, instance_number: InstanceNumber) -> None:
         super().__init__(SettingsParamName(name), property_name)
         self._instance_number = instance_number
+        self.grid_columns = 4
 
     def get_schema(self) -> dict:
         schema = super().get_schema()
@@ -169,6 +175,7 @@ class InstanceGroupParamBase(NumberSettingsParam):
 class InstanceGroup0Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__("Instance group 0", "instance_group_0", instance_number)
+        self.property_order = 4
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
         return [
@@ -183,6 +190,7 @@ class InstanceGroup0Param(InstanceGroupParamBase):
 class InstanceGroup1Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__("Instance group 1", "instance_group_1", instance_number)
+        self.property_order = 5
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
         return [
@@ -197,6 +205,7 @@ class InstanceGroup1Param(InstanceGroupParamBase):
 class InstanceGroup2Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__("Instance group 2", "instance_group_2", instance_number)
+        self.property_order = 6
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
         return [
@@ -219,6 +228,7 @@ class InstanceActiveParam(BooleanSettingsParam):
             lambda short_address, inst=instance_number: EnableInstance(DeviceShort(short_address), inst),
             lambda short_address, inst=instance_number: DisableInstance(DeviceShort(short_address), inst),
         )
+        self.property_order = 1
 
 
 class InstanceTypeParam(SettingsParamBase):

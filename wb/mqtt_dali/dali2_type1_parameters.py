@@ -27,6 +27,8 @@ class DoubleTimerParam(InstanceParam):
             QueryDoubleTimer,
             SetDoubleTimer,
         )
+        self.property_order = 11
+        self.grid_columns = 3
 
 
 class ReportTimerParam(InstanceParam):
@@ -38,6 +40,8 @@ class ReportTimerParam(InstanceParam):
             QueryRepeatTimer,
             SetRepeatTimer,
         )
+        self.property_order = 12
+        self.grid_columns = 3
 
 
 class ShortTimerParam(InstanceParam):
@@ -49,6 +53,8 @@ class ShortTimerParam(InstanceParam):
             QueryShortTimer,
             SetShortTimer,
         )
+        self.property_order = 10
+        self.grid_columns = 3
 
 
 class StuckTimerParam(InstanceParam):
@@ -60,6 +66,8 @@ class StuckTimerParam(InstanceParam):
             QueryStuckTimer,
             SetStuckTimer,
         )
+        self.property_order = 13
+        self.grid_columns = 3
 
 
 def build_type1_push_button_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:

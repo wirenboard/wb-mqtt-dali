@@ -27,6 +27,8 @@ class DeadtimeTimerParam(InstanceParam):
             QueryDeadtimeTimer,
             SetDeadtimeTimer,
         )
+        self.grid_columns = 3
+        self.property_order = 10
 
 
 class ReportTimerParam(InstanceParam):
@@ -38,6 +40,8 @@ class ReportTimerParam(InstanceParam):
             QueryReportTimer,
             SetReportTimer,
         )
+        self.grid_columns = 3
+        self.property_order = 11
 
 
 class HysteresisParam(InstanceParam):
@@ -49,6 +53,8 @@ class HysteresisParam(InstanceParam):
             QueryHysteresis,
             SetHysteresis,
         )
+        self.grid_columns = 3
+        self.property_order = 12
 
 
 class HysteresisMinParam(InstanceParam):
@@ -60,6 +66,8 @@ class HysteresisMinParam(InstanceParam):
             QueryHysteresisMin,
             SetHysteresisMin,
         )
+        self.grid_columns = 3
+        self.property_order = 14
 
 
 def build_type4_light_sensor_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:

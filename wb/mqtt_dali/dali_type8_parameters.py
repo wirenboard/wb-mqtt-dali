@@ -191,8 +191,8 @@ class RgbwafColourValues:
 
 def set_colour_temperature_commands_builder(address: GearShort, value: int) -> list[command.Command]:
     return [
-        DTR0((value >> 8) & 0xFF),
-        DTR1((value & 0xFF)),
+        DTR0((value & 0xFF)),
+        DTR1((value >> 8) & 0xFF),
         SetTemporaryColourTemperature(address),
     ]
 
@@ -208,8 +208,8 @@ class ColourTemperatureValue:
 
 def set_primary_n_commands_builder(address: GearShort, value: int, index: int) -> list[command.Command]:
     return [
-        DTR0((value >> 8) & 0xFF),
-        DTR1((value & 0xFF)),
+        DTR0((value & 0xFF)),
+        DTR1((value >> 8) & 0xFF),
         DTR2(index),
         SetTemporaryPrimaryNDimLevel(address),
     ]
@@ -236,16 +236,16 @@ class PrimaryNColourValues:
 
 def set_x_coordinate_commands_builder(address: GearShort, value: int) -> list[command.Command]:
     return [
-        DTR0((value >> 8) & 0xFF),
-        DTR1((value & 0xFF)),
+        DTR0((value & 0xFF)),
+        DTR1((value >> 8) & 0xFF),
         SetTemporaryXCoordinate(address),
     ]
 
 
 def set_y_coordinate_commands_builder(address: GearShort, value: int) -> list[command.Command]:
     return [
-        DTR0((value >> 8) & 0xFF),
-        DTR1((value & 0xFF)),
+        DTR0((value & 0xFF)),
+        DTR1((value >> 8) & 0xFF),
         SetTemporaryYCoordinate(address),
     ]
 

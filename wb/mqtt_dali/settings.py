@@ -5,7 +5,7 @@ from typing import Callable, Optional
 from dali.command import Command
 
 from .utils import merge_json_schema_properties, merge_translations
-from .wbdali_utils import WBDALIDriver, check_query_response, query_request
+from .wbdali_utils import WBDALIDriver, check_query_response, query_int
 
 
 @dataclass
@@ -84,6 +84,7 @@ class BooleanSettingsParam(SettingsParamBase):
                 self.property_name: {
                     "type": "boolean",
                     "title": self.name.en,
+                    "format": "switch",
                 }
             }
         }
@@ -117,7 +118,7 @@ class NumberSettingsParam(SettingsParamBase):
         self._is_read_only = False
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        self.value = await query_request(driver, self.get_read_command(short_address))
+        self.value = await query_int(driver, self.get_read_command(short_address))
         return {self.property_name: self.value}
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
@@ -170,6 +171,9 @@ class NumberSettingsParam(SettingsParamBase):
 class SettingsParamGroup(SettingsParamBase):
     def __init__(self, name: SettingsParamName, property_name: str) -> None:
         super().__init__(name)
+
+        self.property_order = None
+
         self._property_name = property_name
         self._parameters: list[SettingsParamBase] = []
 
@@ -204,6 +208,7 @@ class SettingsParamGroup(SettingsParamBase):
                 self._property_name: {
                     "title": self.name.en,
                     "properties": {},
+                    "format": "card",
                 }
             },
         }
@@ -212,4 +217,6 @@ class SettingsParamGroup(SettingsParamBase):
         for param in self._parameters:
             merge_json_schema_properties(res["properties"][self._property_name], param.get_schema())
             merge_translations(res, param.get_schema())
+        if self.property_order is not None:
+            res["properties"][self._property_name]["propertyOrder"] = self.property_order
         return res

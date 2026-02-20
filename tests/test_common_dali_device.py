@@ -225,7 +225,7 @@ async def test_load_info_populates_params_and_schema():
         await d.load_info(driver)
 
     assert d.params["short_address"] == 1
-    assert d.params["random_address"] == 0x00
+    assert d.params["random_address"] == "0x0"
     assert d.params["name"] == d.name
     assert d.params["mqtt_id"] == d.mqtt_id
     assert d.params.get("gtin") == 123

@@ -39,15 +39,15 @@ async def test_read_not_implemented(number_settings_param):
 async def test_read(number_settings_param):
     mock_driver = AsyncMock()
     mock_address = MagicMock()
-    mock_query_request = AsyncMock()
-    mock_query_request.return_value = 100
+    mock_query_int = AsyncMock()
+    mock_query_int.return_value = 100
     mock_commands_list = MagicMock()
     with (
         patch.object(number_settings_param, "get_read_command", return_value=mock_commands_list),
-        patch("wb.mqtt_dali.settings.query_request", mock_query_request),
+        patch("wb.mqtt_dali.settings.query_int", mock_query_int),
     ):
         result = await number_settings_param.read(mock_driver, mock_address)
-        mock_query_request.assert_called_once_with(mock_driver, mock_commands_list)
+        mock_query_int.assert_called_once_with(mock_driver, mock_commands_list)
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100
 

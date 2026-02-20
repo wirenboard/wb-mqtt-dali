@@ -22,7 +22,7 @@ from .gear.switching_function import (
     SwitchingFunctionSwitchStatusResponse,
 )
 from .settings import SettingsParamName
-from .wbdali_utils import WBDALIDriver, query_request
+from .wbdali_utils import WBDALIDriver, query_response
 
 
 class UpSwitchOnThresholdParam(NumberGearParam):
@@ -84,16 +84,16 @@ class ErrorHoldOffTimeParam(NumberGearParam):
 class Type7Parameters(TypeParameters):
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         try:
-            features = await query_request(driver, QueryFeatures(GearShort(short_address)))
+            features = await query_response(driver, QueryFeatures(GearShort(short_address)))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read switching function features: {e}") from e
         res = []
-        if getattr(features, "adjustable thresholds") is True:
+        if getattr(features, "adjustable_thresholds") is True:
             res.append(UpSwitchOnThresholdParam())
             res.append(UpSwitchOffThresholdParam())
             res.append(DownSwitchOnThresholdParam())
             res.append(DownSwitchOffThresholdParam())
-        if getattr(features, "adjustable hold-off time") is True:
+        if getattr(features, "adjustable_holdoff_time") is True:
             res.append(ErrorHoldOffTimeParam())
         self._parameters = res
         return await super().read(driver, short_address)

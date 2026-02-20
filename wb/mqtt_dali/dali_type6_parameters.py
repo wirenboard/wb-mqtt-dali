@@ -11,7 +11,7 @@ from dali.gear.led import (
 
 from .dali_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
 from .settings import SettingsParamName
-from .wbdali_utils import WBDALIDriver, query_request
+from .wbdali_utils import WBDALIDriver, query_int
 
 
 class Type6DimmingCurveParam(DimmingCurveParam):
@@ -34,7 +34,7 @@ class FastFadeTimeParam(NumberGearParam):
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         res = await super().read(driver, short_address)
         try:
-            self.maximum = await query_request(driver, QueryMinFastFadeTime(GearShort(short_address)))
+            self.maximum = await query_int(driver, QueryMinFastFadeTime(GearShort(short_address)))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read min fast fade time: {e}") from e
         return res

@@ -13,9 +13,9 @@ from .wbmqtt import ControlMeta, TranslatedTitle
 
 def _format_failure_status(value: Response) -> str:
     if isinstance(value, FailureStatusResponse):
-        if getattr(value, "thermal lamp shutdown") is True:
+        if getattr(value, "thermal_lamp_shutdown") is True:
             return "1"
-        if getattr(value, "thermal lamp overload") is True:
+        if getattr(value, "thermal_lamp_overload") is True:
             return "2"
     return "0"
 

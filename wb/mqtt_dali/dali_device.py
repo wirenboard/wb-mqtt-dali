@@ -74,7 +74,7 @@ def request_with_retry_sequence(cmd):
 
 def query_device_types_sequence(addr):
     """Obtain a list of part 2xx device types supported by control gear"""
-    r = yield request_with_retry_sequence(QueryDeviceType(addr))
+    r = yield from request_with_retry_sequence(QueryDeviceType(addr))
     if r.raw_value.as_integer < 254:
         return [r.raw_value.as_integer]
     if r.raw_value.as_integer == 254:

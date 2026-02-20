@@ -146,13 +146,17 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
             self._mapping[new_short_address] = self._mapping.pop(short_address)
 
 
-async def query_request(driver: WBDALIDriver, cmd: Command) -> int:
+async def query_int(driver: WBDALIDriver, cmd: Command) -> int:
+    return (await query_response(driver, cmd)).raw_value.as_integer
+
+
+async def query_response(driver: WBDALIDriver, cmd: Command) -> Response:
     resp = await driver.send(cmd)
     try:
         check_query_response(resp)
     except Exception as e:
         raise RuntimeError(f"Error in response for {cmd}: {e}") from e
-    return resp.raw_value.as_integer
+    return resp
 
 
 def check_query_response(resp: Optional[Response]) -> None:

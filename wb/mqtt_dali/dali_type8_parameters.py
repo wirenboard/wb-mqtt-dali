@@ -45,7 +45,7 @@ from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali_utils import MASK, WBDALIDriver, query_request
+from .wbdali_utils import MASK, WBDALIDriver, query_response
 
 
 class ColourType(enum.Enum):
@@ -283,6 +283,17 @@ class ColourSettings:
         else:
             raise RuntimeError(f"Unsupported colour type: {colour_type}")
 
+    def to_json(self) -> dict:
+        if self.colour_type == ColourType.RGBWAF:
+            res = {
+                "rgb": f"{self.colour.red};{self.colour.green};{self.colour.blue}",
+                "white": self.colour.white,
+            }
+        else:
+            res = asdict(self.colour)
+        res["level"] = self.level
+        return res
+
 
 def get_max_colour_value(colour_type: ColourType) -> int:
     if colour_type == ColourType.RGBWAF:
@@ -381,9 +392,7 @@ class ColourState(SettingsParamBase):
         if resp is None:
             raise RuntimeError(f"Error reading {self.name.en}")
         self.value = resp
-        res = asdict(resp.colour)
-        res["level"] = resp.level
-        return {self.property_name: res}
+        return {self.property_name: resp.to_json()}
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self.property_name not in value:
@@ -392,9 +401,21 @@ class ColourState(SettingsParamBase):
             raise RuntimeError(f"Cannot write {self.name.en} before reading it")
         values = value.get(self.property_name, {})
         new_state = deepcopy(self.value)
-        for colour in new_state.colour.components:
-            if colour.value in values:
-                setattr(new_state.colour, colour.value, values[colour.value])
+        if new_state.colour_type == ColourType.RGBWAF:
+            rgb_value = values.get("rgb")
+            if rgb_value is not None:
+                try:
+                    red_str, green_str, blue_str = rgb_value.split(";")
+                    new_state.colour.red = int(red_str)
+                    new_state.colour.green = int(green_str)
+                    new_state.colour.blue = int(blue_str)
+                except Exception as e:
+                    raise ValueError(f"Invalid RGB value: {rgb_value}") from e
+            new_state.colour.white = values.get("white", new_state.colour.white)
+        else:
+            for colour in new_state.colour.components:
+                if colour.value in values:
+                    setattr(new_state.colour, colour.value, values[colour.value])
         new_state.level = values.get("level", self.value.level)
         if new_state == self.value:
             return {}
@@ -405,9 +426,7 @@ class ColourState(SettingsParamBase):
         if self._read_after_save:
             return await self.read(driver, short_address)
         self.value = new_state
-        res = asdict(new_state.colour)
-        res["level"] = new_state.level
-        return {self.property_name: res}
+        return {self.property_name: new_state.to_json()}
 
     def get_schema(self) -> dict:
         schema = {
@@ -439,19 +458,42 @@ class ColourState(SettingsParamBase):
             },
         }
         if self.value is not None and self.value.colour is not None:
-            max_value = get_max_colour_value(self.value.colour_type)
-            for index, colour in enumerate(self.value.colour.components):
-                schema["properties"][self.property_name]["properties"][colour.value] = {
-                    "type": "integer",
-                    "title": COLOUR_NAMES[colour][0],
-                    "minimum": 0,
-                    "maximum": max_value,
-                    "propertyOrder": index + 1,
+            root_property = schema["properties"][self.property_name]
+            if self.value.colour_type == ColourType.RGBWAF:
+                root_property["properties"]["rgb"] = {
+                    "type": "string",
+                    "title": "RGB",
+                    "format": "rgb",
+                    "propertyOrder": 1,
                     "options": {
                         "grid_columns": 2,
                     },
                 }
-                schema["properties"][self.property_name]["required"].append(colour.value)
+                root_property["properties"]["white"] = {
+                    "type": "integer",
+                    "title": "White",
+                    "minimum": 0,
+                    "maximum": 255,
+                    "propertyOrder": 2,
+                    "options": {
+                        "grid_columns": 2,
+                    },
+                }
+                root_property["required"].append("rgb")
+                root_property["required"].append("white")
+            else:
+                for index, colour in enumerate(self.value.colour.components):
+                    root_property["properties"][colour.value] = {
+                        "type": "integer",
+                        "title": COLOUR_NAMES[colour][0],
+                        "minimum": 0,
+                        "maximum": 65535,
+                        "propertyOrder": index + 1,
+                        "options": {
+                            "grid_columns": 2,
+                        },
+                    }
+                    root_property["required"].append(colour.value)
         return schema
 
 
@@ -937,11 +979,11 @@ class Type8Parameters(TypeParameters):
         return []
 
     async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: int) -> ColourType:
-        res = await query_request(driver, QueryColourStatus(GearShort(short_address)))
-        if getattr(res, "colour type xy active") is True:
+        res = await query_response(driver, QueryColourStatus(GearShort(short_address)))
+        if getattr(res, "colour_type_xy_active") is True:
             return ColourType.XY
-        if getattr(res, "colour type colour temperature Tc active") is True:
+        if getattr(res, "colour_type_colour_temperature_tc_active") is True:
             return ColourType.COLOUR_TEMPERATURE
-        if getattr(res, "colour type primary N active") is True:
+        if getattr(res, "colour_type_primary_n_active") is True:
             return ColourType.PRIMARY_N
         return ColourType.RGBWAF

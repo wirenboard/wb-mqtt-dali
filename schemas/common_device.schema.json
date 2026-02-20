@@ -129,39 +129,6 @@
         }
       }
     },
-    "part101_version": {
-      "type": "string",
-      "title": "DALI Part 101 Version",
-      "propertyOrder": 9,
-      "options": {
-        "grid_columns": 4,
-        "wb": {
-          "read_only": true
-        }
-      }
-    },
-    "part102_version": {
-      "type": "string",
-      "title": "DALI Part 102 Version",
-      "propertyOrder": 10,
-      "options": {
-        "grid_columns": 4,
-        "wb": {
-          "read_only": true
-        }
-      }
-    },
-    "part103_version": {
-      "type": "string",
-      "title": "DALI Part 103 Version",
-      "propertyOrder": 11,
-      "options": {
-        "grid_columns": 4,
-        "wb": {
-          "read_only": true
-        }
-      }
-    },
     "oem_gtin": {
       "type": "number",
       "title": "OEM Global Trade Item Number",
@@ -196,7 +163,7 @@
       }
     },
     "random_address": {
-      "type": "number",
+      "type": "string",
       "title": "Random Address",
       "propertyOrder": 15,
       "options": {
@@ -247,9 +214,6 @@
       "Identification Number": "Идентификационный номер",
       "Firmware Version": "Версия прошивки",
       "Hardware Version": "Версия аппаратного обеспечения",
-      "DALI Part 101 Version": "Версия части 101 стандарта DALI",
-      "DALI Part 102 Version": "Версия части 102 стандарта DALI",
-      "DALI Part 103 Version": "Версия части 103 стандарта DALI",
       "OEM Global Trade Item Number": "Глобальный номер торговой единицы OEM (GTIN)",
       "OEM Identification Number": "Идентификационный номер OEM",
       "Groups": "Группы",

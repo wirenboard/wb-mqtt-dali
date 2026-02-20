@@ -349,8 +349,8 @@ class ApplicationController:
                 self._handle_on_topic,
             )
 
-        self.dali_devices.sort(key=lambda d: d.address.short)
         self.dali_devices = unchanged_devices + created_devices
+        self.dali_devices.sort(key=lambda d: d.address.short)
         for removed_id in removed_ids:
             self._devices_by_mqtt_id.pop(removed_id, None)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})

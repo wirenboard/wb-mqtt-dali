@@ -83,7 +83,7 @@ def query_device_types_sequence(addr):
     last_seen = 0
     result = []
     while True:
-        r = yield request_with_retry_sequence(QueryNextDeviceType(addr))
+        r = yield from request_with_retry_sequence(QueryNextDeviceType(addr))
         if r.raw_value.as_integer == 254:
             if len(result) == 0:
                 raise RuntimeError("No device types returned by QueryNextDeviceType")

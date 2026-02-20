@@ -980,10 +980,10 @@ class Type8Parameters(TypeParameters):
 
     async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: int) -> ColourType:
         res = await query_response(driver, QueryColourStatus(GearShort(short_address)))
-        if getattr(res, "colour type xy active") is True:
+        if getattr(res, "colour_type_xy_active") is True:
             return ColourType.XY
-        if getattr(res, "colour type colour temperature Tc active") is True:
+        if getattr(res, "colour_type_colour_temperature_tc_active") is True:
             return ColourType.COLOUR_TEMPERATURE
-        if getattr(res, "colour type primary N active") is True:
+        if getattr(res, "colour_type_primary_n_active") is True:
             return ColourType.PRIMARY_N
         return ColourType.RGBWAF

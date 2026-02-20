@@ -44,7 +44,7 @@ class Type1Parameters(TypeParameters):
             features = await query_response(driver, QueryEmergencyFeatures(address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency features: {e}") from e
-        if getattr(features, "adjustable emergency level") is True:
+        if getattr(features, "adjustable_emergency_level") is True:
             self._parameters = [EmergencyLevelParam()]
             return await super().read(driver, short_address)
         return {}

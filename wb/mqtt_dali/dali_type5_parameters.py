@@ -27,7 +27,7 @@ class Type5Parameters(TypeParameters):
             features = await query_response(driver, QueryConverterFeatures(GearShort(short_address)))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
-        if getattr(features, "non-logarithmic dimming curve supported") is True:
+        if getattr(features, "nonlogarithmic_dimming_curve_supported") is True:
             self._parameters = [Type5DimmingCurveParam()]
             return await super().read(driver, short_address)
         return {}

@@ -325,12 +325,8 @@ class ApplicationController:
 
     async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [
-            DaliDevice(d.new, self.uid, self._gtin_db, self.logger) for d in commissioning_result.changed
-        ]
-        new_devices = [
-            DaliDevice(addr, self.uid, self._gtin_db, self.logger) for addr in commissioning_result.new
-        ]
+        changed_devices = [DaliDevice(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
+        new_devices = [DaliDevice(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
             d.short for d in commissioning_result.missing

@@ -982,8 +982,8 @@ class Type8Parameters(TypeParameters):
         res = await query_response(driver, QueryColourStatus(GearShort(short_address)))
         if getattr(res, "colour_type_xy_active") is True:
             return ColourType.XY
-        if getattr(res, "colour_type_colour_temperature_tc_active") is True:
+        if getattr(res, "colour_type_colour_temperature_Tc_active") is True:
             return ColourType.COLOUR_TEMPERATURE
-        if getattr(res, "colour_type_primary_n_active") is True:
+        if getattr(res, "colour_type_primary_N_active") is True:
             return ColourType.PRIMARY_N
         return ColourType.RGBWAF

@@ -328,20 +328,12 @@ class ApplicationController:
         changed_devices = [DaliDevice(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
         new_devices = [DaliDevice(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
+        created_devices = changed_devices + new_devices
+
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
             d.short for d in commissioning_result.missing
         }
         removed_ids = [d.mqtt_id for d in self.dali_devices if d.address.short in removed_short_addresses]
-
-        created_devices = changed_devices + new_devices
-
-        self.dali_devices = unchanged_devices + created_devices
-        self.dali_devices.sort(key=lambda d: d.address.short)
-
-        for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
-        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
-
         changes = DeviceChange(removed=removed_ids)
         for device in created_devices:
             changes.added.append(
@@ -356,33 +348,30 @@ class ApplicationController:
                 "+",
                 self._handle_on_topic,
             )
+
+        self.dali_devices.sort(key=lambda d: d.address.short)
+        self.dali_devices = unchanged_devices + created_devices
+        for removed_id in removed_ids:
+            self._devices_by_mqtt_id.pop(removed_id, None)
+        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
         changed_devices = [Dali2Device(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
         new_devices = [Dali2Device(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
+        created_devices = changed_devices + new_devices
+        new_dali2_devices = unchanged_devices + created_devices
+        if new_dali2_devices:
+            await self._dev_inst_map.async_autodiscover(
+                self._dev, [d.address.short for d in new_dali2_devices]
+            )
+            self._update_dali2_devices_instances({d.address.short: d for d in created_devices})
+
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
             d.short for d in commissioning_result.missing
         }
         removed_ids = [d.mqtt_id for d in self.dali2_devices if d.address.short in removed_short_addresses]
-
-        created_devices = changed_devices + new_devices
-
-        self.dali2_devices = unchanged_devices + created_devices
-        self.dali2_devices.sort(key=lambda d: d.address.short)
-        self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
-
-        for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
-        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
-
-        if self.dali2_devices:
-            await self._dev_inst_map.async_autodiscover(
-                self._dev, [d.address.short for d in self.dali2_devices]
-            )
-            self._update_dali2_devices_instances({d.address.short: d for d in created_devices})
-
         changes = DeviceChange(removed=removed_ids)
         for device in created_devices:
             changes.added.append(
@@ -397,6 +386,13 @@ class ApplicationController:
                 "+",
                 self._handle_on_topic,
             )
+
+        self.dali2_devices = new_dali2_devices
+        self.dali2_devices.sort(key=lambda d: d.address.short)
+        for removed_id in removed_ids:
+            self._devices_by_mqtt_id.pop(removed_id, None)
+        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
+        self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
     async def _handle_on_topic(self, message: mqtt.MQTTMessage) -> None:
         topic_parts = message.topic.split("/")

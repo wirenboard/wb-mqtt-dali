@@ -44,9 +44,12 @@ from .dali2_controls import (
     get_occupancy_controls,
 )
 from .dali2_type1_parameters import build_type1_push_button_parameters
+from .dali2_type2_parameters import build_type2_absolute_input_device_parameters
 from .dali2_type3_parameters import build_type3_occupancy_sensor_parameters
 from .dali2_type4_parameters import build_type4_light_sensor_parameters
+from .dali2_type6_parameters import build_type6_general_purpose_sensor_parameters
 from .dali_device import DaliDeviceAddress
+from .device import absolute_input_device, general_purpose_sensor
 from .gtin_db import DaliDatabase
 from .settings import (
     BooleanSettingsParam,
@@ -97,10 +100,14 @@ class InstanceParameters(SettingsParamGroup):
         ]
         if instance_type == pushbutton.instance_type:
             self._parameters.extend(build_type1_push_button_parameters(instance_number))
+        elif instance_type == absolute_input_device.instance_type:
+            self._parameters.extend(build_type2_absolute_input_device_parameters(instance_number))
         elif instance_type == occupancy.instance_type:
             self._parameters.extend(build_type3_occupancy_sensor_parameters(instance_number))
         elif instance_type == light.instance_type:
             self._parameters.extend(build_type4_light_sensor_parameters(instance_number))
+        elif instance_type == general_purpose_sensor.instance_type:
+            self._parameters.extend(build_type6_general_purpose_sensor_parameters(instance_number))
         self.instance_number = instance_number
         self.instance_type = instance_type
 

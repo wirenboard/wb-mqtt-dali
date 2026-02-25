@@ -26,18 +26,18 @@ class _GeneralPurposeSensorCommand(general._StandardInstanceCommand):
     _opcode = None
 
 
+class SetReportTimer(_GeneralPurposeSensorCommand):
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x50
+
+
 class SetAlarmReportTimer(_GeneralPurposeSensorCommand):
     inputdev = True
     uses_dtr0 = True
     sendtwice = True
     _opcode = 0x51
-
-
-class SetDeadtimeTimer(_GeneralPurposeSensorCommand):
-    inputdev = True
-    uses_dtr0 = True
-    sendtwice = True
-    _opcode = 0x53
 
 
 class SetHysteresis(_GeneralPurposeSensorCommand):
@@ -47,6 +47,13 @@ class SetHysteresis(_GeneralPurposeSensorCommand):
     _opcode = 0x52
 
 
+class SetDeadtimeTimer(_GeneralPurposeSensorCommand):
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x53
+
+
 class SetHysteresisMin(_GeneralPurposeSensorCommand):
     inputdev = True
     uses_dtr0 = True
@@ -54,29 +61,36 @@ class SetHysteresisMin(_GeneralPurposeSensorCommand):
     _opcode = 0x54
 
 
-class SetReportTimer(_GeneralPurposeSensorCommand):
+class SetAlarmType(_GeneralPurposeSensorCommand):
     inputdev = True
     uses_dtr0 = True
     sendtwice = True
-    _opcode = 0x50
+    _opcode = 0x55
 
 
-class QueryAlarmReportTimer(_GeneralPurposeSensorCommand):
+class SetMagnitude(_GeneralPurposeSensorCommand):
     inputdev = True
-    response = command.NumericResponse
-    _opcode = 0x5D
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x56
 
 
-class QueryDeadtimeTimer(_GeneralPurposeSensorCommand):
+class SetAlarm(_GeneralPurposeSensorCommand):
     inputdev = True
-    response = command.NumericResponse
-    _opcode = 0x5B
+    uses_dtr0 = True
+    uses_dtr1 = True
+    uses_dtr2 = True
+    sendtwice = True
+    _opcode = 0x57
 
 
-class QueryHysteresis(_GeneralPurposeSensorCommand):
+class SetAlarmHysteresis(_GeneralPurposeSensorCommand):
     inputdev = True
-    response = command.NumericResponse
-    _opcode = 0x5E
+    uses_dtr0 = True
+    uses_dtr1 = True
+    uses_dtr2 = True
+    sendtwice = True
+    _opcode = 0x58
 
 
 class QueryHysteresisMin(_GeneralPurposeSensorCommand):
@@ -85,7 +99,32 @@ class QueryHysteresisMin(_GeneralPurposeSensorCommand):
     _opcode = 0x5A
 
 
+class QueryDeadtimeTimer(_GeneralPurposeSensorCommand):
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5B
+
+
 class QueryReportTimer(_GeneralPurposeSensorCommand):
     inputdev = True
     response = command.NumericResponse
     _opcode = 0x5C
+
+
+class QueryAlarmReportTimer(_GeneralPurposeSensorCommand):
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5D
+
+
+class QueryHysteresis(_GeneralPurposeSensorCommand):
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5E
+
+
+class QueryMeasurementVariable(_GeneralPurposeSensorCommand):
+    inputdev = True
+    uses_dtr0 = True
+    response = command.NumericResponse
+    _opcode = 0x5F

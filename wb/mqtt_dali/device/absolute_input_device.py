@@ -26,6 +26,21 @@ class _AbsoluteInputDeviceCommand(general._StandardInstanceCommand):
     _opcode = None
 
 
+class SetReportTimer(_AbsoluteInputDeviceCommand):
+    """
+    The Report Timer (T_repeat) sets the interval between "repeat" messages.
+    These are sent regardless of the state of the input has not changed.
+
+    Report Timer increments in intervals of 1 second, i.e. the raw value is the
+    actual value, in seconds.
+    """
+
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x10
+
+
 class SetDeadtimeTimer(_AbsoluteInputDeviceCommand):
     """
     If the Deadtime Timer is set, the instance shall not send out an event until
@@ -43,21 +58,6 @@ class SetDeadtimeTimer(_AbsoluteInputDeviceCommand):
     uses_dtr0 = True
     sendtwice = True
     _opcode = 0x11
-
-
-class SetReportTimer(_AbsoluteInputDeviceCommand):
-    """
-    The Report Timer (T_repeat) sets the interval between "repeat" messages.
-    These are sent regardless of the state of the input has not changed.
-
-    Report Timer increments in intervals of 1 second, i.e. the raw value is the
-    actual value, in seconds.
-    """
-
-    inputdev = True
-    uses_dtr0 = True
-    sendtwice = True
-    _opcode = 0x10
 
 
 class QueryDeadtimeTimer(_AbsoluteInputDeviceCommand):
@@ -88,3 +88,9 @@ class QueryReportTimer(_AbsoluteInputDeviceCommand):
     inputdev = True
     response = command.NumericResponse
     _opcode = 0x1E
+
+
+class QuerySwitch(_AbsoluteInputDeviceCommand):
+    inputdev = True
+    response = command.YesNoResponse
+    _opcode = 0x1F

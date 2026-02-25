@@ -26,6 +26,16 @@ class _FeedbackCommand(general._StandardInstanceCommand):
     _opcode = None
 
 
+class ActivateFeedback(_FeedbackCommand):
+    inputdev = True
+    _opcode = 0x10
+
+
+class StopFeedback(_FeedbackCommand):
+    inputdev = True
+    _opcode = 0x11
+
+
 class SetFeedbackTiming(_FeedbackCommand):
     inputdev = True
     uses_dtr0 = True
@@ -73,6 +83,31 @@ class SetActiveFeedbackPitch(_FeedbackCommand):
     uses_dtr0 = True
     sendtwice = True
     _opcode = 0x18
+
+
+class FeedbackCapabilityResponse(command.BitmapResponse):
+    bits = [
+        "visible feedback",
+        "feedback brightness",
+        "feedback colour",
+        "audible feedback",
+        "feedback volume",
+        "feedback pitch",
+        None,
+        None,
+    ]
+
+
+class QueryFeedbackCapability(_FeedbackCommand):
+    inputdev = True
+    response = FeedbackCapabilityResponse
+    _opcode = 0x2F
+
+
+class QueryFeedbackActive(_FeedbackCommand):
+    inputdev = True
+    response = command.YesNoResponse
+    _opcode = 0x2E
 
 
 class QueryFeedbackTiming(_FeedbackCommand):

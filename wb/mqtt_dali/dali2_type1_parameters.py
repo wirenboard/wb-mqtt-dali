@@ -31,11 +31,11 @@ class DoubleTimerParam(InstanceParam):
         self.grid_columns = 3
 
 
-class ReportTimerParam(InstanceParam):
+class RepeatTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Report timer"),
-            "report_timer",
+            SettingsParamName("Repeat timer"),
+            "repeat_timer",
             instance_number,
             QueryRepeatTimer,
             SetRepeatTimer,
@@ -73,7 +73,7 @@ class StuckTimerParam(InstanceParam):
 def build_type1_push_button_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:
     return [
         DoubleTimerParam(instance_number),
-        ReportTimerParam(instance_number),
+        RepeatTimerParam(instance_number),
         ShortTimerParam(instance_number),
         StuckTimerParam(instance_number),
     ]

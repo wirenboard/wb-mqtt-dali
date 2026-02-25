@@ -249,6 +249,7 @@ class InstanceTypeParam(SettingsParamBase):
         3: "Occupancy sensor (3)",
         4: "Light sensor (4)",
         6: "General purpose sensor (6)",
+        32: "Feedback (32)",
     }
 
     def __init__(self, instance_type: int) -> None:

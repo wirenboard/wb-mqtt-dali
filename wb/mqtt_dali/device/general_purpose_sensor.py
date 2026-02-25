@@ -27,40 +27,65 @@ class _GeneralPurposeSensorCommand(general._StandardInstanceCommand):
 
 
 class SetAlarmReportTimer(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x51
 
 
 class SetDeadtimeTimer(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x53
 
 
 class SetHysteresis(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x52
 
 
 class SetHysteresisMin(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x54
 
 
 class SetReportTimer(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    uses_dtr0 = True
+    sendtwice = True
+    _opcode = 0x50
 
 
 class QueryAlarmReportTimer(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5D
 
 
 class QueryDeadtimeTimer(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5B
 
 
 class QueryHysteresis(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5E
 
 
 class QueryHysteresisMin(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5A
 
 
 class QueryReportTimer(_GeneralPurposeSensorCommand):
-    pass  # TODO
+    inputdev = True
+    response = command.NumericResponse
+    _opcode = 0x5C

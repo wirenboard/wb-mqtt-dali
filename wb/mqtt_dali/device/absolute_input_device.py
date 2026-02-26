@@ -9,7 +9,7 @@ from dali import command
 from dali.device import general
 
 # "2" corresponds with "Part 302", as per Table 4 of IEC 62386 part 103
-instance_type = 2
+instance_type = 2  # pylint: disable=C0103
 
 
 ###############################################################################
@@ -17,7 +17,7 @@ instance_type = 2
 ###############################################################################
 
 
-class _AbsoluteInputDeviceCommand(general._StandardInstanceCommand):
+class _AbsoluteInputDeviceCommand(general._StandardInstanceCommand):  # pylint: disable=W0212
     """
     An extension of the standard commands, addressed to an absolute input control
     device instance

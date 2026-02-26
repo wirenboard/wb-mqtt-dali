@@ -9,7 +9,7 @@ from dali import command
 from dali.device import general
 
 # "32" corresponds with "Part 332", as per Table 4 of IEC 62386 part 103
-instance_type = 32
+instance_type = 32  # pylint: disable=C0103
 
 
 ###############################################################################
@@ -17,7 +17,7 @@ instance_type = 32
 ###############################################################################
 
 
-class _FeedbackCommand(general._StandardInstanceCommand):
+class _FeedbackCommand(general._StandardInstanceCommand):  # pylint: disable=W0212
     """
     An extension of the standard commands, addressed to a feedback control
     device instance

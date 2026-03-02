@@ -10,7 +10,7 @@ from .common_dali_device import (
     ControlPollResult,
     DaliDeviceAddress,
     DaliDeviceBase,
-    MqttControl,
+    MqttControlBase,
 )
 from .dali_common_parameters import (
     FadeTimeFadeRateParam,
@@ -22,7 +22,8 @@ from .dali_common_parameters import (
     SystemFailureLevelParam,
 )
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_controls import CONTROLS
+from .dali_controls import CONTROLS, ActualLevelControl
+from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import TypeParameters
 from .dali_type1_parameters import Type1Parameters
 from .dali_type4_parameters import Type4Parameters
@@ -113,6 +114,7 @@ class DaliDevice(DaliDeviceBase):
         self._type8_handler: Optional[Type8Parameters] = None
         self._types_lock = asyncio.Lock()
         self._type_handlers: list[TypeParameters] = []
+        self._dimming_curve_state = DimmingCurveState()
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         await super().load_info(driver, force_reload)
@@ -124,19 +126,19 @@ class DaliDevice(DaliDeviceBase):
             res.extend(await self._type8_handler.poll_controls(driver, self.address.short))
         return res
 
-    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
+    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
         try:
-            await self._read_types(driver)
+            await self._read_mandatory_info(driver)
         except Exception as e:
             self.logger.error("Failed to read gear types for device %s: %s", self.name, e)
-        res = []
+        res: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
         res.extend(CONTROLS)
         for type_handler in self._type_handlers:
-            res.extend(await type_handler.get_mqtt_controls(driver, self.address.short))
+            res.extend(type_handler.get_mqtt_controls())
         return res
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        await self._read_types(driver)
+        await self._read_mandatory_info(driver)
         res: list[SettingsParamBase] = [
             GroupsParam(),
             MaxLevelParam(),
@@ -150,7 +152,7 @@ class DaliDevice(DaliDeviceBase):
             res.append(type_handler)
         return res
 
-    async def _read_types(self, driver: WBDALIDriver) -> None:
+    async def _read_mandatory_info(self, driver: WBDALIDriver) -> None:
         async with self._types_lock:
             if self.types:
                 return
@@ -163,12 +165,16 @@ class DaliDevice(DaliDeviceBase):
 
             gear_type_params = {
                 DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
-                DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(),
-                DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(),
-                DaliDeviceType.LED_MODULES: Type6Parameters(),
+                DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(
+                    self._dimming_curve_state
+                ),
+                DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(
+                    self._dimming_curve_state
+                ),
+                DaliDeviceType.LED_MODULES: Type6Parameters(self._dimming_curve_state),
                 DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
                 DaliDeviceType.THERMAL_GEAR_PROTECTION: Type16Parameters(),
-                DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(),
+                DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(self._dimming_curve_state),
                 DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
                 DaliDeviceType.THERMAL_LAMP_PROTECTION: Type21Parameters(),
                 DaliDeviceType.INTEGRATED_POWER_SUPPLY: Type49Parameters(),
@@ -185,3 +191,6 @@ class DaliDevice(DaliDeviceBase):
                     self._type_handlers.append(type_handler)
                 except (ValueError, KeyError):
                     continue
+
+            for handler in self._type_handlers:
+                await handler.read_mandatory_info(driver, self.address.short)

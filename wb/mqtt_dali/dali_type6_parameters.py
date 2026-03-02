@@ -9,6 +9,7 @@ from dali.gear.led import (
     StoreDTRAsFastFadeTime,
 )
 
+from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
 from .settings import SettingsParamName
 from .wbdali_utils import WBDALIDriver, query_int
@@ -18,8 +19,8 @@ class Type6DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    def __init__(self) -> None:
-        super().__init__("type_6_dimming_curve")
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__("type_6_dimming_curve", dimming_curve_state)
 
 
 class FastFadeTimeParam(NumberGearParam):
@@ -41,9 +42,13 @@ class FastFadeTimeParam(NumberGearParam):
 
 
 class Type6Parameters(TypeParameters):
-    def __init__(self) -> None:
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__()
+        self._dimming_curve_parameter = Type6DimmingCurveParam(dimming_curve_state)
         self._parameters = [
-            Type6DimmingCurveParam(),
+            self._dimming_curve_parameter,
             FastFadeTimeParam(),
         ]
+
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+        await self._dimming_curve_parameter.read(driver, short_address)

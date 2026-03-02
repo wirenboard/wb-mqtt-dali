@@ -40,7 +40,7 @@ from dali.gear.general import (
     SetSystemFailureLevel,
 )
 
-from .common_dali_device import ControlPollResult, MqttControl
+from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo, ControlMeta
@@ -660,10 +660,12 @@ class Type8Parameters(TypeParameters):
         self._parameters = parameters
         return await super().read(driver, short_address)
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
         async with self._colour_type_lock:
             if self._current_colour_type is None:
                 self._current_colour_type = await self._read_current_colour_type(driver, short_address)
+
+    def get_mqtt_controls(self) -> list[MqttControlBase]:
 
         if self._current_colour_type == ColourType.RGBWAF:
 
@@ -694,7 +696,7 @@ class Type8Parameters(TypeParameters):
                 MqttControl(
                     ControlInfo(
                         "current_rgb",
-                        ControlMeta(title="Current RGB", read_only=True),
+                        ControlMeta("rgb", "Current RGB", read_only=True),
                         "0;0;0",
                     ),
                 ),
@@ -931,7 +933,7 @@ class Type8Parameters(TypeParameters):
                         None
                         if set_error
                         else ";".join(
-                            str(getattr(resp.colour, colour.value)) for colour in RGBW_COLOUR_COMPONENTS
+                            str(getattr(resp.colour, colour)) for colour in ["red", "green", "blue"]
                         )
                     ),
                     error="r" if set_error else None,

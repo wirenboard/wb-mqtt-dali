@@ -2,17 +2,16 @@
 
 from dali.address import GearShort
 
-from .common_dali_device import MqttControl
+from .common_dali_device import MqttControl, MqttControlBase
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.integrated_power_supply import QueryActivePowerSupply
-from .wbdali_utils import WBDALIDriver
 from .wbmqtt import ControlMeta
 
 
 class Type49Parameters(TypeParameters):
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+    def get_mqtt_controls(self) -> list[MqttControlBase]:
         return [
             MqttControl(
                 control_info=ControlInfo(

@@ -7,6 +7,7 @@ from dali.gear.converter import (
     SelectDimmingCurve,
 )
 
+from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, TypeParameters
 from .wbdali_utils import WBDALIDriver, query_response
 
@@ -17,17 +18,24 @@ class Type5DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    def __init__(self) -> None:
-        super().__init__("type_5_dimming_curve")
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__("type_5_dimming_curve", dimming_curve_state)
 
 
 class Type5Parameters(TypeParameters):
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__()
+        self._dimming_curve_state = dimming_curve_state
+        self._dimming_curve_parameter = None
+
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
         try:
             features = await query_response(driver, QueryConverterFeatures(GearShort(short_address)))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if getattr(features, "nonlogarithmic_dimming_curve_supported") is True:
-            self._parameters = [Type5DimmingCurveParam()]
-            return await super().read(driver, short_address)
-        return {}
+            self._dimming_curve_parameter = Type5DimmingCurveParam(self._dimming_curve_state)
+            self._parameters = [self._dimming_curve_parameter]
+            await self._dimming_curve_parameter.read(driver, short_address)
+        else:
+            self._dimming_curve_parameter = None

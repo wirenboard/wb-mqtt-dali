@@ -1,3 +1,5 @@
+from typing import Optional
+
 from dali.address import GearShort
 from dali.command import Command, Response
 from dali.gear.general import (
@@ -16,18 +18,11 @@ from dali.gear.general import (
     Up,
 )
 
-from .common_dali_device import MqttControl
+from .common_dali_device import MqttControl, MqttControlBase
 from .dali_common_parameters import SCENES_TOTAL
+from .dali_dimming_curve import DimmingCurveState
 from .device_publisher import ControlInfo
 from .wbmqtt import ControlMeta, TranslatedTitle
-
-
-def _build_actual_level_query(short_address: int) -> QueryActualLevel:
-    return QueryActualLevel(GearShort(short_address))
-
-
-def _format_actual_level(response: Response) -> str:
-    return str(response.raw_value.as_integer)
 
 
 def _build_error_status_query(short_address: int) -> QueryStatus:
@@ -58,12 +53,24 @@ def handle_dapc(short_address: int, value: str) -> list[Command]:
     return [DAPC(GearShort(short_address), power)]
 
 
-CONTROLS: list[MqttControl] = [
-    MqttControl(
-        ControlInfo("actual_level", ControlMeta(title="Actual Level", read_only=True), "0"),
-        query_builder=_build_actual_level_query,
-        value_formatter=_format_actual_level,
-    ),
+class ActualLevelControl(MqttControlBase):
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__(
+            ControlInfo("actual_level", ControlMeta(title="Actual Level", read_only=True, units="%"), "0")
+        )
+        self._dimming_curve_state = dimming_curve_state
+
+    def get_query(self, short_address: int) -> Optional[Command]:
+        return QueryActualLevel(GearShort(short_address))
+
+    def format_response(self, response: Response) -> str:
+        return f"{self._dimming_curve_state.get_level(response.raw_value.as_integer):.3f}"
+
+    def is_readable(self) -> bool:
+        return True
+
+
+CONTROLS: list[MqttControlBase] = [
     MqttControl(
         ControlInfo("error_status", ControlMeta("alarm", "Error Status", read_only=True), "0"),
         query_builder=_build_error_status_query,
@@ -114,7 +121,7 @@ CONTROLS: list[MqttControl] = [
             "go_to_scene",
             ControlMeta(
                 title="Go To Scene",
-                enum={str(i): {} for i in range(SCENES_TOTAL)},
+                enum={str(i): TranslatedTitle() for i in range(SCENES_TOTAL)},
             ),
             "0",
         ),

@@ -3,7 +3,7 @@
 from dali.address import GearShort
 from dali.command import Response
 
-from .common_dali_device import MqttControl
+from .common_dali_device import MqttControl, MqttControlBase
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo, ControlMeta, TranslatedTitle
 from .gear.switching_function import (
@@ -98,7 +98,7 @@ class Type7Parameters(TypeParameters):
         self._parameters = res
         return await super().read(driver, short_address)
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+    def get_mqtt_controls(self) -> list[MqttControlBase]:
 
         def format_last_acted(value: Response) -> str:
             if isinstance(value, SwitchingFunctionSwitchStatusResponse):

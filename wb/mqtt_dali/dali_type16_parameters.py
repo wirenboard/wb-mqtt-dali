@@ -3,11 +3,10 @@
 from dali.address import GearShort
 from dali.command import Response
 
-from .common_dali_device import MqttControl
+from .common_dali_device import MqttControl, MqttControlBase
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.thermal_gear_protection import FailureStatusResponse, QueryFailureStatus
-from .wbdali_utils import WBDALIDriver
 from .wbmqtt import ControlMeta, TranslatedTitle
 
 
@@ -22,7 +21,7 @@ def _format_failure_status(value: Response) -> str:
 
 class Type16Parameters(TypeParameters):
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+    def get_mqtt_controls(self) -> list[MqttControlBase]:
         return [
             MqttControl(
                 control_info=ControlInfo(

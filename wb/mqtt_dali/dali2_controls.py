@@ -121,12 +121,23 @@ def get_absolute_input_device_controls(instance_index: int) -> list[MqttControl]
     return [
         MqttControl(
             ControlInfo(
+                id=f"position{instance_index}",
+                meta=ControlMeta(
+                    title=f"Position {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            ),
+        ),
+        MqttControl(
+            ControlInfo(
                 id=f"switch{instance_index}",
                 meta=ControlMeta(
                     "switch",
                     f"Switch {instance_index}",
                     read_only=True,
-                    order=instance_index * 10 + 1,
+                    order=instance_index * 10 + 2,
                 ),
                 value="0",
             ),
@@ -245,6 +256,11 @@ async def publish_dali2_event(command: _Event, device_mqtt_id: str, mqtt_client:
     if isinstance(command, DoublePress):
         await publish_event(
             mqtt_client, device_mqtt_id, f"double_press{command.instance_number}", "1", retain=False
+        )
+
+    if isinstance(command, absolute_input_device.PositionEvent):
+        await publish_event(
+            mqtt_client, device_mqtt_id, f"position{command.instance_number}", str(command.position)
         )
 
     if isinstance(command, general_purpose_sensor.MeasurementEvent):

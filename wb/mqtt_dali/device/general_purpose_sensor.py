@@ -5,11 +5,46 @@ General purpose sensor"
 
 from __future__ import annotations
 
-from dali import command
+from dali import command, frame
 from dali.device import general
 
 # "6" corresponds with "Part 306", as per Table 4 of IEC 62386 part 103
 instance_type = 6  # pylint: disable=C0103
+
+
+class MeasurementEvent(general._Event):
+    _instance_type = instance_type
+    _event_info = 0
+
+    @classmethod
+    def _register_subclass(cls, subclass):
+        raise RuntimeError(
+            "Called MeasurementEvent._register_subclass()! There should be no "
+            "subclasses of MeasurementEvent."
+        )
+
+    @classmethod
+    def from_event_data(cls, event_data: int):
+        if event_data & (1 << 9):
+            return MeasurementEvent
+
+        return None
+
+    @property
+    def event_data(self):
+        return self._event_info
+
+    def _set_event_data(self, set_data: int, set_frame: frame.Frame):
+        if not isinstance(set_data, int):
+            raise ValueError("MeasurementEvent requires 'data' to be set as an 'int'")
+
+        self._event_info = set_data
+
+        set_frame[8:0] = set_data
+
+    @property
+    def measurement(self) -> int:
+        return self._event_info
 
 
 ###############################################################################

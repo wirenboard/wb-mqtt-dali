@@ -42,6 +42,7 @@ from .dali2_controls import (
     get_absolute_input_device_controls,
     get_button_controls,
     get_feedback_controls,
+    get_general_purpose_sensor_controls,
     get_light_controls,
     get_occupancy_controls,
 )
@@ -431,6 +432,8 @@ class Dali2Device(DaliDeviceBase):
                 return_controls.extend(get_button_controls(instance.instance_number.value))
             elif instance.instance_type == absolute_input_device.instance_type:
                 return_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
+            elif instance.instance_type == general_purpose_sensor.instance_type:
+                return_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
             elif instance.instance_type == feedback.instance_type:
                 return_controls.extend(get_feedback_controls(instance.instance_number.value))
         return return_controls

@@ -1,4 +1,5 @@
 import asyncio_mqtt as aiomqtt
+from dali.address import DeviceShort
 from dali.device.general import _Event
 from dali.device.light import LightEvent
 from dali.device.occupancy import OccupancyEvent
@@ -13,6 +14,7 @@ from dali.device.pushbutton import (
 )
 
 from .common_dali_device import MqttControl
+from .device import absolute_input_device, feedback, general_purpose_sensor
 from .device_publisher import ControlInfo
 from .wbmqtt import ControlMeta
 
@@ -115,6 +117,86 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
     ]
 
 
+def get_absolute_input_device_controls(instance_index: int) -> list[MqttControl]:
+    return [
+        MqttControl(
+            ControlInfo(
+                id=f"position{instance_index}",
+                meta=ControlMeta(
+                    title=f"Position {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            ),
+        ),
+        MqttControl(
+            ControlInfo(
+                id=f"switch{instance_index}",
+                meta=ControlMeta(
+                    "switch",
+                    f"Switch {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 2,
+                ),
+                value="0",
+            ),
+            query_builder=lambda short_address: absolute_input_device.QuerySwitch(
+                DeviceShort(short_address), instance_index
+            ),
+        ),
+    ]
+
+
+def get_general_purpose_sensor_controls(instance_index: int) -> list[MqttControl]:
+    return [
+        MqttControl(
+            ControlInfo(
+                id=f"measurement{instance_index}",
+                meta=ControlMeta(
+                    title=f"Measurement {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            ),
+        ),
+    ]
+
+
+def get_feedback_controls(instance_index: int) -> list[MqttControl]:
+    return [
+        MqttControl(
+            ControlInfo(
+                id=f"activate_feedback{instance_index}",
+                meta=ControlMeta(
+                    "pushbutton",
+                    f"Activate feedback {instance_index}",
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            ),
+            commands_builder=lambda short_address, _: [
+                feedback.ActivateFeedback(DeviceShort(short_address), instance_index)
+            ],
+        ),
+        MqttControl(
+            ControlInfo(
+                id=f"stop_feedback{instance_index}",
+                meta=ControlMeta(
+                    "pushbutton",
+                    f"Stop feedback {instance_index}",
+                    order=instance_index * 10 + 2,
+                ),
+                value="0",
+            ),
+            commands_builder=lambda short_address, _: [
+                feedback.StopFeedback(DeviceShort(short_address), instance_index)
+            ],
+        ),
+    ]
+
+
 async def publish_event(
     mqtt_client: aiomqtt.Client, device_id: str, control_id: str, value: str, retain: bool = True
 ) -> None:
@@ -174,4 +256,14 @@ async def publish_dali2_event(command: _Event, device_mqtt_id: str, mqtt_client:
     if isinstance(command, DoublePress):
         await publish_event(
             mqtt_client, device_mqtt_id, f"double_press{command.instance_number}", "1", retain=False
+        )
+
+    if isinstance(command, absolute_input_device.PositionEvent):
+        await publish_event(
+            mqtt_client, device_mqtt_id, f"position{command.instance_number}", str(command.position)
+        )
+
+    if isinstance(command, general_purpose_sensor.MeasurementEvent):
+        await publish_event(
+            mqtt_client, device_mqtt_id, f"measurement{command.instance_number}", str(command.measurement)
         )

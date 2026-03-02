@@ -5,11 +5,42 @@ Absolute input devices"
 
 from __future__ import annotations
 
-from dali import command
+from dali import command, frame
 from dali.device import general
 
 # "2" corresponds with "Part 302", as per Table 4 of IEC 62386 part 103
 instance_type = 2  # pylint: disable=C0103
+
+
+class PositionEvent(general._Event):
+    _instance_type = instance_type
+    _event_info = 0
+
+    @classmethod
+    def _register_subclass(cls, subclass):
+        raise RuntimeError(
+            "Called PositionEvent._register_subclass()! There should be no subclasses of PositionEvent."
+        )
+
+    @classmethod
+    def from_event_data(cls, event_data: int):
+        return PositionEvent
+
+    @property
+    def event_data(self):
+        return self._event_info
+
+    def _set_event_data(self, set_data: int, set_frame: frame.Frame):
+        if not isinstance(set_data, int):
+            raise ValueError("PositionEvent requires 'data' to be set as an 'int'")
+
+        self._event_info = set_data
+
+        set_frame[9:0] = set_data
+
+    @property
+    def position(self) -> int:
+        return self._event_info
 
 
 ###############################################################################

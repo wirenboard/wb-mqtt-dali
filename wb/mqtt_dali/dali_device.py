@@ -130,7 +130,7 @@ class DaliDevice(DaliDeviceBase):
         try:
             await self._read_mandatory_info(driver)
         except Exception as e:
-            self.logger.error("Failed to read gear types for device %s: %s", self.name, e)
+            self.logger.error("Failed to read mandatory information for device %s: %s", self.name, e)
         res: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
         res.extend(CONTROLS)
         for type_handler in self._type_handlers:

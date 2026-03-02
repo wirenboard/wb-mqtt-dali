@@ -269,14 +269,10 @@ class DimmingCurveState:
         self.curve_type = DimmingCurveType.LOGARITHMIC
 
     def get_level(self, value_from_register: int) -> float:
-        if self.curve_type == DimmingCurveType.LINEAR:
-            if value_from_register < 1:
-                return 0.0
-            if value_from_register >= 254:
-                return 100.0
-            return round(value_from_register * 100.0 / 254.0, 3)
-        if DIMMING_CURVE.get(value_from_register) is not None:
-            return DIMMING_CURVE[value_from_register]
-        if value_from_register > DIMMING_CURVE[len(DIMMING_CURVE) - 1]:
+        if value_from_register < 1:
+            return 0.0
+        if value_from_register >= 254:
             return 100.0
-        return 0.0
+        if self.curve_type == DimmingCurveType.LINEAR:
+            return round(value_from_register * 100.0 / 254.0, 3)
+        return DIMMING_CURVE[value_from_register]

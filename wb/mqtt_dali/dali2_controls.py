@@ -130,9 +130,9 @@ def get_absolute_input_device_controls(instance_index: int) -> list[MqttControl]
                 ),
                 value="0",
             ),
-            query_builder=lambda short_address, _: [
-                absolute_input_device.QuerySwitch(DeviceShort(short_address), instance_index)
-            ],
+            query_builder=lambda short_address: absolute_input_device.QuerySwitch(
+                DeviceShort(short_address), instance_index
+            ),
         ),
     ]
 

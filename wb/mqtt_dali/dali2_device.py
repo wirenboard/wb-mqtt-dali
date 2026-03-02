@@ -427,4 +427,6 @@ class Dali2Device(DaliDeviceBase):
                 return_controls.extend(get_light_controls(instance.instance_number.value))
             elif instance.instance_type == pushbutton.instance_type:
                 return_controls.extend(get_button_controls(instance.instance_number.value))
+            elif instance.instance_type == feedback.instance_type:
+                return_controls.extend(get_feedback_controls(instance.instance_number.value))
         return return_controls

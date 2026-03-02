@@ -1,4 +1,5 @@
 import asyncio_mqtt as aiomqtt
+from dali.address import DeviceShort
 from dali.device.general import _Event
 from dali.device.light import LightEvent
 from dali.device.occupancy import OccupancyEvent
@@ -13,6 +14,7 @@ from dali.device.pushbutton import (
 )
 
 from .common_dali_device import MqttControl
+from .device import feedback
 from .device_publisher import ControlInfo
 from .wbmqtt import ControlMeta
 
@@ -111,6 +113,39 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
                 ),
                 value="0",
             )
+        ),
+    ]
+
+
+def get_feedback_controls(instance_index: int) -> list[MqttControl]:
+    return [
+        MqttControl(
+            ControlInfo(
+                id=f"activate_feedback{instance_index}",
+                meta=ControlMeta(
+                    "pushbutton",
+                    f"Activate feedback {instance_index}",
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            ),
+            commands_builder=lambda short_address, _: [
+                feedback.ActivateFeedback(DeviceShort(short_address), instance_index)
+            ],
+        ),
+        MqttControl(
+            ControlInfo(
+                id=f"stop_feedback{instance_index}",
+                meta=ControlMeta(
+                    "pushbutton",
+                    f"Stop feedback {instance_index}",
+                    order=instance_index * 10 + 2,
+                ),
+                value="0",
+            ),
+            commands_builder=lambda short_address, _: [
+                feedback.StopFeedback(DeviceShort(short_address), instance_index)
+            ],
         ),
     ]
 

@@ -14,7 +14,7 @@ from dali.device.pushbutton import (
 )
 
 from .common_dali_device import MqttControl
-from .device import feedback
+from .device import absolute_input_device, feedback
 from .device_publisher import ControlInfo
 from .wbmqtt import ControlMeta
 
@@ -113,6 +113,26 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
                 ),
                 value="0",
             )
+        ),
+    ]
+
+
+def get_absolute_input_device_controls(instance_index: int) -> list[MqttControl]:
+    return [
+        MqttControl(
+            ControlInfo(
+                id=f"switch{instance_index}",
+                meta=ControlMeta(
+                    "switch",
+                    f"Switch {instance_index}",
+                    read_only=True,
+                    order=instance_index * 10 + 1,
+                ),
+                value="0",
+            ),
+            query_builder=lambda short_address, _: [
+                absolute_input_device.QuerySwitch(DeviceShort(short_address), instance_index)
+            ],
         ),
     ]
 

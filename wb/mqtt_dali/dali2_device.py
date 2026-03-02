@@ -39,7 +39,9 @@ from dali.device.general import (
 from .common_dali_device import DaliDeviceBase, MqttControl
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import (
+    get_absolute_input_device_controls,
     get_button_controls,
+    get_feedback_controls,
     get_light_controls,
     get_occupancy_controls,
 )

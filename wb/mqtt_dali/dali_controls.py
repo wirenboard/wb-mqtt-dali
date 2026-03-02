@@ -114,7 +114,7 @@ CONTROLS: list[MqttControl] = [
             "go_to_scene",
             ControlMeta(
                 title="Go To Scene",
-                enum={str(i): TranslatedTitle(str(i)) for i in range(SCENES_TOTAL)},
+                enum={str(i): {} for i in range(SCENES_TOTAL)},
             ),
             "0",
         ),

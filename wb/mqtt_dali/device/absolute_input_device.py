@@ -19,8 +19,7 @@ class PositionEvent(general._Event):
     @classmethod
     def _register_subclass(cls, subclass):
         raise RuntimeError(
-            "Called PositionEvent._register_subclass()! There should be no "
-            "subclasses of PositionEvent."
+            "Called PositionEvent._register_subclass()! There should be no subclasses of PositionEvent."
         )
 
     @classmethod

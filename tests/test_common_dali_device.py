@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import (
+    DaliDeviceAddress,
+    DaliDeviceBase,
+    MqttControlBase,
+)
 
 # Prevent file system access in __init__ by providing a non-empty common schema
 DaliDeviceBase._common_schema = {"title": "test-schema"}
@@ -421,8 +425,8 @@ async def test_poll_controls_returns_error_when_response_is_none():
     control.control_info.id = "c1"
     control.control_info.meta = MagicMock()
     control.control_info.meta.control_type = "value"
-    control.query_builder = MagicMock(return_value="Q1")
-    control.value_formatter = MagicMock(return_value="formatted")
+    control.get_query = MagicMock(return_value="Q1")
+    control.format_response = MagicMock(return_value="formatted")
 
     d._polling_controls = [control]
     d._update_mqtt_controls_list = AsyncMock()
@@ -437,7 +441,7 @@ async def test_poll_controls_returns_error_when_response_is_none():
     assert res[0].control_id == "c1"
     assert res[0].value == ""
     assert res[0].error == "r"
-    control.value_formatter.assert_not_called()
+    control.format_response.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -509,8 +513,8 @@ async def test_poll_controls_formats_regular_control_value():
     control.control_info.id = "brightness"
     control.control_info.meta = MagicMock()
     control.control_info.meta.control_type = "value"
-    control.query_builder = MagicMock(return_value="Q_BRIGHT")
-    control.value_formatter = MagicMock(return_value="77")
+    control.get_query = MagicMock(return_value="Q_BRIGHT")
+    control.format_response = MagicMock(return_value="77")
 
     response = MagicMock()
     response.raw_value = MagicMock()
@@ -522,8 +526,8 @@ async def test_poll_controls_formats_regular_control_value():
 
     res = await d.poll_controls(driver)
 
-    control.query_builder.assert_called_once_with(d.address.short)
-    control.value_formatter.assert_called_once_with(response)
+    control.get_query.assert_called_once_with(d.address.short)
+    control.format_response.assert_called_once_with(response)
     assert len(res) == 1
     assert res[0].control_id == "brightness"
     assert res[0].value == "77"
@@ -541,8 +545,8 @@ async def test_poll_controls_alarm_control_active_when_response_error_true():
     control.control_info.id = "alarm1"
     control.control_info.meta = MagicMock()
     control.control_info.meta.control_type = "alarm"
-    control.query_builder = MagicMock(return_value="Q_ALARM")
-    control.value_formatter = MagicMock(return_value="Lamp failure")
+    control.get_query = MagicMock(return_value="Q_ALARM")
+    control.format_response = MagicMock(return_value="Lamp failure")
 
     response = MagicMock()
     response.raw_value = MagicMock()
@@ -560,7 +564,7 @@ async def test_poll_controls_alarm_control_active_when_response_error_true():
     assert res[0].value == "1"
     assert res[0].title == "Lamp failure"
     assert res[0].error is None
-    control.value_formatter.assert_called_once_with(response)
+    control.format_response.assert_called_once_with(response)
 
 
 @pytest.mark.asyncio
@@ -573,8 +577,8 @@ async def test_poll_controls_alarm_control_inactive_when_response_error_false_or
     control.control_info.id = "alarm2"
     control.control_info.meta = MagicMock()
     control.control_info.meta.control_type = "alarm"
-    control.query_builder = MagicMock(return_value="Q_ALARM2")
-    control.value_formatter = MagicMock(return_value="No alarms")
+    control.get_query = MagicMock(return_value="Q_ALARM2")
+    control.format_response = MagicMock(return_value="No alarms")
 
     response = MagicMock()
     response.raw_value = MagicMock()
@@ -605,24 +609,24 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     c1.control_info.id = "regular"
     c1.control_info.meta = MagicMock()
     c1.control_info.meta.control_type = "value"
-    c1.query_builder = MagicMock(return_value="Q1")
-    c1.value_formatter = MagicMock(return_value="11")
+    c1.get_query = MagicMock(return_value="Q1")
+    c1.format_response = MagicMock(return_value="11")
 
     c2 = MagicMock()
     c2.control_info = MagicMock()
     c2.control_info.id = "alarm"
     c2.control_info.meta = MagicMock()
     c2.control_info.meta.control_type = "alarm"
-    c2.query_builder = MagicMock(return_value="Q2")
-    c2.value_formatter = MagicMock(return_value="Alarm text")
+    c2.get_query = MagicMock(return_value="Q2")
+    c2.format_response = MagicMock(return_value="Alarm text")
 
     c3 = MagicMock()
     c3.control_info = MagicMock()
     c3.control_info.id = "bad"
     c3.control_info.meta = MagicMock()
     c3.control_info.meta.control_type = "value"
-    c3.query_builder = MagicMock(return_value="Q3")
-    c3.value_formatter = MagicMock(return_value="should_not_be_used")
+    c3.get_query = MagicMock(return_value="Q3")
+    c3.format_response = MagicMock(return_value="should_not_be_used")
 
     r1 = MagicMock()
     r1.raw_value = MagicMock()
@@ -648,7 +652,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     assert res[1].title == "Alarm text"
     assert res[2].value == ""
     assert res[2].error == "r"
-    c3.value_formatter.assert_not_called()
+    c3.format_response.assert_not_called()
 
 
 @pytest.mark.asyncio

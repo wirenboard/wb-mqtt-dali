@@ -21,18 +21,60 @@ from .utils import merge_json_schemas
 from .wbdali_utils import WBDALIDriver
 
 
-@dataclass(frozen=True)
-class MqttControl:
-    # the property value is used as default value for the control
-    control_info: ControlInfo
+class MqttControlBase:
+    def __init__(self, control_info: ControlInfo) -> None:
+        # the property value is used as default value for the control
+        self.control_info = control_info
 
-    query_builder: Optional[Callable[[int], object]] = None
+    def is_readable(self) -> bool:
+        return False
 
-    value_formatter: Optional[Callable[[Response], str]] = None
+    def is_writable(self) -> bool:
+        return False
 
-    # Callable first parameter is short address, second parameter is desired control value in string format.
-    # Returns list of DALI commands to execute
-    commands_builder: Optional[Callable[[int, str], list[Command]]] = None
+    def get_query(self, short_address: int) -> Optional[Command]:
+        return None
+
+    def format_response(self, response: Response) -> str:
+        return ""
+
+    def get_setup_commands(self, short_address: int, value_to_set: str) -> list[Command]:
+        return []
+
+
+class MqttControl(MqttControlBase):
+    def __init__(
+        self,
+        control_info: ControlInfo,
+        query_builder: Optional[Callable[[int], object]] = None,
+        value_formatter: Optional[Callable[[Response], str]] = None,
+        commands_builder: Optional[Callable[[int, str], list[Command]]] = None,
+    ) -> None:
+        super().__init__(control_info)
+        self.query_builder = query_builder
+        self.value_formatter = value_formatter
+        self.commands_builder = commands_builder
+
+    def get_query(self, short_address: int) -> Optional[Command]:
+        if self.query_builder is not None:
+            return self.query_builder(short_address)
+        return None
+
+    def format_response(self, response: Response) -> str:
+        if self.value_formatter is not None:
+            return self.value_formatter(response)
+        return ""
+
+    def get_setup_commands(self, short_address: int, value_to_set: str) -> list[Command]:
+        if self.commands_builder is not None:
+            return self.commands_builder(short_address, value_to_set)
+        return []
+
+    def is_readable(self) -> bool:
+        return self.query_builder is not None and self.value_formatter is not None
+
+    def is_writable(self) -> bool:
+        return self.commands_builder is not None
 
 
 @dataclass
@@ -192,8 +234,8 @@ class DaliDeviceBase:
         self._parameter_handlers: list[SettingsParamBase] = []
 
         self._controls_lock = asyncio.Lock()
-        self._controls: dict[str, MqttControl] = {}
-        self._polling_controls: list[MqttControl] = []
+        self._controls: dict[str, MqttControlBase] = {}
+        self._polling_controls: list[MqttControlBase] = []
 
         self._compat = compat
 
@@ -285,15 +327,19 @@ class DaliDeviceBase:
 
     async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:
         control = self._controls.get(control_id)
-        if control is not None and control.commands_builder is not None:
-            await driver.send_commands(control.commands_builder(self.address.short, value), source="control")
+        if control is not None and control.is_writable():
+            await driver.send_commands(
+                control.get_setup_commands(self.address.short, value), source="control"
+            )
             return
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         await self._update_mqtt_controls_list(driver)
         queries = []
         for descriptor in self._polling_controls:
-            queries.append(descriptor.query_builder(self.address.short))
+            queries.append(descriptor.get_query(self.address.short))
+        if not queries:
+            return []
         responses = await driver.send_commands(queries, source="polling")
 
         res = []
@@ -303,7 +349,7 @@ class DaliDeviceBase:
                 continue
 
             if descriptor.control_info.meta.control_type == "alarm":
-                alarm_title = descriptor.value_formatter(response)
+                alarm_title = descriptor.format_response(response)
                 alarm_active = "1" if getattr(response, "error", False) else "0"
                 res.append(
                     ControlPollResult(
@@ -317,7 +363,7 @@ class DaliDeviceBase:
             res.append(
                 ControlPollResult(
                     control_id=descriptor.control_info.id,
-                    value=descriptor.value_formatter(response),
+                    value=descriptor.format_response(response),
                 )
             )
         return res
@@ -347,7 +393,7 @@ class DaliDeviceBase:
                 self._polling_controls = []
                 self._controls = {}
                 for control in controls:
-                    if control.query_builder is not None and control.value_formatter is not None:
+                    if control.is_readable():
                         self._polling_controls.append(control)
                     self._controls[control.control_info.id] = control
 
@@ -356,5 +402,5 @@ class DaliDeviceBase:
         raise NotImplementedError()
 
     # Can be implemented by subclasses to provide controls for MQTT topics
-    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
+    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
         return []

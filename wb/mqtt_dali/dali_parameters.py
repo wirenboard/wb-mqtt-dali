@@ -5,7 +5,8 @@ from dali.address import GearShort
 from dali.command import Command
 from dali.gear.general import DTR0
 
-from .common_dali_device import MqttControl
+from .common_dali_device import MqttControlBase
+from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
 from .utils import add_enum, add_translations, merge_json_schemas
 from .wbdali_utils import WBDALIDriver
@@ -70,18 +71,38 @@ class TypeParameters(SettingsParamBase):
             merge_json_schemas(res, param.get_schema())
         return res
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+    def get_mqtt_controls(self) -> list[MqttControlBase]:
         return []
+
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+        """
+        Must be called before any other read or write operations
+        to ensure that all mandatory parameters are read and available.
+        """
 
 
 class DimmingCurveParam(NumberGearParam):
 
-    def __init__(self, property_name: str) -> None:
+    def __init__(self, property_name: str, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), property_name)
+        self._dimming_curve_state = dimming_curve_state
+
+    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+        res = await super().read(driver, short_address)
+        self._dimming_curve_state.curve_type = DimmingCurveType(self.value)
+        return res
+
+    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+        res = await super().write(driver, short_address, value)
+        self._dimming_curve_state.curve_type = DimmingCurveType(self.value)
+        return res
 
     def get_schema(self) -> dict:
         schema = super().get_schema()
-        add_enum(schema["properties"][self.property_name], [(0, "standard"), (1, "linear")])
+        add_enum(
+            schema["properties"][self.property_name],
+            [(DimmingCurveType.LOGARITHMIC, "standard"), (DimmingCurveType.LINEAR, "linear")],
+        )
         add_translations(
             schema,
             "ru",

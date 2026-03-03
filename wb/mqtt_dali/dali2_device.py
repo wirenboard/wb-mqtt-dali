@@ -36,7 +36,7 @@ from dali.device.general import (
     SetPrimaryInstanceGroup,
 )
 
-from .common_dali_device import DaliDeviceBase, MqttControl
+from .common_dali_device import DaliDeviceBase, MqttControlBase
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import (
     get_absolute_input_device_controls,
@@ -421,8 +421,8 @@ class Dali2Device(DaliDeviceBase):
         handlers.extend(self.instances.values())
         return handlers
 
-    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControl]:
-        return_controls: list[MqttControl] = []
+    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
+        return_controls: list[MqttControlBase] = []
         for instance in self.instances.values():
             if instance.instance_type == occupancy.instance_type:
                 return_controls.extend(get_occupancy_controls(instance.instance_number.value))

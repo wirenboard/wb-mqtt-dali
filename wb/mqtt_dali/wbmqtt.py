@@ -30,6 +30,7 @@ class ControlMeta:
         enum: Optional[dict[str, Optional[TranslatedTitle]]] = None,
         minimum: Optional[Union[int, float]] = None,
         maximum: Optional[Union[int, float]] = None,
+        units: Optional[str] = None,
     ) -> None:
         self.control_type = control_type
         if isinstance(title, str):
@@ -41,6 +42,7 @@ class ControlMeta:
         self.enum = enum
         self.minimum = minimum
         self.maximum = maximum
+        self.units = units
 
 
 @dataclass
@@ -199,6 +201,8 @@ class Device:
             meta_dict["min"] = meta.minimum
         if meta.maximum is not None:
             meta_dict["max"] = meta.maximum
+        if meta.units is not None:
+            meta_dict["units"] = meta.units
         if meta.enum is not None:
             enum = {}
             for key, value in meta.enum.items():

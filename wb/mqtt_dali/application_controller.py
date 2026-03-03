@@ -465,7 +465,12 @@ class ApplicationController:
         tasks = []
         for device_responses, device in zip(responses, devices):
             if isinstance(device_responses, BaseException):
-                self.logger.warning("Error polling device %s", device.name)
+                self.logger.warning(
+                    "Error polling device %s: %s",
+                    device.name,
+                    str(device_responses),
+                    exc_info=device_responses,
+                )
                 continue
             for response in device_responses:
                 if response.error is not None:

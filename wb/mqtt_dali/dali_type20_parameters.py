@@ -2,7 +2,7 @@
 
 from dali.address import GearShort
 
-from .common_dali_device import MqttControl
+from .common_dali_device import MqttControl, MqttControlBase
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo
 from .gear.demand_response import (
@@ -17,7 +17,6 @@ from .gear.demand_response import (
 )
 from .settings import SettingsParamName
 from .utils import add_enum, add_translations
-from .wbdali_utils import WBDALIDriver
 from .wbmqtt import ControlMeta, TranslatedTitle
 
 
@@ -98,7 +97,7 @@ class Type20Parameters(TypeParameters):
             ReductionFactor3Param(),
         ]
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver, short_address: int) -> list[MqttControl]:
+    def get_mqtt_controls(self) -> list[MqttControlBase]:
         return [
             MqttControl(
                 control_info=ControlInfo(

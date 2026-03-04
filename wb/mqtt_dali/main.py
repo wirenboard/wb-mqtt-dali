@@ -17,6 +17,12 @@ from .commissioning import Commissioning, check_presence, search_short
 from .gateway import Gateway
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
+from .send_command import (
+    build_command_registry,
+    format_response,
+    list_commands,
+    parse_and_build_command,
+)
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
@@ -30,6 +36,7 @@ GTIN_DB_FILEPATH = "/usr/share/wb-mqtt-dali/products.csv"
 
 EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
+SEND_BATCH_SIZE = 16
 
 
 async def wait_for_cancel():
@@ -235,6 +242,86 @@ async def short_search_service(gateway: str, args, dali2: bool, old_gateway: boo
     return EXIT_SUCCESS
 
 
+async def send_command_service(gateway: str, args, old_gateway: bool):
+    registry = build_command_registry()
+
+    data = int(args.data, 0) if args.data is not None else None
+    cmd = parse_and_build_command(
+        args.command,
+        registry,
+        address=args.address,
+        data=data,
+        broadcast=args.broadcast,
+    )
+
+    repeat = args.repeat
+    client = make_mqtt_client(args.broker_url)
+    mqtt_dispatcher = MQTTDispatcher(client)
+    async with client:
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        if old_gateway:
+            driver = WBDALIDriverOld(
+                WBDALIDriverOldConfig(device_name=gateway, channel=args.bus),
+                mqtt_dispatcher=mqtt_dispatcher,
+                logger=logging.getLogger(),
+            )
+        else:
+            driver = WBDALIDriverNew(
+                WBDALIDriverNewConfig(device_name=gateway, channel=args.bus),
+                mqtt_dispatcher=mqtt_dispatcher,
+                logger=logging.getLogger(),
+            )
+        await driver.initialize()
+        try:
+            cancel_event = asyncio.Event()
+
+            def signal_handler():
+                cancel_event.set()
+
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGINT, signal_handler)
+            loop.add_signal_handler(signal.SIGTERM, signal_handler)
+
+            if repeat == 1:
+                response = await driver.send(cmd)
+                print(format_response(response))
+            else:
+                scheduled = 0
+                printed = 0
+                bs = min(SEND_BATCH_SIZE, repeat) if repeat > 0 else SEND_BATCH_SIZE
+                scheduled += bs
+                current_task = asyncio.create_task(driver.send_commands([cmd] * bs))
+                next_task = None
+                try:
+                    while not cancel_event.is_set():
+                        bs = min(SEND_BATCH_SIZE, repeat - scheduled) if repeat > 0 else SEND_BATCH_SIZE
+                        if bs > 0 and not cancel_event.is_set():
+                            scheduled += bs
+                            next_task = asyncio.create_task(driver.send_commands([cmd] * bs))
+                        else:
+                            next_task = None
+                        responses = await current_task
+                        for response in responses:
+                            printed += 1
+                            print(f"[{printed}] {format_response(response)}")
+                        if next_task is None:
+                            break
+                        current_task = next_task
+                finally:
+                    if next_task is not None and not next_task.done():
+                        next_task.cancel()
+                        try:
+                            await next_task
+                        except asyncio.CancelledError:
+                            pass
+        finally:
+            await driver.deinitialize()
+            dispatcher_task.cancel()
+            await dispatcher_task
+
+    return EXIT_SUCCESS
+
+
 async def main(argv):
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
@@ -320,6 +407,58 @@ async def main(argv):
         help="Bus (channel) number to use (default: 1)",
     )
 
+    parser.add_argument(
+        "--send-command",
+        dest="send_command_gateway",
+        type=str,
+        help="Send a DALI command via specified gateway",
+    )
+
+    parser.add_argument(
+        "--address",
+        dest="address",
+        type=int,
+        help="DALI short address (0-63) for --send-command",
+    )
+
+    parser.add_argument(
+        "--command",
+        dest="command",
+        type=str,
+        help="DALI command name (e.g., Off, DAPC, DT8.Activate, FF24.QueryDeviceStatus)",
+    )
+
+    parser.add_argument(
+        "--data",
+        dest="data",
+        type=str,
+        help="Data value for commands that require it (e.g., DAPC power level, DTR value)",
+    )
+
+    parser.add_argument(
+        "--broadcast",
+        dest="broadcast",
+        action="store_true",
+        default=False,
+        help="Send command as broadcast (no address needed)",
+    )
+
+    parser.add_argument(
+        "--repeat",
+        dest="repeat",
+        type=int,
+        default=1,
+        help="Number of times to send the command (0 = infinite, until Ctrl+C)",
+    )
+
+    parser.add_argument(
+        "--list-commands",
+        dest="list_commands",
+        action="store_true",
+        default=False,
+        help="List all available DALI commands",
+    )
+
     args = parser.parse_args(argv[1:])
 
     logging.basicConfig(level=args.log_level)
@@ -349,6 +488,19 @@ async def main(argv):
         return await short_search_service(
             args.search_short2_gateway, args, dali2=True, old_gateway=args.old_gateway, bus=args.bus
         )
+    if args.list_commands:
+        registry = build_command_registry()
+        print(list_commands(registry))
+        return EXIT_SUCCESS
+    if args.send_command_gateway:
+        if not args.command:
+            parser.error("--send-command requires --command")
+        if args.repeat < 0:
+            parser.error("--repeat must be non-negative (0 = infinite)")
+        try:
+            return await send_command_service(args.send_command_gateway, args, old_gateway=args.old_gateway)
+        except ValueError as exc:
+            parser.error(str(exc))
     return await default_service(args)
 
 

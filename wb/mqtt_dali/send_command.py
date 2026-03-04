@@ -253,6 +253,8 @@ def parse_and_build_command(
 
     if info.kind == "device_standard":
         addr = DeviceBroadcast() if broadcast else DeviceShort(address)
+        if info.needs_data:
+            return info.cls(addr, data)
         return info.cls(addr)
 
     if info.kind == "device_instance":
@@ -265,6 +267,8 @@ def parse_and_build_command(
                 f"Use {prefix}.I<n>.{cmd_name} syntax (e.g., {prefix}.I0.{cmd_name})"
             )
         addr = DeviceBroadcast() if broadcast else DeviceShort(address)
+        if info.needs_data:
+            return info.cls(addr, InstanceNumber(instance_number), data)
         return info.cls(addr, InstanceNumber(instance_number))
 
     if info.kind == "device_special":

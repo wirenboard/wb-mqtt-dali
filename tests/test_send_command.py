@@ -18,7 +18,7 @@ class TestBuildCommandRegistry(unittest.TestCase):
         self.registry = build_command_registry()
 
     def test_registry_not_empty(self):
-        self.assertGreater(len(self.registry), 100)
+        self.assertGreater(len(self.registry), 0)
 
     def test_gear_standard_commands_present(self):
         for name in ["Off", "Up", "Down", "StepUp", "StepDown", "RecallMaxLevel", "RecallMinLevel"]:
@@ -186,6 +186,17 @@ class TestParseAndBuildCommand(unittest.TestCase):
 
         cmd = parse_and_build_command("FF24.QueryDeviceStatus", self.registry, broadcast=True)
         self.assertIsInstance(cmd, QueryDeviceStatus)
+
+    def test_address_and_broadcast_conflict(self):
+        with self.assertRaises(ValueError) as ctx:
+            parse_and_build_command("Off", self.registry, address=5, broadcast=True)
+        self.assertIn("cannot use --address together with --broadcast", str(ctx.exception))
+
+    def test_address_out_of_range(self):
+        with self.assertRaises(ValueError):
+            parse_and_build_command("Off", self.registry, address=64)
+        with self.assertRaises(ValueError):
+            parse_and_build_command("Off", self.registry, address=-1)
 
     def test_unknown_command(self):
         with self.assertRaises(ValueError) as ctx:

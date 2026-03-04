@@ -495,7 +495,12 @@ async def main(argv):
     if args.send_command_gateway:
         if not args.command:
             parser.error("--send-command requires --command")
-        return await send_command_service(args.send_command_gateway, args, old_gateway=args.old_gateway)
+        if args.repeat < 0:
+            parser.error("--repeat must be non-negative (0 = infinite)")
+        try:
+            return await send_command_service(args.send_command_gateway, args, old_gateway=args.old_gateway)
+        except ValueError as exc:
+            parser.error(str(exc))
     return await default_service(args)
 
 

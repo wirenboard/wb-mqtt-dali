@@ -198,7 +198,7 @@ def parse_and_build_command(
     broadcast: bool = False,
 ) -> Command:
     # Handle <prefix>.I<n>.<name> pattern for instance commands
-    # e.g., FF24.I0.EnableInstance, FF24.DT2.I0.SetReportTimer
+    # e.g., FF24.I0.EnableInstance, FF24.DT6.I0.SetReportTimer
     instance_match = _INSTANCE_PATTERN.match(command_name)
     instance_number = None
     lookup_key = command_name
@@ -216,8 +216,14 @@ def parse_and_build_command(
     info = registry[lookup_key]
 
     # Validate arguments
+    if address is not None and broadcast:
+        raise ValueError(f"Command '{command_name}' cannot use --address together with --broadcast")
+
+    if address is not None and (address < 0 or address > 63):
+        raise ValueError(f"--address must be in range 0-63, got {address}")
+
     if info.kind == "gear_special" or info.kind == "device_special":
-        if address is not None and not broadcast:
+        if address is not None:
             raise ValueError(f"Command '{command_name}' is a special command and does not take --address")
     elif info.kind == "gear_dapc":
         if data is None:

@@ -17,6 +17,12 @@ from .commissioning import Commissioning, check_presence, search_short
 from .gateway import Gateway
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
+from .send_command import (
+    build_command_registry,
+    format_response,
+    list_commands,
+    parse_and_build_command,
+)
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
@@ -235,6 +241,44 @@ async def short_search_service(gateway: str, args, dali2: bool, old_gateway: boo
     return EXIT_SUCCESS
 
 
+async def send_command_service(gateway: str, args, old_gateway: bool):
+    registry = build_command_registry()
+
+    data = int(args.data, 0) if args.data is not None else None
+    cmd = parse_and_build_command(
+        args.command,
+        registry,
+        address=args.address,
+        data=data,
+        broadcast=args.broadcast,
+    )
+
+    client = make_mqtt_client(args.broker_url)
+    mqtt_dispatcher = MQTTDispatcher(client)
+    async with client:
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        if old_gateway:
+            driver = WBDALIDriverOld(
+                WBDALIDriverOldConfig(device_name=gateway, channel=args.bus),
+                mqtt_dispatcher=mqtt_dispatcher,
+                logger=logging.getLogger(),
+            )
+        else:
+            driver = WBDALIDriverNew(
+                WBDALIDriverNewConfig(device_name=gateway, channel=args.bus),
+                mqtt_dispatcher=mqtt_dispatcher,
+                logger=logging.getLogger(),
+            )
+        await driver.initialize()
+        response = await driver.send(cmd)
+        print(format_response(response))
+        await driver.deinitialize()
+        dispatcher_task.cancel()
+        await dispatcher_task
+
+    return EXIT_SUCCESS
+
+
 async def main(argv):
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
@@ -320,6 +364,50 @@ async def main(argv):
         help="Bus (channel) number to use (default: 1)",
     )
 
+    parser.add_argument(
+        "--send-command",
+        dest="send_command_gateway",
+        type=str,
+        help="Send a DALI command via specified gateway",
+    )
+
+    parser.add_argument(
+        "--address",
+        dest="address",
+        type=int,
+        help="DALI short address (0-63) for --send-command",
+    )
+
+    parser.add_argument(
+        "--command",
+        dest="command",
+        type=str,
+        help="DALI command name (e.g., Off, DAPC, DT8.Activate, FF24.QueryDeviceStatus)",
+    )
+
+    parser.add_argument(
+        "--data",
+        dest="data",
+        type=str,
+        help="Data value for commands that require it (e.g., DAPC power level, DTR value)",
+    )
+
+    parser.add_argument(
+        "--broadcast",
+        dest="broadcast",
+        action="store_true",
+        default=False,
+        help="Send command as broadcast (no address needed)",
+    )
+
+    parser.add_argument(
+        "--list-commands",
+        dest="list_commands",
+        action="store_true",
+        default=False,
+        help="List all available DALI commands",
+    )
+
     args = parser.parse_args(argv[1:])
 
     logging.basicConfig(level=args.log_level)
@@ -349,6 +437,14 @@ async def main(argv):
         return await short_search_service(
             args.search_short2_gateway, args, dali2=True, old_gateway=args.old_gateway, bus=args.bus
         )
+    if args.list_commands:
+        registry = build_command_registry()
+        print(list_commands(registry))
+        return EXIT_SUCCESS
+    if args.send_command_gateway:
+        if not args.command:
+            parser.error("--send-command requires --command")
+        return await send_command_service(args.send_command_gateway, args, old_gateway=args.old_gateway)
     return await default_service(args)
 
 

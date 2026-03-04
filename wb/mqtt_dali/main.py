@@ -253,6 +253,7 @@ async def send_command_service(gateway: str, args, old_gateway: bool):
         broadcast=args.broadcast,
     )
 
+    repeat = args.repeat
     client = make_mqtt_client(args.broker_url)
     mqtt_dispatcher = MQTTDispatcher(client)
     async with client:
@@ -270,11 +271,30 @@ async def send_command_service(gateway: str, args, old_gateway: bool):
                 logger=logging.getLogger(),
             )
         await driver.initialize()
-        response = await driver.send(cmd)
-        print(format_response(response))
-        await driver.deinitialize()
-        dispatcher_task.cancel()
-        await dispatcher_task
+        try:
+            cancel_event = asyncio.Event()
+
+            def signal_handler():
+                cancel_event.set()
+
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGINT, signal_handler)
+            loop.add_signal_handler(signal.SIGTERM, signal_handler)
+
+            iteration = 1
+            while not cancel_event.is_set():
+                response = await driver.send(cmd)
+                if repeat == 1:
+                    print(format_response(response))
+                else:
+                    print(f"[{iteration}] {format_response(response)}")
+                if repeat > 0 and iteration >= repeat:
+                    break
+                iteration += 1
+        finally:
+            await driver.deinitialize()
+            dispatcher_task.cancel()
+            await dispatcher_task
 
     return EXIT_SUCCESS
 
@@ -398,6 +418,14 @@ async def main(argv):
         action="store_true",
         default=False,
         help="Send command as broadcast (no address needed)",
+    )
+
+    parser.add_argument(
+        "--repeat",
+        dest="repeat",
+        type=int,
+        default=1,
+        help="Number of times to send the command (0 = infinite, until Ctrl+C)",
     )
 
     parser.add_argument(

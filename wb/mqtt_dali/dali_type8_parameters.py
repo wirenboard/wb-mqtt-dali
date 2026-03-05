@@ -383,16 +383,7 @@ class ColourState(SettingsParamBase):
         self._default_colour_type = default_colour_type
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        address = GearShort(short_address)
-        resp = await driver.run_sequence(
-            query_colour_with_level(
-                address, self._query_command_class(address), self._colour_tags, self._default_colour_type
-            )
-        )
-        if resp is None:
-            raise RuntimeError(f"Error reading {self.name.en}")
-        self.value = resp
-        return {self.property_name: resp.to_json()}
+        return await self._read_impl(driver, short_address)
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         if self.property_name not in value:
@@ -424,7 +415,7 @@ class ColourState(SettingsParamBase):
         cmds.extend([DTR0(new_state.level), self._setup_command_class(address)])
         await driver.send_commands(cmds)
         if self._read_after_save:
-            return await self.read(driver, short_address)
+            return await self._read_impl(driver, short_address)
         self.value = new_state
         return {self.property_name: new_state.to_json()}
 
@@ -438,6 +429,7 @@ class ColourState(SettingsParamBase):
                         "level": {
                             "type": "integer",
                             "title": "Light level",
+                            "format": "dali-level",
                             "propertyOrder": 0,
                             "minimum": 0,
                             "maximum": 255,
@@ -496,6 +488,17 @@ class ColourState(SettingsParamBase):
                     root_property["required"].append(colour.value)
         return schema
 
+    async def _read_impl(self, driver: WBDALIDriver, short_address: int) -> dict:
+        address = GearShort(short_address)
+        resp = await driver.run_sequence(
+            query_colour_with_level(
+                address, self._query_command_class(address), self._colour_tags, self._default_colour_type
+            )
+        )
+        if resp is None:
+            raise RuntimeError(f"Error reading {self.name.en}")
+        self.value = resp
+        return {self.property_name: resp.to_json()}
 
 class SceneSettings(ColourState):
     def __init__(self, scene_number: int, default_colour_type: ColourType) -> None:
@@ -511,10 +514,7 @@ class SceneSettings(ColourState):
         self._scene_number = scene_number
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        res = await super().read(driver, short_address)
-        value = res[self.property_name]
-        value["enabled"] = value.get("level") != MASK
-        return value
+        return self._to_json(await super().read(driver, short_address))
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
         values_to_set = deepcopy(value)
@@ -523,7 +523,17 @@ class SceneSettings(ColourState):
         else:
             values_to_set["level"] = MASK
         res = await super().write(driver, short_address, {self.property_name: values_to_set})
-        return res.get(self.property_name, {})
+        return self._to_json(res)
+
+    def _to_json(self, read_response: dict) -> dict:
+        value = read_response.get(self.property_name, {})
+        if not value:
+            return value
+        level = value.get("level", MASK)
+        value["enabled"] = level != MASK
+        if level == MASK:
+            value["level"] = 0
+        return value
 
 
 class ScenesSettings(SettingsParamBase):
@@ -582,9 +592,10 @@ class ScenesSettings(SettingsParamBase):
                             "level": {
                                 "type": "integer",
                                 "title": "Light level",
+                                "format": "dali-level",
                                 "propertyOrder": 2,
                                 "minimum": 0,
-                                "maximum": 255,
+                                "maximum": 254,
                             },
                         },
                         "required": ["enabled", "level"],

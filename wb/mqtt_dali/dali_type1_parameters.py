@@ -22,6 +22,7 @@ class EmergencyLevelParam(NumberGearParam):
         super().__init__(
             SettingsParamName("Emergency level", "Уровень аварийного освещения"), "type_1_emergency_level"
         )
+        self.format = "dali-level"
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         res = await super().read(driver, short_address)

@@ -83,8 +83,8 @@ class TypeParameters(SettingsParamBase):
 
 class DimmingCurveParam(NumberGearParam):
 
-    def __init__(self, property_name: str, dimming_curve_state: DimmingCurveState) -> None:
-        super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), property_name)
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "dimming_curve")
         self._dimming_curve_state = dimming_curve_state
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:

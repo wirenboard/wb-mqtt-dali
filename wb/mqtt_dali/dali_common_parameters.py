@@ -36,6 +36,7 @@ class MaxLevelParam(NumberGearParam):
         super().__init__(SettingsParamName("Max level", "Максимальный уровень"), "max_level")
         self.maximum = 254
         self.default = 254
+        self.format = "dali-level"
         self.grid_columns = 6
         self.property_order = 16
 
@@ -47,6 +48,7 @@ class MinLevelParam(NumberGearParam):
     def __init__(self) -> None:
         super().__init__(SettingsParamName("Min level", "Минимальный уровень"), "min_level")
         self.maximum = 254
+        self.format = "dali-level"
         self.grid_columns = 6
         self.property_order = 17
 
@@ -60,6 +62,7 @@ class PowerOnLevelParam(NumberGearParam):
             SettingsParamName("Power on level", "Уровень при включении питания"), "power_on_level"
         )
         self.default = 254
+        self.format = "dali-level"
         self.grid_columns = 6
         self.property_order = 21
 
@@ -73,6 +76,7 @@ class SystemFailureLevelParam(NumberGearParam):
             SettingsParamName("System failure level", "Уровень при сбое"), "system_failure_level"
         )
         self.default = 254
+        self.format = "dali-level"
         self.grid_columns = 6
         self.property_order = 30
 
@@ -237,6 +241,7 @@ class ScenesParam(SettingsParamBase):
                             "level": {
                                 "type": "integer",
                                 "title": "Light level",
+                                "format": "dali-level",
                                 "minimum": 0,
                                 "maximum": 254,
                                 "propertyOrder": 2,

@@ -500,6 +500,7 @@ class ColourState(SettingsParamBase):
         self.value = resp
         return {self.property_name: resp.to_json()}
 
+
 class SceneSettings(ColourState):
     def __init__(self, scene_number: int, default_colour_type: ColourType) -> None:
         super().__init__(

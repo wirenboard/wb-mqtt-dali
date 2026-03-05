@@ -114,6 +114,7 @@ class NumberSettingsParam(SettingsParamBase):
         self.grid_columns = None
         self.property_order = None
         self.default: Optional[int] = None
+        self.format: Optional[str] = None
         self.value = None
         self._is_read_only = False
 
@@ -155,6 +156,8 @@ class NumberSettingsParam(SettingsParamBase):
             schema["properties"][self.property_name]["options"]["grid_columns"] = self.grid_columns
         if self.name.ru is not None:
             schema["translations"] = {"ru": {self.name.en: self.name.ru}}
+        if self.format is not None:
+            schema["properties"][self.property_name]["format"] = self.format
         if self.default is not None:
             schema["properties"][self.property_name]["default"] = self.default
         if self.property_order is not None:

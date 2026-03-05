@@ -265,7 +265,21 @@ class WBDALIDriver:
         )
 
     async def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
-        raw_value = int(message.payload)
+        if message.retain:
+            return
+
+        try:
+            payload_str = message.payload.decode().strip()
+            raw_value = int(payload_str, 0)
+        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+            self.logger.error(
+                "Failed to parse FF24 payload '%s' from topic '%s': %s",
+                message.payload,
+                message.topic,
+                exc,
+            )
+            return
+
         frame_length = (raw_value >> 32) & 0xFF
         frame_mask = (1 << frame_length) - 1
         frame_data = raw_value & frame_mask
@@ -280,7 +294,7 @@ class WBDALIDriver:
             hex(frame_data),
         )
 
-        if message.retain or is_backward or frame_length != 24:
+        if is_backward or frame_length != 24:
             return
 
         # is_broken = bool((raw_value >> 41) & 0x1)

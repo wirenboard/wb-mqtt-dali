@@ -265,26 +265,42 @@ class WBDALIDriver:
         )
 
     async def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
-        self.logger.debug(
-            "Received FF24 MQTT message: %s %s",
-            message.topic,
-            message.payload.decode(),
-        )
-
         if message.retain:
             return
 
-        raw_value = int(message.payload)
-        frame_data = raw_value & 0xFFFFFFFF
+        try:
+            payload_str = message.payload.decode().strip()
+            raw_value = int(payload_str, 0)
+        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+            self.logger.error(
+                "Failed to parse FF24 payload '%s' from topic '%s': %s",
+                message.payload,
+                message.topic,
+                exc,
+            )
+            return
+
         frame_length = (raw_value >> 32) & 0xFF
+        frame_mask = (1 << frame_length) - 1
+        frame_data = raw_value & frame_mask
         is_backward = bool((raw_value >> 40) & 0x1)
-        # is_broken = bool((raw_value >> 41) & 0x1)
-        # frame_counter = (raw_value >> 48) & 0xFFFF
+
+        self.logger.debug(
+            "Received %s%s%d MQTT message: %s %s",
+            "retained " if message.retain else "",
+            "BF" if is_backward else "FF",
+            frame_length,
+            message.topic,
+            hex(frame_data),
+        )
 
         if is_backward or frame_length != 24:
             return
 
-        frame = ForwardFrame(24, frame_data & 0xFFFFFF)
+        # is_broken = bool((raw_value >> 41) & 0x1)
+        # frame_counter = (raw_value >> 48) & 0xFFFF
+
+        frame = ForwardFrame(24, frame_data)
         cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
         self.logger.debug("Received FF24: %s", cmd)
         self.bus_traffic.invoke(frame, "bus")

@@ -46,6 +46,7 @@ from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali_utils import MASK, WBDALIDriver, query_response
+from .utils import merge_translations, merge_json_schema_properties
 
 
 class ColourType(enum.Enum):
@@ -455,7 +456,7 @@ class ColourState(SettingsParamBase):
                 root_property["properties"]["rgb"] = {
                     "type": "string",
                     "title": "RGB",
-                    "format": "rgb",
+                    "format": "dali-rgb",
                     "propertyOrder": 1,
                     "options": {
                         "grid_columns": 2,
@@ -464,6 +465,7 @@ class ColourState(SettingsParamBase):
                 root_property["properties"]["white"] = {
                     "type": "integer",
                     "title": "White",
+                    "format": "dali-white",
                     "minimum": 0,
                     "maximum": 255,
                     "propertyOrder": 2,
@@ -569,6 +571,23 @@ class ScenesSettings(SettingsParamBase):
     def get_schema(self) -> dict:
         if self._scenes[0].value is None:
             raise RuntimeError("Cannot get schema for scenes before reading them")
+        item_schema = self._scenes[0].get_schema()
+        enabled_schema = {
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "title": "Part of the scene",
+                    "propertyOrder": 0,
+                    "format": "switch",
+                    "options": {
+                        "compact": True,
+                        "grid_columns": 2,
+                    },
+                },
+            },
+            "required": ["enabled"],
+        }
+        merge_json_schema_properties(item_schema["properties"][self._scenes[0].property_name], enabled_schema)
         schema = {
             "properties": {
                 self.property_name: {
@@ -577,30 +596,7 @@ class ScenesSettings(SettingsParamBase):
                     "format": "table",
                     "minItems": SCENES_TOTAL,
                     "maxItems": SCENES_TOTAL,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "enabled": {
-                                "type": "boolean",
-                                "title": "Part of the scene",
-                                "propertyOrder": 1,
-                                "format": "switch",
-                                "options": {
-                                    "compact": True,
-                                    "grid_columns": 2,
-                                },
-                            },
-                            "level": {
-                                "type": "integer",
-                                "title": "Light level",
-                                "format": "dali-level",
-                                "propertyOrder": 2,
-                                "minimum": 0,
-                                "maximum": 254,
-                            },
-                        },
-                        "required": ["enabled", "level"],
-                    },
+                    "items": item_schema["properties"][self._scenes[0].property_name],
                     "propertyOrder": 900,
                 },
             },
@@ -612,19 +608,7 @@ class ScenesSettings(SettingsParamBase):
                 }
             },
         }
-        order = 3
-        max_value = get_max_colour_value(self._scenes[0].value.colour_type)
-        for colour in self._scenes[0].value.colour.components:
-            schema["properties"][self.property_name]["items"]["properties"][colour.value] = {
-                "type": "integer",
-                "title": COLOUR_NAMES[colour][0],
-                "minimum": 0,
-                "maximum": max_value,
-                "propertyOrder": order,
-            }
-            schema["translations"]["ru"][COLOUR_NAMES[colour][0]] = COLOUR_NAMES[colour][1]
-            schema["properties"][self.property_name]["items"]["required"].append(colour.value)
-            order += 1
+        merge_translations(schema, item_schema)
         return schema
 
 

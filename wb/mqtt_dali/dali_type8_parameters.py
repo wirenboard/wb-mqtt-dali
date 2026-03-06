@@ -475,6 +475,7 @@ class ColourState(SettingsParamBase):
                 }
                 root_property["required"].append("rgb")
                 root_property["required"].append("white")
+                schema["translations"]["ru"]["White"] = "Белый"
             else:
                 for index, colour in enumerate(self.value.colour.components):
                     root_property["properties"][colour.value] = {
@@ -488,6 +489,7 @@ class ColourState(SettingsParamBase):
                         },
                     }
                     root_property["required"].append(colour.value)
+                    schema["translations"]["ru"][COLOUR_NAMES[colour][0]] = COLOUR_NAMES[colour][1]
         return schema
 
     async def _read_impl(self, driver: WBDALIDriver, short_address: int) -> dict:

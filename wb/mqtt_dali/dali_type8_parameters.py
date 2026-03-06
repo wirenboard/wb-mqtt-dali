@@ -45,7 +45,7 @@ from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
-from .utils import merge_translations, merge_json_schema_properties
+from .utils import merge_json_schema_properties
 from .wbdali_utils import MASK, WBDALIDriver, query_response
 
 
@@ -579,7 +579,7 @@ class ScenesSettings(SettingsParamBase):
                 "enabled": {
                     "type": "boolean",
                     "title": "Part of the scene",
-                    "propertyOrder": 0,
+                    "propertyOrder": 1,
                     "format": "switch",
                     "options": {
                         "compact": True,
@@ -610,7 +610,10 @@ class ScenesSettings(SettingsParamBase):
                 }
             },
         }
-        merge_translations(schema, item_schema)
+        item_ru_translations = item_schema.get("translations", {}).get("ru", {})
+        for en_title, ru_title in item_ru_translations.items():
+            if ru_title is not None and en_title != "Light level":
+                schema["translations"]["ru"][en_title] = ru_title
         return schema
 
 

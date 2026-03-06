@@ -45,7 +45,7 @@ from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
-from .utils import merge_json_schema_properties
+from .utils import merge_json_schema_properties, merge_translations
 from .wbdali_utils import MASK, WBDALIDriver, query_response
 
 
@@ -431,7 +431,7 @@ class ColourState(SettingsParamBase):
                             "type": "integer",
                             "title": "Light level",
                             "format": "dali-level",
-                            "propertyOrder": 0,
+                            "propertyOrder": 1,
                             "minimum": 0,
                             "maximum": 255,
                             "options": {
@@ -446,7 +446,7 @@ class ColourState(SettingsParamBase):
             "translations": {
                 "ru": {
                     self.name.en: self.name.ru,
-                    "Light level": "Уровень яркости",
+                    "Light level": "Яркость",
                 },
             },
         }
@@ -457,7 +457,7 @@ class ColourState(SettingsParamBase):
                     "type": "string",
                     "title": "RGB",
                     "format": "dali-rgb",
-                    "propertyOrder": 1,
+                    "propertyOrder": 2,
                     "options": {
                         "grid_columns": 2,
                     },
@@ -468,7 +468,7 @@ class ColourState(SettingsParamBase):
                     "format": "dali-white",
                     "minimum": 0,
                     "maximum": 255,
-                    "propertyOrder": 2,
+                    "propertyOrder": 3,
                     "options": {
                         "grid_columns": 2,
                     },
@@ -483,7 +483,7 @@ class ColourState(SettingsParamBase):
                         "title": COLOUR_NAMES[colour][0],
                         "minimum": 0,
                         "maximum": 65535,
-                        "propertyOrder": index + 1,
+                        "propertyOrder": index + 2,
                         "options": {
                             "grid_columns": 2,
                         },
@@ -579,7 +579,7 @@ class ScenesSettings(SettingsParamBase):
                 "enabled": {
                     "type": "boolean",
                     "title": "Part of the scene",
-                    "propertyOrder": 1,
+                    "propertyOrder": 0,
                     "format": "switch",
                     "options": {
                         "compact": True,
@@ -606,14 +606,10 @@ class ScenesSettings(SettingsParamBase):
                 "ru": {
                     self.name.en: self.name.ru,
                     "Part of the scene": "Часть сцены",
-                    "Light level": "Яркость",
                 }
             },
         }
-        item_ru_translations = item_schema.get("translations", {}).get("ru", {})
-        for en_title, ru_title in item_ru_translations.items():
-            if ru_title is not None and en_title != "Light level":
-                schema["translations"]["ru"][en_title] = ru_title
+        merge_translations(schema, item_schema)
         return schema
 
 

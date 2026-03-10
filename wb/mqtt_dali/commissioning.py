@@ -569,7 +569,8 @@ class Commissioning:
                 short_addr,
             )
 
-    async def binary_search(self):
+    async def binary_search(self) -> list[int]:
+        res = []
         try:
             await self.driver.send_commands(
                 [
@@ -590,10 +591,12 @@ class Commissioning:
                 )
                 self._print_binary_search_iteration_info(found_addr, resp[0])
                 low = found_addr
+                res.append(found_addr)
         finally:
             await self.driver.send_commands(
                 [self._cmds.Terminate(), control_device.StopQuiescentMode(DeviceBroadcast())]
             )
+        return res
 
 
 async def get_random_address(
@@ -625,7 +628,7 @@ async def get_random_address(
     return None
 
 
-async def search_short(driver: WBDALIDriver, dali2: bool) -> None:
+async def search_short(driver: WBDALIDriver, dali2: bool) -> list[DaliDeviceAddress]:
     if dali2:
         cmds = Dali2CommandsCompatibilityLayer()
     else:
@@ -636,6 +639,7 @@ async def search_short(driver: WBDALIDriver, dali2: bool) -> None:
             control_device.StartQuiescentMode(DeviceBroadcast()),
         ]
     )
+    res = []
     try:
         if dali2:
             mapper = AsyncDeviceInstanceTypeMapper()
@@ -645,6 +649,10 @@ async def search_short(driver: WBDALIDriver, dali2: bool) -> None:
             for (addr, inst_num), inst_type in sorted_items:
                 if addr != last_short_addr:
                     random_address = await get_random_address(addr, cmds, driver)
+                    device_address = DaliDeviceAddress(
+                        addr, random_address if random_address is not None else 0xFFFFFF
+                    )
+                    res.append(device_address)
                     if random_address is None:
                         print(f"Control device {addr}, failed to get random address")
                     else:
@@ -658,12 +666,17 @@ async def search_short(driver: WBDALIDriver, dali2: bool) -> None:
             for i, resp in enumerate(responses):
                 if resp and resp.value:
                     random_address = await get_random_address(i, cmds, driver)
+                    device_address = DaliDeviceAddress(
+                        i, random_address if random_address is not None else 0xFFFFFF
+                    )
+                    res.append(device_address)
                     if random_address is None:
                         print(f"Control gear {i}, failed to get random address")
                     else:
                         print(f"Control gear {i}, random address 0x{random_address:06x}")
     finally:
         await driver.send(control_device.StopQuiescentMode(DeviceBroadcast()))
+    return res
 
 
 async def check_presence(driver: WBDALIDriver, dali2: bool) -> bool:

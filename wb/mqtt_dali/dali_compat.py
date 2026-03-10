@@ -1,6 +1,6 @@
 from typing import Optional, Union
 
-from dali.address import DeviceShort, GearShort
+from dali.address import DeviceBroadcast, DeviceShort, GearBroadcast, GearShort
 from dali.command import Command, NumericResponse, NumericResponseMask, Response
 from dali.gear import general as control_gear
 
@@ -72,10 +72,18 @@ class DaliCommandsCompatibilityLayer:
     def QueryVersionNumber(self, short_address: int) -> Command:
         return control_gear.QueryVersionNumber(GearShort(short_address))
 
-    def getAddress(self, short_address: int) -> Union[GearShort, DeviceShort]:
+    def Reset(self, short_address: Optional[int]) -> Command:
+        return control_gear.Reset(self.getAddress(short_address))
+
+    def getAddress(
+        self, short_address: Optional[int]
+    ) -> Union[GearShort, DeviceShort, GearBroadcast, DeviceBroadcast]:
+        if short_address is None:
+            return GearBroadcast()
         return GearShort(short_address)
 
-    def setShortAddressCommands(self, short_address: int, new_short_address: int) -> list[Command]:
+    def setShortAddressCommands(self, short_address: Optional[int], new_short_address: int) -> list[Command]:
         # Convert to gear short address format
-        new_short_address = (new_short_address << 1) | 1
-        return [self.DTR0(new_short_address), control_gear.SetShortAddress(GearShort(short_address))]
+        if new_short_address != MASK:
+            new_short_address = (new_short_address << 1) | 1
+        return [self.DTR0(new_short_address), control_gear.SetShortAddress(self.getAddress(short_address))]

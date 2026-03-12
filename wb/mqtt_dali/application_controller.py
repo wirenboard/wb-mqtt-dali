@@ -51,6 +51,24 @@ class ApplicationControllerConfig:
     websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
     # Whether to use the old WB-MDALI gateway (True) or the new WB-DALI gateway (False)
     old_gateway: bool = False
+    enable_bus_monitor: bool = False
+
+
+class OneShotTasks:
+    def __init__(self):
+        self._tasks = []
+
+    def add(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._tasks.append(task)
+        task.add_done_callback(self._tasks.remove)
+        return task
+
+    async def stop(self):
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
 
 
 class ApplicationController:
@@ -99,7 +117,12 @@ class ApplicationController:
 
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()
+
+        self._bus_monitor_topic = f"/devices/{self.uid}/bus_monitor"
+        self._bus_monitor_enabled = config.enable_bus_monitor
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
+
+        self._one_shot_tasks = OneShotTasks()
 
         self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
         self._devices_by_mqtt_id: dict[str, Union[DaliDevice, Dali2Device]] = {}
@@ -110,8 +133,15 @@ class ApplicationController:
     def polling_interval(self) -> float:
         return self._polling_interval
 
+    @property
+    def bus_monitor_enabled(self) -> bool:
+        return self._bus_monitor_enabled
+
     def set_polling_interval(self, value: float) -> None:
         self._polling_interval = value
+
+    def set_bus_monitor_enabled(self, enabled: bool) -> None:
+        self._bus_monitor_enabled = enabled
 
     async def start(self) -> None:
         async with self._state_lock:
@@ -165,6 +195,8 @@ class ApplicationController:
             self._state = ApplicationControllerState.STOPPING
 
         self._bus_traffic_cleanup()
+
+        await self._one_shot_tasks.stop()
 
         if self._quiescent_mode_timer:
             self._quiescent_mode_timer.cancel()
@@ -525,7 +557,7 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
         self._quiescent_mode_timer = asyncio.get_event_loop().call_later(
             60 * 15,  # 15 minutes
-            lambda: asyncio.create_task(self._handle_stop_quiescent_mode()),
+            lambda: self._one_shot_tasks.add(self._handle_stop_quiescent_mode()),
         )
 
     async def _handle_stop_quiescent_mode(self) -> None:
@@ -547,16 +579,17 @@ class ApplicationController:
                 self._active_task_description = ""
                 self._ready_condition.notify()
 
-    def _handle_bus_traffic_frame(self, frame: Frame, source: str) -> None:
-        if isinstance(frame, ForwardFrame):
+    def _handle_bus_traffic_frame(self, frame: Frame, source: str, frame_counter: Optional[int]) -> None:
+        incoming_command = None
+        if not frame.error and isinstance(frame, ForwardFrame):
             incoming_command = from_frame(frame, dev_inst_map=self._dev_inst_map)
             if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
                 try:
                     if isinstance(incoming_command, StartQuiescentMode):
-                        asyncio.create_task(self._handle_start_quiescent_mode())
+                        self._one_shot_tasks.add(self._handle_start_quiescent_mode())
                         return
                     if isinstance(incoming_command, StopQuiescentMode):
-                        asyncio.create_task(self._handle_stop_quiescent_mode())
+                        self._one_shot_tasks.add(self._handle_stop_quiescent_mode())
                         return
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass  # Ignore errors in bus traffic handling
@@ -570,8 +603,18 @@ class ApplicationController:
                 if device is not None:
                     instance = device.instances.get(incoming_command.instance_number)
                     if instance is not None:
-                        asyncio.create_task(
+                        self._one_shot_tasks.add(
                             publish_dali2_event(
                                 incoming_command, device.mqtt_id, self._mqtt_dispatcher.client
                             )
                         )
+
+        if self.bus_monitor_enabled:
+            self._one_shot_tasks.add(
+                self._mqtt_dispatcher.client.publish(
+                    self._bus_monitor_topic,
+                    f"{source}: {frame.as_integer:x} {incoming_command}",
+                    qos=2,
+                    retain=False,
+                )
+            )

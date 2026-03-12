@@ -210,7 +210,7 @@ async def emulate(
 
 
 def publish_traffic(websocket, logger):
-    def _traffic_filter(frame: dali.frame.Frame, _source: str):
+    def _traffic_filter(frame: dali.frame.Frame, _source: str, _frame_counter: Optional[int]) -> None:
         logger.debug(
             "WS >> daliMonitor: %sbits=%d %s",
             "FRAMING ERROR " if frame.error else "",

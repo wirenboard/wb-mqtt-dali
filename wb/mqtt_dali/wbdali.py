@@ -10,6 +10,7 @@ from typing import Any, Callable, List, Optional, Sequence, Union
 
 import paho.mqtt.client as mqtt
 from dali.command import Command, Response, from_frame
+from dali.device.general import _Event
 from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
@@ -43,16 +44,28 @@ class BusTrafficCallbacks:
     def __init__(self) -> None:
         self._callbacks = set()
 
-    def register(self, func: Callable[[Frame, str], None]) -> Callable[[], None]:
+    def register(self, func: Callable[[Frame, str, Optional[int]], None]) -> Callable[[], None]:
         def cleanup():
             self._callbacks.discard(func)
 
         self._callbacks.add(func)
         return cleanup
 
-    def invoke(self, frame: Frame, source: str) -> None:
+    def invoke(self, frame: Frame, source: str, frame_counter: Optional[int] = None) -> None:
+        """
+        Invoke all registered callback functions with the provided frame data.
+
+        Parameters
+        ----------
+        frame : Frame
+            Raw frame object.
+        source : str
+            Identifier of the frame source (e.g., bus, WB, lunatone-iot-emulator, etc).
+        frame_counter : Optional[int]
+            Optional counter for frames received from bus monitor, for tracking and logging purposes.
+        """
         for func in self._callbacks:
-            func(frame, source)
+            func(frame, source, frame_counter)
 
 
 @dataclass
@@ -148,6 +161,7 @@ class WBDALIDriver:
 
         self._batch_start_index = 0
         self._next_queue_index = 0
+        self._last_bus_monitor_frame_counter: Optional[int] = None
 
     @property
     def rpc_client_id(self) -> str:
@@ -273,7 +287,7 @@ class WBDALIDriver:
             raw_value = int(payload_str, 0)
         except (ValueError, UnicodeDecodeError, AttributeError) as exc:
             self.logger.error(
-                "Failed to parse FF24 payload '%s' from topic '%s': %s",
+                "Failed to parse bus monitor payload '%s' from topic '%s': %s",
                 message.payload,
                 message.topic,
                 exc,
@@ -284,26 +298,44 @@ class WBDALIDriver:
         frame_mask = (1 << frame_length) - 1
         frame_data = raw_value & frame_mask
         is_backward = bool((raw_value >> 40) & 0x1)
+        is_broken = bool((raw_value >> 41) & 0x1)
+        frame_counter = (raw_value >> 48) & 0xFFFF
 
-        self.logger.debug(
-            "Received %s%s%d MQTT message: %s %s",
-            "retained " if message.retain else "",
-            "BF" if is_backward else "FF",
-            frame_length,
-            message.topic,
-            hex(frame_data),
-        )
+        if self._last_bus_monitor_frame_counter is not None:
+            if self._last_bus_monitor_frame_counter == 0xFFFF and frame_counter == 0:
+                # Normal wrap-around, ignore
+                pass
+            if self._last_bus_monitor_frame_counter + 1 != frame_counter:
+                self.logger.warning(
+                    "Bus monitor frame counter jump from %d to %d, possible missed frames",
+                    self._last_bus_monitor_frame_counter,
+                    frame_counter,
+                )
+        self._last_bus_monitor_frame_counter = frame_counter
 
-        if is_backward or frame_length != 24:
-            return
-
-        # is_broken = bool((raw_value >> 41) & 0x1)
-        # frame_counter = (raw_value >> 48) & 0xFFFF
-
-        frame = ForwardFrame(24, frame_data)
-        cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
-        self.logger.debug("Received FF24: %s", cmd)
-        self.bus_traffic.invoke(frame, "bus")
+        if is_broken:
+            if is_backward:
+                frame = BackwardFrameError(frame_data)
+                self.logger.debug("Unexpected broken BF: %s", hex(frame_data))
+            else:
+                frame = ForwardFrame(frame_length, frame_data)
+                frame._error = True
+                self.logger.debug("Unexpected broken FF%d: %s", frame_length, hex(frame_data))
+        else:
+            if is_backward:
+                frame = BackwardFrame(frame_data)
+                self.logger.debug("Unexpected BF: %s", hex(frame_data))
+            else:
+                frame = ForwardFrame(frame_length, frame_data)
+                if frame_length in (16, 24):
+                    cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
+                    if isinstance(cmd, _Event):
+                        self.logger.debug("Event: %s", cmd)
+                    else:
+                        self.logger.debug("Unexpected FF%d: %s", frame_length, cmd)
+                else:
+                    self.logger.debug("Unexpected FF%d: %s", frame_length, hex(frame_data))
+        self.bus_traffic.invoke(frame, "bus", frame_counter)
 
     async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
         """Handle reply message from the DALI bus.
@@ -429,15 +461,15 @@ class WBDALIDriver:
                         if progress:
                             progress(cmd)
                     elif isinstance(cmd, list):
-                        response = await self._send_commands_internal(cmd, source="default", lock_queue=False)
+                        response = await self._send_commands_internal(cmd, source="WB", lock_queue=False)
                     else:
-                        response = (
-                            await self._send_commands_internal([cmd], source="default", lock_queue=False)
-                        )[0]
+                        response = (await self._send_commands_internal([cmd], source="WB", lock_queue=False))[
+                            0
+                        ]
         finally:
             seq.close()
 
-    async def send(self, cmd: Command, source: str = "default") -> Optional[Response]:
+    async def send(self, cmd: Command, source: str = "WB") -> Optional[Response]:
         """
         Send a DALI command to the bus and optionally wait for a response.
         Args:
@@ -452,7 +484,7 @@ class WBDALIDriver:
         return (await self.send_commands([cmd], source=source))[0]
 
     async def send_commands(
-        self, commands: Sequence[Command], source: str = "default"
+        self, commands: Sequence[Command], source: str = "WB"
     ) -> List[Optional[Response]]:
         """
         Send a sequence of DALI commands to the bus and optionally wait for responses.

@@ -90,6 +90,7 @@ def bus_from_json(
         polling_interval,
         websocket_conf,
         data.get("old_gateway", False),
+        data.get("bus_monitor_enabled", False),
     )
 
     res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
@@ -271,6 +272,7 @@ class Gateway:
                             "websocket_enabled": bus.websocket_config.enabled,
                             "websocket_port": bus.websocket_config.port,
                             "polling_interval": bus.polling_interval,
+                            "bus_monitor_enabled": bus.bus_monitor_enabled,
                         },
                         "schema": {
                             "type": "object",
@@ -290,6 +292,11 @@ class Gateway:
                                     "type": "number",
                                     "title": "Polling Interval",
                                     "default": 5,
+                                },
+                                "bus_monitor_enabled": {
+                                    "type": "boolean",
+                                    "title": "Enable Bus Monitor",
+                                    "default": False,
                                 },
                             },
                             "translations": {
@@ -328,13 +335,16 @@ class Gateway:
                     ):
                         raise ValueError(f"WebSocket port {new_websocket_config.port} is already in use")
                     await bus.setup_websocket(new_websocket_config)
-                    new_polling_interval = new_config.get("polling_interval", bus.polling_interval)
-                    bus.set_polling_interval(new_polling_interval)
+                    bus.set_polling_interval(new_config.get("polling_interval", bus.polling_interval))
+                    bus.set_bus_monitor_enabled(
+                        new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled)
+                    )
                     await self._save_configuration()
                     return {
                         "websocket_enabled": new_websocket_config.enabled,
                         "websocket_port": new_websocket_config.port,
                         "polling_interval": bus.polling_interval,
+                        "bus_monitor_enabled": bus.bus_monitor_enabled,
                     }
         raise ValueError("Bus not found")
 
@@ -454,6 +464,7 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                                     for dev in bus.dali_devices + bus.dali2_devices
                                 ],
                                 "old_gateway": bus.old_gateway,
+                                "bus_monitor_enabled": bus.bus_monitor_enabled,
                             }
                             for bus in gw.buses
                         ],

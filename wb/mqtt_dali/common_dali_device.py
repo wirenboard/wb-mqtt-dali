@@ -328,9 +328,7 @@ class DaliDeviceBase:
     async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(
-                control.get_setup_commands(self.address.short, value), source="control"
-            )
+            await driver.send_commands(control.get_setup_commands(self.address.short, value))
             return
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
@@ -340,7 +338,7 @@ class DaliDeviceBase:
             queries.append(descriptor.get_query(self.address.short))
         if not queries:
             return []
-        responses = await driver.send_commands(queries, source="polling")
+        responses = await driver.send_commands(queries)
 
         res = []
         for descriptor, response in zip(self._polling_controls, responses):

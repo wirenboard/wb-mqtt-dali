@@ -349,15 +349,15 @@ class WBDALIDriver:
                         if progress:
                             progress(cmd)
                     elif isinstance(cmd, list):
-                        response = await self._send_commands_internal(cmd, source="default", lock_queue=False)
+                        response = await self._send_commands_internal(cmd, source="WB", lock_queue=False)
                     else:
-                        response = (
-                            await self._send_commands_internal([cmd], source="default", lock_queue=False)
-                        )[0]
+                        response = (await self._send_commands_internal([cmd], source="WB", lock_queue=False))[
+                            0
+                        ]
         finally:
             seq.close()
 
-    async def send(self, cmd: Command, source: str = "default") -> Optional[Response]:
+    async def send(self, cmd: Command, source: str = "WB") -> Optional[Response]:
         """
         Send a DALI command to the bus and optionally wait for a response.
         Args:
@@ -372,7 +372,7 @@ class WBDALIDriver:
         return (await self.send_commands([cmd], source=source))[0]
 
     async def send_commands(
-        self, commands: Sequence[Command], source: str = "default"
+        self, commands: Sequence[Command], source: str = "WB"
     ) -> List[Optional[Response]]:
         """
         Send a sequence of DALI commands to the bus and optionally wait for responses.

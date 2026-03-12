@@ -436,7 +436,7 @@ async def test_poll_controls_returns_error_when_response_is_none():
     res = await d.poll_controls(driver)
 
     d._update_mqtt_controls_list.assert_awaited_once_with(driver)
-    driver.send_commands.assert_awaited_once_with(["Q1"], source="polling")
+    driver.send_commands.assert_awaited_once_with(["Q1"])
     assert len(res) == 1
     assert res[0].control_id == "c1"
     assert res[0].value == ""
@@ -645,7 +645,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
 
     res = await d.poll_controls(driver)
 
-    driver.send_commands.assert_awaited_once_with(["Q1", "Q2", "Q3"], source="polling")
+    driver.send_commands.assert_awaited_once_with(["Q1", "Q2", "Q3"])
     assert [x.control_id for x in res] == ["regular", "alarm", "bad"]
     assert res[0].value == "11"
     assert res[1].value == "0"

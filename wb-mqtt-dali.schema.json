@@ -52,6 +52,10 @@
                     "type": "number",
                     "title": "Polling Interval",
                     "default": 5
+                },
+                "bus_monitor_enabled": {
+                    "type": "boolean",
+                    "default": false
                 }
             },
             "required": ["devices"]

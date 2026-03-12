@@ -357,7 +357,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         received_frame = None
         received_source = None
 
-        def traffic_callback(frame, source):
+        def traffic_callback(frame, source, _frame_counter):
             nonlocal received_frame, received_source
             received_frame = frame
             received_source = source
@@ -399,7 +399,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         callback_invoked = asyncio.Event()
 
-        def traffic_callback(frame, source):
+        def traffic_callback(frame, source, _frame_counter):
             if source == "bus":
                 callback_invoked.set()
 

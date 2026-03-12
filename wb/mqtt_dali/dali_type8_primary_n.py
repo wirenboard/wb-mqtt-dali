@@ -83,7 +83,7 @@ class PrimaryNColourValues:
                 },
             }
             required.append(colour.value)
-            translations[colour.value] = COLOUR_NAMES[colour][1]
+            translations[COLOUR_NAMES[colour][0]] = COLOUR_NAMES[colour][1]
         return {
             "properties": properties,
             "required": required,

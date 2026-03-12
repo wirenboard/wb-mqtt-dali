@@ -137,12 +137,18 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
 
 
 def handle_poll_controls_result(new_colour: Optional[ColourTemperatureValue]) -> list[ControlPollResult]:
+    if new_colour is None or new_colour.tc == MASK_2BYTES:
+        value = None
+        error = "r"
+    else:
+        value = str(tc_kelvin_mirek(new_colour.tc))
+        error = None
     return [
         ControlPollResult(
             "current_colour_temperature",
-            None if new_colour is None else str(tc_kelvin_mirek(new_colour.tc)),
-            error="r" if new_colour is None else None,
-        )
+            value,
+            error=error,
+        ),
     ]
 
 

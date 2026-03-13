@@ -126,7 +126,7 @@ class ApplicationController:
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()
 
-        self._bus_monitor_topic = f"/devices/{self.uid}/bus_monitor"
+        self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
@@ -587,7 +587,7 @@ class ApplicationController:
                 self._active_task_description = ""
                 self._ready_condition.notify()
 
-    def _handle_bus_traffic_frame(self, frame: Frame, source: str, frame_counter: Optional[int]) -> None:
+    def _handle_bus_traffic_frame(self, frame: Frame, source: str, _frame_counter: Optional[int]) -> None:
         incoming_command = None
         if not frame.error and isinstance(frame, ForwardFrame):
             incoming_command = from_frame(frame, dev_inst_map=self._dev_inst_map)

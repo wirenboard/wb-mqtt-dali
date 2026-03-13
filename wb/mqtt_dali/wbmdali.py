@@ -50,7 +50,7 @@ class BusTrafficCallbacks:
     def __init__(self) -> None:
         self._callbacks = set()
 
-    def register(self, func: Callable[[Frame, str], None]) -> Callable[[], None]:
+    def register(self, func: Callable[[Frame, str, Optional[int]], None]) -> Callable[[], None]:
 
         def cleanup():
             self._callbacks.discard(func)

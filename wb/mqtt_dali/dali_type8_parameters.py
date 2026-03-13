@@ -3,33 +3,19 @@
 import asyncio
 import enum
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Callable, Generator, List, Optional, Union
 
 from dali import command
 from dali.address import GearShort
 from dali.gear.colour import (
     Activate,
-    ColourTemperatureTcStepCooler,
-    ColourTemperatureTcStepWarmer,
     QueryColourStatus,
     QueryColourValue,
     QueryColourValueDTR,
-    SetTemporaryColourTemperature,
-    SetTemporaryPrimaryNDimLevel,
-    SetTemporaryRGBDimLevel,
-    SetTemporaryWAFDimLevel,
-    SetTemporaryXCoordinate,
-    SetTemporaryYCoordinate,
-    XCoordinateStepDown,
-    XCoordinateStepUp,
-    YCoordinateStepDown,
-    YCoordinateStepUp,
 )
 from dali.gear.general import (
     DTR0,
-    DTR1,
-    DTR2,
     QueryActualLevel,
     QueryContentDTR0,
     QueryPowerOnLevel,
@@ -40,10 +26,11 @@ from dali.gear.general import (
     SetSystemFailureLevel,
 )
 
-from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8_xy
+from .common_dali_device import ControlPollResult, MqttControlBase
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
-from .device_publisher import ControlInfo, ControlMeta
+from .dali_type8_common import ColourComponent, Type8Limits
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
 from .wbdali_utils import MASK, WBDALIDriver, query_response
@@ -55,67 +42,6 @@ class ColourType(enum.Enum):
     PRIMARY_N = 0x40
     RGBWAF = 0x80
 
-
-class ColourComponent(enum.Enum):
-    RED = "red"
-    GREEN = "green"
-    BLUE = "blue"
-    WHITE = "white"
-    AMBER = "amber"
-    FREE_COLOUR = "free_colour"
-    COLOUR_TEMPERATURE = "tc"
-    PRIMARY_N0 = "primary_n0"
-    PRIMARY_N1 = "primary_n1"
-    PRIMARY_N2 = "primary_n2"
-    PRIMARY_N3 = "primary_n3"
-    PRIMARY_N4 = "primary_n4"
-    PRIMARY_N5 = "primary_n5"
-    X_COORDINATE = "x_coordinate"
-    Y_COORDINATE = "y_coordinate"
-
-
-COLOUR_NAMES = {
-    ColourComponent.RED: ("Red", "Красный"),
-    ColourComponent.GREEN: ("Green", "Зеленый"),
-    ColourComponent.BLUE: ("Blue", "Синий"),
-    ColourComponent.WHITE: ("White", "Белый"),
-    ColourComponent.AMBER: ("Amber", "Янтарный"),
-    ColourComponent.FREE_COLOUR: ("Free colour", "Свободный цвет"),
-    ColourComponent.COLOUR_TEMPERATURE: ("Colour temperature", "Цветовая температура"),
-    ColourComponent.PRIMARY_N0: ("Primary N0", "Основной N0"),
-    ColourComponent.PRIMARY_N1: ("Primary N1", "Основной N1"),
-    ColourComponent.PRIMARY_N2: ("Primary N2", "Основной N2"),
-    ColourComponent.PRIMARY_N3: ("Primary N3", "Основной N3"),
-    ColourComponent.PRIMARY_N4: ("Primary N4", "Основной N4"),
-    ColourComponent.PRIMARY_N5: ("Primary N5", "Основной N5"),
-    ColourComponent.X_COORDINATE: ("X Coordinate", "Координата X"),
-    ColourComponent.Y_COORDINATE: ("Y Coordinate", "Координата Y"),
-}
-
-RGBW_COLOUR_COMPONENTS = [
-    ColourComponent.RED,
-    ColourComponent.GREEN,
-    ColourComponent.BLUE,
-    ColourComponent.WHITE,
-]
-
-COLOR_TEMPERATURE_COLOUR_COMPONENTS = [
-    ColourComponent.COLOUR_TEMPERATURE,
-]
-
-PRIMARY_N_COLOUR_COMPONENTS = [
-    ColourComponent.PRIMARY_N0,
-    ColourComponent.PRIMARY_N1,
-    ColourComponent.PRIMARY_N2,
-    ColourComponent.PRIMARY_N3,
-    ColourComponent.PRIMARY_N4,
-    ColourComponent.PRIMARY_N5,
-]
-
-XY_COLOUR_COMPONENTS = [
-    ColourComponent.X_COORDINATE,
-    ColourComponent.Y_COORDINATE,
-]
 
 ACTUAL_LEVEL_COLOUR_TAGS = {
     ColourComponent.RED: QueryColourValueDTR.RedDimLevel,
@@ -154,152 +80,35 @@ REPORT_COLOUR_TAGS = {
 }
 
 
-def set_rgb_commands_builder(address: GearShort, red: int, green: int, blue: int) -> list[command.Command]:
-    return [
-        DTR0(red),
-        DTR1(green),
-        DTR2(blue),
-        SetTemporaryRGBDimLevel(address),
-    ]
-
-
-def set_waf_commands_builder(
-    address: GearShort, white: int, amber: int, free_colour: int
-) -> list[command.Command]:
-    return [
-        DTR0(white),
-        DTR1(amber),
-        DTR2(free_colour),
-        SetTemporaryWAFDimLevel(address),
-    ]
-
-
-@dataclass
-class RgbwafColourValues:
-    red: int = MASK
-    green: int = MASK
-    blue: int = MASK
-    white: int = MASK
-    amber: int = MASK
-    free_colour: int = MASK
-    components = RGBW_COLOUR_COMPONENTS
-
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
-        return set_rgb_commands_builder(address, self.red, self.green, self.blue) + set_waf_commands_builder(
-            address, self.white, self.amber, self.free_colour
-        )
-
-
-def set_colour_temperature_commands_builder(address: GearShort, value: int) -> list[command.Command]:
-    return [
-        DTR0((value & 0xFF)),
-        DTR1((value >> 8) & 0xFF),
-        SetTemporaryColourTemperature(address),
-    ]
-
-
-@dataclass
-class ColourTemperatureValue:
-    tc: int = MASK
-    components = COLOR_TEMPERATURE_COLOUR_COMPONENTS
-
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
-        return set_colour_temperature_commands_builder(address, self.tc)
-
-
-def set_primary_n_commands_builder(address: GearShort, value: int, index: int) -> list[command.Command]:
-    return [
-        DTR0((value & 0xFF)),
-        DTR1((value >> 8) & 0xFF),
-        DTR2(index),
-        SetTemporaryPrimaryNDimLevel(address),
-    ]
-
-
-@dataclass
-class PrimaryNColourValues:
-    primary_n0: int = MASK
-    primary_n1: int = MASK
-    primary_n2: int = MASK
-    primary_n3: int = MASK
-    primary_n4: int = MASK
-    primary_n5: int = MASK
-    components = PRIMARY_N_COLOUR_COMPONENTS
-
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
-        res = []
-        for colour in self.components:
-            value = getattr(self, colour.value)
-            index = int(colour.value[-1])  # primary_n0 -> 0
-            res.extend(set_primary_n_commands_builder(address, value, index))
-        return res
-
-
-def set_x_coordinate_commands_builder(address: GearShort, value: int) -> list[command.Command]:
-    return [
-        DTR0((value & 0xFF)),
-        DTR1((value >> 8) & 0xFF),
-        SetTemporaryXCoordinate(address),
-    ]
-
-
-def set_y_coordinate_commands_builder(address: GearShort, value: int) -> list[command.Command]:
-    return [
-        DTR0((value & 0xFF)),
-        DTR1((value >> 8) & 0xFF),
-        SetTemporaryYCoordinate(address),
-    ]
-
-
-@dataclass
-class XYColourValues:
-    x_coordinate: int = MASK
-    y_coordinate: int = MASK
-    components = XY_COLOUR_COMPONENTS
-
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
-        res = set_x_coordinate_commands_builder(
-            address, self.x_coordinate
-        ) + set_y_coordinate_commands_builder(address, self.y_coordinate)
-        return res
-
-
 @dataclass
 class ColourSettings:
     colour_type: ColourType
-    colour: Union[RgbwafColourValues, ColourTemperatureValue, PrimaryNColourValues, XYColourValues]
+    colour: Union[
+        dali_type8_rgbwaf.RgbwafColourValues,
+        dali_type8_tc.ColourTemperatureValue,
+        dali_type8_primary_n.PrimaryNColourValues,
+        dali_type8_xy.XYColourValues,
+    ]
     level: int
 
     def __init__(self, colour_type: ColourType, level: int = MASK) -> None:
         self.colour_type = colour_type
         self.level = level
         if colour_type == ColourType.RGBWAF:
-            self.colour = RgbwafColourValues()
+            self.colour = dali_type8_rgbwaf.RgbwafColourValues()
         elif colour_type == ColourType.COLOUR_TEMPERATURE:
-            self.colour = ColourTemperatureValue()
+            self.colour = dali_type8_tc.ColourTemperatureValue()
         elif colour_type == ColourType.PRIMARY_N:
-            self.colour = PrimaryNColourValues()
+            self.colour = dali_type8_primary_n.PrimaryNColourValues()
         elif colour_type == ColourType.XY:
-            self.colour = XYColourValues()
+            self.colour = dali_type8_xy.XYColourValues()
         else:
             raise RuntimeError(f"Unsupported colour type: {colour_type}")
 
     def to_json(self) -> dict:
-        if self.colour_type == ColourType.RGBWAF:
-            res = {
-                "rgb": f"{self.colour.red};{self.colour.green};{self.colour.blue}",
-                "white": self.colour.white,
-            }
-        else:
-            res = asdict(self.colour)
+        res = self.colour.to_json()
         res["level"] = self.level
         return res
-
-
-def get_max_colour_value(colour_type: ColourType) -> int:
-    if colour_type == ColourType.RGBWAF:
-        return 255
-    return 65535
 
 
 def query_colour_with_level(
@@ -309,7 +118,7 @@ def query_colour_with_level(
     default_colour_type: ColourType,
 ) -> Generator[
     Union[command.Command, List[command.Command]],
-    Union[Optional[command.Response], List[Optional[command.Response]]],
+    List[Optional[command.Response]],
     ColourSettings,
 ]:
     resp = yield [cmd, DTR0(QueryColourValueDTR.ReportColourType), QueryColourValue(address)]
@@ -371,6 +180,7 @@ class ColourState(SettingsParamBase):
         colour_tags: dict[ColourComponent, QueryColourValueDTR],
         property_order: int,
         default_colour_type: ColourType,
+        limits: Type8Limits,
         read_after_save: bool = True,
     ) -> None:
         super().__init__(name)
@@ -382,6 +192,7 @@ class ColourState(SettingsParamBase):
         self._colour_tags = colour_tags
         self._read_after_save = read_after_save
         self._default_colour_type = default_colour_type
+        self._limits = limits
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
         return await self._read_impl(driver, short_address)
@@ -393,21 +204,7 @@ class ColourState(SettingsParamBase):
             raise RuntimeError(f"Cannot write {self.name.en} before reading it")
         values = value.get(self.property_name, {})
         new_state = deepcopy(self.value)
-        if new_state.colour_type == ColourType.RGBWAF:
-            rgb_value = values.get("rgb")
-            if rgb_value is not None:
-                try:
-                    red_str, green_str, blue_str = rgb_value.split(";")
-                    new_state.colour.red = int(red_str)
-                    new_state.colour.green = int(green_str)
-                    new_state.colour.blue = int(blue_str)
-                except Exception as e:
-                    raise ValueError(f"Invalid RGB value: {rgb_value}") from e
-            new_state.colour.white = values.get("white", new_state.colour.white)
-        else:
-            for colour in new_state.colour.components:
-                if colour.value in values:
-                    setattr(new_state.colour, colour.value, values[colour.value])
+        new_state.colour.from_json(values)
         new_state.level = values.get("level", self.value.level)
         if new_state == self.value:
             return {}
@@ -433,7 +230,7 @@ class ColourState(SettingsParamBase):
                             "format": "dali-level",
                             "propertyOrder": 1,
                             "minimum": 0,
-                            "maximum": 255,
+                            "maximum": MASK,
                             "options": {
                                 "grid_columns": 1,
                             },
@@ -451,45 +248,10 @@ class ColourState(SettingsParamBase):
             },
         }
         if self.value is not None and self.value.colour is not None:
+            colour_schema = self.value.colour.get_schema(self._limits)
             root_property = schema["properties"][self.property_name]
-            if self.value.colour_type == ColourType.RGBWAF:
-                root_property["properties"]["rgb"] = {
-                    "type": "string",
-                    "title": "RGB",
-                    "format": "dali-rgb",
-                    "propertyOrder": 2,
-                    "options": {
-                        "grid_columns": 2,
-                    },
-                }
-                root_property["properties"]["white"] = {
-                    "type": "integer",
-                    "title": "White",
-                    "format": "dali-white",
-                    "minimum": 0,
-                    "maximum": 255,
-                    "propertyOrder": 3,
-                    "options": {
-                        "grid_columns": 2,
-                    },
-                }
-                root_property["required"].append("rgb")
-                root_property["required"].append("white")
-                schema["translations"]["ru"]["White"] = "Белый"
-            else:
-                for index, colour in enumerate(self.value.colour.components):
-                    root_property["properties"][colour.value] = {
-                        "type": "integer",
-                        "title": COLOUR_NAMES[colour][0],
-                        "minimum": 0,
-                        "maximum": 65535,
-                        "propertyOrder": index + 2,
-                        "options": {
-                            "grid_columns": 2,
-                        },
-                    }
-                    root_property["required"].append(colour.value)
-                    schema["translations"]["ru"][COLOUR_NAMES[colour][0]] = COLOUR_NAMES[colour][1]
+            merge_json_schema_properties(root_property, colour_schema)
+            merge_translations(schema, colour_schema)
         return schema
 
     async def _read_impl(self, driver: WBDALIDriver, short_address: int) -> dict:
@@ -506,7 +268,7 @@ class ColourState(SettingsParamBase):
 
 
 class SceneSettings(ColourState):
-    def __init__(self, scene_number: int, default_colour_type: ColourType) -> None:
+    def __init__(self, scene_number: int, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(
             SettingsParamName(f"Scene {scene_number}"),
             f"scene_{scene_number}",
@@ -515,6 +277,7 @@ class SceneSettings(ColourState):
             REPORT_COLOUR_TAGS,
             900,
             default_colour_type,
+            limits,
         )
         self._scene_number = scene_number
 
@@ -542,11 +305,11 @@ class SceneSettings(ColourState):
 
 
 class ScenesSettings(SettingsParamBase):
-    def __init__(self, default_colour_type: ColourType) -> None:
+    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(SettingsParamName("Scenes", "Сцены"))
 
         self.property_name = "scenes"
-        self._scenes = [SceneSettings(i, default_colour_type) for i in range(SCENES_TOTAL)]
+        self._scenes = [SceneSettings(i, default_colour_type, limits) for i in range(SCENES_TOTAL)]
         self._scene_values = [{} for _ in range(SCENES_TOTAL)]
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
@@ -618,11 +381,14 @@ class Type8Parameters(TypeParameters):
         super().__init__()
 
         self._current_colour_type: Optional[ColourType] = None
+        self._limits = Type8Limits(dali_type8_tc.MIN_TC_MIREK, dali_type8_tc.MAX_TC_MIREK)
         self._colour_type_lock = asyncio.Lock()
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        async with self._colour_type_lock:
-            self._current_colour_type = await self._read_current_colour_type(driver, short_address)
+        await self.read_mandatory_info(driver, short_address)
+        default_colour_type = (
+            self._current_colour_type if self._current_colour_type is not None else ColourType.RGBWAF
+        )
         parameters = [
             ColourState(
                 SettingsParamName("Current colour", "Текущий цвет"),
@@ -631,7 +397,8 @@ class Type8Parameters(TypeParameters):
                 Activate,
                 ACTUAL_LEVEL_COLOUR_TAGS,
                 800,
-                self._current_colour_type,
+                default_colour_type,
+                self._limits,
                 read_after_save=False,
             ),
             ColourState(
@@ -641,7 +408,8 @@ class Type8Parameters(TypeParameters):
                 SetPowerOnLevel,
                 REPORT_COLOUR_TAGS,
                 21,
-                self._current_colour_type,
+                default_colour_type,
+                self._limits,
             ),
             ColourState(
                 SettingsParamName("System Failure Colour", "Цвет при сбое"),
@@ -650,9 +418,10 @@ class Type8Parameters(TypeParameters):
                 SetSystemFailureLevel,
                 REPORT_COLOUR_TAGS,
                 31,
-                self._current_colour_type,
+                default_colour_type,
+                self._limits,
             ),
-            ScenesSettings(self._current_colour_type),
+            ScenesSettings(default_colour_type, self._limits),
         ]
         self._parameters = parameters
         return await super().read(driver, short_address)
@@ -661,245 +430,20 @@ class Type8Parameters(TypeParameters):
         async with self._colour_type_lock:
             if self._current_colour_type is None:
                 self._current_colour_type = await self._read_current_colour_type(driver, short_address)
+                if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+                    self._limits.tc_min_mirek, self._limits.tc_max_mirek = (
+                        await dali_type8_tc.read_colour_temperature_limits_mirek(driver, short_address)
+                    )
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
-
         if self._current_colour_type == ColourType.RGBWAF:
-
-            def _set_rgb_commands_builder(short_address: int, value: str) -> list[command.Command]:
-                components = value.split(";")
-                if len(components) != 3:
-                    raise ValueError("RGB value must be in format 'R;G;B'")
-                try:
-                    red, green, blue = (int(c) for c in components)
-                except ValueError as e:
-                    raise ValueError("RGB components must be integers") from e
-                return set_rgb_commands_builder(GearShort(short_address), red, green, blue) + [
-                    DTR0(255),
-                    Activate(GearShort(short_address)),
-                ]
-
-            def _set_white_commands_builder(short_address: int, value: str) -> list[command.Command]:
-                try:
-                    white = int(value)
-                except ValueError as e:
-                    raise ValueError("white component must be integer") from e
-                return set_waf_commands_builder(GearShort(short_address), white, MASK, MASK) + [
-                    DTR0(255),
-                    Activate(GearShort(short_address)),
-                ]
-
-            return [
-                MqttControl(
-                    ControlInfo(
-                        "current_rgb",
-                        ControlMeta("rgb", "Current RGB", read_only=True),
-                        "0;0;0",
-                    ),
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "current_white",
-                        ControlMeta(title="Current White", read_only=True),
-                        "0",
-                    ),
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "set_rgb",
-                        ControlMeta("rgb", "Wanted RGB"),
-                        "255;255;255",
-                    ),
-                    commands_builder=_set_rgb_commands_builder,
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "set_white",
-                        ControlMeta("range", "Wanted White", minimum=0, maximum=255),
-                        "255",
-                    ),
-                    commands_builder=_set_white_commands_builder,
-                ),
-            ]
-
+            return dali_type8_rgbwaf.get_mqtt_controls()
         if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-
-            def _set_colour_temperature_commands_builder(
-                short_address: int, value: str
-            ) -> list[command.Command]:
-                try:
-                    tc = int(value)
-                except ValueError as e:
-                    raise ValueError("colour temperature must be integer") from e
-                return set_colour_temperature_commands_builder(GearShort(short_address), tc) + [
-                    DTR0(255),
-                    Activate(GearShort(short_address)),
-                ]
-
-            return [
-                MqttControl(
-                    ControlInfo(
-                        "current_colour_temperature",
-                        ControlMeta(title="Colour Temperature", read_only=True),
-                        "0",
-                    ),
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "colour_temperature_step_warmer",
-                        ControlMeta("pushbutton", "Colour Temperature Step Warmer"),
-                        "0",
-                    ),
-                    commands_builder=lambda short_address, _: [
-                        ColourTemperatureTcStepWarmer(GearShort(short_address))
-                    ],
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "colour_temperature_step_cooler",
-                        ControlMeta("pushbutton", "Colour Temperature Step Cooler"),
-                        "0",
-                    ),
-                    commands_builder=lambda short_address, _: [
-                        ColourTemperatureTcStepCooler(GearShort(short_address))
-                    ],
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "set_colour_temperature",
-                        ControlMeta("range", "Wanted Colour Temperature", minimum=0, maximum=65535),
-                        "4000",
-                    ),
-                    commands_builder=_set_colour_temperature_commands_builder,
-                ),
-            ]
-
+            return dali_type8_tc.get_mqtt_controls(self._limits.tc_min_mirek, self._limits.tc_max_mirek)
         if self._current_colour_type == ColourType.PRIMARY_N:
-
-            def _set_primary_n_commands_builder(
-                short_address: int, value: str, index: int
-            ) -> list[command.Command]:
-                try:
-                    primary_n = int(value)
-                except ValueError as e:
-                    raise ValueError(f"primary N{index} must be integer") from e
-                return set_primary_n_commands_builder(GearShort(short_address), primary_n, index) + [
-                    DTR0(255),
-                    Activate(GearShort(short_address)),
-                ]
-
-            res = []
-            for i in range(6):
-                res.append(
-                    MqttControl(
-                        ControlInfo(
-                            f"current_primary_n{i}",
-                            ControlMeta(title=f"Current Primary N{i}", read_only=True),
-                            "0",
-                        ),
-                    ),
-                )
-                res.append(
-                    MqttControl(
-                        ControlInfo(
-                            f"set_primary_n{i}",
-                            ControlMeta("range", f"Wanted Primary N{i}", minimum=0, maximum=65535),
-                            "32768",
-                        ),
-                        commands_builder=lambda short_address, value, index=i: _set_primary_n_commands_builder(
-                            short_address, value, index
-                        ),
-                    )
-                )
-            return res
-
+            return dali_type8_primary_n.get_mqtt_controls()
         if self._current_colour_type == ColourType.XY:
-
-            def _set_x_coordinate_commands_builder(short_address: int, value: str) -> list[command.Command]:
-                try:
-                    x_coordinate = int(value)
-                except ValueError as e:
-                    raise ValueError("X coordinate must be integer") from e
-                return set_x_coordinate_commands_builder(GearShort(short_address), x_coordinate) + [
-                    DTR0(255),
-                    Activate(GearShort(short_address)),
-                ]
-
-            def _set_y_coordinate_commands_builder(short_address: int, value: str) -> list[command.Command]:
-                try:
-                    y_coordinate = int(value)
-                except ValueError as e:
-                    raise ValueError("Y coordinate must be integer") from e
-                return set_y_coordinate_commands_builder(GearShort(short_address), y_coordinate) + [
-                    DTR0(255),
-                    Activate(GearShort(short_address)),
-                ]
-
-            return [
-                MqttControl(
-                    ControlInfo(
-                        "current_x_coordinate",
-                        ControlMeta(title="Current X Coordinate", read_only=True),
-                        "0",
-                    ),
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "current_y_coordinate",
-                        ControlMeta(title="Current Y Coordinate", read_only=True),
-                        "0",
-                    ),
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "x_coordinate_step_up",
-                        ControlMeta("pushbutton", "X Coordinate Step Up"),
-                        "0",
-                    ),
-                    commands_builder=lambda short_address, _: [XCoordinateStepUp(GearShort(short_address))],
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "x_coordinate_step_down",
-                        ControlMeta("pushbutton", "X Coordinate Step Down"),
-                        "0",
-                    ),
-                    commands_builder=lambda short_address, _: [XCoordinateStepDown(GearShort(short_address))],
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "y_coordinate_step_up",
-                        ControlMeta("pushbutton", "Y Coordinate Step Up"),
-                        "0",
-                    ),
-                    commands_builder=lambda short_address, _: [YCoordinateStepUp(GearShort(short_address))],
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "y_coordinate_step_down",
-                        ControlMeta("pushbutton", "Y Coordinate Step Down"),
-                        "0",
-                    ),
-                    commands_builder=lambda short_address, _: [YCoordinateStepDown(GearShort(short_address))],
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "set_x_coordinate",
-                        ControlMeta("range", "Wanted X Coordinate", minimum=0, maximum=65535),
-                        "32768",
-                    ),
-                    commands_builder=_set_x_coordinate_commands_builder,
-                ),
-                MqttControl(
-                    ControlInfo(
-                        "set_y_coordinate",
-                        ControlMeta("range", "Wanted Y Coordinate", minimum=0, maximum=65535),
-                        "32768",
-                    ),
-                    commands_builder=_set_y_coordinate_commands_builder,
-                ),
-            ]
-
+            return dali_type8_xy.get_mqtt_controls()
         return []
 
     async def poll_controls(self, driver: WBDALIDriver, short_address: int) -> list[ControlPollResult]:
@@ -923,57 +467,13 @@ class Type8Parameters(TypeParameters):
         if not set_error and resp.colour_type != self._current_colour_type:
             set_error = True
         if self._current_colour_type == ColourType.RGBWAF:
-            return [
-                ControlPollResult(
-                    "current_rgb",
-                    (
-                        None
-                        if set_error
-                        else ";".join(
-                            str(getattr(resp.colour, colour)) for colour in ["red", "green", "blue"]
-                        )
-                    ),
-                    error="r" if set_error else None,
-                ),
-                ControlPollResult(
-                    "current_white",
-                    None if set_error else str(resp.colour.white),
-                    error="r" if set_error else None,
-                ),
-            ]
-
+            return dali_type8_rgbwaf.handle_poll_controls_result(None if set_error else resp.colour)
         if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-            return [
-                ControlPollResult(
-                    "current_colour_temperature",
-                    None if set_error else str(resp.colour.tc),
-                    error="r" if set_error else None,
-                )
-            ]
-
+            return dali_type8_tc.handle_poll_controls_result(None if set_error else resp.colour)
         if self._current_colour_type == ColourType.PRIMARY_N:
-            return [
-                ControlPollResult(
-                    f"current_primary_n{i}",
-                    None if set_error else str(getattr(resp.colour, f"primary_n{i}")),
-                    error="r" if set_error else None,
-                )
-                for i, _ in enumerate(PRIMARY_N_COLOUR_COMPONENTS)
-            ]
-
+            return dali_type8_primary_n.handle_poll_controls_result(None if set_error else resp.colour)
         if self._current_colour_type == ColourType.XY:
-            return [
-                ControlPollResult(
-                    "current_x_coordinate",
-                    None if set_error else str(resp.colour.x_coordinate),
-                    error="r" if set_error else None,
-                ),
-                ControlPollResult(
-                    "current_y_coordinate",
-                    None if set_error else str(resp.colour.y_coordinate),
-                    error="r" if set_error else None,
-                ),
-            ]
+            return dali_type8_xy.handle_poll_controls_result(None if set_error else resp.colour)
 
         return []
 

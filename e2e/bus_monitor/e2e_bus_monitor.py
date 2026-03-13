@@ -13,6 +13,7 @@ from dali.gear.general import QueryActualLevel
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.wbdali import FRAME_COUNTER_MODULO
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
 
@@ -97,12 +98,8 @@ async def main(argv):
     def bus_monitor_callback(_frame, _source, frame_counter):
         nonlocal last_frame_counter, missed_frames
         if frame_counter is not None:
-            if last_frame_counter is not None and frame_counter != (last_frame_counter + 1) % 65535:
-                missed_frames += (
-                    last_frame_counter - 65535 - frame_counter
-                    if frame_counter < last_frame_counter
-                    else frame_counter - last_frame_counter
-                )
+            delta = (frame_counter - last_frame_counter - 1) % FRAME_COUNTER_MODULO
+            missed_frames += delta
             last_frame_counter = frame_counter
 
     async with client:

@@ -61,14 +61,22 @@ class OneShotTasks:
     def add(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._tasks.append(task)
-        task.add_done_callback(self._tasks.remove)
+        task.add_done_callback(self._remove_task)
         return task
 
     async def stop(self):
-        for task in self._tasks:
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+
+    def _remove_task(self, task: asyncio.Task) -> None:
+        try:
+            self._tasks.remove(task)
+        except ValueError:
+            # Task might have been removed already (e.g., during stop()).
+            pass
 
 
 class ApplicationController:

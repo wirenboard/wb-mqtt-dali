@@ -23,7 +23,7 @@ WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
-MASK = 0xFF
+FRAME_COUNTER_MODULO = 1 << 16
 
 
 @dataclass
@@ -302,10 +302,8 @@ class WBDALIDriver:
         frame_counter = (raw_value >> 48) & 0xFFFF
 
         if self._last_bus_monitor_frame_counter is not None:
-            if self._last_bus_monitor_frame_counter == 0xFFFF and frame_counter == 0:
-                # Normal wrap-around, ignore
-                pass
-            if self._last_bus_monitor_frame_counter + 1 != frame_counter:
+            delta = (frame_counter - self._last_bus_monitor_frame_counter - 1) % FRAME_COUNTER_MODULO
+            if delta > 1:
                 self.logger.warning(
                     "Bus monitor frame counter jump from %d to %d, possible missed frames",
                     self._last_bus_monitor_frame_counter,

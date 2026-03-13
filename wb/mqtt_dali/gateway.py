@@ -112,7 +112,6 @@ def bus_to_json(bus: ApplicationController) -> dict:
             )
         ),
         "groups": [],
-        "isCommissioning": bus.is_commissioning(),
     }
 
 

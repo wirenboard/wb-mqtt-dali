@@ -329,7 +329,6 @@ class DaliDeviceBase:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
             await driver.send_commands(control.get_setup_commands(self.address.short, value))
-            return
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         await self._update_mqtt_controls_list(driver)

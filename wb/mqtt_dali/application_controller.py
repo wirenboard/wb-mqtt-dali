@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Optional, Sequence, Union
+from typing import Any, Optional, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import DeviceBroadcast
@@ -30,9 +30,6 @@ class ApplicationControllerState(Enum):
     INITIALIZING = auto()
     READY = auto()
     STOPPING = auto()
-    COMMISSIONING = auto()
-    IN_QUIESCENT_MODE = auto()
-    GENERIC_TASK = auto()
 
 
 @dataclass
@@ -79,6 +76,20 @@ class OneShotTasks:
             pass
 
 
+class ApplicationControllerTaskType(Enum):
+    APPLY_SETTING = auto()
+    COMMISSIONING = auto()
+    LOAD_INFO = auto()
+    EXECUTE_CONTROL = auto()
+
+
+@dataclass
+class ApplicationControllerTask:
+    task_type: ApplicationControllerTaskType
+    data: Any = {}
+    future: asyncio.Future = field(default_factory=asyncio.Future)
+
+
 class ApplicationController:
     def __init__(
         self,
@@ -96,11 +107,8 @@ class ApplicationController:
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
-        self._ready_condition = asyncio.Condition(self._state_lock)
 
         self._quiescent_mode_timer: Optional[asyncio.TimerHandle] = None
-        self._active_task: Optional[asyncio.Task] = None
-        self._active_task_description: str = ""
 
         self._mqtt_dispatcher = mqtt_dispatcher
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
@@ -109,7 +117,6 @@ class ApplicationController:
 
         self._polling_interval = config.polling_interval
         self._polling_task: Optional[asyncio.Task] = None
-        self._reschedule_polling_task = True
 
         if config.old_gateway:
             cfg = WBDALIDriverOldConfig(
@@ -136,6 +143,12 @@ class ApplicationController:
         self._devices_by_mqtt_id: dict[str, Union[DaliDevice, Dali2Device]] = {}
 
         self._gtin_db = gtin_db
+
+        self._tasks_queue: asyncio.Queue[ApplicationControllerTask] = asyncio.Queue()
+
+        self._in_quiescent_mode = False
+
+        self._controls_to_execute: dict[tuple[Union[DaliDevice, Dali2Device], str], str] = {}
 
     @property
     def polling_interval(self) -> float:
@@ -192,7 +205,6 @@ class ApplicationController:
         async with self._websocket_lock:
             if self.websocket_config.enabled:
                 self._run_websocket()
-        await self._notify_ready()
 
     async def stop(self) -> None:
         async with self._state_lock:
@@ -210,7 +222,6 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
 
         if self._polling_task:
-            self._reschedule_polling_task = False
             self._polling_task.cancel()
             try:
                 await self._polling_task
@@ -218,51 +229,46 @@ class ApplicationController:
                 pass
             self._polling_task = None
 
+        self._controls_to_execute.clear()
+
         async with self._websocket_lock:
             await self._stop_websocket()
 
         await self._device_publisher.cleanup()
-
-        if self._active_task:
-            if self._active_task.cancel():
-                self.logger.debug("Cancelling active task: %s", self._active_task_description)
-            try:
-                await self._active_task
-            except asyncio.CancelledError:
-                pass
-            self._active_task = None
-
         await self._dev.deinitialize()
         async with self._state_lock:
             self._state = ApplicationControllerState.UNINITIALIZED
 
     async def rescan_bus(self) -> None:
-        await self._run_task(
-            ApplicationControllerState.COMMISSIONING, self._commissioning_task(), "commissioning", 5.0
-        )
-
-    def is_commissioning(self) -> bool:
-        return self._state == ApplicationControllerState.COMMISSIONING
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.COMMISSIONING)
+            self._tasks_queue.put_nowait(task)
+        await task.future
 
     async def load_device_info(
         self, device: Union[DaliDevice, Dali2Device], force_reload: bool = False
     ) -> None:
-        await self._run_task(
-            ApplicationControllerState.GENERIC_TASK,
-            device.load_info(self._dev, force_reload),
-            f"loading device {device.name} info",
-            5.0,
-        )
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.LOAD_INFO, (device, force_reload))
+            self._tasks_queue.put_nowait(task)
+        await task.future
 
     async def apply_parameters(self, device: Union[DaliDevice, Dali2Device], new_params: dict) -> None:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(
+                ApplicationControllerTaskType.APPLY_SETTING, (device, new_params)
+            )
+            self._tasks_queue.put_nowait(task)
+
         old_mqtt_id = device.mqtt_id
         old_short_address = device.address.short
-        await self._run_task(
-            ApplicationControllerState.GENERIC_TASK,
-            device.apply_parameters(self._dev, new_params),
-            f"applying parameters to device {device.name}",
-            5.0,
-        )
+        await task.future
 
         new_mqtt_id = device.mqtt_id
         if old_mqtt_id != new_mqtt_id:
@@ -291,15 +297,10 @@ class ApplicationController:
 
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
-            if self._state in (
-                ApplicationControllerState.UNINITIALIZED,
-                ApplicationControllerState.INITIALIZING,
-                ApplicationControllerState.STOPPING,
-            ):
+            if self._state != ApplicationControllerState.READY:
                 self.websocket_config = config
                 self.logger.debug(
-                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state %s, just saving config",
-                    self._state,
+                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, just saving config",
                 )
                 return
 
@@ -322,25 +323,6 @@ class ApplicationController:
 
                 self.websocket_config = config
                 self._run_websocket()
-
-    async def _run_task(
-        self, new_state: ApplicationControllerState, task, task_description: str, timeout: float = 1.0
-    ) -> None:
-        try:
-            async with self._ready_condition:
-                await asyncio.wait_for(
-                    self._ready_condition.wait_for(lambda: self._state == ApplicationControllerState.READY),
-                    timeout=timeout,
-                )
-                self._state = new_state
-        except asyncio.TimeoutError as e:
-            raise RuntimeError(f"Bus is occupied by {self._active_task_description}") from e
-        self._active_task = asyncio.create_task(task)
-        self._active_task_description = task_description
-        try:
-            await self._active_task
-        finally:
-            await self._notify_ready()
 
     async def _commissioning_task(self):
         start_time = default_timer()
@@ -446,16 +428,23 @@ class ApplicationController:
         device = self._devices_by_mqtt_id.get(device_id)
         if device is None:
             return
-        if self._active_task:
-            if self._active_task_description == "polling":
-                self._active_task.cancel("command sent")
-        try:
-            await self._run_task(
-                ApplicationControllerState.GENERIC_TASK,
-                device.execute_control(self._dev, control_id, payload),
-                "sending command",
-                3.0,
+
+        key = (device, control_id)
+        if key in self._controls_to_execute:
+            self._controls_to_execute[key] = payload
+            self.logger.debug(
+                "Received new command for control %s of device %s while previous command is still pending",
+                control_id,
+                device_id,
             )
+            return
+        self._controls_to_execute[key] = payload
+        try:
+            task = ApplicationControllerTask(
+                ApplicationControllerTaskType.EXECUTE_CONTROL, (device, control_id)
+            )
+            self._tasks_queue.put_nowait(task)
+            await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
@@ -471,67 +460,101 @@ class ApplicationController:
                 device.add_instance(inst_num, inst_type)
 
     async def _polling_loop(self) -> None:
-        try:
-            await asyncio.sleep(self._polling_interval)
-
-            devices = tuple(self.dali_devices)
-            if devices:
+        devices = []
+        timeout = 0
+        item = None
+        while True:
+            try:
                 try:
-                    await self._run_task(
-                        ApplicationControllerState.GENERIC_TASK,
-                        self._poll_devices(devices),
-                        "polling",
+                    if item is None:
+                        item = await asyncio.wait_for(self._tasks_queue.get(), timeout)
+                except asyncio.TimeoutError:
+                    if not self._in_quiescent_mode:
+                        if not devices:
+                            devices = list(self.dali_devices)
+                        if devices:
+                            await self._poll_device(devices.pop())
+                    continue
+                finally:
+                    timeout = self._polling_interval
+
+                if self._in_quiescent_mode:
+                    item.future.cancel()
+                    item = None
+                    continue
+
+                if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
+                    controls = []
+                    while (
+                        item is not None and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
+                    ):
+                        payload = self._controls_to_execute.pop(item.data, None)
+                        if payload is not None:
+                            controls.append((item, payload))
+                        try:
+                            item = self._tasks_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            item = None
+                    results = await asyncio.gather(
+                        *[
+                            item.device.execute_control(self._dev, item.control_id, payload)
+                            for item, payload in controls
+                        ],
+                        return_exceptions=True,
                     )
-                except RuntimeError as e:
-                    self.logger.debug("Skipping polling cycle: %s", e)
+                    for (item, payload), result in zip(controls, results):
+                        if isinstance(result, Exception):
+                            item.future.set_exception(result)
+                        else:
+                            item.future.set_result(result)
+                else:
+                    try:
+                        if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
+                            await self._commissioning_task()
+                            devices = list(self.dali_devices)
+                        elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
+                            device, force_reload = item.data
+                            await device.load_info(self._dev, force_reload)
+                        elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
+                            device, new_params = item.data
+                            await device.apply_parameters(self._dev, new_params)
+                        item.future.set_result(None)
+                    except Exception as e:
+                        item.future.set_exception(e)
+                    finally:
+                        item = None
 
-        except asyncio.CancelledError:
-            self.logger.info("Polling loop cancelled")
-            if not self._reschedule_polling_task:
-                raise
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
-            await asyncio.sleep(1)
-        finally:
-            if self._reschedule_polling_task and self._state not in (
-                ApplicationControllerState.STOPPING,
-                ApplicationControllerState.UNINITIALIZED,
-            ):
-                self._polling_task = asyncio.create_task(self._polling_loop())
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
+                item = None
 
-    async def _poll_devices(self, devices: Sequence[DaliDevice]) -> None:
-        queries = [device.poll_controls(self._dev) for device in devices]
-        responses = await asyncio.gather(*queries, return_exceptions=True)
+    async def _poll_device(self, device: DaliDevice) -> None:
+        try:
+            responses = await device.poll_controls(self._dev)
+        except Exception as e:
+            self.logger.exception("Error polling device %s: %s", device.name, str(e))
+            return
         tasks = []
-        for device_responses, device in zip(responses, devices):
-            if isinstance(device_responses, BaseException):
-                self.logger.warning(
-                    "Error polling device %s: %s",
-                    device.name,
-                    str(device_responses),
-                    exc_info=device_responses,
+        for response in responses:
+            if response.error is not None:
+                tasks.append(
+                    self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
                 )
                 continue
-            for response in device_responses:
-                if response.error is not None:
-                    tasks.append(
-                        self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
+            if response.title is not None:
+                tasks.append(
+                    self._device_publisher.set_control_title(
+                        device.mqtt_id, response.control_id, response.title
                     )
-                    continue
-                if response.title is not None:
-                    tasks.append(
-                        self._device_publisher.set_control_title(
-                            device.mqtt_id, response.control_id, response.title
-                        )
+                )
+            if response.value is not None:
+                tasks.append(
+                    self._device_publisher.set_control_value(
+                        device.mqtt_id, response.control_id, response.value
                     )
-                if response.value is not None:
-                    tasks.append(
-                        self._device_publisher.set_control_value(
-                            device.mqtt_id, response.control_id, response.value
-                        )
-                    )
+                )
         if tasks:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _run_websocket(self) -> None:
         self._websocket_task = asyncio.create_task(
@@ -550,17 +573,7 @@ class ApplicationController:
             self._websocket_task = None
 
     async def _handle_start_quiescent_mode(self) -> None:
-        async with self._state_lock:
-            if self._state not in [
-                ApplicationControllerState.READY,
-                ApplicationControllerState.IN_QUIESCENT_MODE,
-                ApplicationControllerState.GENERIC_TASK,
-                ApplicationControllerState.COMMISSIONING,
-            ]:
-                return
-            self._state = ApplicationControllerState.IN_QUIESCENT_MODE
-        if self._active_task:
-            self._active_task.cancel()
+        self._in_quiescent_mode = True
         if self._quiescent_mode_timer:
             self._quiescent_mode_timer.cancel()
         self._quiescent_mode_timer = asyncio.get_event_loop().call_later(
@@ -569,23 +582,10 @@ class ApplicationController:
         )
 
     async def _handle_stop_quiescent_mode(self) -> None:
-        async with self._state_lock:
-            if self._state == ApplicationControllerState.IN_QUIESCENT_MODE:
-                self._state = ApplicationControllerState.READY
-                if self._quiescent_mode_timer:
-                    self._quiescent_mode_timer.cancel()
-                    self._quiescent_mode_timer = None
-                self._ready_condition.notify()
-
-    async def _notify_ready(self) -> None:
-        async with self._state_lock:
-            if self._state not in [
-                ApplicationControllerState.STOPPING,
-                ApplicationControllerState.IN_QUIESCENT_MODE,
-            ]:
-                self._state = ApplicationControllerState.READY
-                self._active_task_description = ""
-                self._ready_condition.notify()
+        self._in_quiescent_mode = False
+        if self._quiescent_mode_timer:
+            self._quiescent_mode_timer.cancel()
+            self._quiescent_mode_timer = None
 
     def _handle_bus_traffic_frame(self, frame: Frame, source: str, _frame_counter: Optional[int]) -> None:
         incoming_command = None

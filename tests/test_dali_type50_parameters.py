@@ -1,11 +1,14 @@
 from unittest.mock import AsyncMock
 
 import pytest
-
 from dali.memory import oem
 from dali.memory.location import FlagValue
 
-from wb.mqtt_dali.dali_type50_parameters import _FIELD_SPECS, Type50MemoryBankParam, Type50Parameters
+from wb.mqtt_dali.dali_type50_parameters import (
+    _FIELD_SPECS,
+    Type50MemoryBankParam,
+    Type50Parameters,
+)
 
 
 def _make_raw(overrides: dict) -> dict:

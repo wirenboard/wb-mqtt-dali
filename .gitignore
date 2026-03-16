@@ -179,3 +179,5 @@ config.local.*
 .coveragerc
 pyproject.toml
 .config
+standards/
+CLAUDE.md

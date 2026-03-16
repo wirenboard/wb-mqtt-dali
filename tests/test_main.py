@@ -49,9 +49,7 @@ def test_validate_config_no_conflicts():
 def test_validate_config_dali2_same_short_no_conflict():
     # DALI 1.0 and DALI 2.0 devices may share the same short address on the same bus
     # because their default mqtt_ids differ ("gw_bus_1_0" vs "gw_bus_1_dali2_0")
-    config = _make_config(
-        [_make_gateway("gw", [_make_bus([_make_device(0), _make_device(0, dali2=True)])])]
-    )
+    config = _make_config([_make_gateway("gw", [_make_bus([_make_device(0), _make_device(0, dali2=True)])])])
     validate_config(config)
 
 

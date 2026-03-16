@@ -11,8 +11,8 @@ from dali.gear.general import DTR0, DTR1, DTR2
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
-from .wbmqtt import TranslatedTitle
 from .wbdali_utils import MASK
+from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE = MASK - 1
 

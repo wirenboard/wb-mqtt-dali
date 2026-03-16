@@ -86,8 +86,8 @@ class ApplicationControllerTaskType(Enum):
 @dataclass
 class ApplicationControllerTask:
     task_type: ApplicationControllerTaskType
-    data: Any = {}
-    future: asyncio.Future = field(default_factory=asyncio.Future)
+    data: Any = field(default_factory=dict)
+    future: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
 
 
 class ApplicationController:
@@ -200,6 +200,9 @@ class ApplicationController:
             self._devices_by_mqtt_id[device.mqtt_id] = device
             device.setLogger(self.logger)
 
+        async with self._state_lock:
+            self._state = ApplicationControllerState.READY
+
         self._polling_task = asyncio.create_task(self._polling_loop())
 
         async with self._websocket_lock:
@@ -228,6 +231,15 @@ class ApplicationController:
             except asyncio.CancelledError:
                 pass
             self._polling_task = None
+
+        # Cancel any queued ApplicationControllerTasks so that callers awaiting
+        # their futures do not hang during shutdown.
+        try:
+            while True:
+                task = self._tasks_queue.get_nowait()
+                task.future.cancel()
+        except asyncio.QueueEmpty:
+            pass
 
         self._controls_to_execute.clear()
 
@@ -490,19 +502,26 @@ class ApplicationController:
                     ):
                         payload = self._controls_to_execute.pop(item.data, None)
                         if payload is not None:
-                            controls.append((item, payload))
+                            device, control_id = item.data
+                            controls.append((item, payload, device, control_id))
+                        else:
+                            # Ensure futures are always resolved, even if there is no payload
+                            if not item.future.done():
+                                item.future.set_exception(
+                                    RuntimeError("No payload available for EXECUTE_CONTROL task")
+                                )
                         try:
                             item = self._tasks_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             item = None
                     results = await asyncio.gather(
                         *[
-                            item.device.execute_control(self._dev, item.control_id, payload)
-                            for item, payload in controls
+                            device.execute_control(self._dev, control_id, payload)
+                            for _item, payload, device, control_id in controls
                         ],
                         return_exceptions=True,
                     )
-                    for (item, payload), result in zip(controls, results):
+                    for (item, payload, device, control_id), result in zip(controls, results):
                         if isinstance(result, Exception):
                             item.future.set_exception(result)
                         else:

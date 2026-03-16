@@ -13,7 +13,9 @@
             "properties": {
                 "short": {
                     "type": "integer",
-                    "title": "Short Address"
+                    "title": "Short Address",
+                    "minimum": 0,
+                    "maximum": 63
                 },
                 "random": {
                     "type": "integer",

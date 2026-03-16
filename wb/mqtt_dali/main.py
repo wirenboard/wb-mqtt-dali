@@ -14,6 +14,7 @@ import jsonschema
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .commissioning import Commissioning, check_presence, search_short
+from .config_validator import validate_config
 from .gateway import Gateway
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
@@ -103,6 +104,7 @@ def load_config(config_filepath: str) -> dict:
     with open(config_filepath, "r", encoding="utf-8") as config_file:
         config = json.load(config_file)
         jsonschema.validate(instance=config, schema=schema, format_checker=jsonschema.draft4_format_checker)
+    validate_config(config)
     return config
 
 

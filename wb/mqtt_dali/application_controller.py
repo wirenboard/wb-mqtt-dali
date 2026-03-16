@@ -491,6 +491,8 @@ class ApplicationController:
                     timeout = self._polling_interval
 
                 if self._in_quiescent_mode:
+                    if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
+                        self._controls_to_execute.pop(item.data, None)
                     item.future.cancel()
                     item = None
                     continue
@@ -522,10 +524,11 @@ class ApplicationController:
                         return_exceptions=True,
                     )
                     for (item, payload, device, control_id), result in zip(controls, results):
-                        if isinstance(result, Exception):
-                            item.future.set_exception(result)
-                        else:
-                            item.future.set_result(result)
+                        if not item.future.done():
+                            if isinstance(result, Exception):
+                                item.future.set_exception(result)
+                            else:
+                                item.future.set_result(result)
                 else:
                     try:
                         if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
@@ -537,9 +540,11 @@ class ApplicationController:
                         elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
                             device, new_params = item.data
                             await device.apply_parameters(self._dev, new_params)
-                        item.future.set_result(None)
+                        if not item.future.done():
+                            item.future.set_result(None)
                     except Exception as e:
-                        item.future.set_exception(e)
+                        if not item.future.done():
+                            item.future.set_exception(e)
                     finally:
                         item = None
 
@@ -573,7 +578,14 @@ class ApplicationController:
                     )
                 )
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    self.logger.error(
+                        "Error updating MQTT control for device %s: %s",
+                        device.name,
+                        result,
+                    )
 
     def _run_websocket(self) -> None:
         self._websocket_task = asyncio.create_task(

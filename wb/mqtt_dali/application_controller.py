@@ -44,7 +44,8 @@ class WebSocketConfig:
 @dataclass
 class ApplicationControllerConfig:
     gateway_mqtt_device_id: str
-    bus_index: int
+    # Gateway bus number starting from 1
+    bus: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
     polling_interval: float
@@ -86,8 +87,8 @@ class ApplicationController:
         mqtt_dispatcher: MQTTDispatcher,
         gtin_db: DaliDatabase,
     ) -> None:
-        self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus_index}"
-        self.bus_name = f"Bus {config.bus_index}"
+        self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
+        self.bus_name = f"Bus {config.bus}"
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
         self.websocket_config = config.websocket_config
@@ -119,7 +120,7 @@ class ApplicationController:
         else:
             cfg = WBDALIConfig(
                 device_name=config.gateway_mqtt_device_id,
-                channel=config.bus_index + 1,
+                bus=config.bus,
             )
             self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 

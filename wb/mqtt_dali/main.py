@@ -161,13 +161,13 @@ async def check_presence_service(gateway: str, args, dali2: bool, old_gateway: b
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
         if old_gateway:
             driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(device_name=gateway, channel=bus),
+                WBDALIDriverOldConfig(gateway, bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
         else:
             driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(device_name=gateway, channel=bus),
+                WBDALIDriverNewConfig(gateway, bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
@@ -196,13 +196,13 @@ async def binary_search_service(gateway: str, args, dali2: bool, old_gateway: bo
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
         if old_gateway:
             driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(device_name=gateway, channel=bus),
+                WBDALIDriverOldConfig(gateway, bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
         else:
             driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(device_name=gateway, channel=bus),
+                WBDALIDriverNewConfig(gateway, bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
@@ -223,13 +223,13 @@ async def short_search_service(gateway: str, args, dali2: bool, old_gateway: boo
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
         if old_gateway:
             driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(device_name=gateway, channel=bus),
+                WBDALIDriverOldConfig(gateway, bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
         else:
             driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(device_name=gateway, channel=bus),
+                WBDALIDriverNewConfig(gateway, bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
@@ -261,13 +261,13 @@ async def send_command_service(gateway: str, args, old_gateway: bool):
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
         if old_gateway:
             driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(device_name=gateway, channel=args.bus),
+                WBDALIDriverOldConfig(gateway, args.bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
         else:
             driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(device_name=gateway, channel=args.bus),
+                WBDALIDriverNewConfig(gateway, args.bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )
@@ -404,7 +404,7 @@ async def main(argv):
         dest="bus",
         type=int,
         default=1,
-        help="Bus (channel) number to use (default: 1)",
+        help="Bus number to use (default: 1)",
     )
 
     parser.add_argument(

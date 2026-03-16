@@ -171,7 +171,10 @@ def get_feedback_controls(instance_index: int) -> list[MqttControl]:
                 id=f"activate_feedback{instance_index}",
                 meta=ControlMeta(
                     "pushbutton",
-                    TranslatedTitle(f"Activate feedback {instance_index}", f"Активировать обратную связь {instance_index}"),
+                    TranslatedTitle(
+                        f"Activate feedback {instance_index}",
+                        f"Активировать обратную связь {instance_index}",
+                    ),
                     order=instance_index * 10 + 1,
                 ),
                 value="0",
@@ -185,7 +188,10 @@ def get_feedback_controls(instance_index: int) -> list[MqttControl]:
                 id=f"stop_feedback{instance_index}",
                 meta=ControlMeta(
                     "pushbutton",
-                    TranslatedTitle(f"Stop feedback {instance_index}", f"Остановить обратную связь {instance_index}"),
+                    TranslatedTitle(
+                        f"Stop feedback {instance_index}",
+                        f"Остановить обратную связь {instance_index}",
+                    ),
                     order=instance_index * 10 + 2,
                 ),
                 value="0",

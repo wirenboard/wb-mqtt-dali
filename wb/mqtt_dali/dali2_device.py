@@ -90,7 +90,11 @@ class PowerCycleNotificationParam(BooleanSettingsParam):
 class InstanceParameters(SettingsParamGroup):
     def __init__(self, instance_number: InstanceNumber, instance_type: int) -> None:
         super().__init__(
-            SettingsParamName(f"Instance {instance_number.value}", f"Экземпляр {instance_number.value}"), f"instance{instance_number.value}"
+            SettingsParamName(
+                f"Instance {instance_number.value}",
+                f"Экземпляр {instance_number.value}",
+            ),
+            f"instance{instance_number.value}"
         )
         self.property_order = instance_number.value + 100
         self._parameters = [
@@ -120,7 +124,9 @@ class InstanceParameters(SettingsParamGroup):
 
 class EventSchemeParam(NumberSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Event addressing scheme", "Схема адресации событий"), "event_scheme")
+        super().__init__(
+            SettingsParamName("Event addressing scheme", "Схема адресации событий"), "event_scheme"
+        )
         self._instance_number = instance_number
         self.property_order = 2
         self.grid_columns = 6
@@ -187,7 +193,11 @@ class InstanceGroupParamBase(NumberSettingsParam):
 
 class InstanceGroup0Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Instance group 0", "Группа экземпляра 0"), "instance_group_0", instance_number)
+        super().__init__(
+            SettingsParamName("Instance group 0", "Группа экземпляра 0"),
+            "instance_group_0",
+            instance_number,
+        )
         self.property_order = 4
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
@@ -202,7 +212,11 @@ class InstanceGroup0Param(InstanceGroupParamBase):
 
 class InstanceGroup1Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Instance group 1", "Группа экземпляра 1"), "instance_group_1", instance_number)
+        super().__init__(
+            SettingsParamName("Instance group 1", "Группа экземпляра 1"),
+            "instance_group_1",
+            instance_number,
+        )
         self.property_order = 5
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
@@ -217,7 +231,11 @@ class InstanceGroup1Param(InstanceGroupParamBase):
 
 class InstanceGroup2Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Instance group 2", "Группа экземпляра 2"), "instance_group_2", instance_number)
+        super().__init__(
+            SettingsParamName("Instance group 2", "Группа экземпляра 2"),
+            "instance_group_2",
+            instance_number,
+        )
         self.property_order = 6
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:

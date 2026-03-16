@@ -109,7 +109,10 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             MqttControl(
                 ControlInfo(
                     f"current_primary_n{i}",
-                    ControlMeta(title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"), read_only=True),
+                    ControlMeta(
+                        title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"),
+                        read_only=True,
+                    ),
                     "0",
                 ),
             ),
@@ -118,7 +121,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             MqttControl(
                 ControlInfo(
                     f"set_primary_n{i}",
-                    ControlMeta("range", TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"), minimum=0, maximum=MASK_2BYTES),
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"),
+                        minimum=0,
+                        maximum=MASK_2BYTES,
+                    ),
                     "0",
                 ),
                 commands_builder=lambda short_address, value, index=i: _set_primary_n_commands_builder(

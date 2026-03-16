@@ -96,7 +96,11 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
         MqttControl(
             ControlInfo(
                 "current_colour_temperature",
-                ControlMeta(title=TranslatedTitle("Colour Temperature", "Цветовая температура"), read_only=True, units="K"),
+                ControlMeta(
+                    title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
+                    read_only=True,
+                    units="K",
+                ),
                 "4000",
             ),
         ),

@@ -160,7 +160,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "set_white",
-                ControlMeta("range", TranslatedTitle("Wanted White", "Желаемый белый"), minimum=0, maximum=MAX_COLOUR_VALUE),
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted White", "Желаемый белый"),
+                    minimum=0,
+                    maximum=MAX_COLOUR_VALUE,
+                ),
                 "0",
             ),
             commands_builder=_set_white_commands_builder,

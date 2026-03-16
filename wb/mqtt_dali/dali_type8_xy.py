@@ -119,14 +119,20 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "current_x_coordinate",
-                ControlMeta(title=TranslatedTitle("Current X Coordinate", "Текущая координата X"), read_only=True),
+                ControlMeta(
+                    title=TranslatedTitle("Current X Coordinate", "Текущая координата X"),
+                    read_only=True,
+                ),
                 "0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "current_y_coordinate",
-                ControlMeta(title=TranslatedTitle("Current Y Coordinate", "Текущая координата Y"), read_only=True),
+                ControlMeta(
+                    title=TranslatedTitle("Current Y Coordinate", "Текущая координата Y"),
+                    read_only=True,
+                ),
                 "0",
             ),
         ),
@@ -165,7 +171,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "set_x_coordinate",
-                ControlMeta("range", TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"), minimum=0, maximum=MASK_2BYTES),
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
+                    minimum=0,
+                    maximum=MASK_2BYTES,
+                ),
                 "0",
             ),
             commands_builder=_set_x_coordinate_commands_builder,
@@ -173,7 +184,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "set_y_coordinate",
-                ControlMeta("range", TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"), minimum=0, maximum=MASK_2BYTES),
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
+                    minimum=0,
+                    maximum=MASK_2BYTES,
+                ),
                 "0",
             ),
             commands_builder=_set_y_coordinate_commands_builder,

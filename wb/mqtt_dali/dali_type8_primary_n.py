@@ -11,6 +11,7 @@ from dali.gear.general import DTR0, DTR1, DTR2
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
+from .wbmqtt import TranslatedTitle
 
 COLOUR_NAMES = {
     ColourComponent.PRIMARY_N0: ("Primary N0", "Основной N0"),
@@ -108,7 +109,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             MqttControl(
                 ControlInfo(
                     f"current_primary_n{i}",
-                    ControlMeta(title=f"Current Primary N{i}", read_only=True),
+                    ControlMeta(title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"), read_only=True),
                     "0",
                 ),
             ),
@@ -117,7 +118,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             MqttControl(
                 ControlInfo(
                     f"set_primary_n{i}",
-                    ControlMeta("range", f"Wanted Primary N{i}", minimum=0, maximum=MASK_2BYTES),
+                    ControlMeta("range", TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"), minimum=0, maximum=MASK_2BYTES),
                     "0",
                 ),
                 commands_builder=lambda short_address, value, index=i: _set_primary_n_commands_builder(

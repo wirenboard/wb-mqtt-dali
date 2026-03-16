@@ -23,7 +23,7 @@ from .settings import SettingsParamName
 class AlarmReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Alarm report timer"),
+            SettingsParamName("Alarm report timer", "Таймер аварийного отчёта"),
             "alarm_report_timer",
             instance_number,
             QueryAlarmReportTimer,
@@ -36,7 +36,7 @@ class AlarmReportTimerParam(InstanceParam):
 class DeadtimeTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Deadtime timer"),
+            SettingsParamName("Deadtime timer", "Таймер задержки"),
             "deadtime_timer",
             instance_number,
             QueryDeadtimeTimer,
@@ -49,7 +49,7 @@ class DeadtimeTimerParam(InstanceParam):
 class HysteresisParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Hysteresis"),
+            SettingsParamName("Hysteresis", "Гистерезис"),
             "hysteresis",
             instance_number,
             QueryHysteresis,
@@ -62,7 +62,7 @@ class HysteresisParam(InstanceParam):
 class HysteresisMinParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Hysteresis minimum"),
+            SettingsParamName("Hysteresis minimum", "Минимальный гистерезис"),
             "hysteresis_min",
             instance_number,
             QueryHysteresisMin,
@@ -75,7 +75,7 @@ class HysteresisMinParam(InstanceParam):
 class ReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Report timer"),
+            SettingsParamName("Report timer", "Таймер отчёта"),
             "report_timer",
             instance_number,
             QueryReportTimer,

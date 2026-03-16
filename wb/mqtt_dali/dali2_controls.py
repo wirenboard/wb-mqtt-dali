@@ -16,7 +16,7 @@ from dali.device.pushbutton import (
 from .common_dali_device import MqttControl
 from .device import absolute_input_device, feedback, general_purpose_sensor
 from .device_publisher import ControlInfo
-from .wbmqtt import ControlMeta
+from .wbmqtt import ControlMeta, TranslatedTitle
 
 
 def get_occupancy_controls(instance_index: int) -> list[MqttControl]:
@@ -26,7 +26,7 @@ def get_occupancy_controls(instance_index: int) -> list[MqttControl]:
                 id=f"occupied{instance_index}",
                 meta=ControlMeta(
                     "switch",
-                    f"Occupied {instance_index}",
+                    TranslatedTitle(f"Occupied {instance_index}", f"Занято {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 2,
                 ),
@@ -38,7 +38,7 @@ def get_occupancy_controls(instance_index: int) -> list[MqttControl]:
                 id=f"movement{instance_index}",
                 meta=ControlMeta(
                     "switch",
-                    f"Movement {instance_index}",
+                    TranslatedTitle(f"Movement {instance_index}", f"Движение {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 3,
                 ),
@@ -54,7 +54,7 @@ def get_light_controls(instance_index: int) -> list[MqttControl]:
             ControlInfo(
                 id=f"illuminance{instance_index}",
                 meta=ControlMeta(
-                    title=f"Illuminance {instance_index}",
+                    title=TranslatedTitle(f"Illuminance {instance_index}", f"Освещённость {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 1,
                 ),
@@ -71,7 +71,7 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
                 id=f"button{instance_index}",
                 meta=ControlMeta(
                     "switch",
-                    f"Button {instance_index}",
+                    TranslatedTitle(f"Button {instance_index}", f"Кнопка {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 1,
                 ),
@@ -83,7 +83,7 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
                 id=f"long_press{instance_index}",
                 meta=ControlMeta(
                     "switch",
-                    f"Long Press {instance_index}",
+                    TranslatedTitle(f"Long Press {instance_index}", f"Длинное нажатие {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 2,
                 ),
@@ -95,7 +95,7 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
                 id=f"short_press{instance_index}",
                 meta=ControlMeta(
                     "pushbutton",
-                    f"Short Press {instance_index}",
+                    TranslatedTitle(f"Short Press {instance_index}", f"Короткое нажатие {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 3,
                 ),
@@ -107,7 +107,7 @@ def get_button_controls(instance_index: int) -> list[MqttControl]:
                 id=f"double_press{instance_index}",
                 meta=ControlMeta(
                     "pushbutton",
-                    f"Double Press {instance_index}",
+                    TranslatedTitle(f"Double Press {instance_index}", f"Двойное нажатие {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 4,
                 ),
@@ -123,7 +123,7 @@ def get_absolute_input_device_controls(instance_index: int) -> list[MqttControl]
             ControlInfo(
                 id=f"position{instance_index}",
                 meta=ControlMeta(
-                    title=f"Position {instance_index}",
+                    title=TranslatedTitle(f"Position {instance_index}", f"Положение {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 1,
                 ),
@@ -135,7 +135,7 @@ def get_absolute_input_device_controls(instance_index: int) -> list[MqttControl]
                 id=f"switch{instance_index}",
                 meta=ControlMeta(
                     "switch",
-                    f"Switch {instance_index}",
+                    TranslatedTitle(f"Switch {instance_index}", f"Переключатель {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 2,
                 ),
@@ -154,7 +154,7 @@ def get_general_purpose_sensor_controls(instance_index: int) -> list[MqttControl
             ControlInfo(
                 id=f"measurement{instance_index}",
                 meta=ControlMeta(
-                    title=f"Measurement {instance_index}",
+                    title=TranslatedTitle(f"Measurement {instance_index}", f"Измерение {instance_index}"),
                     read_only=True,
                     order=instance_index * 10 + 1,
                 ),
@@ -171,7 +171,7 @@ def get_feedback_controls(instance_index: int) -> list[MqttControl]:
                 id=f"activate_feedback{instance_index}",
                 meta=ControlMeta(
                     "pushbutton",
-                    f"Activate feedback {instance_index}",
+                    TranslatedTitle(f"Activate feedback {instance_index}", f"Активировать обратную связь {instance_index}"),
                     order=instance_index * 10 + 1,
                 ),
                 value="0",
@@ -185,7 +185,7 @@ def get_feedback_controls(instance_index: int) -> list[MqttControl]:
                 id=f"stop_feedback{instance_index}",
                 meta=ControlMeta(
                     "pushbutton",
-                    f"Stop feedback {instance_index}",
+                    TranslatedTitle(f"Stop feedback {instance_index}", f"Остановить обратную связь {instance_index}"),
                     order=instance_index * 10 + 2,
                 ),
                 value="0",

@@ -27,12 +27,12 @@ class Type21Parameters(TypeParameters):
                 control_info=ControlInfo(
                     "thermal_lamp_protection",
                     ControlMeta(
-                        title="Thermal lamp protection",
+                        title=TranslatedTitle("Thermal lamp protection", "Тепловая защита лампы"),
                         read_only=True,
                         enum={
-                            "0": TranslatedTitle("ok"),
-                            "1": TranslatedTitle("shutdown"),
-                            "2": TranslatedTitle("overload"),
+                            "0": TranslatedTitle("ok", "ок"),
+                            "1": TranslatedTitle("shutdown", "отключение"),
+                            "2": TranslatedTitle("overload", "перегрузка"),
                         },
                     ),
                     "0",

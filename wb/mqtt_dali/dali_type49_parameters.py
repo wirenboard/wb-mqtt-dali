@@ -6,7 +6,7 @@ from .common_dali_device import MqttControl, MqttControlBase
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.integrated_power_supply import QueryActivePowerSupply
-from .wbmqtt import ControlMeta
+from .wbmqtt import ControlMeta, TranslatedTitle
 
 
 class Type49Parameters(TypeParameters):
@@ -18,7 +18,7 @@ class Type49Parameters(TypeParameters):
                     "integrated_power_supply",
                     ControlMeta(
                         "switch",
-                        "Integrated Power Supply",
+                        TranslatedTitle("Integrated Power Supply", "Встроенный источник питания"),
                         read_only=True,
                     ),
                     "0",

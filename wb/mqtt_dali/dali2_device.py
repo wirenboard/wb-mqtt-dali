@@ -68,7 +68,7 @@ from .wbdali_utils import WBDALIDriver, check_query_response
 class ApplicationActiveParam(BooleanSettingsParam):
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Application controller"),
+            SettingsParamName("Application controller", "Контроллер приложения"),
             "application_active",
             lambda short_address: QueryApplicationControlEnabled(DeviceShort(short_address)),
             lambda short_address: EnableApplicationController(DeviceShort(short_address)),
@@ -79,7 +79,7 @@ class ApplicationActiveParam(BooleanSettingsParam):
 class PowerCycleNotificationParam(BooleanSettingsParam):
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Power cycle notification"),
+            SettingsParamName("Power cycle notification", "Уведомление о цикле питания"),
             "power_cycle_notification",
             lambda short_address: QueryPowerCycleNotification(DeviceShort(short_address)),
             lambda short_address: EnablePowerCycleNotification(DeviceShort(short_address)),
@@ -90,7 +90,7 @@ class PowerCycleNotificationParam(BooleanSettingsParam):
 class InstanceParameters(SettingsParamGroup):
     def __init__(self, instance_number: InstanceNumber, instance_type: int) -> None:
         super().__init__(
-            SettingsParamName(f"Instance {instance_number.value}"), f"instance{instance_number.value}"
+            SettingsParamName(f"Instance {instance_number.value}", f"Экземпляр {instance_number.value}"), f"instance{instance_number.value}"
         )
         self.property_order = instance_number.value + 100
         self._parameters = [
@@ -120,7 +120,7 @@ class InstanceParameters(SettingsParamGroup):
 
 class EventSchemeParam(NumberSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Event addressing scheme"), "event_scheme")
+        super().__init__(SettingsParamName("Event addressing scheme", "Схема адресации событий"), "event_scheme")
         self._instance_number = instance_number
         self.property_order = 2
         self.grid_columns = 6
@@ -151,7 +151,7 @@ class EventSchemeParam(NumberSettingsParam):
 
 class EventPriorityParam(NumberSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName("Event priority"), "event_priority")
+        super().__init__(SettingsParamName("Event priority", "Приоритет события"), "event_priority")
         self._instance_number = instance_number
         self.property_order = 3
         self.grid_columns = 6
@@ -174,8 +174,8 @@ class EventPriorityParam(NumberSettingsParam):
 
 
 class InstanceGroupParamBase(NumberSettingsParam):
-    def __init__(self, name: str, property_name: str, instance_number: InstanceNumber) -> None:
-        super().__init__(SettingsParamName(name), property_name)
+    def __init__(self, name: SettingsParamName, property_name: str, instance_number: InstanceNumber) -> None:
+        super().__init__(name, property_name)
         self._instance_number = instance_number
         self.grid_columns = 4
 
@@ -187,7 +187,7 @@ class InstanceGroupParamBase(NumberSettingsParam):
 
 class InstanceGroup0Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__("Instance group 0", "instance_group_0", instance_number)
+        super().__init__(SettingsParamName("Instance group 0", "Группа экземпляра 0"), "instance_group_0", instance_number)
         self.property_order = 4
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
@@ -202,7 +202,7 @@ class InstanceGroup0Param(InstanceGroupParamBase):
 
 class InstanceGroup1Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__("Instance group 1", "instance_group_1", instance_number)
+        super().__init__(SettingsParamName("Instance group 1", "Группа экземпляра 1"), "instance_group_1", instance_number)
         self.property_order = 5
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
@@ -217,7 +217,7 @@ class InstanceGroup1Param(InstanceGroupParamBase):
 
 class InstanceGroup2Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
-        super().__init__("Instance group 2", "instance_group_2", instance_number)
+        super().__init__(SettingsParamName("Instance group 2", "Группа экземпляра 2"), "instance_group_2", instance_number)
         self.property_order = 6
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
@@ -233,7 +233,7 @@ class InstanceGroup2Param(InstanceGroupParamBase):
 class InstanceActiveParam(BooleanSettingsParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Enable Event Messages"),
+            SettingsParamName("Enable Event Messages", "Включить сообщения о событиях"),
             "instance_active",
             lambda short_address, inst=instance_number: QueryInstanceEnabled(
                 DeviceShort(short_address), inst
@@ -256,7 +256,7 @@ class InstanceTypeParam(SettingsParamBase):
     }
 
     def __init__(self, instance_type: int) -> None:
-        super().__init__(SettingsParamName("Instance type"))
+        super().__init__(SettingsParamName("Instance type", "Тип экземпляра"))
         self.instance_type_name = self.INSTANCE_TYPE_NAMES.get(instance_type, f"Unknown ({instance_type})")
         self.property_name = "instance_type"
 
@@ -283,7 +283,7 @@ class DeviceGroupsParam(SettingsParamBase):
     HALF_RANGE = 16
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Device groups"))
+        super().__init__(SettingsParamName("Device groups", "Группы устройств"))
         self.property_name = "device_groups"
         self._groups = [False] * self.TOTAL_GROUPS
 

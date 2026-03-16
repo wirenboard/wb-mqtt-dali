@@ -36,6 +36,7 @@ from .dali_type17_parameters import Type17Parameters
 from .dali_type20_parameters import Type20Parameters
 from .dali_type21_parameters import Type21Parameters
 from .dali_type49_parameters import Type49Parameters
+from .dali_type50_parameters import Type50Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
 from .wbdali_utils import WBDALIDriver
@@ -59,6 +60,7 @@ class DaliDeviceType(IntEnum):
     THERMAL_LAMP_PROTECTION = 21
     NON_REPLACEABLE_LAMP_SOURCE = 23
     INTEGRATED_POWER_SUPPLY = 49
+    MEMORY_BANK_1_EXTENSION = 50
     ENERGY_REPORTING_DEVICE = 51
 
 
@@ -178,6 +180,7 @@ class DaliDevice(DaliDeviceBase):
                 DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
                 DaliDeviceType.THERMAL_LAMP_PROTECTION: Type21Parameters(),
                 DaliDeviceType.INTEGRATED_POWER_SUPPLY: Type49Parameters(),
+                DaliDeviceType.MEMORY_BANK_1_EXTENSION: Type50Parameters(),
             }
             self._type_handlers = []
             for gear_type in types:

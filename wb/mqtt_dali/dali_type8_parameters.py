@@ -270,7 +270,7 @@ class ColourState(SettingsParamBase):
 class SceneSettings(ColourState):
     def __init__(self, scene_number: int, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(
-            SettingsParamName(f"Scene {scene_number}"),
+            SettingsParamName(f"Scene {scene_number}", f"Сцена {scene_number}"),
             f"scene_{scene_number}",
             lambda address: QuerySceneLevel(address, scene_number),
             lambda address: SetScene(address, scene_number),

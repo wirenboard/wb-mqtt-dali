@@ -117,14 +117,14 @@ class Type7Parameters(TypeParameters):
                 control_info=ControlInfo(
                     "last_acted",
                     ControlMeta(
-                        title="Last Acted",
+                        title=TranslatedTitle("Last Acted", "Последнее действие"),
                         read_only=True,
                         enum={
-                            "0": TranslatedTitle("unknown"),
-                            "1": TranslatedTitle("up switch on"),
-                            "2": TranslatedTitle("up switch off"),
-                            "3": TranslatedTitle("down switch on"),
-                            "4": TranslatedTitle("down switch off"),
+                            "0": TranslatedTitle("unknown", "неизвестно"),
+                            "1": TranslatedTitle("up switch on", "верхний переключатель вкл"),
+                            "2": TranslatedTitle("up switch off", "верхний переключатель выкл"),
+                            "3": TranslatedTitle("down switch on", "нижний переключатель вкл"),
+                            "4": TranslatedTitle("down switch off", "нижний переключатель выкл"),
                         },
                     ),
                     "0",

@@ -20,6 +20,7 @@ from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import WBDALIDriver
+from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE_2BYTES = MASK_2BYTES - 1
 
@@ -95,14 +96,18 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
         MqttControl(
             ControlInfo(
                 "current_colour_temperature",
-                ControlMeta(title="Colour Temperature", read_only=True, units="K"),
+                ControlMeta(
+                    title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
+                    read_only=True,
+                    units="K",
+                ),
                 "4000",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "colour_temperature_step_warmer",
-                ControlMeta("pushbutton", "Colour Temperature Step Warmer"),
+                ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Warmer", "Теплее")),
                 "0",
             ),
             commands_builder=lambda short_address, _: [
@@ -112,7 +117,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
         MqttControl(
             ControlInfo(
                 "colour_temperature_step_cooler",
-                ControlMeta("pushbutton", "Colour Temperature Step Cooler"),
+                ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Cooler", "Холоднее")),
                 "0",
             ),
             commands_builder=lambda short_address, _: [
@@ -124,7 +129,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 "set_colour_temperature",
                 ControlMeta(
                     "range",
-                    "Wanted Colour Temperature",
+                    TranslatedTitle("Wanted Colour Temperature", "Желаемая цветовая температура"),
                     minimum=tc_kelvin_mirek(tc_max_mirek),
                     maximum=tc_kelvin_mirek(tc_min_mirek),
                     units="K",

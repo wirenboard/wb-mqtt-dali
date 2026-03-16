@@ -12,6 +12,7 @@ from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import MASK
+from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE = MASK - 1
 
@@ -137,21 +138,21 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "current_rgb",
-                ControlMeta("rgb", "Current RGB", read_only=True),
+                ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True),
                 "0;0;0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "current_white",
-                ControlMeta(title="Current White", read_only=True),
+                ControlMeta(title=TranslatedTitle("Current White", "Текущий белый"), read_only=True),
                 "0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "set_rgb",
-                ControlMeta("rgb", "Wanted RGB"),
+                ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")),
                 "0;0;0",
             ),
             commands_builder=_set_rgb_commands_builder,
@@ -159,7 +160,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "set_white",
-                ControlMeta("range", "Wanted White", minimum=0, maximum=MAX_COLOUR_VALUE),
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted White", "Желаемый белый"),
+                    minimum=0,
+                    maximum=MAX_COLOUR_VALUE,
+                ),
                 "0",
             ),
             commands_builder=_set_white_commands_builder,

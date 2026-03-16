@@ -20,6 +20,7 @@ from dali.gear.general import DTR0, DTR1
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
+from .wbmqtt import TranslatedTitle
 
 XY_COLOUR_COMPONENTS = [
     ColourComponent.X_COORDINATE,
@@ -118,21 +119,27 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "current_x_coordinate",
-                ControlMeta(title="Current X Coordinate", read_only=True),
+                ControlMeta(
+                    title=TranslatedTitle("Current X Coordinate", "Текущая координата X"),
+                    read_only=True,
+                ),
                 "0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "current_y_coordinate",
-                ControlMeta(title="Current Y Coordinate", read_only=True),
+                ControlMeta(
+                    title=TranslatedTitle("Current Y Coordinate", "Текущая координата Y"),
+                    read_only=True,
+                ),
                 "0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "x_coordinate_step_up",
-                ControlMeta("pushbutton", "X Coordinate Step Up"),
+                ControlMeta("pushbutton", TranslatedTitle("X Coordinate Step Up", "Координата X шаг вверх")),
                 "0",
             ),
             commands_builder=lambda short_address, _: [XCoordinateStepUp(GearShort(short_address))],
@@ -140,7 +147,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "x_coordinate_step_down",
-                ControlMeta("pushbutton", "X Coordinate Step Down"),
+                ControlMeta("pushbutton", TranslatedTitle("X Coordinate Step Down", "Координата X шаг вниз")),
                 "0",
             ),
             commands_builder=lambda short_address, _: [XCoordinateStepDown(GearShort(short_address))],
@@ -148,7 +155,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "y_coordinate_step_up",
-                ControlMeta("pushbutton", "Y Coordinate Step Up"),
+                ControlMeta("pushbutton", TranslatedTitle("Y Coordinate Step Up", "Координата Y шаг вверх")),
                 "0",
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepUp(GearShort(short_address))],
@@ -156,7 +163,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "y_coordinate_step_down",
-                ControlMeta("pushbutton", "Y Coordinate Step Down"),
+                ControlMeta("pushbutton", TranslatedTitle("Y Coordinate Step Down", "Координата Y шаг вниз")),
                 "0",
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepDown(GearShort(short_address))],
@@ -164,7 +171,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "set_x_coordinate",
-                ControlMeta("range", "Wanted X Coordinate", minimum=0, maximum=MASK_2BYTES),
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
+                    minimum=0,
+                    maximum=MASK_2BYTES,
+                ),
                 "0",
             ),
             commands_builder=_set_x_coordinate_commands_builder,
@@ -172,7 +184,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "set_y_coordinate",
-                ControlMeta("range", "Wanted Y Coordinate", minimum=0, maximum=MASK_2BYTES),
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
+                    minimum=0,
+                    maximum=MASK_2BYTES,
+                ),
                 "0",
             ),
             commands_builder=_set_y_coordinate_commands_builder,

@@ -147,7 +147,7 @@ class GeneralMemoryParams(SettingsParamBase):
         compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
         gtin_db: DaliDatabase,
     ) -> None:
-        super().__init__(SettingsParamName("General memory parameters"))
+        super().__init__(SettingsParamName("General memory parameters", "Общие параметры памяти"))
         self._compat = compat
         self._gtin_db = gtin_db
 

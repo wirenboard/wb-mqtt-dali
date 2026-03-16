@@ -56,7 +56,15 @@ def handle_dapc(short_address: int, value: str) -> list[Command]:
 class ActualLevelControl(MqttControlBase):
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__(
-            ControlInfo("actual_level", ControlMeta(title="Actual Level", read_only=True, units="%"), "0")
+            ControlInfo(
+                "actual_level",
+                ControlMeta(
+                    title=TranslatedTitle("Actual Level", "Фактический уровень"),
+                    read_only=True,
+                    units="%",
+                ),
+                "0",
+            )
         )
         self._dimming_curve_state = dimming_curve_state
 
@@ -72,55 +80,75 @@ class ActualLevelControl(MqttControlBase):
 
 CONTROLS: list[MqttControlBase] = [
     MqttControl(
-        ControlInfo("error_status", ControlMeta("alarm", "Error Status", read_only=True), "0"),
+        ControlInfo(
+            "error_status",
+            ControlMeta("alarm", TranslatedTitle("Error Status", "Статус ошибки"), read_only=True),
+            "0",
+        ),
         query_builder=_build_error_status_query,
         value_formatter=_format_error_status,
     ),
     MqttControl(
-        ControlInfo("off", ControlMeta("pushbutton", "Off")),
+        ControlInfo("off", ControlMeta("pushbutton", TranslatedTitle("Off", "Выкл"))),
         commands_builder=lambda short_address, _: [Off(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("up", ControlMeta("pushbutton", "Up")),
+        ControlInfo("up", ControlMeta("pushbutton", TranslatedTitle("Up", "Вверх"))),
         commands_builder=lambda short_address, _: [Up(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("down", ControlMeta("pushbutton", "Down")),
+        ControlInfo("down", ControlMeta("pushbutton", TranslatedTitle("Down", "Вниз"))),
         commands_builder=lambda short_address, _: [Down(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("step_up", ControlMeta("pushbutton", "Step Up")),
+        ControlInfo("step_up", ControlMeta("pushbutton", TranslatedTitle("Step Up", "Шаг вверх"))),
         commands_builder=lambda short_address, _: [StepUp(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("step_down", ControlMeta("pushbutton", "Step Down")),
+        ControlInfo("step_down", ControlMeta("pushbutton", TranslatedTitle("Step Down", "Шаг вниз"))),
         commands_builder=lambda short_address, _: [StepDown(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("recall_max_level", ControlMeta("pushbutton", "Recall Max Level")),
+        ControlInfo(
+            "recall_max_level",
+            ControlMeta("pushbutton", TranslatedTitle("Recall Max Level", "Максимальный уровень")),
+        ),
         commands_builder=lambda short_address, _: [RecallMaxLevel(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("recall_min_level", ControlMeta("pushbutton", "Recall Min Level")),
+        ControlInfo(
+            "recall_min_level",
+            ControlMeta("pushbutton", TranslatedTitle("Recall Min Level", "Минимальный уровень")),
+        ),
         commands_builder=lambda short_address, _: [RecallMinLevel(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("step_down_and_off", ControlMeta("pushbutton", "Step Down And Off")),
+        ControlInfo(
+            "step_down_and_off",
+            ControlMeta("pushbutton", TranslatedTitle("Step Down And Off", "Шаг вниз и выкл")),
+        ),
         commands_builder=lambda short_address, _: [StepDownAndOff(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("on_and_step_up", ControlMeta("pushbutton", "On And Step Up")),
+        ControlInfo(
+            "on_and_step_up",
+            ControlMeta("pushbutton", TranslatedTitle("On And Step Up", "Вкл и шаг вверх")),
+        ),
         commands_builder=lambda short_address, _: [OnAndStepUp(GearShort(short_address))],
     ),
     MqttControl(
-        ControlInfo("dapc", ControlMeta("text", "Direct Arc Power Control"), ""),
+        ControlInfo(
+            "dapc",
+            ControlMeta("text", TranslatedTitle("Direct Arc Power Control", "Задать мощность (DAPC)")),
+            "",
+        ),
         commands_builder=handle_dapc,
     ),
     MqttControl(
         ControlInfo(
             "go_to_scene",
             ControlMeta(
-                title="Go To Scene",
+                title=TranslatedTitle("Go To Scene", "Перейти к сцене"),
                 enum={str(i): TranslatedTitle() for i in range(SCENES_TOTAL)},
             ),
             "0",

@@ -39,7 +39,7 @@ class NumberGearParam(NumberSettingsParam):
 class TypeParameters(SettingsParamBase):
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Type parameters"))
+        super().__init__(SettingsParamName("Type parameters", "Параметры типа"))
         # Must be filled by subclasses
         self._parameters: list[SettingsParamBase] = []
 

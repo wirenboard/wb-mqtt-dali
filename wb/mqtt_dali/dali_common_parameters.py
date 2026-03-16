@@ -84,7 +84,7 @@ class SystemFailureLevelParam(NumberGearParam):
 class FadeTimeFadeRateParam(SettingsParamBase):
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Fade time and fade rate"))
+        super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость затухания"))
         self._fade_time = None
         self._fade_rate = None
 
@@ -130,7 +130,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
 
 class GroupsParam(SettingsParamBase):
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Groups"))
+        super().__init__(SettingsParamName("Groups", "Группы"))
         self._groups = [False for _ in range(GROUPS_TOTAL)]
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:

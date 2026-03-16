@@ -21,7 +21,7 @@ from .settings import SettingsParamName
 class DoubleTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Double timer"),
+            SettingsParamName("Double timer", "Таймер двойного нажатия"),
             "double_timer",
             instance_number,
             QueryDoubleTimer,
@@ -34,7 +34,7 @@ class DoubleTimerParam(InstanceParam):
 class RepeatTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Repeat timer"),
+            SettingsParamName("Repeat timer", "Таймер повтора"),
             "repeat_timer",
             instance_number,
             QueryRepeatTimer,
@@ -47,7 +47,7 @@ class RepeatTimerParam(InstanceParam):
 class ShortTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Short timer"),
+            SettingsParamName("Short timer", "Таймер короткого нажатия"),
             "short_timer",
             instance_number,
             QueryShortTimer,
@@ -60,7 +60,7 @@ class ShortTimerParam(InstanceParam):
 class StuckTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Stuck timer"),
+            SettingsParamName("Stuck timer", "Таймер залипания"),
             "stuck_timer",
             instance_number,
             QueryStuckTimer,

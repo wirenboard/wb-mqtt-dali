@@ -27,12 +27,12 @@ class Type16Parameters(TypeParameters):
                 control_info=ControlInfo(
                     "thermal_gear_protection",
                     ControlMeta(
-                        title="Thermal gear protection",
+                        title=TranslatedTitle("Thermal gear protection", "Тепловая защита"),
                         read_only=True,
                         enum={
-                            "0": TranslatedTitle("ok"),
-                            "1": TranslatedTitle("shutdown"),
-                            "2": TranslatedTitle("overload"),
+                            "0": TranslatedTitle("ok", "ок"),
+                            "1": TranslatedTitle("shutdown", "отключение"),
+                            "2": TranslatedTitle("overload", "перегрузка"),
                         },
                     ),
                     "0",

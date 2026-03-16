@@ -97,7 +97,7 @@ async def main(argv):
         dest="bus",
         type=int,
         default=1,
-        help="Bus (channel) number to use (default: 1)",
+        help="Bus number to use (default: 1)",
     )
 
     parser.add_argument(
@@ -144,7 +144,7 @@ async def main(argv):
         async with client:
             dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
             driver = WBDALIDriver(
-                WBDALIConfig(device_name=args.gateway, channel=args.bus),
+                WBDALIConfig(args.gateway, args.bus),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
             )

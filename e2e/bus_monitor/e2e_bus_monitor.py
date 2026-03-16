@@ -105,13 +105,13 @@ async def main(argv):
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
         driver_bus1 = WBDALIDriverNew(
-            WBDALIDriverNewConfig(device_name=args.gateway, channel=1),
+            WBDALIDriverNewConfig(device_name=args.gateway, bus=1),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
         )
         await driver_bus1.initialize()
         driver_bus2 = WBDALIDriverNew(
-            WBDALIDriverNewConfig(device_name=args.gateway, channel=2),
+            WBDALIDriverNewConfig(device_name=args.gateway, bus=2),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
         )

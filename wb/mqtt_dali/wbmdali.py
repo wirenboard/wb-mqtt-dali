@@ -39,7 +39,7 @@ class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
     device_name: str = "wb-mdali_1"
-    channel: int = 1
+    bus: int = 1
     queue_size: int = 10
     queue_start_modbus_address: int = 1920
 
@@ -161,13 +161,13 @@ class WBDALIDriver:
         # Subscribe to all reply topics
         self.logger.debug("Subscribing to reply topics...")
         for i in range(self.config.queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.bus}_reply{i}"
             await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
 
         # Subscribe to FF24 topic
         self.logger.debug("Subscribing to FF24 topic...")
         await self._mqtt_dispatcher.subscribe(
-            f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+            f"/devices/{self.config.device_name}/controls/channel{self.config.bus}_receive_24bit_forward",
             self._handle_ff24_message,
         )
 
@@ -192,14 +192,14 @@ class WBDALIDriver:
 
         # Unsubscribe from all reply topics
         for i in range(self.config.queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_reply{i}"
+            topic = f"/devices/{self.config.device_name}/controls/channel{self.config.bus}_reply{i}"
             if self._mqtt_dispatcher.is_running:
                 await self._mqtt_dispatcher.unsubscribe(topic)
 
         # Unsubscribe from FF24 topic
         if self._mqtt_dispatcher.is_running:
             await self._mqtt_dispatcher.unsubscribe(
-                f"/devices/{self.config.device_name}/controls/channel{self.config.channel}_receive_24bit_forward",
+                f"/devices/{self.config.device_name}/controls/channel{self.config.bus}_receive_24bit_forward",
             )
         self.logger.debug("Deinitialized successfully")
 
@@ -280,7 +280,7 @@ class WBDALIDriver:
 
         # Process the message as needed
         resp_pointer = int(
-            str(message.topic).rsplit("/", maxsplit=1)[-1].replace(f"channel{self.config.channel}_reply", "")
+            str(message.topic).rsplit("/", maxsplit=1)[-1].replace(f"channel{self.config.bus}_reply", "")
         )
 
         resp_waiter = self._waiting_for_responses.get(resp_pointer)

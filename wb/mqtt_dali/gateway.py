@@ -134,7 +134,7 @@ class Gateway:
                             lambda bus: bus_from_json(
                                 gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher, gtin_db
                             ),
-                            enumerate(gw_conf.get("buses", [])),
+                            enumerate(gw_conf.get("buses", []), 1),
                         )
                     ),
                 ),
@@ -415,7 +415,7 @@ class Gateway:
                 if is_old_gateway:
                     # old gateway supports only one bus
                     bus_count = 1
-                for bus_index in range(bus_count):
+                for bus_index in range(1, bus_count + 1):
                     apc_conf = ApplicationControllerConfig(
                         did, bus_index, [], [], DEFAULT_POLLING_INTERVAL, old_gateway=is_old_gateway
                     )

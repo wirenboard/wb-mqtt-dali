@@ -31,11 +31,13 @@ class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
     device_name: str = "wb-dali_1"
-    channel: int = 1
+
+    # DALI bus number, starting from 1 as printed on the gateway label
+    bus: int = 1
     queue_size: int = 16
     queue_start_modbus_address: int = 1400
     queue_bulk_send_pointer_modbus_address: int = 1432
-    queue_modbus_channel_offset: int = 1000
+    queue_modbus_bus_offset: int = 1000
 
 
 class BusTrafficCallbacks:
@@ -140,6 +142,9 @@ class WBDALIDriver:
         self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
 
         self.config = config
+        if self.config.bus not in [1, 2, 3]:
+            raise ValueError("Bus number must be 1, 2 or 3")
+
         self.dev_inst_map = dev_inst_map
 
         # Register to be called back with bus traffic
@@ -186,15 +191,13 @@ class WBDALIDriver:
         # Subscribe to all reply topics
         self.logger.debug("Subscribing to reply topics...")
         for i in range(self.config.queue_size):
-            topic = (
-                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{i}"
-            )
+            topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}"
             await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
 
         # Subscribe to FF24 topic
         self.logger.debug("Subscribing to FF24 topic...")
         await self._mqtt_dispatcher.subscribe(
-            f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame",
+            f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame",
             self._handle_ff24_message,
         )
 
@@ -219,16 +222,14 @@ class WBDALIDriver:
 
         # Unsubscribe from all reply topics
         for i in range(self.config.queue_size):
-            topic = (
-                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_bulk_send_reply_{i}"
-            )
+            topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}"
             if self._mqtt_dispatcher.is_running:
                 await self._mqtt_dispatcher.unsubscribe(topic)
 
         # Unsubscribe from FF24 topic
         if self._mqtt_dispatcher.is_running:
             await self._mqtt_dispatcher.unsubscribe(
-                f"/devices/{self.config.device_name}/controls/bus_{self.config.channel}_monitor_sporadic_frame",
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame",
             )
         self.logger.debug("Deinitialized successfully")
 
@@ -268,7 +269,7 @@ class WBDALIDriver:
 
         pointer_address = (
             self.config.queue_bulk_send_pointer_modbus_address
-            + (self.config.channel - 1) * self.config.queue_modbus_channel_offset
+            + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
         )
 
         await self.send_modbus_rpc_no_response(
@@ -360,7 +361,7 @@ class WBDALIDriver:
         resp_pointer = int(
             str(message.topic)
             .rsplit("/", maxsplit=1)[-1]
-            .replace(f"bus_{self.config.channel}_bulk_send_reply_", "")
+            .replace(f"bus_{self.config.bus}_bulk_send_reply_", "")
         )
 
         resp_waiter = self._waiting_for_responses.get(resp_pointer)
@@ -581,7 +582,7 @@ class WBDALIDriver:
             msg = "".join([f"{((reg & 0xFFFF) << 16) | ((reg >> 16) & 0xFFFF):08x}" for reg in regs_32bit])
             buffer_address = (
                 self.config.queue_start_modbus_address
-                + (self.config.channel - 1) * self.config.queue_modbus_channel_offset
+                + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
                 + start_index * 2
             )
             await self.send_modbus_rpc_no_response(

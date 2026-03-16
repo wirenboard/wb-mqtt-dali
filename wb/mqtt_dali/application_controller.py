@@ -473,22 +473,29 @@ class ApplicationController:
 
     async def _polling_loop(self) -> None:
         devices = []
-        timeout = 0
+        next_poll_time = default_timer()
+        queue_timeout = 0.001
         item = None
         while True:
             try:
                 try:
                     if item is None:
-                        item = await asyncio.wait_for(self._tasks_queue.get(), timeout)
+                        item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
                 except asyncio.TimeoutError:
-                    if not self._in_quiescent_mode:
+                    current_timer = default_timer()
+                    if next_poll_time <= current_timer:
+                        if self._in_quiescent_mode:
+                            queue_timeout = 1.0
+                            continue
                         if not devices:
                             devices = list(self.dali_devices)
                         if devices:
                             await self._poll_device(devices.pop())
+                            queue_timeout = 0.001
+                        if not devices:
+                            next_poll_time = current_timer + self._polling_interval
+                            queue_timeout = 1.0
                     continue
-                finally:
-                    timeout = self._polling_interval
 
                 if self._in_quiescent_mode:
                     if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:

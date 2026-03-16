@@ -94,7 +94,7 @@ class InstanceParameters(SettingsParamGroup):
                 f"Instance {instance_number.value}",
                 f"Экземпляр {instance_number.value}",
             ),
-            f"instance{instance_number.value}"
+            f"instance{instance_number.value}",
         )
         self.property_order = instance_number.value + 100
         self._parameters = [

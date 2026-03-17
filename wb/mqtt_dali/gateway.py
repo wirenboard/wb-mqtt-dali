@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Optional, Tuple, Union
 
 from .application_controller import (
@@ -29,9 +30,8 @@ def check_short_address_conflict(
     new_short: int,
 ) -> None:
     """Raise ValueError if new_short is already used by another device on the same bus."""
-    for device in devices:
-        if device is not target_device and device.address.short == new_short:
-            raise ValueError(f"Short address {new_short} is already used by another device on this bus")
+    if any(device is not target_device and device.address.short == new_short for device in devices):
+        raise ValueError(f"Short address {new_short} is already used by another device on this bus")
 
 
 @dataclass
@@ -66,12 +66,9 @@ def check_mqtt_id_conflict(
     """Raise ValueError if new_mqtt_id is already used by another device across all gateways."""
     for gw in gateways:
         for bus in gw.buses:
-            for device in bus.dali_devices:
-                if device is not target_device and device.mqtt_id == new_mqtt_id:
-                    raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
-            for device in bus.dali2_devices:
-                if device is not target_device and device.mqtt_id == new_mqtt_id:
-                    raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
+            all_devices = chain(bus.dali_devices, bus.dali2_devices)
+            if any(device is not target_device and device.mqtt_id == new_mqtt_id for device in all_devices):
+                raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
 
 
 def bus_from_json(

@@ -211,6 +211,7 @@ async def emulate(
         logger.info("WS closed: %s", e)
     finally:
         unregister_bus_traffic_watcher()
+        await one_shot_tasks.stop()
 
 
 def publish_traffic(

@@ -96,23 +96,12 @@ async def test_read_skips_flag_values(param, mock_driver):
 
 
 @pytest.mark.asyncio
-async def test_read_skips_all_ff_gtin(param, mock_driver):
-    """Unprogrammed GTIN (all bytes 0xFF) must be omitted."""
-    all_ff_6 = (1 << 48) - 1
-    raw = _make_raw({oem.ManufacturerGTIN: all_ff_6, oem.CRI: 80})
-    mock_driver.run_sequence.return_value = raw
-
-    result = await param.read(mock_driver, short_address=1)
-    assert "luminaire_gtin" not in result["luminaire_info"]
-
-
-@pytest.mark.asyncio
 async def test_read_includes_valid_gtin(param, mock_driver):
-    raw = _make_raw({oem.ManufacturerGTIN: 123456789012})
+    raw = _make_raw({oem.YearOfManufacture: 2026})
     mock_driver.run_sequence.return_value = raw
 
     result = await param.read(mock_driver, short_address=1)
-    assert result["luminaire_info"]["luminaire_gtin"] == 123456789012
+    assert result["luminaire_info"]["year_of_manufacture"] == 2026
 
 
 @pytest.mark.asyncio

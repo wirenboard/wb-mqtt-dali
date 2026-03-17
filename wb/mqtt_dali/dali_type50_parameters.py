@@ -13,20 +13,6 @@ from .wbdali_utils import WBDALIDriver
 # Each entry: (oem memory value class, json key, English title, Russian title, json schema type)
 _FIELD_SPECS = [
     (
-        oem.ManufacturerGTIN,
-        "luminaire_gtin",
-        "Luminaire manufacturer GTIN",
-        "GTIN производителя светильника",
-        "integer",
-    ),
-    (
-        oem.LuminaireID,
-        "luminaire_id",
-        "Luminaire identification number",
-        "Идентификационный номер светильника",
-        "integer",
-    ),
-    (
         oem.YearOfManufacture,
         "year_of_manufacture",
         "Year of manufacture",

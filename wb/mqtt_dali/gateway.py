@@ -317,7 +317,7 @@ class Gateway:
                                     "propertyOrder": 1,
                                 },
                                 "websocket_enabled": {
-                                    "title": "Lunaton DALI-2 IoT Gateway emulator",
+                                    "title": "Lunatone DALI-2 IoT Gateway emulator",
                                     "type": "boolean",
                                     "description": "websocket_description",
                                     "format": "switch",
@@ -341,17 +341,17 @@ class Gateway:
                             },
                             "translations": {
                                 "ru": {
-                                    "Lunaton DALI-2 IoT Gateway emulator": "Эмуляция шлюза Lunaton DALI-2 IoT",
+                                    "Lunatone DALI-2 IoT Gateway emulator": "Эмуляция шлюза Lunatone DALI-2 IoT",
                                     "WebSocket port": "Порт WebSocket'а",
                                     "Polling Interval": "Интервал опроса",
-                                    "websocket_description": "Включение этой опции запустит WebSocket-сервер, который эмулирует Lunaton DALI-2 IoT Gateway. "
+                                    "websocket_description": "Включение этой опции запустит WebSocket-сервер, который эмулирует Lunatone DALI-2 IoT Gateway. "
                                     "К нему можно подключить Lunatone DALI Cockpit для управления устройствами. "
                                     "В DALI Cockpit надо выбрать Network в качестве интерфейса шины, "
                                     "указать DALI-2 Display/DALI-2 IoT/DALI-2 WLAN, ввести адрес контроллера и порт, заданный ниже.",
                                     "Bus Monitor": "Монитор шины",
                                 },
                                 "en": {
-                                    "websocket_description": "Enabling this option will start a WebSocket-server that emulates the Lunaton DALI-2 IoT Gateway. "
+                                    "websocket_description": "Enabling this option will start a WebSocket-server that emulates the Lunatone DALI-2 IoT Gateway. "
                                     "You can connect the Lunatone DALI Cockpit to it for device management. "
                                     "In DALI Cockpit, select Network as the bus interface, "
                                     "specify DALI-2 Display/DALI-2 IoT/DALI-2 WLAN, and enter the controller address and the port specified above.",

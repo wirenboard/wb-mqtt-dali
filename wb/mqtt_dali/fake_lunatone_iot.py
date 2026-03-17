@@ -29,6 +29,7 @@ from websockets.http import Headers
 from websockets.server import HTTPResponse, WebSocketServerProtocol, serve
 from websockets.typing import Data
 
+from .asyncio_utils import OneShotTasks
 from .wbdali_utils import WBDALIDriver
 
 LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE = "lunatone-iot-emulator"
@@ -79,7 +80,7 @@ def _msg_dali_monitor(line: int, bits: int, data: list[int], framing_error: bool
 _INITIAL_GREET = {
     "type": "info",
     "data": {
-        "name": "faux-lunatone-iot",
+        "name": "wb-lunatone-iot",
         "errors": {},
         "descriptor": {
             "lines": 1,
@@ -127,7 +128,10 @@ async def emulate(
     driver: WBDALIDriver,
     logger: logging.Logger,
 ):  # pylint: disable=R0912 disable=R0915
-    unregister_bus_traffic_watcher = driver.bus_traffic.register(publish_traffic(websocket, logger))
+    one_shot_tasks = OneShotTasks(logger)
+    unregister_bus_traffic_watcher = driver.bus_traffic.register(
+        publish_traffic(websocket, logger, one_shot_tasks)
+    )
     try:
         await websocket.send(json.dumps(_INITIAL_GREET))
         async for raw_message in websocket:
@@ -209,7 +213,11 @@ async def emulate(
         unregister_bus_traffic_watcher()
 
 
-def publish_traffic(websocket, logger):
+def publish_traffic(
+    websocket,
+    logger: logging.Logger,
+    one_shot_tasks: OneShotTasks,
+) -> Callable[[dali.frame.Frame, str, Optional[int]], None]:
     def _traffic_filter(frame: dali.frame.Frame, _source: str, _frame_counter: Optional[int]) -> None:
         logger.debug(
             "WS >> daliMonitor: %sbits=%d %s",
@@ -217,17 +225,11 @@ def publish_traffic(websocket, logger):
             len(frame),
             " ".join(f"{b:02x}" for b in frame.as_byte_sequence),
         )
-        asyncio.create_task(
+        one_shot_tasks.add(
             websocket.send(
                 json.dumps(_msg_dali_monitor(0, len(frame), frame.as_byte_sequence, frame.error is True))
             ),
-            name="publish_traffic",
-        ).add_done_callback(
-            lambda fut: (
-                logger.error("Failed to publish DALI bus traffic to websocket: %s", fut.exception())
-                if fut.exception()
-                else None
-            )
+            "Publish DALI bus traffic to websocket",
         )
 
     return _traffic_filter

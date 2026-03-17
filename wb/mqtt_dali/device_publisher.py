@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Optional, Set, Union
 
 import paho.mqtt.client as mqtt
 
+from .asyncio_utils import OneShotTasks
 from .mqtt_dispatcher import MessageCallback, MQTTDispatcher
 from .wbmqtt import ControlMeta, Device, TranslatedTitle
 
@@ -51,13 +52,14 @@ class DevicePublisher:
         mqtt_dispatcher: MQTTDispatcher,
         logger: logging.Logger,
     ):
+        self.logger = logger.getChild("DevicePublisher")
+
         self._mqtt_dispatcher = mqtt_dispatcher
         self._devices: Dict[str, Device] = {}
         self._control_handlers: Dict[str, ControlHandler] = {}
         self._initialized = False
         self._lock = asyncio.Lock()
-        self._on_topic_running_handlers: Set[asyncio.Task] = set()
-        self.logger = logger.getChild("DevicePublisher")
+        self._on_topic_running_handlers = OneShotTasks(self.logger)
 
     async def initialize(self) -> None:
         async with self._lock:
@@ -84,24 +86,7 @@ class DevicePublisher:
                     ]
                 )
 
-            # Make a copy of the set to avoid modification during iteration
-            tasks_to_cancel = list(self._on_topic_running_handlers)
-            for task in tasks_to_cancel:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    # Task cancellation is expected during cleanup; suppress the exception.
-                    pass
-            self._on_topic_running_handlers.clear()
-
-            for task in self._on_topic_running_handlers:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            self._on_topic_running_handlers.clear()
+            await self._on_topic_running_handlers.stop()
 
             self._control_handlers.clear()
 
@@ -288,35 +273,10 @@ class DevicePublisher:
             return
 
         handler = self._control_handlers[handler_key]
-
+        msg = f"Handling /on message for {handler.device_id}/{handler.control_id}"
         try:
             payload = message.payload.decode("utf-8") if message.payload else ""
-            self.logger.debug(
-                "Handling /on message for %s/%s: %s",
-                handler.device_id,
-                handler.control_id,
-                payload,
-            )
-
-            def task_finished(fut: asyncio.Task) -> None:
-                self._on_topic_running_handlers.discard(fut)
-                if fut.exception():
-                    self.logger.error(
-                        "Error handling /on message for %s/%s: %s",
-                        handler.device_id,
-                        handler.control_id,
-                        fut.exception(),
-                        exc_info=True,
-                    )
-
-            task = asyncio.create_task(handler.callback(message))
-            self._on_topic_running_handlers.add(task)
-            task.add_done_callback(task_finished)
+            self.logger.debug("%s: %s", msg, payload)
+            self._on_topic_running_handlers.add(handler.callback(message), msg)
         except Exception as e:
-            self.logger.error(
-                "Error handling /on message for %s/%s: %s",
-                handler.device_id,
-                handler.control_id,
-                e,
-                exc_info=True,
-            )
+            self.logger.error("%s error: %s", msg, e, exc_info=True)

@@ -7,10 +7,12 @@ from typing import Optional, Sequence, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import DeviceBroadcast
-from dali.command import from_frame
+from dali.command import Command, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
+from dali.gear.general import EnableDeviceType
 
+from .asyncio_utils import OneShotTasks
 from .commissioning import Commissioning, CommissioningResult
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
@@ -55,31 +57,6 @@ class ApplicationControllerConfig:
     enable_bus_monitor: bool = False
 
 
-class OneShotTasks:
-    def __init__(self):
-        self._tasks = []
-
-    def add(self, coro) -> asyncio.Task:
-        task = asyncio.create_task(coro)
-        self._tasks.append(task)
-        task.add_done_callback(self._remove_task)
-        return task
-
-    async def stop(self):
-        tasks = list(self._tasks)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        self._tasks.clear()
-
-    def _remove_task(self, task: asyncio.Task) -> None:
-        try:
-            self._tasks.remove(task)
-        except ValueError:
-            # Task might have been removed already (e.g., during stop()).
-            pass
-
-
 class ApplicationController:
     def __init__(
         self,
@@ -112,6 +89,10 @@ class ApplicationController:
         self._polling_task: Optional[asyncio.Task] = None
         self._reschedule_polling_task = True
 
+        # Special gear commands are preceded by EnableDeviceType
+        # Store the type to correctly decode the following command frame
+        self._last_bus_traffic_device_type: int = 0
+
         if config.old_gateway:
             cfg = WBDALIDriverOldConfig(
                 device_name=config.gateway_mqtt_device_id,
@@ -131,7 +112,7 @@ class ApplicationController:
         self._bus_monitor_enabled = config.enable_bus_monitor
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
-        self._one_shot_tasks = OneShotTasks()
+        self._one_shot_tasks = OneShotTasks(self.logger)
 
         self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
         self._devices_by_mqtt_id: dict[str, Union[DaliDevice, Dali2Device]] = {}
@@ -566,7 +547,9 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
         self._quiescent_mode_timer = asyncio.get_event_loop().call_later(
             60 * 15,  # 15 minutes
-            lambda: self._one_shot_tasks.add(self._handle_stop_quiescent_mode()),
+            lambda: self._one_shot_tasks.add(
+                self._handle_stop_quiescent_mode(), "Stop quiescent mode after timeout"
+            ),
         )
 
     async def _handle_stop_quiescent_mode(self) -> None:
@@ -588,17 +571,19 @@ class ApplicationController:
                 self._active_task_description = ""
                 self._ready_condition.notify()
 
-    def _handle_bus_traffic_frame(self, frame: Frame, source: str, _frame_counter: Optional[int]) -> None:
+    def _handle_bus_traffic_frame(self, frame: Frame, source: str, frame_counter: Optional[int]) -> None:
         incoming_command = None
         if not frame.error and isinstance(frame, ForwardFrame):
-            incoming_command = from_frame(frame, dev_inst_map=self._dev_inst_map)
+            incoming_command = from_frame(
+                frame, dev_inst_map=self._dev_inst_map, devicetype=self._last_bus_traffic_device_type
+            )
             if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
                 try:
                     if isinstance(incoming_command, StartQuiescentMode):
-                        self._one_shot_tasks.add(self._handle_start_quiescent_mode())
+                        self._one_shot_tasks.add(self._handle_start_quiescent_mode(), "Start quiescent mode")
                         return
                     if isinstance(incoming_command, StopQuiescentMode):
-                        self._one_shot_tasks.add(self._handle_stop_quiescent_mode())
+                        self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
                         return
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass  # Ignore errors in bus traffic handling
@@ -615,15 +600,46 @@ class ApplicationController:
                         self._one_shot_tasks.add(
                             publish_dali2_event(
                                 incoming_command, device.mqtt_id, self._mqtt_dispatcher.client
-                            )
+                            ),
+                            "Publish DALI 2 event to MQTT",
                         )
 
+        self._publish_bus_traffic(frame, source, frame_counter, incoming_command)
+
+    def _publish_bus_traffic(
+        self, frame: Frame, source: str, frame_counter: Optional[int], decoded_command: Optional[Command]
+    ) -> None:
+        if decoded_command is not None and isinstance(decoded_command, EnableDeviceType):
+            self._last_bus_traffic_device_type = decoded_command.param
+        else:
+            self._last_bus_traffic_device_type = 0
+
         if self.bus_monitor_enabled:
+            if frame.error:
+                command_str = " Error"
+            elif decoded_command is not None:
+                command_str = f" {decoded_command}"
+            else:
+                command_str = ""
+
+            frame_length = len(frame)
+            if frame_length <= 16:
+                frame_value = f"   {frame.as_integer:04x}"
+            elif frame_length <= 24:
+                frame_value = f" {frame.as_integer:06x}"
+            else:
+                frame_value = f"{frame.as_integer:07x}"
+
+            frame_type = "FF" if isinstance(frame, ForwardFrame) else "BF"
+
+            if source == "bus":
+                msg = f"<<{frame_value} {frame_type:<4}{command_str}"
+                if frame_counter is not None:
+                    msg = msg + f" (fc: {frame_counter})"
+            else:
+                msg = f">>{frame_value} {frame_type}{len(frame)}{command_str} (src: {source})"
+
             self._one_shot_tasks.add(
-                self._mqtt_dispatcher.client.publish(
-                    self._bus_monitor_topic,
-                    f"{source}: {frame.as_integer:x} {incoming_command}",
-                    qos=2,
-                    retain=False,
-                )
+                self._mqtt_dispatcher.client.publish(self._bus_monitor_topic, msg, qos=2, retain=False),
+                "Publish DALI bus traffic to MQTT",
             )

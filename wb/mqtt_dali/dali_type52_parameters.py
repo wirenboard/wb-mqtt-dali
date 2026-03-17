@@ -1,5 +1,6 @@
 # Type 52 Diagnostics and maintenance (IEC 62386-253:2023)
 
+from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory.diagnostics import (
     BANK_205,
     BANK_206,
@@ -86,13 +87,13 @@ class Type52Parameters(TypeParameters):
         try:
             data = await driver.run_sequence(read_memory_bank(BANK_205, short_address, self._compat))
             cg.update(self._extract_bank205(data))
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+        except (MemoryLocationNotImplemented, ResponseError) as e:
+            raise RuntimeError(f"Failed to read DT52 memory bank 205: {e}") from e
         try:
             data = await driver.run_sequence(read_memory_bank(BANK_206, short_address, self._compat))
             ls.update(self._extract_bank206(data))
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+        except (MemoryLocationNotImplemented, ResponseError) as e:
+            raise RuntimeError(f"Failed to read DT52 memory bank 206: {e}") from e
         try:
             data = await driver.run_sequence(read_memory_bank(BANK_207, short_address, self._compat))
             v = _get(data, InternalControlGearReferenceTemperature)
@@ -104,8 +105,8 @@ class Type52Parameters(TypeParameters):
             v = _get(data, RatedMedianUsefulLightSourceStarts)
             if v is not None:
                 ls["rated_median_useful_starts"] = int(v)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+        except (MemoryLocationNotImplemented, ResponseError) as e:
+            raise RuntimeError(f"Failed to read DT52 memory bank 207: {e}") from e
         res = {}
         if cg:
             res["type52_cg"] = cg

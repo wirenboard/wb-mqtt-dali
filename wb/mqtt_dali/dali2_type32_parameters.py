@@ -27,7 +27,7 @@ from .settings import SettingsParamName
 class ActiveFeedbackBrightnessParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Active feedback brightness"),
+            SettingsParamName("Active feedback brightness", "Яркость активной обратной связи"),
             "active_feedback_brightness",
             instance_number,
             QueryActiveFeedbackBrightness,
@@ -40,7 +40,7 @@ class ActiveFeedbackBrightnessParam(InstanceParam):
 class ActiveFeedbackColourParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Active feedback colour"),
+            SettingsParamName("Active feedback colour", "Цвет активной обратной связи"),
             "active_feedback_colour",
             instance_number,
             QueryActiveFeedbackColour,
@@ -53,7 +53,7 @@ class ActiveFeedbackColourParam(InstanceParam):
 class ActiveFeedbackPitchParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Active feedback pitch"),
+            SettingsParamName("Active feedback pitch", "Тон активной обратной связи"),
             "active_feedback_pitch",
             instance_number,
             QueryActiveFeedbackPitch,
@@ -66,7 +66,7 @@ class ActiveFeedbackPitchParam(InstanceParam):
 class ActiveFeedbackVolumeParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Active feedback volume"),
+            SettingsParamName("Active feedback volume", "Громкость активной обратной связи"),
             "active_feedback_volume",
             instance_number,
             QueryActiveFeedbackVolume,
@@ -79,7 +79,7 @@ class ActiveFeedbackVolumeParam(InstanceParam):
 class FeedbackTimingParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Feedback timing"),
+            SettingsParamName("Feedback timing", "Тайминг обратной связи"),
             "feedback_timing",
             instance_number,
             QueryFeedbackTiming,
@@ -92,7 +92,7 @@ class FeedbackTimingParam(InstanceParam):
 class InactiveFeedbackBrightnessParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Inactive feedback brightness"),
+            SettingsParamName("Inactive feedback brightness", "Яркость неактивной обратной связи"),
             "inactive_feedback_brightness",
             instance_number,
             QueryInactiveFeedbackBrightness,
@@ -105,7 +105,7 @@ class InactiveFeedbackBrightnessParam(InstanceParam):
 class InactiveFeedbackColourParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Inactive feedback colour"),
+            SettingsParamName("Inactive feedback colour", "Цвет неактивной обратной связи"),
             "inactive_feedback_colour",
             instance_number,
             QueryInactiveFeedbackColour,

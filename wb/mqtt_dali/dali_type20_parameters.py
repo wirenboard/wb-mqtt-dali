@@ -103,13 +103,13 @@ class Type20Parameters(TypeParameters):
                 control_info=ControlInfo(
                     "load_shedding_condition",
                     ControlMeta(
-                        title="Load Shedding Condition",
+                        title=TranslatedTitle("Load Shedding Condition", "Условие снижения нагрузки"),
                         read_only=True,
                         enum={
-                            "0": TranslatedTitle("no reduction"),
-                            "1": TranslatedTitle("reduction factor 1"),
-                            "2": TranslatedTitle("reduction factor 2"),
-                            "3": TranslatedTitle("reduction factor 3"),
+                            "0": TranslatedTitle("no reduction", "без снижения"),
+                            "1": TranslatedTitle("reduction factor 1", "фактор снижения 1"),
+                            "2": TranslatedTitle("reduction factor 2", "фактор снижения 2"),
+                            "3": TranslatedTitle("reduction factor 3", "фактор снижения 3"),
                         },
                     ),
                     "0",

@@ -180,4 +180,3 @@ config.local.*
 pyproject.toml
 .config
 standards/
-CLAUDE.md

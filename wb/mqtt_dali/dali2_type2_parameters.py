@@ -17,7 +17,7 @@ from .settings import SettingsParamName
 class DeadtimeTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Deadtime timer"),
+            SettingsParamName("Deadtime timer", "Таймер задержки"),
             "deadtime_timer",
             instance_number,
             QueryDeadtimeTimer,
@@ -30,7 +30,7 @@ class DeadtimeTimerParam(InstanceParam):
 class ReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Report timer"),
+            SettingsParamName("Report timer", "Таймер отчёта"),
             "report_timer",
             instance_number,
             QueryReportTimer,

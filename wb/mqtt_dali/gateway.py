@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
+from itertools import chain
 from typing import Optional, Tuple, Union
 
 from .application_controller import (
@@ -21,6 +22,16 @@ from .mqtt_rpc_server import MQTTRPCServer
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_POLLING_INTERVAL = 5.0
+
+
+def check_short_address_conflict(
+    devices: Union[list[DaliDevice], list[Dali2Device]],
+    target_device: Union[DaliDevice, Dali2Device],
+    new_short: int,
+) -> None:
+    """Raise ValueError if new_short is already used by another device on the same bus."""
+    if any(device is not target_device and device.address.short == new_short for device in devices):
+        raise ValueError(f"Short address {new_short} is already used by another device on this bus")
 
 
 @dataclass
@@ -45,6 +56,19 @@ class WbDaliGateway:
         for r in res:
             if isinstance(r, Exception):
                 raise r
+
+
+def check_mqtt_id_conflict(
+    gateways: list[WbDaliGateway],
+    target_device: Union[DaliDevice, Dali2Device],
+    new_mqtt_id: str,
+) -> None:
+    """Raise ValueError if new_mqtt_id is already used by another device across all gateways."""
+    for gw in gateways:
+        for bus in gw.buses:
+            all_devices = chain(bus.dali_devices, bus.dali2_devices)
+            if any(device is not target_device and device.mqtt_id == new_mqtt_id for device in all_devices):
+                raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
 
 
 def bus_from_json(
@@ -249,6 +273,15 @@ class Gateway:
         bus, device = self._get_bus_and_device_by_id(device_id)
         if bus is None or device is None:
             raise ValueError(f"Device {device_id} not found")
+        new_short = new_params.get("short_address")
+        if new_short is not None and new_short != device.address.short:
+            if isinstance(device, Dali2Device):
+                check_short_address_conflict(bus.dali2_devices, device, new_short)
+            else:
+                check_short_address_conflict(bus.dali_devices, device, new_short)
+        new_mqtt_id = new_params.get("mqtt_id")
+        if new_mqtt_id is not None and new_mqtt_id != device.mqtt_id:
+            check_mqtt_id_conflict(self.wb_dali_gateways, device, new_mqtt_id)
         await bus.apply_parameters(device, new_params)
         return device.params
 

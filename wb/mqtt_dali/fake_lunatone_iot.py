@@ -18,6 +18,7 @@ your device's IP address and port, e.g., 192.0.2.3:8080.
 import asyncio
 import json
 import logging
+from copy import deepcopy
 from enum import Enum
 from http import HTTPStatus
 from typing import Any, Awaitable, Callable, Optional
@@ -93,6 +94,12 @@ _INITIAL_GREET = {
 }
 
 
+def make_initial_greet(name: str) -> dict[str, Any]:
+    greet = deepcopy(_INITIAL_GREET)
+    greet["data"]["name"] = name
+    return greet
+
+
 def _unbreak_jsonish(blob: Data) -> str:
     # Lunatone's DALI-Cockpit sends malformed JSON,
     # with `True` and `False` instead of JSON's own `true` and `false`.
@@ -133,7 +140,7 @@ async def emulate(
         publish_traffic(websocket, logger, one_shot_tasks)
     )
     try:
-        await websocket.send(json.dumps(_INITIAL_GREET))
+        await websocket.send(json.dumps(make_initial_greet(driver.config.device_name)))
         async for raw_message in websocket:
             line = 0
             try:

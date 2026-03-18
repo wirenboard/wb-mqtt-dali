@@ -253,6 +253,7 @@ async def send_command_service(gateway: str, args, old_gateway: bool):
         registry,
         address=args.address,
         data=data,
+        group=args.group,
         broadcast=args.broadcast,
     )
 
@@ -435,6 +436,13 @@ async def main(argv):
         dest="data",
         type=str,
         help="Data value for commands that require it (e.g., DAPC power level, DTR value)",
+    )
+
+    parser.add_argument(
+        "--group",
+        dest="group",
+        type=int,
+        help="DALI group (0-15) or DALI 2.0 group (0-31) for --send-command",
     )
 
     parser.add_argument(

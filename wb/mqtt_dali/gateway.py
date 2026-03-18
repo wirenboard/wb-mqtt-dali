@@ -309,40 +309,48 @@ class Gateway:
                         "schema": {
                             "type": "object",
                             "properties": {
+                                "polling_interval": {
+                                    "type": "number",
+                                    "title": "Polling Interval",
+                                    "default": 5,
+                                    "propertyOrder": 1,
+                                },
                                 "websocket_enabled": {
-                                    "title": "Enable Lunaton DALI-2 IoT Gateway emulator",
+                                    "title": "Lunatone DALI-2 IoT Gateway emulator",
                                     "type": "boolean",
                                     "description": "websocket_description",
+                                    "format": "switch",
+                                    "default": False,
+                                    "propertyOrder": 2,
                                 },
                                 "websocket_port": {
                                     "title": "WebSocket port",
                                     "type": "integer",
                                     "minimum": 1,
                                     "maximum": 65535,
-                                },
-                                "polling_interval": {
-                                    "type": "number",
-                                    "title": "Polling Interval",
-                                    "default": 5,
+                                    "propertyOrder": 3,
                                 },
                                 "bus_monitor_enabled": {
                                     "type": "boolean",
-                                    "title": "Enable Bus Monitor",
+                                    "title": "Bus Monitor",
                                     "default": False,
+                                    "format": "switch",
+                                    "propertyOrder": 4,
                                 },
                             },
                             "translations": {
                                 "ru": {
-                                    "Enable WebSocket": "Включить эмуляцию шлюза Lunaton DALI-2 IoT",
+                                    "Lunatone DALI-2 IoT Gateway emulator": "Эмуляция шлюза Lunatone DALI-2 IoT",
                                     "WebSocket port": "Порт WebSocket'а",
                                     "Polling Interval": "Интервал опроса",
-                                    "websocket_description": "Включение этой опции запустит WebSocket сервер, который эмулирует Lunaton DALI-2 IoT Gateway. "
+                                    "websocket_description": "Включение этой опции запустит WebSocket-сервер, который эмулирует Lunatone DALI-2 IoT Gateway. "
                                     "К нему можно подключить Lunatone DALI Cockpit для управления устройствами. "
                                     "В DALI Cockpit надо выбрать Network в качестве интерфейса шины, "
                                     "указать DALI-2 Display/DALI-2 IoT/DALI-2 WLAN, ввести адрес контроллера и порт, заданный ниже.",
+                                    "Bus Monitor": "Монитор шины",
                                 },
                                 "en": {
-                                    "websocket_description": "Enabling this option will start a WebSocket server that emulates the Lunaton DALI-2 IoT Gateway. "
+                                    "websocket_description": "Enabling this option will start a WebSocket-server that emulates the Lunatone DALI-2 IoT Gateway. "
                                     "You can connect the Lunatone DALI Cockpit to it for device management. "
                                     "In DALI Cockpit, select Network as the bus interface, "
                                     "specify DALI-2 Display/DALI-2 IoT/DALI-2 WLAN, and enter the controller address and the port specified above.",
@@ -475,10 +483,13 @@ def get_dict_for_device_config(device: Union[DaliDevice, Dali2Device]) -> dict:
 
 
 def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGateway]) -> None:
+    real_config_path = os.path.realpath(config_path)
+    config_dir = os.path.dirname(real_config_path)
+    config_path = real_config_path
     temp_fd, temp_path = tempfile.mkstemp(
         prefix="wb-mqtt-dali",
         suffix=".cfg.tmp",
-        dir=os.path.dirname(os.path.abspath(config_path)),
+        dir=config_dir,
     )
     try:
         with os.fdopen(temp_fd, "w", encoding="utf-8") as temp_f:

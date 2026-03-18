@@ -194,7 +194,7 @@ class InstanceGroupParamBase(NumberSettingsParam):
 class InstanceGroup0Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Instance group 0", "Группа экземпляра 0"),
+            SettingsParamName("Primary instance group", "Основная группа экземпляра"),
             "instance_group_0",
             instance_number,
         )

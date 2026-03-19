@@ -669,11 +669,11 @@ class ApplicationController:
             frame_type = "FF" if isinstance(frame, ForwardFrame) else "BF"
 
             if source == "bus":
-                msg = f"<<{frame_value} {frame_type:<4}{command_str}"
+                msg = f"<<{frame_value} {frame_type}{frame_length}{command_str}"
                 if frame_counter is not None:
                     msg = msg + f" (fc: {frame_counter})"
             else:
-                msg = f">>{frame_value} {frame_type}{len(frame)}{command_str} (src: {source})"
+                msg = f">>{frame_value} {frame_type}{frame_length}{command_str} (src: {source})"
 
             self._one_shot_tasks.add(
                 self._mqtt_dispatcher.client.publish(self._bus_monitor_topic, msg, qos=2, retain=False),

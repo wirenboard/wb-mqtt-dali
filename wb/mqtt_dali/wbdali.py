@@ -70,6 +70,114 @@ class BusTrafficCallbacks:
             func(frame, source, frame_counter)
 
 
+class BusMonitorFrameHandler:
+    def __init__(
+        self, bus_traffic: BusTrafficCallbacks, logger: logging.Logger, dev_inst_map: DeviceInstanceTypeMapper
+    ) -> None:
+        self._last_frame_counter: Optional[int] = None
+        self._out_of_order_frame: Optional[int] = None
+        self._logger = logger
+        self._bus_traffic = bus_traffic
+        self._dev_inst_map = dev_inst_map
+
+    async def handle(self, message: mqtt.MQTTMessage) -> None:
+        if message.retain:
+            return
+
+        try:
+            payload_str = message.payload.decode().strip()
+            raw_value = int(payload_str, 0)
+        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+            self._logger.error(
+                "Failed to parse bus monitor payload '%s' from topic '%s': %s",
+                message.payload,
+                message.topic,
+                exc,
+            )
+            return
+
+        frame_counter = (raw_value >> 48) & 0xFFFF
+
+        if self._last_frame_counter is None:
+            self._last_frame_counter = frame_counter
+            await self._bus_traffic_invoke(raw_value)
+            return
+
+        delta = self.get_frame_counter_delta(self._last_frame_counter, frame_counter)
+        if delta == 2 and self._out_of_order_frame is None:
+            # Allow one backward jump without logging a warning, to handle the case when the gateway queue jumps from 4th to 1st item
+            # N -> N+2 -> N+1 -> N+3 -> N+4
+            self._out_of_order_frame = raw_value
+            self._last_frame_counter = frame_counter
+            return
+
+        if delta == -1 and self._out_of_order_frame is not None:
+            try:
+                await self._bus_traffic_invoke(raw_value)
+                await self._bus_traffic_invoke(self._out_of_order_frame)
+                return
+            finally:
+                self._out_of_order_frame = None
+
+        if delta != 1:
+            self._logger.warning(
+                "Bus monitor frame counter jump from %d to %d, possible missed frames",
+                self._last_frame_counter,
+                frame_counter,
+            )
+
+        if self._out_of_order_frame is not None:
+            try:
+                await self._bus_traffic_invoke(self._out_of_order_frame)
+            finally:
+                self._out_of_order_frame = None
+
+        self._last_frame_counter = frame_counter
+        await self._bus_traffic_invoke(raw_value)
+
+    def get_frame_counter_delta(self, start: int, end: int) -> int:
+        # It is ok to have a backward jump to one frame,
+        # that can happen when the gateway queue jumps from 4th to 1st item.
+        # Jumps for more than one frame are not expected and likely indicate missed frames
+        if (start == 0 and end == FRAME_COUNTER_MODULO - 1) or (start - end == 1):
+            return -1
+        if end >= start:
+            return end - start
+        return end + FRAME_COUNTER_MODULO - start
+
+    async def _bus_traffic_invoke(self, raw_value: int) -> None:
+        frame_length = (raw_value >> 32) & 0xFF
+        frame_mask = (1 << frame_length) - 1
+        frame_data = raw_value & frame_mask
+        is_backward = bool((raw_value >> 40) & 0x1)
+        is_broken = bool((raw_value >> 41) & 0x1)
+        frame_counter = (raw_value >> 48) & 0xFFFF
+
+        if is_broken:
+            if is_backward:
+                frame = BackwardFrameError(frame_data)
+                self._logger.debug("Unexpected broken BF: %s", hex(frame_data))
+            else:
+                frame = ForwardFrame(frame_length, frame_data)
+                frame._error = True
+                self._logger.debug("Unexpected broken FF%d: %s", frame_length, hex(frame_data))
+        else:
+            if is_backward:
+                frame = BackwardFrame(frame_data)
+                self._logger.debug("Unexpected BF: %s", hex(frame_data))
+            else:
+                frame = ForwardFrame(frame_length, frame_data)
+                if frame_length in (16, 24):
+                    cmd = from_frame(frame, dev_inst_map=self._dev_inst_map)
+                    if isinstance(cmd, _Event):
+                        self._logger.debug("Event: %s", cmd)
+                    else:
+                        self._logger.debug("Unexpected FF%d: %s", frame_length, cmd)
+                else:
+                    self._logger.debug("Unexpected FF%d: %s", frame_length, hex(frame_data))
+        self._bus_traffic.invoke(frame, "bus", frame_counter)
+
+
 @dataclass
 class SendQueueItem:
     future: asyncio.Future
@@ -166,7 +274,10 @@ class WBDALIDriver:
 
         self._batch_start_index = 0
         self._next_queue_index = 0
-        self._last_bus_monitor_frame_counter: Optional[int] = None
+
+        self._bus_monitor_frame_handler = BusMonitorFrameHandler(
+            self.bus_traffic, self.logger, self.dev_inst_map
+        )
 
     @property
     def rpc_client_id(self) -> str:
@@ -196,10 +307,11 @@ class WBDALIDriver:
 
         # Subscribe to FF24 topic
         self.logger.debug("Subscribing to FF24 topic...")
-        await self._mqtt_dispatcher.subscribe(
-            f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame",
-            self._handle_ff24_message,
-        )
+        for i in range(1, 5):
+            await self._mqtt_dispatcher.subscribe(
+                f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+                self._bus_monitor_frame_handler.handle,
+            )
 
         self.logger.debug("Initialized successfully")
 
@@ -228,9 +340,10 @@ class WBDALIDriver:
 
         # Unsubscribe from FF24 topic
         if self._mqtt_dispatcher.is_running:
-            await self._mqtt_dispatcher.unsubscribe(
-                f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame",
-            )
+            for i in range(1, 5):
+                await self._mqtt_dispatcher.unsubscribe(
+                    f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+                )
         self.logger.debug("Deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
@@ -278,63 +391,6 @@ class WBDALIDriver:
             count=1,
             msg="0000",
         )
-
-    async def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
-        if message.retain:
-            return
-
-        try:
-            payload_str = message.payload.decode().strip()
-            raw_value = int(payload_str, 0)
-        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
-            self.logger.error(
-                "Failed to parse bus monitor payload '%s' from topic '%s': %s",
-                message.payload,
-                message.topic,
-                exc,
-            )
-            return
-
-        frame_length = (raw_value >> 32) & 0xFF
-        frame_mask = (1 << frame_length) - 1
-        frame_data = raw_value & frame_mask
-        is_backward = bool((raw_value >> 40) & 0x1)
-        is_broken = bool((raw_value >> 41) & 0x1)
-        frame_counter = (raw_value >> 48) & 0xFFFF
-
-        if self._last_bus_monitor_frame_counter is not None:
-            delta = (frame_counter - self._last_bus_monitor_frame_counter - 1) % FRAME_COUNTER_MODULO
-            if delta > 1:
-                self.logger.warning(
-                    "Bus monitor frame counter jump from %d to %d, possible missed frames",
-                    self._last_bus_monitor_frame_counter,
-                    frame_counter,
-                )
-        self._last_bus_monitor_frame_counter = frame_counter
-
-        if is_broken:
-            if is_backward:
-                frame = BackwardFrameError(frame_data)
-                self.logger.debug("Unexpected broken BF: %s", hex(frame_data))
-            else:
-                frame = ForwardFrame(frame_length, frame_data)
-                frame._error = True
-                self.logger.debug("Unexpected broken FF%d: %s", frame_length, hex(frame_data))
-        else:
-            if is_backward:
-                frame = BackwardFrame(frame_data)
-                self.logger.debug("Unexpected BF: %s", hex(frame_data))
-            else:
-                frame = ForwardFrame(frame_length, frame_data)
-                if frame_length in (16, 24):
-                    cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
-                    if isinstance(cmd, _Event):
-                        self.logger.debug("Event: %s", cmd)
-                    else:
-                        self.logger.debug("Unexpected FF%d: %s", frame_length, cmd)
-                else:
-                    self.logger.debug("Unexpected FF%d: %s", frame_length, hex(frame_data))
-        self.bus_traffic.invoke(frame, "bus", frame_counter)
 
     async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
         """Handle reply message from the DALI bus.

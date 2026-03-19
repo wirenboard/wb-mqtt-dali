@@ -98,11 +98,14 @@ async def main(argv):
 
     def bus_monitor_callback(_frame, _source, frame_counter):
         nonlocal last_frame_counter, missed_frames, got_frames
-        if frame_counter is not None:
+        if last_frame_counter is None:
+            last_frame_counter = frame_counter
+        elif frame_counter is not None:
             delta = (frame_counter - last_frame_counter - 1) % FRAME_COUNTER_MODULO
             missed_frames += delta
             last_frame_counter = frame_counter
-        got_frames += 1
+        if frame_counter is not None:
+            got_frames += 1
 
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))

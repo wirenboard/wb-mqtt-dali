@@ -72,7 +72,10 @@ class BusTrafficCallbacks:
 
 class BusMonitorFrameHandler:
     def __init__(
-        self, bus_traffic: BusTrafficCallbacks, logger: logging.Logger, dev_inst_map: DeviceInstanceTypeMapper
+        self,
+        bus_traffic: BusTrafficCallbacks,
+        logger: logging.Logger,
+        dev_inst_map: Optional[DeviceInstanceTypeMapper],
     ) -> None:
         self._last_frame_counter: Optional[int] = None
         self._out_of_order_frame: Optional[int] = None

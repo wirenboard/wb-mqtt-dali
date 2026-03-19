@@ -406,7 +406,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.bus_traffic.register(traffic_callback)
 
         message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame".encode()
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_1".encode()
         )
         message.payload = str(0x1A900180088863B).encode()
         await self.mock_mqtt_dispatcher._dispatch_message(message)

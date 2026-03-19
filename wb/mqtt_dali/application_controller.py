@@ -434,9 +434,7 @@ class ApplicationController:
             return
         self._controls_to_execute[key] = payload
         try:
-            task = ApplicationControllerTask(
-                ApplicationControllerTaskType.EXECUTE_CONTROL, (device, control_id)
-            )
+            task = ApplicationControllerTask(ApplicationControllerTaskType.EXECUTE_CONTROL, key)
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
@@ -508,16 +506,16 @@ class ApplicationController:
                     results = await asyncio.gather(
                         *[
                             device.execute_control(self._dev, control_id, payload)
-                            for _item, payload, device, control_id in controls
+                            for _task, payload, device, control_id in controls
                         ],
                         return_exceptions=True,
                     )
-                    for (item, payload, device, control_id), result in zip(controls, results):
-                        if not item.future.done():
+                    for (processed_task, payload, device, control_id), result in zip(controls, results):
+                        if not processed_task.future.done():
                             if isinstance(result, Exception):
-                                item.future.set_exception(result)
+                                processed_task.future.set_exception(result)
                             else:
-                                item.future.set_result(result)
+                                processed_task.future.set_result(result)
                 else:
                     try:
                         if item.task_type == ApplicationControllerTaskType.COMMISSIONING:

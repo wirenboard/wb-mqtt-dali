@@ -11,9 +11,13 @@ import dali.gear.general as gear_general
 import dali.gear.incandescent as gear_incandescent
 import dali.gear.led as gear_led
 from dali.address import (
+    DeviceAddress,
     DeviceBroadcast,
+    DeviceGroup,
     DeviceShort,
+    GearAddress,
     GearBroadcast,
+    GearGroup,
     GearShort,
     InstanceNumber,
 )
@@ -190,11 +194,36 @@ def build_command_registry() -> Dict[str, CommandInfo]:
 _INSTANCE_PATTERN = re.compile(r"^(.+)\.I(\d+)\.(.+)$")
 
 
+def build_gear_address(
+    address: Optional[int], group: Optional[int], broadcast: bool
+) -> Optional[GearAddress]:
+    if broadcast:
+        return GearBroadcast()
+    if group is not None:
+        return GearGroup(group)
+    if address is not None:
+        return GearShort(address)
+    return None
+
+
+def build_device_address(
+    address: Optional[int], group: Optional[int], broadcast: bool
+) -> Optional[DeviceAddress]:
+    if broadcast:
+        return DeviceBroadcast()
+    if group is not None:
+        return DeviceGroup(group)
+    if address is not None:
+        return DeviceShort(address)
+    return None
+
+
 def parse_and_build_command(
     command_name: str,
     registry: Dict[str, CommandInfo],
     address: Optional[int] = None,
     data: Optional[int] = None,
+    group: Optional[int] = None,
     broadcast: bool = False,
 ) -> Command:
     # Handle <prefix>.I<n>.<name> pattern for instance commands
@@ -222,26 +251,40 @@ def parse_and_build_command(
     if address is not None and (address < 0 or address > 63):
         raise ValueError(f"--address must be in range 0-63, got {address}")
 
+    if group is not None and address is not None:
+        raise ValueError(f"Command '{command_name}' cannot use --group together with --address")
+
+    if group is not None and broadcast:
+        raise ValueError(f"Command '{command_name}' cannot use --group together with --broadcast")
+
+    if group is not None:
+        if (info.kind == "gear_standard") and (group < 0 or group > 15):
+            raise ValueError(f"--group must be in range 0-15, got {group}")
+        if (info.kind == "device_standard") and (group < 0 or group > 31):
+            raise ValueError(f"--group must be in range 0-31, got {group}")
+
     if info.kind == "gear_special" or info.kind == "device_special":
         if address is not None:
             raise ValueError(f"Command '{command_name}' is a special command and does not take --address")
+        if group is not None:
+            raise ValueError(f"Command '{command_name}' is a special command and does not take --group")
     elif info.kind == "gear_dapc":
         if data is None:
             raise ValueError("DAPC command requires --data argument")
     elif info.kind in ("gear_standard", "device_standard", "device_instance"):
-        if address is None and not broadcast:
-            raise ValueError(f"Command '{command_name}' requires --address or --broadcast")
+        if address is None and group is None and not broadcast:
+            raise ValueError(f"Command '{command_name}' requires --address, --group or --broadcast")
 
     if info.needs_data and data is None:
         raise ValueError(f"Command '{command_name}' requires --data argument")
 
     # Build the command
     if info.kind == "gear_dapc":
-        addr = GearBroadcast() if broadcast else GearShort(address)
+        addr = build_gear_address(address, group, broadcast)
         return info.cls(addr, data)
 
     if info.kind == "gear_standard":
-        addr = GearBroadcast() if broadcast else GearShort(address)
+        addr = build_gear_address(address, group, broadcast)
         if info.needs_data:
             return info.cls(addr, data)
         return info.cls(addr)
@@ -252,7 +295,7 @@ def parse_and_build_command(
         return info.cls()
 
     if info.kind == "device_standard":
-        addr = DeviceBroadcast() if broadcast else DeviceShort(address)
+        addr = build_device_address(address, group, broadcast)
         if info.needs_data:
             return info.cls(addr, data)
         return info.cls(addr)
@@ -266,7 +309,7 @@ def parse_and_build_command(
                 f"Command '{command_name}' is an instance command. "
                 f"Use {prefix}.I<n>.{cmd_name} syntax (e.g., {prefix}.I0.{cmd_name})"
             )
-        addr = DeviceBroadcast() if broadcast else DeviceShort(address)
+        addr = build_device_address(address, group, broadcast)
         if info.needs_data:
             return info.cls(addr, InstanceNumber(instance_number), data)
         return info.cls(addr, InstanceNumber(instance_number))

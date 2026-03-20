@@ -114,6 +114,7 @@ class DaliDevice(DaliDeviceBase):
             address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
         )
         self.types: list[int] = []
+        self.groups: list[bool] = []
 
         self._type8_handler: Optional[Type8Parameters] = None
         self._types_lock = asyncio.Lock()
@@ -166,6 +167,7 @@ class DaliDevice(DaliDeviceBase):
                     f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
                 )
             self.types = types
+            self.groups = (await GroupsParam().read(driver, self.address.short))["groups"]
 
             gear_type_params = {
                 DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),

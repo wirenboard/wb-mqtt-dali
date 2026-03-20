@@ -94,13 +94,18 @@ async def main(argv):
     last_frame_counter = None
     missed_frames = 0
     total_frames = 0
+    got_frames = 0
 
     def bus_monitor_callback(_frame, _source, frame_counter):
-        nonlocal last_frame_counter, missed_frames
-        if frame_counter is not None:
+        nonlocal last_frame_counter, missed_frames, got_frames
+        if last_frame_counter is None:
+            last_frame_counter = frame_counter
+        elif frame_counter is not None:
             delta = (frame_counter - last_frame_counter - 1) % FRAME_COUNTER_MODULO
             missed_frames += delta
             last_frame_counter = frame_counter
+        if frame_counter is not None:
+            got_frames += 1
 
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
@@ -145,13 +150,15 @@ async def main(argv):
                     current_task = next_task
             finally:
                 if next_task is not None and not next_task.done():
-                    next_task.cancel()
+                    await next_task
         finally:
             await driver_bus2.deinitialize()
             await driver_bus1.deinitialize()
             dispatcher_task.cancel()
             await dispatcher_task
-            print(f"Missed frames: {missed_frames}/{total_frames}")
+            print(
+                f"Missed frames: {missed_frames}, received frames: {got_frames}, send frames: {total_frames}"
+            )
 
 
 if __name__ == "__main__":

@@ -101,7 +101,7 @@ def make_controls(addr: AddressFactory) -> list[MqttControlBase]:
             commands_builder=lambda short_address, _, _addr=addr: [StepUp(_addr(short_address))],
         ),
         MqttControl(
-            ControlInfo("step_down", ControlMeta("pushbutton", TranslatedTitle("Step Up", "Шаг вниз"))),
+            ControlInfo("step_down", ControlMeta("pushbutton", TranslatedTitle("Step Down", "Шаг вниз"))),
             commands_builder=lambda short_address, _, _addr=addr: [StepDown(_addr(short_address))],
         ),
         MqttControl(

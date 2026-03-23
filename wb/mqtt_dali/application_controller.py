@@ -76,8 +76,7 @@ class BroadcastVirtualDevice:
         self.name = name
         self.logger = logging.getLogger()
         self._controls: dict[str, MqttControlBase] = {
-            control.control_info.id: control
-            for control in make_controls(lambda _: GearBroadcast())
+            control.control_info.id: control for control in make_controls(lambda _: GearBroadcast())
         }
 
     async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:

@@ -94,10 +94,10 @@ class GroupVirtualDevice:
         self._controls: dict[str, MqttControlBase] = {
             control.control_info.id: control
             for control in [
-                *make_controls(lambda _, group=group_number: GearGroup(group)),
-                *rgbwaf_mqtt_controls(lambda _, group=group_number: GearGroup(group)),
+                *make_controls(lambda _: GearGroup(group_number)),
+                *rgbwaf_mqtt_controls(lambda _: GearGroup(group_number)),
                 *tc_mqtt_controls(
-                    lambda _, group=group_number: GearGroup(group),
+                    lambda _: GearGroup(group_number),
                     MIN_TC_MIREK,
                     MAX_TC_MIREK,
                 ),

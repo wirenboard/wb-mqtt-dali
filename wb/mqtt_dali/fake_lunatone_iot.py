@@ -26,8 +26,12 @@ from typing import Any, Awaitable, Callable, Optional
 import dali.command
 import dali.frame
 import websockets.exceptions
-from websockets.http import Headers
-from websockets.server import HTTPResponse, WebSocketServerProtocol, serve
+try:
+    from websockets.http import Headers
+    from websockets.server import HTTPResponse, WebSocketServerProtocol, serve
+except ImportError:
+    from websockets.legacy.http import Headers
+    from websockets.legacy.server import HTTPResponse, WebSocketServerProtocol, serve
 from websockets.typing import Data
 
 from .asyncio_utils import OneShotTasks

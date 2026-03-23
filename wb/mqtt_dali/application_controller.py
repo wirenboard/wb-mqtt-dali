@@ -19,6 +19,7 @@ from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_controls import make_controls
 from .dali_device import DaliDevice
+from .dali_type8_rgbwaf import get_wanted_mqtt_controls
 from .device_publisher import (
     ControlInfo,
     DeviceChange,
@@ -90,7 +91,10 @@ class GroupVirtualDevice:
         self.logger = logging.getLogger()
         self._controls: dict[str, MqttControlBase] = {
             control.control_info.id: control
-            for control in make_controls(lambda _, group=group_number: GearGroup(group))
+            for control in [
+                *make_controls(lambda _, group=group_number: GearGroup(group)),
+                *get_wanted_mqtt_controls(lambda _, group=group_number: GearGroup(group)),
+            ]
         }
 
     async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:
@@ -116,7 +120,11 @@ class BroadcastVirtualDevice:
         self.name = name
         self.logger = logging.getLogger()
         self._controls: dict[str, MqttControlBase] = {
-            control.control_info.id: control for control in make_controls(lambda _: GearBroadcast())
+            control.control_info.id: control
+            for control in [
+                *make_controls(lambda _: GearBroadcast()),
+                *get_wanted_mqtt_controls(lambda _: GearBroadcast()),
+            ]
         }
 
     async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:

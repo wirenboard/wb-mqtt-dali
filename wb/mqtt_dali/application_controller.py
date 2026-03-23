@@ -66,6 +66,7 @@ class ApplicationControllerTaskType(Enum):
     APPLY_SETTING = auto()
     COMMISSIONING = auto()
     LOAD_INFO = auto()
+    REFRESH_GROUP_VIRTUAL_DEVICES = auto()
     EXECUTE_CONTROL = auto()
 
 
@@ -381,7 +382,7 @@ class ApplicationController:
             self._dali2_devices_by_addr[device.address.short] = device
 
         if isinstance(device, DaliDevice):
-            await self._refresh_group_virtual_devices()
+            await self._refresh_group_virtual_devices_through_queue()
 
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
@@ -570,6 +571,15 @@ class ApplicationController:
         self._devices_by_mqtt_id[device.mqtt_id] = device
         device.setLogger(self.logger)
 
+    async def _refresh_group_virtual_devices_through_queue(self) -> None:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                await self._refresh_group_virtual_devices()
+                return
+            task = ApplicationControllerTask(ApplicationControllerTaskType.REFRESH_GROUP_VIRTUAL_DEVICES)
+            self._tasks_queue.put_nowait(task)
+        await task.future
+
     async def _refresh_group_virtual_devices(self) -> None:
         active_groups = set(self._get_active_group_numbers())
         existing_groups = set(self._group_devices_by_number)
@@ -684,6 +694,8 @@ class ApplicationController:
                         elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
                             device, new_params = item.data
                             await device.apply_parameters(self._dev, new_params)
+                        elif item.task_type == ApplicationControllerTaskType.REFRESH_GROUP_VIRTUAL_DEVICES:
+                            await self._refresh_group_virtual_devices()
                         if not item.future.done():
                             item.future.set_result(None)
                     except Exception as e:

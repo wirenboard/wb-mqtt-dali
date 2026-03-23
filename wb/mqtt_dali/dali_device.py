@@ -172,7 +172,12 @@ class DaliDevice(DaliDeviceBase):
                     f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
                 )
             self.types = types
-            self.groups = (await GroupsParam().read(driver, self.address.short))["groups"]
+            groups = (await GroupsParam().read(driver, self.address.short))["groups"]
+            if groups is None:
+                raise RuntimeError(
+                    f"Device at short address {self.address.short} did not respond to QueryGroups*"
+                )
+            self.groups = groups
 
             gear_type_params = {
                 DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),

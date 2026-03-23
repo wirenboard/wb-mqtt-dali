@@ -114,6 +114,7 @@ class DaliDevice(DaliDeviceBase):
             address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
         )
         self.types: list[int] = []
+        self.groups: list[bool] = []
 
         self._type8_handler: Optional[Type8Parameters] = None
         self._types_lock = asyncio.Lock()
@@ -122,7 +123,12 @@ class DaliDevice(DaliDeviceBase):
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         await super().load_info(driver, force_reload)
+        self._sync_groups_from_params()
         self.params["types"] = self.types
+
+    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
+        await super().apply_parameters(driver, new_values)
+        self._sync_groups_from_params()
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         res = await super().poll_controls(driver)
@@ -166,6 +172,12 @@ class DaliDevice(DaliDeviceBase):
                     f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
                 )
             self.types = types
+            groups = (await GroupsParam().read(driver, self.address.short))["groups"]
+            if groups is None:
+                raise RuntimeError(
+                    f"Device at short address {self.address.short} did not respond to QueryGroups*"
+                )
+            self.groups = groups
 
             gear_type_params = {
                 DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
@@ -200,3 +212,8 @@ class DaliDevice(DaliDeviceBase):
 
             for handler in self._type_handlers:
                 await handler.read_mandatory_info(driver, self.address.short)
+
+    def _sync_groups_from_params(self) -> None:
+        groups = self.params.get("groups")
+        if groups is not None:
+            self.groups = groups

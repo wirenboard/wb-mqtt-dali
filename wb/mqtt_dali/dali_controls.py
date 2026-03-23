@@ -93,7 +93,7 @@ def make_controls(addr: AddressFactory) -> list[MqttControlBase]:
             commands_builder=lambda short_address, _, _addr=addr: [Up(_addr(short_address))],
         ),
         MqttControl(
-            ControlInfo("down", ControlMeta("pushbutton", TranslatedTitle("Up", "Вниз"))),
+            ControlInfo("down", ControlMeta("pushbutton", TranslatedTitle("Down", "Вниз"))),
             commands_builder=lambda short_address, _, _addr=addr: [Down(_addr(short_address))],
         ),
         MqttControl(

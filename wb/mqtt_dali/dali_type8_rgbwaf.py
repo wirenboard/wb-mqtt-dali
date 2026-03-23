@@ -28,7 +28,9 @@ RGBW_COLOUR_COMPONENTS = [
 ]
 
 
-def set_rgb_commands_builder(address: ColourAddress, red: int, green: int, blue: int) -> list[command.Command]:
+def set_rgb_commands_builder(
+    address: ColourAddress, red: int, green: int, blue: int
+) -> list[command.Command]:
     return [
         DTR0(red),
         DTR1(green),

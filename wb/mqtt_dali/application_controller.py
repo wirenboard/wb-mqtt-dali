@@ -19,7 +19,9 @@ from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_controls import make_controls
 from .dali_device import DaliDevice
-from .dali_type8_rgbwaf import get_wanted_mqtt_controls
+from .dali_type8_rgbwaf import get_wanted_mqtt_controls as rgbwaf_mqtt_controls
+from .dali_type8_tc import MAX_TC_MIREK, MIN_TC_MIREK
+from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_publisher import (
     ControlInfo,
     DeviceChange,
@@ -93,7 +95,12 @@ class GroupVirtualDevice:
             control.control_info.id: control
             for control in [
                 *make_controls(lambda _, group=group_number: GearGroup(group)),
-                *get_wanted_mqtt_controls(lambda _, group=group_number: GearGroup(group)),
+                *rgbwaf_mqtt_controls(lambda _, group=group_number: GearGroup(group)),
+                *tc_mqtt_controls(
+                    lambda _, group=group_number: GearGroup(group),
+                    MIN_TC_MIREK,
+                    MAX_TC_MIREK,
+                ),
             ]
         }
 
@@ -123,7 +130,12 @@ class BroadcastVirtualDevice:
             control.control_info.id: control
             for control in [
                 *make_controls(lambda _: GearBroadcast()),
-                *get_wanted_mqtt_controls(lambda _: GearBroadcast()),
+                *rgbwaf_mqtt_controls(lambda _: GearBroadcast()),
+                *tc_mqtt_controls(
+                    lambda _: GearBroadcast(),
+                    MIN_TC_MIREK,
+                    MAX_TC_MIREK,
+                ),
             ]
         }
 

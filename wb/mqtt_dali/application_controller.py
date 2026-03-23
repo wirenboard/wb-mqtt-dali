@@ -19,7 +19,13 @@ from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_controls import make_controls
 from .dali_device import DaliDevice
-from .device_publisher import ControlInfo, DeviceChange, DeviceInfo, DevicePublisher
+from .device_publisher import (
+    ControlInfo,
+    DeviceChange,
+    DeviceInfo,
+    DevicePublisher,
+    TranslatedTitle,
+)
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
@@ -156,7 +162,7 @@ class ApplicationController:
         self._devices_by_mqtt_id: dict[str, ControllableDevice] = {}
         self._broadcast_device = BroadcastVirtualDevice(
             mqtt_id=f"{self.uid}_broadcast",
-            name=f"{self.bus_name} Broadcast",
+            name=TranslatedTitle(f"{self.bus_name} Broadcast", f"{self.bus_name} широковещательный"),
         )
 
         self._gtin_db = gtin_db

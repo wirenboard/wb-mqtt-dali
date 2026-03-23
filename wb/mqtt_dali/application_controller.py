@@ -547,7 +547,7 @@ class ApplicationController:
 
     def _make_group_virtual_device(self, group_number: int) -> GroupVirtualDevice:
         return GroupVirtualDevice(
-            mqtt_id=f"{self.uid}_group_{group_number}",
+            mqtt_id=f"{self.uid}_group_{group_number:02d}",
             name=TranslatedTitle(
                 f"{self.bus_name} Group {group_number}",
                 f"{self.bus_name} группа {group_number}",

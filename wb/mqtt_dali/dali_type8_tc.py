@@ -64,12 +64,16 @@ class ColourTemperatureValue:
                 "tc": {
                     "type": "integer",
                     "title": "Colour temperature",
-                    "minimum": limits.tc_min_mirek,
-                    "maximum": limits.tc_max_mirek,
                     "format": "dali-tc",
                     "propertyOrder": 2,
                     "options": {
                         "grid_columns": 2,
+                        "wb": {
+                            "dali_tc": {
+                                "minimum": limits.tc_min_mirek,
+                                "maximum": limits.tc_max_mirek,
+                            },
+                        },
                     },
                 },
             },

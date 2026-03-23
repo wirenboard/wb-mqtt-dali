@@ -6,7 +6,7 @@ from timeit import default_timer
 from typing import Any, Optional, Union
 
 import paho.mqtt.client as mqtt
-from dali.address import DeviceBroadcast
+from dali.address import DeviceBroadcast, GearBroadcast
 from dali.command import Command, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
@@ -14,10 +14,18 @@ from dali.gear.general import EnableDeviceType
 
 from .asyncio_utils import OneShotTasks
 from .commissioning import Commissioning, CommissioningResult
+from .common_dali_device import MqttControlBase
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
+from .dali_controls import make_controls
 from .dali_device import DaliDevice
-from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher
+from .device_publisher import (
+    ControlInfo,
+    DeviceChange,
+    DeviceInfo,
+    DevicePublisher,
+    TranslatedTitle,
+)
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
@@ -66,6 +74,35 @@ class ApplicationControllerTask:
     task_type: ApplicationControllerTaskType
     data: Any = field(default_factory=dict)
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
+
+
+class BroadcastVirtualDevice:
+    def __init__(self, mqtt_id: str, name: str) -> None:
+        self.mqtt_id = mqtt_id
+        self.name = name
+        self.logger = logging.getLogger()
+        self._controls: dict[str, MqttControlBase] = {
+            control.control_info.id: control for control in make_controls(lambda _: GearBroadcast())
+        }
+
+    async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:
+        return [control.control_info for control in self._controls.values()]
+
+    async def execute_control(
+        self,
+        driver: Union[WBDALIDriver, WBDALIDriverOld],
+        control_id: str,
+        value: str,
+    ) -> None:
+        control = self._controls.get(control_id)
+        if control is not None and control.is_writable():
+            await driver.send_commands(control.get_setup_commands(0, value))
+
+    def setLogger(self, logger: logging.Logger) -> None:
+        self.logger = logger
+
+
+ControllableDevice = Union[DaliDevice, Dali2Device, BroadcastVirtualDevice]
 
 
 class ApplicationController:
@@ -122,7 +159,11 @@ class ApplicationController:
         self._one_shot_tasks = OneShotTasks(self.logger)
 
         self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
-        self._devices_by_mqtt_id: dict[str, Union[DaliDevice, Dali2Device]] = {}
+        self._devices_by_mqtt_id: dict[str, ControllableDevice] = {}
+        self._broadcast_device = BroadcastVirtualDevice(
+            mqtt_id=f"{self.uid}_broadcast",
+            name=TranslatedTitle(f"{self.bus_name} Broadcast", f"{self.bus_name} широковещательный"),
+        )
 
         self._gtin_db = gtin_db
 
@@ -130,7 +171,7 @@ class ApplicationController:
 
         self._in_quiescent_mode = False
 
-        self._controls_to_execute: dict[tuple[Union[DaliDevice, Dali2Device], str], str] = {}
+        self._controls_to_execute: dict[tuple[ControllableDevice, str], str] = {}
 
     @property
     def polling_interval(self) -> float:
@@ -166,6 +207,20 @@ class ApplicationController:
         self._update_dali2_devices_instances({d.address.short: d for d in self.dali2_devices})
 
         await self._device_publisher.initialize()
+        broadcast_device_info = DeviceInfo(
+            self._broadcast_device.mqtt_id,
+            self._broadcast_device.name,
+            await self._broadcast_device.get_mqtt_controls(self._dev),
+        )
+        await self._device_publisher.add_device(broadcast_device_info)
+        await self._device_publisher.register_control_handler(
+            self._broadcast_device.mqtt_id,
+            "+",
+            self._handle_on_topic,
+        )
+        self._devices_by_mqtt_id[self._broadcast_device.mqtt_id] = self._broadcast_device
+        self._broadcast_device.setLogger(self.logger)
+
         for device in self.dali_devices + self.dali2_devices:
             try:
                 controls = await device.get_mqtt_controls(self._dev)

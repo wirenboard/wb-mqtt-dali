@@ -6,7 +6,7 @@ from timeit import default_timer
 from typing import Any, Optional, Union
 
 import paho.mqtt.client as mqtt
-from dali.address import DeviceBroadcast, GearBroadcast
+from dali.address import DeviceBroadcast, GearBroadcast, GearGroup
 from dali.command import Command, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
@@ -76,8 +76,41 @@ class ApplicationControllerTask:
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
 
 
+class GroupVirtualDevice:
+    def __init__(
+        self,
+        mqtt_id: str,
+        name: Union[str, TranslatedTitle],
+        group_number: int,
+    ) -> None:
+        self.mqtt_id = mqtt_id
+        self.name = name
+        self.group_number = group_number
+        self.logger = logging.getLogger()
+        self._controls: dict[str, MqttControlBase] = {
+            control.control_info.id: control
+            for control in make_controls(lambda _, group=group_number: GearGroup(group))
+        }
+
+    async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:
+        return [control.control_info for control in self._controls.values()]
+
+    async def execute_control(
+        self,
+        driver: Union[WBDALIDriver, WBDALIDriverOld],
+        control_id: str,
+        value: str,
+    ) -> None:
+        control = self._controls.get(control_id)
+        if control is not None and control.is_writable():
+            await driver.send_commands(control.get_setup_commands(0, value))
+
+    def setLogger(self, logger: logging.Logger) -> None:
+        self.logger = logger
+
+
 class BroadcastVirtualDevice:
-    def __init__(self, mqtt_id: str, name: str) -> None:
+    def __init__(self, mqtt_id: str, name: Union[str, TranslatedTitle]) -> None:
         self.mqtt_id = mqtt_id
         self.name = name
         self.logger = logging.getLogger()
@@ -102,7 +135,7 @@ class BroadcastVirtualDevice:
         self.logger = logger
 
 
-ControllableDevice = Union[DaliDevice, Dali2Device, BroadcastVirtualDevice]
+ControllableDevice = Union[DaliDevice, Dali2Device, BroadcastVirtualDevice, GroupVirtualDevice]
 
 
 class ApplicationController:
@@ -164,6 +197,7 @@ class ApplicationController:
             mqtt_id=f"{self.uid}_broadcast",
             name=TranslatedTitle(f"{self.bus_name} Broadcast", f"{self.bus_name} широковещательный"),
         )
+        self._group_devices_by_number: dict[int, GroupVirtualDevice] = {}
 
         self._gtin_db = gtin_db
 
@@ -236,6 +270,8 @@ class ApplicationController:
             )
             self._devices_by_mqtt_id[device.mqtt_id] = device
             device.setLogger(self.logger)
+
+        await self._refresh_group_virtual_devices()
 
         async with self._state_lock:
             self._state = ApplicationControllerState.READY
@@ -344,6 +380,9 @@ class ApplicationController:
             self._dali2_devices_by_addr.pop(old_short_address, None)
             self._dali2_devices_by_addr[device.address.short] = device
 
+        if isinstance(device, DaliDevice):
+            await self._refresh_group_virtual_devices()
+
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
             if self._state != ApplicationControllerState.READY:
@@ -425,6 +464,7 @@ class ApplicationController:
         for removed_id in removed_ids:
             self._devices_by_mqtt_id.pop(removed_id, None)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
+        await self._refresh_group_virtual_devices()
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
@@ -496,6 +536,68 @@ class ApplicationController:
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
             await self._device_publisher.set_control_error(device_id, control_id, "w")
+
+    def _get_active_group_numbers(self) -> list[int]:
+        active_groups = set()
+        for device in self.dali_devices:
+            for group_number, is_member in enumerate(device.groups):
+                if is_member:
+                    active_groups.add(group_number)
+        return sorted(active_groups)
+
+    def _make_group_virtual_device(self, group_number: int) -> GroupVirtualDevice:
+        return GroupVirtualDevice(
+            mqtt_id=f"{self.uid}_group_{group_number}",
+            name=TranslatedTitle(
+                f"{self.bus_name} Group {group_number}",
+                f"{self.bus_name} группа {group_number}",
+            ),
+            group_number=group_number,
+        )
+
+    async def _publish_group_virtual_device(self, device: GroupVirtualDevice) -> None:
+        device_info = DeviceInfo(
+            device.mqtt_id,
+            device.name,
+            await device.get_mqtt_controls(self._dev),
+        )
+        await self._device_publisher.add_device(device_info)
+        await self._device_publisher.register_control_handler(
+            device.mqtt_id,
+            "+",
+            self._handle_on_topic,
+        )
+        self._devices_by_mqtt_id[device.mqtt_id] = device
+        device.setLogger(self.logger)
+
+    async def _refresh_group_virtual_devices(self) -> None:
+        active_groups = set(self._get_active_group_numbers())
+        existing_groups = set(self._group_devices_by_number)
+        self.logger.debug(
+            "Refreshing group virtual devices: active=%s existing=%s",
+            sorted(active_groups),
+            sorted(existing_groups),
+        )
+
+        for group_number in sorted(existing_groups - active_groups):
+            device = self._group_devices_by_number.pop(group_number)
+            self.logger.debug(
+                "Removing group virtual device: group=%d mqtt_id=%s",
+                group_number,
+                device.mqtt_id,
+            )
+            await self._device_publisher.remove_device(device.mqtt_id)
+            self._devices_by_mqtt_id.pop(device.mqtt_id, None)
+
+        for group_number in sorted(active_groups - existing_groups):
+            device = self._make_group_virtual_device(group_number)
+            self.logger.debug(
+                "Adding group virtual device: group=%d mqtt_id=%s",
+                group_number,
+                device.mqtt_id,
+            )
+            await self._publish_group_virtual_device(device)
+            self._group_devices_by_number[group_number] = device
 
     def _update_dali2_devices_instances(self, dali2_devices_by_addr: dict[int, Dali2Device]) -> None:
         for (addr, inst_num), inst_type in self._dev_inst_map.mapping.items():

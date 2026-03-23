@@ -26,7 +26,7 @@ class DeviceInfo:  # pylint: disable=R0903
     # Must be unique
     # Device topic /devices/{id}
     id: str
-    title: Optional[str] = None
+    title: Optional[Union[str, TranslatedTitle]] = None
     controls: List[ControlInfo] = field(default_factory=list)
 
 

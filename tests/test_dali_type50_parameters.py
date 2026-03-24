@@ -147,30 +147,30 @@ async def test_read_raises_on_bank_error(param, mock_driver):
 
 
 def test_get_schema_contains_all_fields(param):
-    schema = param.get_schema()
+    schema = param.get_schema(False)
     luminaire_info_props = schema["properties"]["luminaire_info"]["properties"]
     for _, key, _, _, _ in _FIELD_SPECS:
         assert key in luminaire_info_props
 
 
 def test_get_schema_integer_field_type(param):
-    schema = param.get_schema()
+    schema = param.get_schema(False)
     assert schema["properties"]["luminaire_info"]["properties"]["cri"]["type"] == "integer"
 
 
 def test_get_schema_string_field_type(param):
-    schema = param.get_schema()
+    schema = param.get_schema(False)
     assert schema["properties"]["luminaire_info"]["properties"]["luminaire_color"]["type"] == "string"
 
 
 def test_get_schema_fields_are_read_only(param):
-    schema = param.get_schema()
+    schema = param.get_schema(False)
     for _, key, _, _, _ in _FIELD_SPECS:
         assert schema["properties"]["luminaire_info"]["properties"][key]["options"]["wb"]["read_only"] is True
 
 
 def test_get_schema_has_ru_translations(param):
-    schema = param.get_schema()
+    schema = param.get_schema(False)
     ru = schema["translations"]["ru"]
     assert "CRI" in ru
     assert ru["CRI"] == "CRI"

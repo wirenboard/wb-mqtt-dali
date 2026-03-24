@@ -1,6 +1,6 @@
 # Type 1 self-contained emergency lighting parameters
 
-from dali.address import GearShort
+from dali.address import Address, GearShort
 from dali.gear.emergency import (
     QueryEmergencyFeatures,
     QueryEmergencyLevel,
@@ -24,28 +24,24 @@ class EmergencyLevelParam(NumberGearParam):
         )
         self.format = "dali-level"
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         res = await super().read(driver, short_address)
-        address = GearShort(short_address)
         try:
-            self.minimum = await query_int(driver, QueryEmergencyMinLevel(address))
+            self.minimum = await query_int(driver, QueryEmergencyMinLevel(short_address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency min level: {e}") from e
         try:
-            self.maximum = await query_int(driver, QueryEmergencyMaxLevel(address))
+            self.maximum = await query_int(driver, QueryEmergencyMaxLevel(short_address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency max level: {e}") from e
         return res
 
 
 class Type1Parameters(TypeParameters):
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        address = GearShort(short_address)
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         try:
-            features = await query_response(driver, QueryEmergencyFeatures(address))
+            features = await query_response(driver, QueryEmergencyFeatures(short_address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency features: {e}") from e
         if getattr(features, "adjustable_emergency_level") is True:
             self._parameters = [EmergencyLevelParam()]
-            return await super().read(driver, short_address)
-        return {}

@@ -28,9 +28,9 @@ class Type5Parameters(TypeParameters):
         self._dimming_curve_state = dimming_curve_state
         self._dimming_curve_parameter = None
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         try:
-            features = await query_response(driver, QueryConverterFeatures(GearShort(short_address)))
+            features = await query_response(driver, QueryConverterFeatures(short_address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if getattr(features, "nonlogarithmic_dimming_curve_supported") is True:

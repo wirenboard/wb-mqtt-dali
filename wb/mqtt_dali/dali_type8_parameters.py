@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from typing import Callable, Generator, List, Optional, Union
 
 from dali import command
-from dali.address import GearShort
+from dali.address import Address, GearShort
 from dali.gear.colour import (
     Activate,
     QueryColourStatus,
     QueryColourValue,
     QueryColourValueDTR,
+    tc_kelvin_mirek,
 )
 from dali.gear.general import (
     DTR0,
@@ -33,7 +34,12 @@ from .dali_parameters import TypeParameters
 from .dali_type8_common import ColourComponent, Type8Limits
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
-from .wbdali_utils import MASK, WBDALIDriver, query_response
+from .wbdali_utils import (
+    MASK,
+    WBDALIDriver,
+    is_broadcast_or_group_address,
+    query_response,
+)
 
 
 class ColourType(enum.Enum):
@@ -175,8 +181,8 @@ class ColourState(SettingsParamBase):
         self,
         name: SettingsParamName,
         property_name: str,
-        query_command_class: Callable[[GearShort], command.Command],
-        setup_command_class: Callable[[GearShort], command.Command],
+        query_command_class: Callable[[Address], command.Command],
+        setup_command_class: Callable[[Address], command.Command],
         colour_tags: dict[ColourComponent, QueryColourValueDTR],
         property_order: int,
         default_colour_type: ColourType,
@@ -185,7 +191,7 @@ class ColourState(SettingsParamBase):
     ) -> None:
         super().__init__(name)
         self.property_name = property_name
-        self.value: Optional[ColourSettings] = None
+        self.value = ColourSettings(default_colour_type)
         self._query_command_class = query_command_class
         self._setup_command_class = setup_command_class
         self._property_order = property_order
@@ -194,30 +200,28 @@ class ColourState(SettingsParamBase):
         self._default_colour_type = default_colour_type
         self._limits = limits
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         return await self._read_impl(driver, short_address)
 
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
         if self.property_name not in value:
             return {}
-        if self.value is None or self.value.colour is None:
-            raise RuntimeError(f"Cannot write {self.name.en} before reading it")
         values = value.get(self.property_name, {})
         new_state = deepcopy(self.value)
         new_state.colour.from_json(values)
         new_state.level = values.get("level", self.value.level)
-        if new_state == self.value:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and new_state == self.value:
             return {}
-        address = GearShort(short_address)
-        cmds = new_state.colour.get_write_commands(address)
-        cmds.extend([DTR0(new_state.level), self._setup_command_class(address)])
+        cmds = new_state.colour.get_write_commands(short_address)
+        cmds.extend([DTR0(new_state.level), self._setup_command_class(short_address)])
         await driver.send_commands(cmds)
-        if self._read_after_save:
+        if is_for_single_device and self._read_after_save:
             return await self._read_impl(driver, short_address)
         self.value = new_state
         return {self.property_name: new_state.to_json()}
 
-    def get_schema(self) -> dict:
+    def get_schema(self, group_and_broadcast: bool) -> dict:
         schema = {
             "properties": {
                 self.property_name: {
@@ -231,13 +235,14 @@ class ColourState(SettingsParamBase):
                             "propertyOrder": 1,
                             "minimum": 0,
                             "maximum": MASK,
+                            "default": MASK,
                             "options": {
                                 "grid_columns": 1,
                             },
                         }
                     },
                     "propertyOrder": self._property_order,
-                    "required": [],
+                    "required": ["level"],
                 },
             },
             "translations": {
@@ -247,18 +252,19 @@ class ColourState(SettingsParamBase):
                 },
             },
         }
-        if self.value is not None and self.value.colour is not None:
-            colour_schema = self.value.colour.get_schema(self._limits)
-            root_property = schema["properties"][self.property_name]
-            merge_json_schema_properties(root_property, colour_schema)
-            merge_translations(schema, colour_schema)
+        colour_schema = self.value.colour.get_schema(self._limits)
+        root_property = schema["properties"][self.property_name]
+        merge_json_schema_properties(root_property, colour_schema)
+        merge_translations(schema, colour_schema)
         return schema
 
-    async def _read_impl(self, driver: WBDALIDriver, short_address: int) -> dict:
-        address = GearShort(short_address)
+    async def _read_impl(self, driver: WBDALIDriver, short_address: Address) -> dict:
         resp = await driver.run_sequence(
             query_colour_with_level(
-                address, self._query_command_class(address), self._colour_tags, self._default_colour_type
+                short_address,
+                self._query_command_class(short_address),
+                self._colour_tags,
+                self._default_colour_type,
             )
         )
         if resp is None:
@@ -281,10 +287,10 @@ class SceneSettings(ColourState):
         )
         self._scene_number = scene_number
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         return self._to_json(await super().read(driver, short_address))
 
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
         values_to_set = deepcopy(value)
         if value.get("enabled", True):
             values_to_set["level"] = value.get("level", 0)
@@ -308,17 +314,17 @@ class ScenesSettings(SettingsParamBase):
     def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(SettingsParamName("Scenes", "Сцены"))
 
-        self.property_name = "scenes"
+        self.property_name = f"scenes_{default_colour_type.value}"
         self._scenes = [SceneSettings(i, default_colour_type, limits) for i in range(SCENES_TOTAL)]
         self._scene_values = [{} for _ in range(SCENES_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         self._scene_values = await asyncio.gather(
             *[scene.read(driver, short_address) for scene in self._scenes]
         )
         return {self.property_name: self._scene_values}
 
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
         if self._scenes[0].value is None:
             raise RuntimeError("Cannot write scenes before reading them")
         if self.property_name not in value:
@@ -333,10 +339,8 @@ class ScenesSettings(SettingsParamBase):
             self._scene_values[i].update(res)
         return {self.property_name: self._scene_values}
 
-    def get_schema(self) -> dict:
-        if self._scenes[0].value is None:
-            raise RuntimeError("Cannot get schema for scenes before reading them")
-        item_schema = self._scenes[0].get_schema()
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        item_schema = self._scenes[0].get_schema(group_and_broadcast)
         enabled_schema = {
             "properties": {
                 "enabled": {
@@ -371,9 +375,110 @@ class ScenesSettings(SettingsParamBase):
                     "Part of the scene": "Часть сцены",
                 }
             },
+            "required": [self.property_name],
         }
         merge_translations(schema, item_schema)
         return schema
+
+
+class GroupScenesSettings(ColourState):
+    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+        super().__init__(
+            SettingsParamName("Scenes", "Сцены"),
+            f"scene_{default_colour_type.value}",
+            QuerySceneLevel,
+            SetScene,
+            REPORT_COLOUR_TAGS,
+            900,
+            default_colour_type,
+            limits,
+        )
+
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+        if self.property_name not in value:
+            return {}
+        self._setup_command_class = lambda address: SetScene(address, value.get("index", 0))
+        values_to_set = deepcopy(value)
+        if value.get("enabled", True):
+            values_to_set["level"] = value.get("level", 0)
+        else:
+            values_to_set["level"] = MASK
+        await super().write(driver, short_address, {self.property_name: values_to_set})
+        return {}
+
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        schema = super().get_schema(True)
+        additional_schema = {
+            "properties": {
+                "index": {
+                    "type": "number",
+                    "title": "Scene number",
+                    "propertyOrder": -1,
+                    "enum": list(range(SCENES_TOTAL)),
+                    "default": 0,
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "title": "Part of the scene",
+                    "propertyOrder": 0,
+                    "format": "switch",
+                    "default": False
+                },
+            },
+            "required": ["index", "enabled"],
+            "translations": {
+                "ru": {
+                    "Part of the scene": "Часть сцены",
+                    "Scene number": "Номер сцены",
+                }
+            },
+        }
+        merge_json_schema_properties(schema["properties"][self.property_name], additional_schema)
+        merge_translations(schema, additional_schema)
+        return schema
+
+
+class CurrentColourState(ColourState):
+    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+        super().__init__(
+            SettingsParamName("Current colour", "Текущий цвет"),
+            f"current_colour_{default_colour_type.value}",
+            QueryActualLevel,
+            Activate,
+            ACTUAL_LEVEL_COLOUR_TAGS,
+            800,
+            default_colour_type,
+            limits,
+            read_after_save=False,
+        )
+
+
+class PowerOnColourState(ColourState):
+    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+        super().__init__(
+            SettingsParamName("Power On Colour", "Цвет после включения питания"),
+            f"power_on_colour_{default_colour_type.value}",
+            QueryPowerOnLevel,
+            SetPowerOnLevel,
+            REPORT_COLOUR_TAGS,
+            21,
+            default_colour_type,
+            limits,
+        )
+
+
+class SystemFailureColourState(ColourState):
+    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+        super().__init__(
+            SettingsParamName("System Failure Colour", "Цвет при сбое"),
+            f"system_failure_colour_{default_colour_type.value}",
+            QuerySystemFailureLevel,
+            SetSystemFailureLevel,
+            REPORT_COLOUR_TAGS,
+            31,
+            default_colour_type,
+            limits,
+        )
 
 
 class Type8Parameters(TypeParameters):
@@ -384,49 +489,11 @@ class Type8Parameters(TypeParameters):
         self._limits = Type8Limits(dali_type8_tc.MIN_TC_MIREK, dali_type8_tc.MAX_TC_MIREK)
         self._colour_type_lock = asyncio.Lock()
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        await self.read_mandatory_info(driver, short_address)
-        default_colour_type = (
-            self._current_colour_type if self._current_colour_type is not None else ColourType.RGBWAF
-        )
-        parameters = [
-            ColourState(
-                SettingsParamName("Current colour", "Текущий цвет"),
-                "current_colour",
-                QueryActualLevel,
-                Activate,
-                ACTUAL_LEVEL_COLOUR_TAGS,
-                800,
-                default_colour_type,
-                self._limits,
-                read_after_save=False,
-            ),
-            ColourState(
-                SettingsParamName("Power On Colour", "Цвет после включения питания"),
-                "power_on_colour",
-                QueryPowerOnLevel,
-                SetPowerOnLevel,
-                REPORT_COLOUR_TAGS,
-                21,
-                default_colour_type,
-                self._limits,
-            ),
-            ColourState(
-                SettingsParamName("System Failure Colour", "Цвет при сбое"),
-                "system_failure_colour",
-                QuerySystemFailureLevel,
-                SetSystemFailureLevel,
-                REPORT_COLOUR_TAGS,
-                31,
-                default_colour_type,
-                self._limits,
-            ),
-            ScenesSettings(default_colour_type, self._limits),
-        ]
-        self._parameters = parameters
-        return await super().read(driver, short_address)
+    @property
+    def default_colour_type(self) -> ColourType:
+        return self._current_colour_type if self._current_colour_type is not None else ColourType.RGBWAF
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         async with self._colour_type_lock:
             if self._current_colour_type is None:
                 self._current_colour_type = await self._read_current_colour_type(driver, short_address)
@@ -434,6 +501,13 @@ class Type8Parameters(TypeParameters):
                     self._limits.tc_min_mirek, self._limits.tc_max_mirek = (
                         await dali_type8_tc.read_colour_temperature_limits_mirek(driver, short_address)
                     )
+        parameters = [
+            CurrentColourState(self.default_colour_type, self._limits),
+            PowerOnColourState(self.default_colour_type, self._limits),
+            SystemFailureColourState(self.default_colour_type, self._limits),
+            ScenesSettings(self.default_colour_type, self._limits),
+        ]
+        self._parameters = parameters
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
         if self._current_colour_type == ColourType.RGBWAF:
@@ -477,8 +551,16 @@ class Type8Parameters(TypeParameters):
 
         return []
 
-    async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: int) -> ColourType:
-        res = await query_response(driver, QueryColourStatus(GearShort(short_address)))
+    def get_group_parameters(self) -> list[SettingsParamBase]:
+        limits = Type8Limits(tc_kelvin_mirek(20000), tc_kelvin_mirek(50))
+        return [
+            PowerOnColourState(self.default_colour_type, limits),
+            SystemFailureColourState(self.default_colour_type, limits),
+            GroupScenesSettings(self.default_colour_type, limits),
+        ]
+
+    async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: Address) -> ColourType:
+        res = await query_response(driver, QueryColourStatus(short_address))
         if getattr(res, "colour_type_xy_active") is True:
             return ColourType.XY
         if getattr(res, "colour_type_colour_temperature_Tc_active") is True:

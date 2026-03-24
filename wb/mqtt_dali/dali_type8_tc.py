@@ -1,10 +1,10 @@
 # Type 8 Colour Temperature
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Union
+from typing import List, Optional
 
 from dali import command
-from dali.address import GearBroadcast, GearGroup, GearShort
+from dali.address import Address
 from dali.gear.colour import (
     Activate,
     ColourTemperatureTcStepCooler,
@@ -34,11 +34,7 @@ COLOR_TEMPERATURE_COLOUR_COMPONENTS = [
 ]
 
 
-AddressFactory = Callable[[int], Union[GearShort, GearGroup, GearBroadcast]]
-ColourAddress = Union[GearShort, GearGroup, GearBroadcast]
-
-
-def set_colour_temperature_commands_builder(address: ColourAddress, value: int) -> list[command.Command]:
+def set_colour_temperature_commands_builder(address: Address, value: int) -> list[command.Command]:
     return [
         DTR0((value & 0xFF)),
         DTR1((value >> 8) & 0xFF),
@@ -51,7 +47,7 @@ class ColourTemperatureValue:
     tc: int = MASK_2BYTES
     components = COLOR_TEMPERATURE_COLOUR_COMPONENTS
 
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
+    def get_write_commands(self, address: Address) -> List[command.Command]:
         return set_colour_temperature_commands_builder(address, self.tc)
 
     def to_json(self) -> dict:
@@ -68,6 +64,7 @@ class ColourTemperatureValue:
                 "tc": {
                     "type": "integer",
                     "title": "Colour temperature",
+                    "default": MASK_2BYTES,
                     "format": "dali-tc",
                     "propertyOrder": 2,
                     "options": {
@@ -87,11 +84,12 @@ class ColourTemperatureValue:
 
 
 def get_wanted_mqtt_controls(
-    address_factory: AddressFactory,
     tc_min_mirek: int,
     tc_max_mirek: int,
 ) -> list[MqttControlBase]:
-    def _set_colour_temperature_commands_builder(short_address: int, value_k: str) -> list[command.Command]:
+    def _set_colour_temperature_commands_builder(
+        short_address: Address, value_k: str
+    ) -> list[command.Command]:
         try:
             tc_k = max(int(value_k), 1)
             tc_mirek = tc_kelvin_mirek(tc_k)
@@ -99,8 +97,7 @@ def get_wanted_mqtt_controls(
             tc_mirek = max(tc_mirek, MIN_TC_MIREK)
         except ValueError as e:
             raise ValueError("colour temperature must be integer") from e
-        address = address_factory(short_address)
-        return set_colour_temperature_commands_builder(address, tc_mirek) + [Activate(address)]
+        return set_colour_temperature_commands_builder(short_address, tc_mirek) + [Activate(short_address)]
 
     return [
         MqttControl(
@@ -140,9 +137,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Warmer", "Теплее")),
                 "0",
             ),
-            commands_builder=lambda short_address, _: [
-                ColourTemperatureTcStepWarmer(GearShort(short_address))
-            ],
+            commands_builder=lambda short_address, _: [ColourTemperatureTcStepWarmer(short_address)],
         ),
         MqttControl(
             ControlInfo(
@@ -150,11 +145,9 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Cooler", "Холоднее")),
                 "0",
             ),
-            commands_builder=lambda short_address, _: [
-                ColourTemperatureTcStepCooler(GearShort(short_address))
-            ],
+            commands_builder=lambda short_address, _: [ColourTemperatureTcStepCooler(short_address)],
         ),
-        *get_wanted_mqtt_controls(GearShort, tc_min_mirek, tc_max_mirek),
+        *get_wanted_mqtt_controls(tc_min_mirek, tc_max_mirek),
     ]
 
 
@@ -174,16 +167,17 @@ def handle_poll_controls_result(new_colour: Optional[ColourTemperatureValue]) ->
     ]
 
 
-async def read_colour_temperature_limits_mirek(driver: WBDALIDriver, short_address: int) -> tuple[int, int]:
-    address = GearShort(short_address)
+async def read_colour_temperature_limits_mirek(
+    driver: WBDALIDriver, short_address: Address
+) -> tuple[int, int]:
     cmds = [
-        QueryActualLevel(address),
+        QueryActualLevel(short_address),
         DTR0(QueryColourValueDTR.ColourTemperatureTcWarmest),
-        QueryColourValue(address),
-        QueryContentDTR0(address),
+        QueryColourValue(short_address),
+        QueryContentDTR0(short_address),
         DTR0(QueryColourValueDTR.ColourTemperatureTcCoolest),
-        QueryColourValue(address),
-        QueryContentDTR0(address),
+        QueryColourValue(short_address),
+        QueryContentDTR0(short_address),
     ]
     resp = await driver.send_commands(cmds)
     warmest = MAX_TC_MIREK

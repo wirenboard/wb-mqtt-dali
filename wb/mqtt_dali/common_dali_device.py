@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 import jsonschema
+from dali.address import Address
 from dali.command import Command, Response
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import info, location, oem
@@ -32,13 +33,13 @@ class MqttControlBase:
     def is_writable(self) -> bool:
         return False
 
-    def get_query(self, short_address: int) -> Optional[Command]:
+    def get_query(self, short_address: Address) -> Optional[Command]:
         return None
 
     def format_response(self, response: Response) -> str:
         return ""
 
-    def get_setup_commands(self, short_address: int, value_to_set: str) -> list[Command]:
+    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         return []
 
 
@@ -46,16 +47,16 @@ class MqttControl(MqttControlBase):
     def __init__(
         self,
         control_info: ControlInfo,
-        query_builder: Optional[Callable[[int], object]] = None,
+        query_builder: Optional[Callable[[Address], object]] = None,
         value_formatter: Optional[Callable[[Response], str]] = None,
-        commands_builder: Optional[Callable[[int, str], list[Command]]] = None,
+        commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
     ) -> None:
         super().__init__(control_info)
         self.query_builder = query_builder
         self.value_formatter = value_formatter
         self.commands_builder = commands_builder
 
-    def get_query(self, short_address: int) -> Optional[Command]:
+    def get_query(self, short_address: Address) -> Optional[Command]:
         if self.query_builder is not None:
             return self.query_builder(short_address)
         return None
@@ -65,7 +66,7 @@ class MqttControl(MqttControlBase):
             return self.value_formatter(response)
         return ""
 
-    def get_setup_commands(self, short_address: int, value_to_set: str) -> list[Command]:
+    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         if self.commands_builder is not None:
             return self.commands_builder(short_address, value_to_set)
         return []
@@ -93,10 +94,10 @@ class DaliDeviceAddress:
 
 def read_memory_bank(
     bank: info.MemoryBank,
-    short_address: int,
+    short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
 ):
-    last_address = yield from bank.LastAddress.read(compat.getAddress(short_address))
+    last_address = yield from bank.LastAddress.read(short_address)
     if isinstance(last_address, location.FlagValue):
         raise ResponseError(
             f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
@@ -151,7 +152,7 @@ class GeneralMemoryParams(SettingsParamBase):
         self._compat = compat
         self._gtin_db = gtin_db
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         res = {}
         try:
             v = await driver.send(self._compat.QueryVersionNumber(short_address))
@@ -296,12 +297,16 @@ class DaliDeviceBase:
             "mqtt_id": self.mqtt_id,
         }
         schema = deepcopy(self._common_schema)
-        awaitables = [param_handler.read(driver, self.address.short) for param_handler in parameter_handlers]
-        results_iterable = iter(await asyncio.gather(*awaitables))
-        for _ in parameter_handlers:
-            type_params = next(results_iterable)
-            params.update(type_params)
-        schemas = [param_handler.get_schema() for param_handler in parameter_handlers]
+        awaitables = [
+            param_handler.read(driver, self._compat.getAddress(self.address.short))
+            for param_handler in parameter_handlers
+        ]
+        results = await asyncio.gather(*awaitables, return_exceptions=True)
+        for param, result in zip(parameter_handlers, results):
+            if isinstance(result, BaseException):
+                raise RuntimeError(f'Error reading "{param.name.en}": {result}') from result
+            params.update(result)
+        schemas = [param_handler.get_schema(False) for param_handler in parameter_handlers]
         for type_schema in schemas:
             if type_schema is not None:
                 merge_json_schemas(schema, type_schema)
@@ -317,7 +322,12 @@ class DaliDeviceBase:
         )
         updated_parameters = {}
         for param_handler in self._parameter_handlers:
-            updated_parameters.update(await param_handler.write(driver, self.address.short, new_values))
+            try:
+                updated_parameters.update(
+                    await param_handler.write(driver, self._compat.getAddress(self.address.short), new_values)
+                )
+            except Exception as e:
+                raise RuntimeError(f'Error writing "{param_handler.name.en}": {e}') from e
         self.params.update(updated_parameters)
         await self._apply_common_parameters(driver, new_values)
 
@@ -328,13 +338,15 @@ class DaliDeviceBase:
     async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(control.get_setup_commands(self.address.short, value))
+            await driver.send_commands(
+                control.get_setup_commands(self._compat.getAddress(self.address.short), value)
+            )
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         await self._update_mqtt_controls_list(driver)
         queries = []
         for descriptor in self._polling_controls:
-            queries.append(descriptor.get_query(self.address.short))
+            queries.append(descriptor.get_query(self._compat.getAddress(self.address.short)))
         if not queries:
             return []
         responses = await driver.send_commands(queries)
@@ -393,6 +405,9 @@ class DaliDeviceBase:
                     if control.is_readable():
                         self._polling_controls.append(control)
                     self._controls[control.control_info.id] = control
+
+    async def get_group_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
+        return []
 
     # Must be implemented by subclasses
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:

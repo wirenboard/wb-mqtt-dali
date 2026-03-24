@@ -1,5 +1,6 @@
 # Type 52 Diagnostics and maintenance (IEC 62386-253:2023)
 
+from dali.address import Address
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory.diagnostics import (
     BANK_205,
@@ -81,7 +82,7 @@ class Type52Parameters(TypeParameters):
         super().__init__()
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         cg: dict = {}
         ls: dict = {}
         try:
@@ -195,7 +196,10 @@ class Type52Parameters(TypeParameters):
                 res[key] = bool(v)
         return res
 
-    def get_schema(self) -> dict:
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        if group_and_broadcast:
+            return {}
+
         ro = {"wb": {"read_only": True}}
         ro_6 = {"wb": {"read_only": True}, "grid_columns": 6}
         return {

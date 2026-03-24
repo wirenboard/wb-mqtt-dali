@@ -1,6 +1,6 @@
 # Type 6 LED modules
 
-from dali.address import GearShort
+from dali.address import Address, GearShort
 from dali.gear.led import (
     QueryDimmingCurve,
     QueryFastFadeTime,
@@ -32,10 +32,10 @@ class FastFadeTimeParam(NumberGearParam):
             SettingsParamName("Fast fade time", "Время быстрого затухания"), "type_6_fast_fade_time"
         )
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         res = await super().read(driver, short_address)
         try:
-            self.maximum = await query_int(driver, QueryMinFastFadeTime(GearShort(short_address)))
+            self.maximum = await query_int(driver, QueryMinFastFadeTime(short_address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read min fast fade time: {e}") from e
         return res
@@ -50,5 +50,5 @@ class Type6Parameters(TypeParameters):
             FastFadeTimeParam(),
         ]
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         await self._dimming_curve_parameter.read(driver, short_address)

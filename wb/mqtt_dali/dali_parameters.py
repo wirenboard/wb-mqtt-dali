@@ -1,83 +1,55 @@
-import asyncio
 from typing import Callable, Optional
 
-from dali.address import GearShort
+from dali.address import Address, GearShort
 from dali.command import Command
 from dali.gear.general import DTR0
 
 from .common_dali_device import MqttControlBase
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
-from .utils import add_enum, add_translations, merge_json_schemas
+from .utils import add_enum, add_translations
 from .wbdali_utils import WBDALIDriver
 
 
 class NumberGearParam(NumberSettingsParam):
-    query_command_class: Optional[Callable[[GearShort], Command]] = None
-    set_command_class: Optional[Callable[[GearShort], Command]] = None
+    query_command_class: Optional[Callable[[Address], Command]] = None
+    set_command_class: Optional[Callable[[Address], Command]] = None
 
     def __init__(self, name: SettingsParamName, property_name: str = "") -> None:
         super().__init__(name, property_name)
         self._is_read_only = self.set_command_class is None
 
-    def get_read_command(self, short_address: int) -> Command:
+    def get_read_command(self, short_address: Address) -> Command:
         if self.query_command_class is not None:
-            return self.query_command_class(GearShort(short_address))
+            return self.query_command_class(short_address)
         raise RuntimeError(f"Query command class for {self.name.en} is not defined")
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:
         if self.set_command_class is not None:
             if self.query_command_class is not None:
                 return [
                     DTR0(value_to_set),
-                    self.set_command_class(GearShort(short_address)),
+                    self.set_command_class(short_address),
                 ]
             raise RuntimeError(f"Set command class for {self.name.en} is not defined")
         raise RuntimeError(f"Query command class for {self.name.en} is not defined")
 
 
-class TypeParameters(SettingsParamBase):
+class TypeParameters:
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Type parameters", "Параметры типа"))
         # Must be filled by subclasses
         self._parameters: list[SettingsParamBase] = []
-
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        res = {}
-        awaitables = [param.read(driver, short_address) for param in self._parameters]
-        results = await asyncio.gather(*awaitables, return_exceptions=True)
-        for param, result in zip(self._parameters, results):
-            if isinstance(result, BaseException):
-                raise RuntimeError(f'Error reading "{param.name.en}": {result}') from result
-            if result is not None:
-                res.update(result)
-        return res
-
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
-        awaitables = [param.write(driver, short_address, value) for param in self._parameters]
-        results = await asyncio.gather(*awaitables, return_exceptions=True)
-        res = {}
-        for param, result in zip(self._parameters, results):
-            if isinstance(result, BaseException):
-                raise RuntimeError(f'Error writing "{param.name.en}": {result}') from result
-            if result is not None:
-                res.update(result)
-        return res
-
-    def get_schema(self) -> dict:
-        res = {}
-        for param in self._parameters:
-            merge_json_schemas(res, param.get_schema())
-        return res
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
         return []
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         """
-        Must be called before any other read or write operations
+        Must be called before any other read, write or get_schema operations
         to ensure that all mandatory parameters are read and available.
+        self._parameters must be filled in this method or in constructor,
+        otherwise get_schema for groups or broadcast may not work correctly.
         """
 
 
@@ -87,18 +59,19 @@ class DimmingCurveParam(NumberGearParam):
         super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "dimming_curve")
         self._dimming_curve_state = dimming_curve_state
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         res = await super().read(driver, short_address)
         self._dimming_curve_state.curve_type = DimmingCurveType(self.value)
         return res
 
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
         res = await super().write(driver, short_address, value)
-        self._dimming_curve_state.curve_type = DimmingCurveType(self.value)
+        if self.value is not None:
+            self._dimming_curve_state.curve_type = DimmingCurveType(self.value)
         return res
 
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        schema = super().get_schema(group_and_broadcast)
         add_enum(
             schema["properties"][self.property_name],
             [(DimmingCurveType.LOGARITHMIC, "standard"), (DimmingCurveType.LINEAR, "linear")],

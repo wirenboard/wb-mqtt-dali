@@ -4,7 +4,15 @@ import asyncio
 import logging
 from typing import Iterable, Optional, Union
 
-from dali.address import DeviceBroadcast, DeviceShort, InstanceNumber
+from dali.address import (
+    Address,
+    DeviceBroadcast,
+    DeviceGroup,
+    DeviceShort,
+    GearBroadcast,
+    GearGroup,
+    InstanceNumber,
+)
 from dali.command import Command, Response
 from dali.device.general import (
     QueryDeviceStatus,
@@ -167,3 +175,7 @@ def check_query_response(resp: Optional[Response]) -> None:
         raise RuntimeError("no response")
     if raw_value.error:
         raise RuntimeError("framing error")
+
+
+def is_broadcast_or_group_address(addr: Address) -> bool:
+    return isinstance(addr, (DeviceBroadcast, GearGroup, GearBroadcast, DeviceGroup))

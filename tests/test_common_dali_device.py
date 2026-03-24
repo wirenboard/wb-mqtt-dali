@@ -1,14 +1,10 @@
-import asyncio
-from copy import deepcopy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from dali.address import GearShort
 
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    MqttControlBase,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
 # Prevent file system access in __init__ by providing a non-empty common schema
 DaliDeviceBase._common_schema = {"title": "test-schema"}
@@ -23,7 +19,7 @@ def test_default_mqtt_id_when_no_custom():
         bus_id="bus1",
         default_name_prefix="n",
         default_mqtt_id_part="dev",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
     )
     # default mqtt id is composed from bus_id, default_mqtt_id_part and short address
@@ -40,7 +36,7 @@ def test_custom_mqtt_id_at_init_and_flag():
         bus_id="b",
         default_name_prefix="n",
         default_mqtt_id_part="p",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
         mqtt_id="custom_id",
     )
@@ -57,7 +53,7 @@ def test_mqtt_id_setter_changes_internal_state():
         bus_id="busX",
         default_name_prefix="Dev",
         default_mqtt_id_part="x",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
     )
     default = d.default_mqtt_id
@@ -79,7 +75,7 @@ def test_default_name_when_no_custom():
         bus_id="bus1",
         default_name_prefix="Lamp",
         default_mqtt_id_part="dev",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
     )
     assert d.default_name == "Lamp 3:0xab"
@@ -95,7 +91,7 @@ def test_custom_name_at_init_and_flag():
         bus_id="b",
         default_name_prefix="Dev",
         default_mqtt_id_part="p",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
         name="My Custom Name",
     )
@@ -128,7 +124,7 @@ def test_name_setter_changes_internal_state():
         bus_id="bus",
         default_name_prefix="Light",
         default_mqtt_id_part="l",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
     )
     default = d.default_name
@@ -154,7 +150,7 @@ def test_name_setter_empty_string_is_custom():
         bus_id="b",
         default_name_prefix="P",
         default_mqtt_id_part="d",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
     )
     # Empty string is falsy but should still be treated as custom if different from default
@@ -174,7 +170,7 @@ def test_name_none_at_init_uses_default():
         bus_id="bus",
         default_name_prefix="Sensor",
         default_mqtt_id_part="s",
-        compat=object(),
+        compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
         name=None,
     )
@@ -201,7 +197,7 @@ def _make_device(**kwargs):
         "bus_id": "bus",
         "default_name_prefix": "Dev",
         "default_mqtt_id_part": "d",
-        "compat": MagicMock(),
+        "compat": DaliCommandsCompatibilityLayer(),
         "gtin_db": MagicMock(),
     }
     defaults.update(kwargs)
@@ -377,7 +373,7 @@ async def test_load_info_uses_correct_short_address_for_read():
 
         await d.load_info(driver)
 
-    mock_gmp_instance.read.assert_awaited_once_with(driver, 42)
+    mock_gmp_instance.read.assert_awaited_once_with(driver, GearShort(42))
 
 
 @pytest.mark.asyncio
@@ -526,7 +522,7 @@ async def test_poll_controls_formats_regular_control_value():
 
     res = await d.poll_controls(driver)
 
-    control.get_query.assert_called_once_with(d.address.short)
+    control.get_query.assert_called_once_with(GearShort(d.address.short))
     control.format_response.assert_called_once_with(response)
     assert len(res) == 1
     assert res[0].control_id == "brightness"
@@ -732,8 +728,8 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
         await d.apply_parameters(driver, new_values)
 
-    h1.write.assert_awaited_once_with(driver, 33, new_values)
-    h2.write.assert_awaited_once_with(driver, 33, new_values)
+    h1.write.assert_awaited_once_with(driver, GearShort(33), new_values)
+    h2.write.assert_awaited_once_with(driver, GearShort(33), new_values)
     assert d.params["existing"] == "keep"
     assert d.params["p1"] == "v1"
     assert d.params["p2"] == 2

@@ -31,6 +31,7 @@ from .device_publisher import (
 from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
+from .utils import merge_json_schemas
 from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbdali_utils import AsyncDeviceInstanceTypeMapper
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
@@ -69,6 +70,8 @@ class ApplicationControllerConfig:
 
 class ApplicationControllerTaskType(Enum):
     APPLY_SETTING = auto()
+    APPLY_GROUP_SETTING = auto()
+    LOAD_GROUP_INFO = auto()
     COMMISSIONING = auto()
     LOAD_INFO = auto()
     REFRESH_GROUP_VIRTUAL_DEVICES = auto()
@@ -96,13 +99,9 @@ class GroupVirtualDevice:
         self._controls: dict[str, MqttControlBase] = {
             control.control_info.id: control
             for control in [
-                *make_controls(lambda _: GearGroup(group_number)),
-                *rgbwaf_mqtt_controls(lambda _: GearGroup(group_number)),
-                *tc_mqtt_controls(
-                    lambda _: GearGroup(group_number),
-                    MIN_TC_COLOUR,
-                    MAX_TC_COLOUR,
-                ),
+                *make_controls(),
+                *rgbwaf_mqtt_controls(),
+                *tc_mqtt_controls(MIN_TC_COLOUR, MAX_TC_COLOUR),
             ]
         }
 
@@ -117,7 +116,7 @@ class GroupVirtualDevice:
     ) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(control.get_setup_commands(0, value))
+            await driver.send_commands(control.get_setup_commands(GearGroup(self.group_number), value))
 
     def setLogger(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -131,13 +130,9 @@ class BroadcastVirtualDevice:
         self._controls: dict[str, MqttControlBase] = {
             control.control_info.id: control
             for control in [
-                *make_controls(lambda _: GearBroadcast()),
-                *rgbwaf_mqtt_controls(lambda _: GearBroadcast()),
-                *tc_mqtt_controls(
-                    lambda _: GearBroadcast(),
-                    MIN_TC_COLOUR,
-                    MAX_TC_COLOUR,
-                ),
+                *make_controls(),
+                *rgbwaf_mqtt_controls(),
+                *tc_mqtt_controls(MIN_TC_COLOUR, MAX_TC_COLOUR),
             ]
         }
 
@@ -152,7 +147,7 @@ class BroadcastVirtualDevice:
     ) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(control.get_setup_commands(0, value))
+            await driver.send_commands(control.get_setup_commands(GearBroadcast(), value))
 
     def setLogger(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -406,6 +401,24 @@ class ApplicationController:
         if isinstance(device, DaliDevice):
             await self._refresh_group_virtual_devices_through_queue()
 
+    async def load_group_info(self, group_index: int) -> dict:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.LOAD_GROUP_INFO, group_index)
+            self._tasks_queue.put_nowait(task)
+        return await task.future
+
+    async def apply_group_parameters(self, group_index: int, new_params: dict) -> None:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(
+                ApplicationControllerTaskType.APPLY_GROUP_SETTING, (group_index, new_params)
+            )
+            self._tasks_queue.put_nowait(task)
+        await task.future
+
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
             if self._state != ApplicationControllerState.READY:
@@ -434,6 +447,29 @@ class ApplicationController:
 
                 self.websocket_config = config
                 self._run_websocket()
+
+    async def _load_group_info_task(self, group_index: int) -> dict:
+        res = {}
+        for device in self.dali_devices:
+            if group_index in device.groups:
+                handlers = await device.get_group_parameter_handlers(self._dev)
+                for handler in handlers:
+                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
+        return res
+
+    async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
+        group_parameter_handlers = []
+        group_parameter_types: set[tuple[str, str]] = set()
+        for device in self.dali_devices:
+            if group_index in device.groups:
+                handlers = await device.get_group_parameter_handlers(self._dev)
+                for handler in handlers:
+                    handler_key = (type(handler).__name__, getattr(handler, "property_name", ""))
+                    if handler_key not in group_parameter_types:
+                        group_parameter_types.add(handler_key)
+                        group_parameter_handlers.append(handler)
+        for handler in group_parameter_handlers:
+            await handler.write(self._dev, GearGroup(group_index), new_params)
 
     async def _commissioning_task(self):
         start_time = default_timer()
@@ -718,6 +754,14 @@ class ApplicationController:
                             await device.apply_parameters(self._dev, new_params)
                         elif item.task_type == ApplicationControllerTaskType.REFRESH_GROUP_VIRTUAL_DEVICES:
                             await self._refresh_group_virtual_devices()
+                        elif item.task_type == ApplicationControllerTaskType.LOAD_GROUP_INFO:
+                            group_index = item.data
+                            result = await self._load_group_info_task(group_index)
+                            if not item.future.done():
+                                item.future.set_result(result)
+                        elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
+                            group_index, new_params = item.data
+                            await self._apply_group_parameters_task(group_index, new_params)
                         if not item.future.done():
                             item.future.set_result(None)
                     except Exception as e:

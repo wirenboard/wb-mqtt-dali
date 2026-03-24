@@ -1,6 +1,7 @@
+import asyncio
 from typing import Optional, Type
 
-from dali.address import DeviceShort, InstanceNumber
+from dali.address import Address, DeviceShort, InstanceNumber
 from dali.command import Command
 from dali.device import light, occupancy, pushbutton
 from dali.device.general import (
@@ -70,9 +71,9 @@ class ApplicationActiveParam(BooleanSettingsParam):
         super().__init__(
             SettingsParamName("Application controller", "Контроллер приложения"),
             "application_active",
-            lambda short_address: QueryApplicationControlEnabled(DeviceShort(short_address)),
-            lambda short_address: EnableApplicationController(DeviceShort(short_address)),
-            lambda short_address: DisableApplicationController(DeviceShort(short_address)),
+            QueryApplicationControlEnabled,
+            EnableApplicationController,
+            DisableApplicationController,
         )
 
 
@@ -81,9 +82,9 @@ class PowerCycleNotificationParam(BooleanSettingsParam):
         super().__init__(
             SettingsParamName("Power cycle notification", "Уведомление о цикле питания"),
             "power_cycle_notification",
-            lambda short_address: QueryPowerCycleNotification(DeviceShort(short_address)),
-            lambda short_address: EnablePowerCycleNotification(DeviceShort(short_address)),
-            lambda short_address: DisablePowerCycleNotification(DeviceShort(short_address)),
+            QueryPowerCycleNotification,
+            EnablePowerCycleNotification,
+            DisablePowerCycleNotification,
         )
 
 
@@ -131,17 +132,17 @@ class EventSchemeParam(NumberSettingsParam):
         self.property_order = 2
         self.grid_columns = 6
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:
         return [
             DTR0(value_to_set),
-            SetEventScheme(DeviceShort(short_address), self._instance_number),
+            SetEventScheme(short_address, self._instance_number),
         ]
 
-    def get_read_command(self, short_address: int) -> Command:
-        return QueryEventScheme(DeviceShort(short_address), self._instance_number)
+    def get_read_command(self, short_address: Address) -> Command:
+        return QueryEventScheme(short_address, self._instance_number)
 
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        schema = super().get_schema(group_and_broadcast)
         schema["properties"][self.property_name]["enum"] = [0, 1, 2, 3, 4]
         if "options" not in schema["properties"][self.property_name]:
             schema["properties"][self.property_name]["options"] = {}
@@ -162,17 +163,17 @@ class EventPriorityParam(NumberSettingsParam):
         self.property_order = 3
         self.grid_columns = 6
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:
         return [
             DTR0(value_to_set),
-            SetEventPriority(DeviceShort(short_address), self._instance_number),
+            SetEventPriority(short_address, self._instance_number),
         ]
 
-    def get_read_command(self, short_address: int) -> Command:
-        return QueryEventPriority(DeviceShort(short_address), self._instance_number)
+    def get_read_command(self, short_address: Address) -> Command:
+        return QueryEventPriority(short_address, self._instance_number)
 
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        schema = super().get_schema(group_and_broadcast)
         schema["properties"][self.property_name]["enum"] = [2, 3, 4, 5]
         if "options" not in schema["properties"][self.property_name]:
             schema["properties"][self.property_name]["options"] = {}
@@ -185,8 +186,8 @@ class InstanceGroupParamBase(NumberSettingsParam):
         self._instance_number = instance_number
         self.grid_columns = 4
 
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        schema = super().get_schema(group_and_broadcast)
         schema["properties"][self.property_name]["enum"] = list(range(32)) + [255]
         return schema
 
@@ -200,14 +201,14 @@ class InstanceGroup0Param(InstanceGroupParamBase):
         )
         self.property_order = 4
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:
         return [
             DTR0(value_to_set),
-            SetPrimaryInstanceGroup(DeviceShort(short_address), self._instance_number),
+            SetPrimaryInstanceGroup(short_address, self._instance_number),
         ]
 
-    def get_read_command(self, short_address: int) -> Command:
-        return QueryPrimaryInstanceGroup(DeviceShort(short_address), self._instance_number)
+    def get_read_command(self, short_address: Address) -> Command:
+        return QueryPrimaryInstanceGroup(short_address, self._instance_number)
 
 
 class InstanceGroup1Param(InstanceGroupParamBase):
@@ -219,14 +220,14 @@ class InstanceGroup1Param(InstanceGroupParamBase):
         )
         self.property_order = 5
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:
         return [
             DTR0(value_to_set),
-            SetInstanceGroup1(DeviceShort(short_address), self._instance_number),
+            SetInstanceGroup1(short_address, self._instance_number),
         ]
 
-    def get_read_command(self, short_address: int) -> Command:
-        return QueryInstanceGroup1(DeviceShort(short_address), self._instance_number)
+    def get_read_command(self, short_address: Address) -> Command:
+        return QueryInstanceGroup1(short_address, self._instance_number)
 
 
 class InstanceGroup2Param(InstanceGroupParamBase):
@@ -238,14 +239,14 @@ class InstanceGroup2Param(InstanceGroupParamBase):
         )
         self.property_order = 6
 
-    def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:
+    def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:
         return [
             DTR0(value_to_set),
-            SetInstanceGroup2(DeviceShort(short_address), self._instance_number),
+            SetInstanceGroup2(short_address, self._instance_number),
         ]
 
-    def get_read_command(self, short_address: int) -> Command:
-        return QueryInstanceGroup2(DeviceShort(short_address), self._instance_number)
+    def get_read_command(self, short_address: Address) -> Command:
+        return QueryInstanceGroup2(short_address, self._instance_number)
 
 
 class InstanceActiveParam(BooleanSettingsParam):
@@ -253,11 +254,9 @@ class InstanceActiveParam(BooleanSettingsParam):
         super().__init__(
             SettingsParamName("Enable Event Messages", "Включить сообщения о событиях"),
             "instance_active",
-            lambda short_address, inst=instance_number: QueryInstanceEnabled(
-                DeviceShort(short_address), inst
-            ),
-            lambda short_address, inst=instance_number: EnableInstance(DeviceShort(short_address), inst),
-            lambda short_address, inst=instance_number: DisableInstance(DeviceShort(short_address), inst),
+            lambda short_address, inst=instance_number: QueryInstanceEnabled(short_address, inst),
+            lambda short_address, inst=instance_number: EnableInstance(short_address, inst),
+            lambda short_address, inst=instance_number: DisableInstance(short_address, inst),
         )
         self.property_order = 1
 
@@ -278,10 +277,10 @@ class InstanceTypeParam(SettingsParamBase):
         self.instance_type_name = self.INSTANCE_TYPE_NAMES.get(instance_type, f"Unknown ({instance_type})")
         self.property_name = "instance_type"
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         return {self.property_name: self.instance_type_name}
 
-    def get_schema(self) -> dict:
+    def get_schema(self, group_and_broadcast: bool) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -304,13 +303,15 @@ class DeviceGroupsParam(SettingsParamBase):
         super().__init__(SettingsParamName("Device groups", "Группы устройств"))
         self.property_name = "device_groups"
         self._groups = [False] * self.TOTAL_GROUPS
+        self._group_indexes: set[int] = set()
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         updated_groups = await self._query_all_groups(driver, short_address)
         self._groups = updated_groups
+        self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
         return {self.property_name: updated_groups}
 
-    async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
         groups_to_set = value.get(self.property_name)
         if groups_to_set is None:
             return {}
@@ -320,7 +321,6 @@ class DeviceGroupsParam(SettingsParamBase):
         if desired_groups == self._groups:
             return {}
 
-        address = DeviceShort(short_address)
         current_lower = self._mask_for_slice(self._groups[: self.HALF_RANGE])
         current_upper = self._mask_for_slice(self._groups[self.HALF_RANGE :])
         desired_lower = self._mask_for_slice(desired_groups[: self.HALF_RANGE])
@@ -334,32 +334,37 @@ class DeviceGroupsParam(SettingsParamBase):
         commands: list[Command] = []
         if remove_lower:
             commands.extend(
-                self._build_group_command_sequence(address, remove_lower, RemoveFromDeviceGroupsZeroToFifteen)
+                self._build_group_command_sequence(
+                    short_address, remove_lower, RemoveFromDeviceGroupsZeroToFifteen
+                )
             )
         if remove_upper:
             commands.extend(
                 self._build_group_command_sequence(
-                    address, remove_upper, RemoveFromDeviceGroupsSixteenToThirtyOne
+                    short_address, remove_upper, RemoveFromDeviceGroupsSixteenToThirtyOne
                 )
             )
         if add_lower:
             commands.extend(
-                self._build_group_command_sequence(address, add_lower, AddToDeviceGroupsZeroToFifteen)
+                self._build_group_command_sequence(short_address, add_lower, AddToDeviceGroupsZeroToFifteen)
             )
         if add_upper:
             commands.extend(
-                self._build_group_command_sequence(address, add_upper, AddToDeviceGroupsSixteenToThirtyOne)
+                self._build_group_command_sequence(
+                    short_address, add_upper, AddToDeviceGroupsSixteenToThirtyOne
+                )
             )
         if not commands:
             return {}
 
-        query_commands = self._build_query_commands(address)
+        query_commands = self._build_query_commands(short_address)
         responses = await driver.send_commands(commands + query_commands)
         updated_groups = self._parse_group_responses(responses[-len(query_commands) :])
         self._groups = updated_groups
+        self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
         return {self.property_name: updated_groups}
 
-    def get_schema(self) -> dict:
+    def get_schema(self, group_and_broadcast: bool) -> dict:
         return {
             "properties": {
                 self.property_name: {
@@ -372,11 +377,15 @@ class DeviceGroupsParam(SettingsParamBase):
             }
         }
 
-    async def _query_all_groups(self, driver: WBDALIDriver, short_address: int) -> list[bool]:
-        responses = await driver.send_commands(self._build_query_commands(DeviceShort(short_address)))
+    @property
+    def groups(self) -> set[int]:
+        return self._group_indexes
+
+    async def _query_all_groups(self, driver: WBDALIDriver, short_address: Address) -> list[bool]:
+        responses = await driver.send_commands(self._build_query_commands(short_address))
         return self._parse_group_responses(responses)
 
-    def _build_query_commands(self, address: DeviceShort) -> list[Command]:
+    def _build_query_commands(self, address: Address) -> list[Command]:
         return [
             QueryDeviceGroupsZeroToSeven(address),
             QueryDeviceGroupsEightToFifteen(address),
@@ -394,7 +403,7 @@ class DeviceGroupsParam(SettingsParamBase):
 
     def _build_group_command_sequence(
         self,
-        address: DeviceShort,
+        address: Address,
         mask: int,
         command_factory: Type[Command],
     ) -> list[Command]:
@@ -427,19 +436,24 @@ class Dali2Device(DaliDeviceBase):
         )
         self.instances: dict[int, InstanceParameters] = {}
         self._gtin_db = gtin_db
+        self._groups_parameter = DeviceGroupsParam()
+        self._mandatory_info_lock = asyncio.Lock()
+        self._mandatory_info_loaded = False
 
     def add_instance(self, index: int, instance_type: int) -> None:
         self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
 
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
+        await self._read_mandatory_info(driver)
         handlers: list[SettingsParamBase] = [
-            DeviceGroupsParam(),
+            self._groups_parameter,
             PowerCycleNotificationParam(),
         ]
         handlers.extend(self.instances.values())
         return handlers
 
     async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
+        await self._read_mandatory_info(driver)
         return_controls: list[MqttControlBase] = []
         for instance in self.instances.values():
             if instance.instance_type == occupancy.instance_type:
@@ -455,3 +469,14 @@ class Dali2Device(DaliDeviceBase):
             elif instance.instance_type == feedback.instance_type:
                 return_controls.extend(get_feedback_controls(instance.instance_number.value))
         return return_controls
+
+    async def _read_mandatory_info(self, driver: WBDALIDriver) -> None:
+        async with self._mandatory_info_lock:
+            if self._mandatory_info_loaded:
+                return
+            await self._groups_parameter.read(driver, DeviceShort(self.address.short))
+            self._mandatory_info_loaded = True
+
+    @property
+    def groups(self) -> set[int]:
+        return set()

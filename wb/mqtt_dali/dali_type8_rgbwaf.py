@@ -1,10 +1,10 @@
 # Type 8 RGBWAF
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional, Union
 
 from dali import command
-from dali.address import GearShort
+from dali.address import GearBroadcast, GearGroup, GearShort
 from dali.gear.colour import Activate, SetTemporaryRGBDimLevel, SetTemporaryWAFDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
@@ -16,6 +16,9 @@ from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE = MASK - 1
 
+AddressFactory = Callable[[int], Union[GearShort, GearGroup, GearBroadcast]]
+ColourAddress = Union[GearShort, GearGroup, GearBroadcast]
+
 
 RGBW_COLOUR_COMPONENTS = [
     ColourComponent.RED,
@@ -25,7 +28,9 @@ RGBW_COLOUR_COMPONENTS = [
 ]
 
 
-def set_rgb_commands_builder(address: GearShort, red: int, green: int, blue: int) -> list[command.Command]:
+def set_rgb_commands_builder(
+    address: ColourAddress, red: int, green: int, blue: int
+) -> list[command.Command]:
     return [
         DTR0(red),
         DTR1(green),
@@ -35,7 +40,7 @@ def set_rgb_commands_builder(address: GearShort, red: int, green: int, blue: int
 
 
 def set_waf_commands_builder(
-    address: GearShort, white: int, amber: int, free_colour: int
+    address: ColourAddress, white: int, amber: int, free_colour: int
 ) -> list[command.Command]:
     return [
         DTR0(white),
@@ -107,8 +112,7 @@ class RgbwafColourValues:
         }
 
 
-def get_mqtt_controls() -> list[MqttControlBase]:
-
+def get_wanted_mqtt_controls(address_factory: AddressFactory) -> list[MqttControlBase]:
     def _set_rgb_commands_builder(short_address: int, value: str) -> list[command.Command]:
         components = value.split(";")
         if len(components) != 3:
@@ -120,9 +124,8 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             blue = min(blue, MAX_COLOUR_VALUE)
         except ValueError as e:
             raise ValueError("RGB components must be integers") from e
-        return set_rgb_commands_builder(GearShort(short_address), red, green, blue) + [
-            Activate(GearShort(short_address)),
-        ]
+        address = address_factory(short_address)
+        return set_rgb_commands_builder(address, red, green, blue) + [Activate(address)]
 
     def _set_white_commands_builder(short_address: int, value: str) -> list[command.Command]:
         try:
@@ -130,25 +133,10 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             white = min(white, MAX_COLOUR_VALUE)
         except ValueError as e:
             raise ValueError("white component must be integer") from e
-        return set_waf_commands_builder(GearShort(short_address), white, MASK, MASK) + [
-            Activate(GearShort(short_address)),
-        ]
+        address = address_factory(short_address)
+        return set_waf_commands_builder(address, white, MASK, MASK) + [Activate(address)]
 
     return [
-        MqttControl(
-            ControlInfo(
-                "current_rgb",
-                ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True),
-                "0;0;0",
-            ),
-        ),
-        MqttControl(
-            ControlInfo(
-                "current_white",
-                ControlMeta(title=TranslatedTitle("Current White", "Текущий белый"), read_only=True),
-                "0",
-            ),
-        ),
         MqttControl(
             ControlInfo(
                 "set_rgb",
@@ -170,6 +158,26 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             ),
             commands_builder=_set_white_commands_builder,
         ),
+    ]
+
+
+def get_mqtt_controls() -> list[MqttControlBase]:
+    return [
+        MqttControl(
+            ControlInfo(
+                "current_rgb",
+                ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True),
+                "0;0;0",
+            ),
+        ),
+        MqttControl(
+            ControlInfo(
+                "current_white",
+                ControlMeta(title=TranslatedTitle("Current White", "Текущий белый"), read_only=True),
+                "0",
+            ),
+        ),
+        *get_wanted_mqtt_controls(GearShort),
     ]
 
 

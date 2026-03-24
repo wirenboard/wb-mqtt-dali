@@ -1,10 +1,10 @@
 # Type 8 Colour Temperature
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, List, Optional, Union
 
 from dali import command
-from dali.address import GearShort
+from dali.address import GearBroadcast, GearGroup, GearShort
 from dali.gear.colour import (
     Activate,
     ColourTemperatureTcStepCooler,
@@ -34,7 +34,11 @@ COLOR_TEMPERATURE_COLOUR_COMPONENTS = [
 ]
 
 
-def set_colour_temperature_commands_builder(address: GearShort, value: int) -> list[command.Command]:
+AddressFactory = Callable[[int], Union[GearShort, GearGroup, GearBroadcast]]
+ColourAddress = Union[GearShort, GearGroup, GearBroadcast]
+
+
+def set_colour_temperature_commands_builder(address: ColourAddress, value: int) -> list[command.Command]:
     return [
         DTR0((value & 0xFF)),
         DTR1((value >> 8) & 0xFF),
@@ -82,8 +86,11 @@ class ColourTemperatureValue:
         }
 
 
-def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlBase]:
-
+def get_wanted_mqtt_controls(
+    address_factory: AddressFactory,
+    tc_min_mirek: int,
+    tc_max_mirek: int,
+) -> list[MqttControlBase]:
     def _set_colour_temperature_commands_builder(short_address: int, value_k: str) -> list[command.Command]:
         try:
             tc_k = max(int(value_k), 1)
@@ -92,9 +99,28 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
             tc_mirek = max(tc_mirek, MIN_TC_MIREK)
         except ValueError as e:
             raise ValueError("colour temperature must be integer") from e
-        return set_colour_temperature_commands_builder(GearShort(short_address), tc_mirek) + [
-            Activate(GearShort(short_address)),
-        ]
+        address = address_factory(short_address)
+        return set_colour_temperature_commands_builder(address, tc_mirek) + [Activate(address)]
+
+    return [
+        MqttControl(
+            ControlInfo(
+                "set_colour_temperature",
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted Colour Temperature", "Желаемая цветовая температура"),
+                    minimum=tc_kelvin_mirek(tc_max_mirek),
+                    maximum=tc_kelvin_mirek(tc_min_mirek),
+                    units="K",
+                ),
+                "4000",
+            ),
+            commands_builder=_set_colour_temperature_commands_builder,
+        ),
+    ]
+
+
+def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlBase]:
 
     return [
         MqttControl(
@@ -128,20 +154,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 ColourTemperatureTcStepCooler(GearShort(short_address))
             ],
         ),
-        MqttControl(
-            ControlInfo(
-                "set_colour_temperature",
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Wanted Colour Temperature", "Желаемая цветовая температура"),
-                    minimum=tc_kelvin_mirek(tc_max_mirek),
-                    maximum=tc_kelvin_mirek(tc_min_mirek),
-                    units="K",
-                ),
-                "4000",
-            ),
-            commands_builder=_set_colour_temperature_commands_builder,
-        ),
+        *get_wanted_mqtt_controls(GearShort, tc_min_mirek, tc_max_mirek),
     ]
 
 

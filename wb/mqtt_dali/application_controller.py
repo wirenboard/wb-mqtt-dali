@@ -19,6 +19,8 @@ from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_controls import make_controls
 from .dali_device import DaliDevice
+from .dali_type8_rgbwaf import get_wanted_mqtt_controls as rgbwaf_mqtt_controls
+from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_publisher import (
     ControlInfo,
     DeviceChange,
@@ -33,6 +35,9 @@ from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbdali_utils import AsyncDeviceInstanceTypeMapper
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
 from .wbmdali import WBDALIDriver as WBDALIDriverOld
+
+MIN_TC_COLOUR = 100000
+MAX_TC_COLOUR = 20000000
 
 
 class ApplicationControllerState(Enum):
@@ -90,7 +95,15 @@ class GroupVirtualDevice:
         self.logger = logging.getLogger()
         self._controls: dict[str, MqttControlBase] = {
             control.control_info.id: control
-            for control in make_controls(lambda _, group=group_number: GearGroup(group))
+            for control in [
+                *make_controls(lambda _: GearGroup(group_number)),
+                *rgbwaf_mqtt_controls(lambda _: GearGroup(group_number)),
+                *tc_mqtt_controls(
+                    lambda _: GearGroup(group_number),
+                    MIN_TC_COLOUR,
+                    MAX_TC_COLOUR,
+                ),
+            ]
         }
 
     async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:
@@ -116,7 +129,16 @@ class BroadcastVirtualDevice:
         self.name = name
         self.logger = logging.getLogger()
         self._controls: dict[str, MqttControlBase] = {
-            control.control_info.id: control for control in make_controls(lambda _: GearBroadcast())
+            control.control_info.id: control
+            for control in [
+                *make_controls(lambda _: GearBroadcast()),
+                *rgbwaf_mqtt_controls(lambda _: GearBroadcast()),
+                *tc_mqtt_controls(
+                    lambda _: GearBroadcast(),
+                    MIN_TC_COLOUR,
+                    MAX_TC_COLOUR,
+                ),
+            ]
         }
 
     async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:

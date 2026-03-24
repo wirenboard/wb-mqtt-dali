@@ -599,9 +599,7 @@ class ApplicationController:
     def _get_active_group_numbers(self) -> list[int]:
         active_groups = set()
         for device in self.dali_devices:
-            for group_number, is_member in enumerate(device.groups):
-                if is_member:
-                    active_groups.add(group_number)
+            active_groups.update(device.groups)
         return sorted(active_groups)
 
     def _make_group_virtual_device(self, group_number: int) -> GroupVirtualDevice:

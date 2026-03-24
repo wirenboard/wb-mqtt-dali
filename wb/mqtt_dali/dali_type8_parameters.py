@@ -422,7 +422,7 @@ class GroupScenesSettings(ColourState):
                     "title": "Part of the scene",
                     "propertyOrder": 0,
                     "format": "switch",
-                    "default": False
+                    "default": False,
                 },
             },
             "required": ["index", "enabled"],

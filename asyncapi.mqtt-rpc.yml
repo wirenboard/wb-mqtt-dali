@@ -638,14 +638,6 @@ components:
           type: number
         result:
           type: object
-          properties:
-            schema:
-              type: object
-            config: 
-              type: object
-          required:
-            - schema
-            - config
       required:
         - id
         - result
@@ -673,7 +665,7 @@ components:
         id:
           type: number
         result:
-          type: boolean
+          type: object
       required:
         - id
         - result

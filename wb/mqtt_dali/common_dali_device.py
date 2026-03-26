@@ -298,6 +298,8 @@ class DaliDeviceBase:
             parameter_handlers.append(GeneralMemoryParams(self._compat, self._gtin_db))
             self._parameter_handlers = parameter_handlers
             self._group_parameter_handlers = group_parameter_handlers
+            self._controls.clear()
+            self._polling_controls.clear()
             for control in mqtt_controls:
                 if control.is_readable():
                     self._polling_controls.append(control)

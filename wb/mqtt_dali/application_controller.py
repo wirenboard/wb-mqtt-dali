@@ -10,9 +10,8 @@ from dali.address import DeviceBroadcast, GearBroadcast, GearGroup
 from dali.command import Command, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
-from dali.gear.general import EnableDeviceType
 from dali.gear.colour import tc_kelvin_mirek
-
+from dali.gear.general import EnableDeviceType
 
 from .asyncio_utils import OneShotTasks
 from .commissioning import Commissioning, CommissioningResult

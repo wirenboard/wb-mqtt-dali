@@ -675,25 +675,15 @@ class ApplicationController:
                     e,
                 )
                 if not self._device_publisher.has_device(mqtt_id):
-                    await self._publish_device_with_error(device)
+                    await self._publish_device(device, error=True)
             return  # one device per call
 
-    async def _publish_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        device_info = DeviceInfo(
-            device.mqtt_id,
-            device.name,
-            device.get_mqtt_controls(),
-        )
-        await self._device_publisher.add_device(device_info)
-        await self._device_publisher.register_control_handler(
-            device.mqtt_id,
-            "+",
-            self._handle_on_topic,
-        )
-
-    async def _publish_device_with_error(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        common_controls = device.get_common_mqtt_controls()
-        controls = [c.control_info for c in common_controls]
+    async def _publish_device(self, device: Union[DaliDevice, Dali2Device], error: bool = False) -> None:
+        if error:
+            common_controls = device.get_common_mqtt_controls()
+            controls = [c.control_info for c in common_controls]
+        else:
+            controls = device.get_mqtt_controls()
         device_info = DeviceInfo(device.mqtt_id, device.name, controls)
         await self._device_publisher.add_device(device_info)
         await self._device_publisher.register_control_handler(
@@ -701,9 +691,12 @@ class ApplicationController:
             "+",
             self._handle_on_topic,
         )
-        for control in common_controls:
-            if control.is_readable():
-                await self._device_publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
+        if error:
+            for control in common_controls:
+                if control.is_readable():
+                    await self._device_publisher.set_control_error(
+                        device.mqtt_id, control.control_info.id, "r"
+                    )
 
     def _update_dali2_device_instance_map(self, device: Dali2Device) -> None:
         addr = DeviceShort(device.address.short)

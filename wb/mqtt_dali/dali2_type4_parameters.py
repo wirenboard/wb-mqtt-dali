@@ -21,7 +21,7 @@ from .settings import SettingsParamName
 class DeadtimeTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Deadtime timer", "Таймер задержки"),
+            SettingsParamName("Deadtime timer, ms", "Таймер задержки, мс"),
             "deadtime_timer",
             instance_number,
             QueryDeadtimeTimer,
@@ -29,12 +29,14 @@ class DeadtimeTimerParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 10
+        self.multiplier = 50  # IEC 62386-304 Table 3: T_incr = 50 ms
+        self.maximum = 255 * 50
 
 
 class ReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Report timer", "Таймер отчёта"),
+            SettingsParamName("Report timer, s", "Таймер отчёта, с"),
             "report_timer",
             instance_number,
             QueryReportTimer,
@@ -42,12 +44,13 @@ class ReportTimerParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 11
+        # IEC 62386-304 Table 3: T_incr = 1 s, raw value = seconds directly
 
 
 class HysteresisParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Hysteresis", "Гистерезис"),
+            SettingsParamName("Hysteresis, %", "Гистерезис, %"),
             "hysteresis",
             instance_number,
             QueryHysteresis,
@@ -55,6 +58,7 @@ class HysteresisParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 12
+        self.maximum = 25  # IEC 62386-304: hysteresis range is 0..25 %
 
 
 class HysteresisMinParam(InstanceParam):

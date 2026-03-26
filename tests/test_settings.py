@@ -21,6 +21,7 @@ def test_initialization(number_settings_param):
     assert number_settings_param.property_name == "test_property"
     assert number_settings_param.minimum == 0
     assert number_settings_param.maximum == 255
+    assert number_settings_param.multiplier == 1
     assert number_settings_param.default is None
     assert number_settings_param.grid_columns is None
     assert number_settings_param.property_order is None
@@ -115,6 +116,114 @@ def test_get_schema(number_settings_param):
     assert "properties" in schema
     assert "translations" not in schema
     assert schema["properties"]["test_property"]["title"] == "test_name"
+    assert "multipleOf" not in schema["properties"]["test_property"]
+
+
+def test_get_schema_multiplier(number_settings_param):
+    number_settings_param.multiplier = 50
+    schema = number_settings_param.get_schema()
+    assert schema["properties"]["test_property"]["multipleOf"] == 50
+
+
+@pytest.mark.asyncio
+async def test_read_with_multiplier(number_settings_param):
+    number_settings_param.multiplier = 50
+    mock_driver = AsyncMock()
+    mock_query_int = AsyncMock(return_value=30)
+    with (
+        patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
+        patch("wb.mqtt_dali.settings.query_int", mock_query_int),
+    ):
+        result = await number_settings_param.read(mock_driver, MagicMock())
+        assert result == {"test_property": 1500}
+        assert number_settings_param.value == 1500
+
+
+@pytest.mark.asyncio
+async def test_write_with_multiplier(number_settings_param):
+    number_settings_param.multiplier = 50
+    number_settings_param.value = 1500
+    mock_driver = AsyncMock()
+    # device returns raw=32, so stored value should be 32*50=1600
+    mock_driver.send_commands.return_value = [
+        None,
+        MagicMock(raw_value=MagicMock(as_integer=32, error=None)),
+    ]
+    captured_raw = []
+
+    def capture_write_commands(short_address, raw):
+        captured_raw.append(raw)
+        return [MagicMock()]
+
+    with (
+        patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
+        patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
+    ):
+        result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 1600})
+        assert captured_raw == [32]  # 1600 / 50 = 32
+        assert result == {"test_property": 1600}
+        assert number_settings_param.value == 1600
+
+
+@pytest.mark.asyncio
+async def test_write_no_change_with_multiplier(number_settings_param):
+    number_settings_param.multiplier = 50
+    number_settings_param.value = 1500
+    mock_driver = MagicMock()
+    result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 1500})
+    assert result == {}
+    assert number_settings_param.value == 1500
+
+
+@pytest.mark.asyncio
+async def test_write_rounding_with_multiplier(number_settings_param):
+    # 55 ms is not a multiple of 50 ms; round(55/50)=1, device returns raw=1, stored=50
+    number_settings_param.multiplier = 50
+    number_settings_param.value = 0
+    mock_driver = AsyncMock()
+    mock_driver.send_commands.return_value = [
+        None,
+        MagicMock(raw_value=MagicMock(as_integer=1, error=None)),
+    ]
+    captured_raw = []
+
+    def capture_write_commands(short_address, raw):
+        captured_raw.append(raw)
+        return [MagicMock()]
+
+    with (
+        patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
+        patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
+    ):
+        result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 55})
+        assert captured_raw == [1]
+        assert result == {"test_property": 50}
+        assert number_settings_param.value == 50
+
+
+@pytest.mark.asyncio
+async def test_write_multiplier_one_sends_raw_unchanged(number_settings_param):
+    # multiplier=1: value passes through unmodified
+    number_settings_param.value = 0
+    mock_driver = AsyncMock()
+    mock_driver.send_commands.return_value = [
+        None,
+        MagicMock(raw_value=MagicMock(as_integer=100, error=None)),
+    ]
+    captured_raw = []
+
+    def capture_write_commands(short_address, raw):
+        captured_raw.append(raw)
+        return [MagicMock()]
+
+    with (
+        patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
+        patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
+    ):
+        result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 100})
+        assert captured_raw == [100]
+        assert result == {"test_property": 100}
+        assert number_settings_param.value == 100
 
 
 @pytest.mark.asyncio

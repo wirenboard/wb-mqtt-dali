@@ -111,6 +111,7 @@ class NumberSettingsParam(SettingsParamBase):
         self.property_name = property_name
         self.minimum = 0
         self.maximum = 255
+        self.multiplier = 1
         self.grid_columns = None
         self.property_order = None
         self.default: Optional[int] = None
@@ -119,7 +120,7 @@ class NumberSettingsParam(SettingsParamBase):
         self._is_read_only = False
 
     async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
-        self.value = await query_int(driver, self.get_read_command(short_address))
+        self.value = await query_int(driver, self.get_read_command(short_address)) * self.multiplier
         return {self.property_name: self.value}
 
     async def write(self, driver: WBDALIDriver, short_address: int, value: dict) -> dict:
@@ -128,11 +129,12 @@ class NumberSettingsParam(SettingsParamBase):
         value_to_set = value[self.property_name]
         if self.value == value_to_set:
             return {}
-        commands = self.get_write_commands(short_address, value_to_set)
+        raw = round(value_to_set / self.multiplier)
+        commands = self.get_write_commands(short_address, raw)
         commands.append(self.get_read_command(short_address))
         res = (await driver.send_commands(commands))[-1]
         check_query_response(res)
-        self.value = res.raw_value.as_integer
+        self.value = res.raw_value.as_integer * self.multiplier
         return {self.property_name: self.value}
 
     def get_schema(self) -> dict:
@@ -162,6 +164,8 @@ class NumberSettingsParam(SettingsParamBase):
             schema["properties"][self.property_name]["default"] = self.default
         if self.property_order is not None:
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
+        if self.multiplier > 1:
+            schema["properties"][self.property_name]["multipleOf"] = self.multiplier
         return schema
 
     def get_write_commands(self, short_address: int, value_to_set: int) -> list[Command]:

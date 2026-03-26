@@ -1,4 +1,3 @@
-import asyncio
 from enum import IntEnum
 from typing import Optional
 
@@ -116,7 +115,6 @@ class DaliDevice(DaliDeviceBase):
         self.types: list[int] = []
 
         self._type8_handler: Optional[Type8Parameters] = None
-        self._types_lock = asyncio.Lock()
         self._type_handlers: list[TypeParameters] = []
         self._dimming_curve_state = DimmingCurveState()
         self._groups_parameter = GroupsParam()
@@ -124,9 +122,6 @@ class DaliDevice(DaliDeviceBase):
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         await super().load_info(driver, force_reload)
         self.params["types"] = self.types
-
-    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
-        await super().apply_parameters(driver, new_values)
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         res = await super().poll_controls(driver)
@@ -142,38 +137,59 @@ class DaliDevice(DaliDeviceBase):
     def dt8_colour_type(self) -> Optional[ColourType]:
         return self._type8_handler.default_colour_type if self._type8_handler is not None else None
 
-    async def get_group_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        await self._read_mandatory_info(driver)
-        res: list[SettingsParamBase] = [
-            MaxLevelParam(),
-            MinLevelParam(),
-            FadeTimeFadeRateParam(),
-        ]
-        # Colour control has own scenes, power on level and system failure level parameters
-        if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
-            res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
-        for type_handler in self._type_handlers:
-            if type_handler != self._type8_handler:
-                res.extend(type_handler._parameters)
-            else:
-                if self._type8_handler is not None:
-                    res.extend(self._type8_handler.get_group_parameters())
-        return res
+    def get_common_mqtt_controls(self) -> list[MqttControlBase]:
+        return [ActualLevelControl(self._dimming_curve_state), *CONTROLS]
 
-    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
-        try:
-            await self._read_mandatory_info(driver)
-        except Exception as e:
-            self.logger.error("Failed to read mandatory information for device %s: %s", self.name, e)
-        res: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
-        res.extend(CONTROLS)
-        for type_handler in self._type_handlers:
-            res.extend(type_handler.get_mqtt_controls())
-        return res
+    async def _initialize_impl(
+        self, driver: WBDALIDriver
+    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
+        address = GearShort(self.address.short)
 
-    async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        await self._read_mandatory_info(driver)
-        res: list[SettingsParamBase] = [
+        await self._groups_parameter.read(driver, address)
+
+        types = await driver.run_sequence(query_device_types_sequence(address))
+        if types is None:
+            raise RuntimeError(
+                f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
+            )
+        self.types = types
+
+        gear_type_params = {
+            DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
+            DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(
+                self._dimming_curve_state
+            ),
+            DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(
+                self._dimming_curve_state
+            ),
+            DaliDeviceType.LED_MODULES: Type6Parameters(self._dimming_curve_state),
+            DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
+            DaliDeviceType.THERMAL_GEAR_PROTECTION: Type16Parameters(),
+            DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(self._dimming_curve_state),
+            DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
+            DaliDeviceType.THERMAL_LAMP_PROTECTION: Type21Parameters(),
+            DaliDeviceType.INTEGRATED_POWER_SUPPLY: Type49Parameters(),
+            DaliDeviceType.MEMORY_BANK_1_EXTENSION: Type50Parameters(),
+            DaliDeviceType.DIAGNOSTICS_AND_MAINTENANCE: Type52Parameters(),
+        }
+        self._type_handlers = []
+        for gear_type in types:
+            try:
+                dali_device_type = DaliDeviceType(gear_type)
+                if dali_device_type == DaliDeviceType.COLOUR_CONTROL:
+                    self._type8_handler = Type8Parameters()
+                    type_handler = self._type8_handler
+                else:
+                    type_handler = gear_type_params[dali_device_type]
+                self._type_handlers.append(type_handler)
+            except (ValueError, KeyError):
+                continue
+
+        for handler in self._type_handlers:
+            await handler.read_mandatory_info(driver, address)
+
+        # Parameter handlers for settings page in UI
+        parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,
             MaxLevelParam(),
             MinLevelParam(),
@@ -181,57 +197,30 @@ class DaliDevice(DaliDeviceBase):
         ]
         # Colour control has own scenes, power on level and system failure level parameters
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
-            res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
+            parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
-            res.extend(type_handler._parameters)
-        return res
+            parameter_handlers.extend(type_handler._parameters)
 
-    async def _read_mandatory_info(self, driver: WBDALIDriver) -> None:
-        async with self._types_lock:
-            if self.types:
-                return
+        # MQTT controls
+        mqtt_controls: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
+        mqtt_controls.extend(CONTROLS)
+        for type_handler in self._type_handlers:
+            mqtt_controls.extend(type_handler.get_mqtt_controls())
 
-            address = GearShort(self.address.short)
+        # Group parameter handlers for group settings page in UI
+        group_parameter_handlers: list[SettingsParamBase] = [
+            MaxLevelParam(),
+            MinLevelParam(),
+            FadeTimeFadeRateParam(),
+        ]
+        # Colour control has own scenes, power on level and system failure level parameters
+        if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
+            group_parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
+        for type_handler in self._type_handlers:
+            if type_handler != self._type8_handler:
+                group_parameter_handlers.extend(type_handler._parameters)
+            else:
+                if self._type8_handler is not None:
+                    group_parameter_handlers.extend(self._type8_handler.get_group_parameters())
 
-            await self._groups_parameter.read(driver, address)
-
-            types = await driver.run_sequence(query_device_types_sequence(address))
-            if types is None:
-                raise RuntimeError(
-                    f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
-                )
-            self.types = types
-
-            gear_type_params = {
-                DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
-                DaliDeviceType.SUPPLY_VOLTAGE_CONTROLLER_FOR_INCANDESCENT_LAMPS: Type4Parameters(
-                    self._dimming_curve_state
-                ),
-                DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE: Type5Parameters(
-                    self._dimming_curve_state
-                ),
-                DaliDeviceType.LED_MODULES: Type6Parameters(self._dimming_curve_state),
-                DaliDeviceType.SWITCHING_FUNCTION: Type7Parameters(),
-                DaliDeviceType.THERMAL_GEAR_PROTECTION: Type16Parameters(),
-                DaliDeviceType.DIMMING_CURVE_SELECTION: Type17Parameters(self._dimming_curve_state),
-                DaliDeviceType.DEMAND_RESPONSE: Type20Parameters(),
-                DaliDeviceType.THERMAL_LAMP_PROTECTION: Type21Parameters(),
-                DaliDeviceType.INTEGRATED_POWER_SUPPLY: Type49Parameters(),
-                DaliDeviceType.MEMORY_BANK_1_EXTENSION: Type50Parameters(),
-                DaliDeviceType.DIAGNOSTICS_AND_MAINTENANCE: Type52Parameters(),
-            }
-            self._type_handlers = []
-            for gear_type in types:
-                try:
-                    dali_device_type = DaliDeviceType(gear_type)
-                    if dali_device_type == DaliDeviceType.COLOUR_CONTROL:
-                        self._type8_handler = Type8Parameters()
-                        type_handler = self._type8_handler
-                    else:
-                        type_handler = gear_type_params[dali_device_type]
-                    self._type_handlers.append(type_handler)
-                except (ValueError, KeyError):
-                    continue
-
-            for handler in self._type_handlers:
-                await handler.read_mandatory_info(driver, address)
+        return (parameter_handlers, mqtt_controls, group_parameter_handlers)

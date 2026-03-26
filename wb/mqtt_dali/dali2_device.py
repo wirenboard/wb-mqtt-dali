@@ -1,4 +1,3 @@
-import asyncio
 from typing import Optional, Type
 
 from dali.address import Address, DeviceShort, InstanceNumber
@@ -26,6 +25,8 @@ from dali.device.general import (
     QueryInstanceEnabled,
     QueryInstanceGroup1,
     QueryInstanceGroup2,
+    QueryInstanceType,
+    QueryNumberOfInstances,
     QueryPowerCycleNotification,
     QueryPrimaryInstanceGroup,
     RemoveFromDeviceGroupsSixteenToThirtyOne,
@@ -36,6 +37,7 @@ from dali.device.general import (
     SetInstanceGroup2,
     SetPrimaryInstanceGroup,
 )
+from dali.device.helpers import check_bad_rsp
 
 from .common_dali_device import DaliDeviceBase, MqttControlBase
 from .dali2_compat import Dali2CommandsCompatibilityLayer
@@ -437,46 +439,54 @@ class Dali2Device(DaliDeviceBase):
         self.instances: dict[int, InstanceParameters] = {}
         self._gtin_db = gtin_db
         self._groups_parameter = DeviceGroupsParam()
-        self._mandatory_info_lock = asyncio.Lock()
-        self._mandatory_info_loaded = False
-
-    def add_instance(self, index: int, instance_type: int) -> None:
-        self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
-
-    async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        await self._read_mandatory_info(driver)
-        handlers: list[SettingsParamBase] = [
-            self._groups_parameter,
-            PowerCycleNotificationParam(),
-        ]
-        handlers.extend(self.instances.values())
-        return handlers
-
-    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
-        await self._read_mandatory_info(driver)
-        return_controls: list[MqttControlBase] = []
-        for instance in self.instances.values():
-            if instance.instance_type == occupancy.instance_type:
-                return_controls.extend(get_occupancy_controls(instance.instance_number.value))
-            elif instance.instance_type == light.instance_type:
-                return_controls.extend(get_light_controls(instance.instance_number.value))
-            elif instance.instance_type == pushbutton.instance_type:
-                return_controls.extend(get_button_controls(instance.instance_number.value))
-            elif instance.instance_type == absolute_input_device.instance_type:
-                return_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
-            elif instance.instance_type == general_purpose_sensor.instance_type:
-                return_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
-            elif instance.instance_type == feedback.instance_type:
-                return_controls.extend(get_feedback_controls(instance.instance_number.value))
-        return return_controls
-
-    async def _read_mandatory_info(self, driver: WBDALIDriver) -> None:
-        async with self._mandatory_info_lock:
-            if self._mandatory_info_loaded:
-                return
-            await self._groups_parameter.read(driver, DeviceShort(self.address.short))
-            self._mandatory_info_loaded = True
 
     @property
     def groups(self) -> set[int]:
         return set()
+
+    def add_instance(self, index: int, instance_type: int) -> None:
+        self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
+
+    async def _initialize_impl(
+        self, driver: WBDALIDriver
+    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
+        addr = DeviceShort(self.address.short)
+        await self._groups_parameter.read(driver, addr)
+
+        # Per-device instance discovery
+        self.instances.clear()
+        num_instances_rsp = await driver.send(QueryNumberOfInstances(device=addr))
+        if not check_bad_rsp(num_instances_rsp):
+            num_instances = num_instances_rsp.value
+            for inst_int in range(num_instances):
+                inst = InstanceNumber(inst_int)
+                enabled_rsp = await driver.send(QueryInstanceEnabled(device=addr, instance=inst))
+                if check_bad_rsp(enabled_rsp) or not enabled_rsp.value:
+                    continue
+                type_rsp = await driver.send(QueryInstanceType(device=addr, instance=inst))
+                if check_bad_rsp(type_rsp):
+                    continue
+                self.add_instance(inst_int, type_rsp.value)
+
+        parameter_handlers: list[SettingsParamBase] = [
+            self._groups_parameter,
+            PowerCycleNotificationParam(),
+        ]
+        parameter_handlers.extend(self.instances.values())
+
+        mqtt_controls: list[MqttControlBase] = []
+        for instance in self.instances.values():
+            if instance.instance_type == occupancy.instance_type:
+                mqtt_controls.extend(get_occupancy_controls(instance.instance_number.value))
+            elif instance.instance_type == light.instance_type:
+                mqtt_controls.extend(get_light_controls(instance.instance_number.value))
+            elif instance.instance_type == pushbutton.instance_type:
+                mqtt_controls.extend(get_button_controls(instance.instance_number.value))
+            elif instance.instance_type == absolute_input_device.instance_type:
+                mqtt_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
+            elif instance.instance_type == general_purpose_sensor.instance_type:
+                mqtt_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
+            elif instance.instance_type == feedback.instance_type:
+                mqtt_controls.extend(get_feedback_controls(instance.instance_number.value))
+
+        return (parameter_handlers, mqtt_controls, [])

@@ -173,13 +173,22 @@ class Gateway:
         self._gtin_db = gtin_db
 
     async def start(self) -> None:
-        await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
-        await wait_for_rpc_endpoint(
-            "wb-mqtt-serial",
-            "config",
-            "Load",
-            self._mqtt_dispatcher,
-        )
+        try:
+            await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.debug("Failed to remove old MQTT topics for wb-mqtt-dali: %s", e)
+
+        try:
+            await wait_for_rpc_endpoint(
+                "wb-mqtt-serial",
+                "config",
+                "Load",
+                self._mqtt_dispatcher,
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.warning("wb-mqtt-serial RPC endpoint is not available: %s", e)
+            raise RuntimeError("Required RPC endpoint wb-mqtt-serial/config/Load is not available") from e
+
         res = await asyncio.gather(
             *[gw.start() for gw in self.wb_dali_gateways],
             return_exceptions=True,
@@ -308,65 +317,24 @@ class Gateway:
         for gw in self.wb_dali_gateways:
             for bus in gw.buses:
                 if bus.uid == bus_id:
-                    return {
+                    try:
+                        schema = await bus.load_bus_info()
+                    except Exception as e:
+                        logging.error("Failed to load bus info for bus %s: %s", bus_id, e)
+                        schema = {
+                            "type": "object",
+                            "properties": {},
+                        }
+                    result = {
                         "config": {
                             "websocket_enabled": bus.websocket_config.enabled,
                             "websocket_port": bus.websocket_config.port,
                             "polling_interval": bus.polling_interval,
                             "bus_monitor_enabled": bus.bus_monitor_enabled,
                         },
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "polling_interval": {
-                                    "type": "number",
-                                    "title": "Polling Interval",
-                                    "default": 5,
-                                    "propertyOrder": 1,
-                                },
-                                "websocket_enabled": {
-                                    "title": "Lunatone DALI-2 IoT Gateway emulator",
-                                    "type": "boolean",
-                                    "description": "websocket_description",
-                                    "format": "switch",
-                                    "default": False,
-                                    "propertyOrder": 2,
-                                },
-                                "websocket_port": {
-                                    "title": "WebSocket port",
-                                    "type": "integer",
-                                    "minimum": 1,
-                                    "maximum": 65535,
-                                    "propertyOrder": 3,
-                                },
-                                "bus_monitor_enabled": {
-                                    "type": "boolean",
-                                    "title": "Bus Monitor",
-                                    "default": False,
-                                    "format": "switch",
-                                    "propertyOrder": 4,
-                                },
-                            },
-                            "translations": {
-                                "ru": {
-                                    "Lunatone DALI-2 IoT Gateway emulator": "Эмуляция шлюза Lunatone DALI-2 IoT",
-                                    "WebSocket port": "Порт WebSocket'а",
-                                    "Polling Interval": "Интервал опроса",
-                                    "websocket_description": "Включение этой опции запустит WebSocket-сервер, который эмулирует Lunatone DALI-2 IoT Gateway. "
-                                    "К нему можно подключить Lunatone DALI Cockpit для управления устройствами. "
-                                    "В DALI Cockpit надо выбрать Network в качестве интерфейса шины, "
-                                    "указать DALI-2 Display/DALI-2 IoT/DALI-2 WLAN, ввести адрес контроллера и порт, заданный ниже.",
-                                    "Bus Monitor": "Монитор шины",
-                                },
-                                "en": {
-                                    "websocket_description": "Enabling this option will start a WebSocket-server that emulates the Lunatone DALI-2 IoT Gateway. "
-                                    "You can connect the Lunatone DALI Cockpit to it for device management. "
-                                    "In DALI Cockpit, select Network as the bus interface, "
-                                    "specify DALI-2 Display/DALI-2 IoT/DALI-2 WLAN, and enter the controller address and the port specified above.",
-                                },
-                            },
-                        },
+                        "schema": schema,
                     }
+                    return result
         raise ValueError(f"Bus {bus_id} not found")
 
     async def set_bus_rpc_handler(self, params: dict):
@@ -388,6 +356,10 @@ class Gateway:
                     bus.set_bus_monitor_enabled(
                         new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled)
                     )
+                    for key in ["websocket_enabled", "websocket_port", "polling_interval", "bus_monitor_enabled"]:
+                        params.pop(key, None)
+                    if params:
+                        await bus.apply_bus_parameters(params)
                     await self._save_configuration()
                     return {
                         "websocket_enabled": new_websocket_config.enabled,

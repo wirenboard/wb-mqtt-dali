@@ -456,17 +456,20 @@ class Dali2Device(DaliDeviceBase):
         # Per-device instance discovery
         self.instances.clear()
         num_instances_rsp = await driver.send(QueryNumberOfInstances(device=addr))
-        if not check_bad_rsp(num_instances_rsp):
-            num_instances = num_instances_rsp.value
-            for inst_int in range(num_instances):
-                inst = InstanceNumber(inst_int)
-                enabled_rsp = await driver.send(QueryInstanceEnabled(device=addr, instance=inst))
-                if check_bad_rsp(enabled_rsp) or not enabled_rsp.value:
-                    continue
-                type_rsp = await driver.send(QueryInstanceType(device=addr, instance=inst))
-                if check_bad_rsp(type_rsp):
-                    continue
-                self.add_instance(inst_int, type_rsp.value)
+        if check_bad_rsp(num_instances_rsp):
+            raise RuntimeError(
+                f"Device at address {self.address.short} did not respond to QueryNumberOfInstances"
+            )
+        num_instances = num_instances_rsp.value
+        for inst_int in range(num_instances):
+            inst = InstanceNumber(inst_int)
+            enabled_rsp = await driver.send(QueryInstanceEnabled(device=addr, instance=inst))
+            if check_bad_rsp(enabled_rsp) or not enabled_rsp.value:
+                continue
+            type_rsp = await driver.send(QueryInstanceType(device=addr, instance=inst))
+            if check_bad_rsp(type_rsp):
+                continue
+            self.add_instance(inst_int, type_rsp.value)
 
         parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,

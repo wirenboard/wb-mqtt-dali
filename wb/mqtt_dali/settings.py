@@ -129,7 +129,7 @@ class NumberSettingsParam(SettingsParamBase):
         value_to_set = value[self.property_name]
         if self.value == value_to_set:
             return {}
-        raw = round(value_to_set / self.multiplier)
+        raw = (int(value_to_set) + self.multiplier // 2) // self.multiplier
         commands = self.get_write_commands(short_address, raw)
         commands.append(self.get_read_command(short_address))
         res = (await driver.send_commands(commands))[-1]

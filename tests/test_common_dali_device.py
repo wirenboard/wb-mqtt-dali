@@ -187,8 +187,8 @@ class ConcreteDaliDevice(DaliDeviceBase):
         self._extra_param_handlers = extra_param_handlers or []
         super().__init__(*args, **kwargs)
 
-    async def _get_parameter_handlers(self, driver):
-        return self._extra_param_handlers
+    async def _initialize_impl(self, driver):
+        return (self._extra_param_handlers, [], [])
 
 
 def _make_device(**kwargs):
@@ -425,13 +425,12 @@ async def test_poll_controls_returns_error_when_response_is_none():
     control.format_response = MagicMock(return_value="formatted")
 
     d._polling_controls = [control]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
 
     driver.send_commands = AsyncMock(return_value=[None])
 
     res = await d.poll_controls(driver)
 
-    d._update_mqtt_controls_list.assert_awaited_once_with(driver)
     driver.send_commands.assert_awaited_once_with(["Q1"])
     assert len(res) == 1
     assert res[0].control_id == "c1"
@@ -457,7 +456,7 @@ async def test_poll_controls_returns_error_when_raw_value_is_none():
     response.raw_value = None
 
     d._polling_controls = [control]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
     res = await d.poll_controls(driver)
@@ -487,7 +486,7 @@ async def test_poll_controls_returns_error_when_raw_value_has_error():
     response.raw_value.error = True
 
     d._polling_controls = [control]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
     res = await d.poll_controls(driver)
@@ -517,7 +516,7 @@ async def test_poll_controls_formats_regular_control_value():
     response.raw_value.error = False
 
     d._polling_controls = [control]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
     res = await d.poll_controls(driver)
@@ -550,7 +549,7 @@ async def test_poll_controls_alarm_control_active_when_response_error_true():
     response.error = True
 
     d._polling_controls = [control]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
     res = await d.poll_controls(driver)
@@ -583,7 +582,7 @@ async def test_poll_controls_alarm_control_inactive_when_response_error_false_or
         del response.error
 
     d._polling_controls = [control]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
     res = await d.poll_controls(driver)
@@ -636,7 +635,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     r3 = None
 
     d._polling_controls = [c1, c2, c3]
-    d._update_mqtt_controls_list = AsyncMock()
+    d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[r1, r2, r3])
 
     res = await d.poll_controls(driver)
@@ -652,30 +651,29 @@ async def test_poll_controls_multiple_controls_and_queries_order():
 
 
 @pytest.mark.asyncio
-async def test_apply_parameters_calls_load_info_when_params_empty():
+async def test_apply_parameters_raises_when_not_initialized():
     d = _make_device()
-    d.params = {}
-    d.schema = {"type": "object"}
-    d._parameter_handlers = []
-    d.load_info = AsyncMock()
-    d._apply_common_parameters = AsyncMock()
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate") as mock_validate:
+    with pytest.raises(RuntimeError, match="not initialized"):
         await d.apply_parameters(driver, {"name": "New Name"})
 
-    d.load_info.assert_awaited_once_with(driver)
-    mock_validate.assert_called_once_with(
-        instance={"name": "New Name"},
-        schema=d.schema,
-        format_checker=pytest.importorskip("jsonschema").draft4_format_checker,
-    )
-    d._apply_common_parameters.assert_awaited_once_with(driver, {"name": "New Name"})
+
+@pytest.mark.asyncio
+async def test_apply_parameters_raises_when_params_not_loaded():
+    d = _make_device()
+    d.is_initialized = True
+    d.params = {}
+    driver = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="info is not loaded"):
+        await d.apply_parameters(driver, {"name": "New Name"})
 
 
 @pytest.mark.asyncio
 async def test_apply_parameters_does_not_call_load_info_when_params_present():
     d = _make_device()
+    d.is_initialized = True
     d.params = {"short_address": 1}
     d.schema = {"type": "object"}
     d._parameter_handlers = []
@@ -693,6 +691,7 @@ async def test_apply_parameters_does_not_call_load_info_when_params_present():
 @pytest.mark.asyncio
 async def test_apply_parameters_validates_with_current_schema():
     d = _make_device()
+    d.is_initialized = True
     d.params = {"short_address": 1}
     d.schema = {"type": "object", "properties": {"name": {"type": "string"}}}
     d._parameter_handlers = []
@@ -718,6 +717,7 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     h2.write = AsyncMock(return_value={"p2": 2, "shared": "from_h2"})
 
     d = _make_device(address=DaliDeviceAddress(short=33, random=0x00))
+    d.is_initialized = True
     d.params = {"existing": "keep"}
     d.schema = {"type": "object"}
     d._parameter_handlers = [h1, h2]
@@ -740,6 +740,7 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
 @pytest.mark.asyncio
 async def test_apply_parameters_calls_apply_common_even_with_no_handlers():
     d = _make_device()
+    d.is_initialized = True
     d.params = {"short_address": 1}
     d.schema = {"type": "object"}
     d._parameter_handlers = []
@@ -759,6 +760,7 @@ async def test_apply_parameters_propagates_validation_error_and_stops_processing
     h.write = AsyncMock(return_value={"x": 1})
 
     d = _make_device()
+    d.is_initialized = True
     d.params = {"short_address": 1}
     d.schema = {"type": "object"}
     d._parameter_handlers = [h]
@@ -784,6 +786,7 @@ async def test_apply_parameters_propagates_write_error_and_does_not_apply_common
     h2.write = AsyncMock(return_value={"ok": True})
 
     d = _make_device()
+    d.is_initialized = True
     d.params = {"short_address": 1}
     d.schema = {"type": "object"}
     d._parameter_handlers = [h1, h2]

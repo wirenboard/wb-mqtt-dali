@@ -295,7 +295,7 @@ class DaliDeviceBase:
             [parameter_handlers, mqtt_controls, group_parameter_handlers] = await self._initialize_impl(
                 driver
             )
-            parameter_handlers.append(GeneralMemoryParams(self._compat, self._gtin_db))
+            parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
             self._parameter_handlers = parameter_handlers
             self._group_parameter_handlers = group_parameter_handlers
             self._controls.clear()

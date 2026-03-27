@@ -60,7 +60,7 @@ class ActualLevelControl(MqttControlBase):
             ControlInfo(
                 "actual_level",
                 ControlMeta(
-                    title=TranslatedTitle("Actual Level", "Фактический уровень"),
+                    title=TranslatedTitle("Actual Level", "Яркость"),
                     read_only=True,
                     units="%",
                 ),
@@ -132,8 +132,13 @@ def make_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "dapc",
-                ControlMeta("text", TranslatedTitle("Direct Arc Power Control", "Задать мощность (DAPC)")),
-                "",
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Direct Arc Power Control", "Задать яркость"),
+                    minimum=0,
+                    maximum=254,
+                ),
+                "0",
             ),
             commands_builder=handle_dapc,
         ),

@@ -10,6 +10,7 @@ from dali.address import DeviceBroadcast, GearBroadcast, GearGroup
 from dali.command import Command, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
+from dali.gear.colour import tc_kelvin_mirek
 from dali.gear.general import EnableDeviceType
 
 from .asyncio_utils import OneShotTasks
@@ -37,8 +38,8 @@ from .wbdali_utils import AsyncDeviceInstanceTypeMapper
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
 from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
-MIN_TC_COLOUR = 100000
-MAX_TC_COLOUR = 20000000
+MIN_TC_MIREK_BROADCAST = tc_kelvin_mirek(20000)
+MAX_TC_MIREK_BROADCAST = tc_kelvin_mirek(100)
 
 
 class ApplicationControllerState(Enum):
@@ -101,7 +102,7 @@ class GroupVirtualDevice:
             for control in [
                 *make_controls(),
                 *rgbwaf_mqtt_controls(),
-                *tc_mqtt_controls(MIN_TC_COLOUR, MAX_TC_COLOUR),
+                *tc_mqtt_controls(MIN_TC_MIREK_BROADCAST, MAX_TC_MIREK_BROADCAST),
             ]
         }
 
@@ -132,7 +133,7 @@ class BroadcastVirtualDevice:
             for control in [
                 *make_controls(),
                 *rgbwaf_mqtt_controls(),
-                *tc_mqtt_controls(MIN_TC_COLOUR, MAX_TC_COLOUR),
+                *tc_mqtt_controls(MIN_TC_MIREK_BROADCAST, MAX_TC_MIREK_BROADCAST),
             ]
         }
 

@@ -18,6 +18,9 @@ class DaliCommandsCompatibilityLayer:
         self.SetSearchAddrH = control_gear.SetSearchAddrH
         self.SetSearchAddrM = control_gear.SetSearchAddrM
         self.SetSearchAddrL = control_gear.SetSearchAddrL
+        self.QueryVersionNumber = control_gear.QueryVersionNumber
+        self.ReadMemoryLocation = control_gear.ReadMemoryLocation
+        self.DTR0 = control_gear.DTR0
 
     def Initialise(self, short_address: Optional[int]) -> Command:
         """
@@ -62,15 +65,6 @@ class DaliCommandsCompatibilityLayer:
         if resp is None or resp.raw_value is None or resp.raw_value.error:
             return None
         return resp.value.as_integer
-
-    def DTR0(self, value: int) -> Command:
-        return control_gear.DTR0(value)
-
-    def ReadMemoryLocation(self, short_address: int) -> Command:
-        return control_gear.ReadMemoryLocation(GearShort(short_address))
-
-    def QueryVersionNumber(self, short_address: int) -> Command:
-        return control_gear.QueryVersionNumber(GearShort(short_address))
 
     def Reset(self, short_address: Optional[int]) -> Command:
         return control_gear.Reset(self.getAddress(short_address))

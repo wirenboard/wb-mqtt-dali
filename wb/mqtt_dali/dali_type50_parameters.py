@@ -1,5 +1,6 @@
 # Type 50 Memory bank 1 extension (luminaire information)
 
+from dali.address import Address
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import oem
 from dali.memory.location import FlagValue
@@ -97,7 +98,7 @@ class Type50MemoryBankParam(SettingsParamBase):
         self._values: dict = {}
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
         try:
             raw = await driver.run_sequence(read_memory_bank(oem.BANK_1, short_address, self._compat))
         except (MemoryLocationNotImplemented, ResponseError) as e:
@@ -122,7 +123,10 @@ class Type50MemoryBankParam(SettingsParamBase):
             return {}
         return {"luminaire_info": self._values}
 
-    def get_schema(self) -> dict:
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        if group_and_broadcast:
+            return {}
+
         properties = {}
         translations_ru = {self.name.en: self.name.ru}
         for order, (_, key, title_en, title_ru, json_type) in enumerate(_FIELD_SPECS, start=1):

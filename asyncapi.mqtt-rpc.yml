@@ -388,14 +388,7 @@ components:
         groups:
           type: array
           items:
-            type: string
-    groupItem:
-      type: object
-      properties:
-        id:
-          type: string
-        name:
-          type: number
+            type: number
     busItem:
       type: object
       properties:
@@ -407,10 +400,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/deviceItem'
-        groups:
-          type: array
-          items:
-            $ref: '#/components/schemas/groupItem'
     gatewayItem:
       type: object
       properties:
@@ -649,14 +638,6 @@ components:
           type: number
         result:
           type: object
-          properties:
-            schema:
-              type: object
-            config: 
-              type: object
-          required:
-            - schema
-            - config
       required:
         - id
         - result
@@ -684,7 +665,7 @@ components:
         id:
           type: number
         result:
-          type: boolean
+          type: object
       required:
         - id
         - result

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from dali import command
-from dali.address import GearShort
+from dali.address import Address
 from dali.gear.colour import Activate, SetTemporaryPrimaryNDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
@@ -33,7 +33,7 @@ PRIMARY_N_COLOUR_COMPONENTS = [
 ]
 
 
-def set_primary_n_commands_builder(address: GearShort, value: int, index: int) -> list[command.Command]:
+def set_primary_n_commands_builder(address: Address, value: int, index: int) -> list[command.Command]:
     return [
         DTR0((value & 0xFF)),
         DTR1((value >> 8) & 0xFF),
@@ -52,7 +52,7 @@ class PrimaryNColourValues:
     primary_n5: int = MASK_2BYTES
     components = PRIMARY_N_COLOUR_COMPONENTS
 
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
+    def get_write_commands(self, address: Address) -> List[command.Command]:
         res = []
         for colour in self.components:
             value = getattr(self, colour.value)
@@ -78,6 +78,7 @@ class PrimaryNColourValues:
                 "title": COLOUR_NAMES[colour][0],
                 "minimum": 0,
                 "maximum": MASK_2BYTES,
+                "default": MASK_2BYTES,
                 "propertyOrder": i + 2,
                 "options": {
                     "grid_columns": 2,
@@ -94,13 +95,15 @@ class PrimaryNColourValues:
 
 def get_mqtt_controls() -> list[MqttControlBase]:
 
-    def _set_primary_n_commands_builder(short_address: int, value: str, index: int) -> list[command.Command]:
+    def _set_primary_n_commands_builder(
+        short_address: Address, value: str, index: int
+    ) -> list[command.Command]:
         try:
             primary_n = int(value)
         except ValueError as e:
             raise ValueError(f"primary N{index} must be integer") from e
-        return set_primary_n_commands_builder(GearShort(short_address), primary_n, index) + [
-            Activate(GearShort(short_address)),
+        return set_primary_n_commands_builder(short_address, primary_n, index) + [
+            Activate(short_address),
         ]
 
     res = []

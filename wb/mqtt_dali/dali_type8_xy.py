@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from dali import command
-from dali.address import GearShort
+from dali.address import Address
 from dali.gear.colour import (
     Activate,
     SetTemporaryXCoordinate,
@@ -28,7 +28,7 @@ XY_COLOUR_COMPONENTS = [
 ]
 
 
-def set_x_coordinate_commands_builder(address: GearShort, value: int) -> list[command.Command]:
+def set_x_coordinate_commands_builder(address: Address, value: int) -> list[command.Command]:
     return [
         DTR0((value & 0xFF)),
         DTR1((value >> 8) & 0xFF),
@@ -36,7 +36,7 @@ def set_x_coordinate_commands_builder(address: GearShort, value: int) -> list[co
     ]
 
 
-def set_y_coordinate_commands_builder(address: GearShort, value: int) -> list[command.Command]:
+def set_y_coordinate_commands_builder(address: Address, value: int) -> list[command.Command]:
     return [
         DTR0((value & 0xFF)),
         DTR1((value >> 8) & 0xFF),
@@ -50,7 +50,7 @@ class XYColourValues:
     y_coordinate: int = MASK_2BYTES
     components = XY_COLOUR_COMPONENTS
 
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
+    def get_write_commands(self, address: Address) -> List[command.Command]:
         res = set_x_coordinate_commands_builder(
             address, self.x_coordinate
         ) + set_y_coordinate_commands_builder(address, self.y_coordinate)
@@ -74,6 +74,7 @@ class XYColourValues:
                     "title": "X Coordinate",
                     "minimum": 0,
                     "maximum": MASK_2BYTES,
+                    "default": MASK_2BYTES,
                     "propertyOrder": 2,
                     "options": {
                         "grid_columns": 2,
@@ -84,6 +85,7 @@ class XYColourValues:
                     "title": "Y Coordinate",
                     "minimum": 0,
                     "maximum": MASK_2BYTES,
+                    "default": MASK_2BYTES,
                     "propertyOrder": 3,
                     "options": {
                         "grid_columns": 2,
@@ -97,22 +99,22 @@ class XYColourValues:
 
 def get_mqtt_controls() -> list[MqttControlBase]:
 
-    def _set_x_coordinate_commands_builder(short_address: int, value: str) -> list[command.Command]:
+    def _set_x_coordinate_commands_builder(short_address: Address, value: str) -> list[command.Command]:
         try:
             x_coordinate = int(value)
         except ValueError as e:
             raise ValueError("X coordinate must be integer") from e
-        return set_x_coordinate_commands_builder(GearShort(short_address), x_coordinate) + [
-            Activate(GearShort(short_address)),
+        return set_x_coordinate_commands_builder(short_address, x_coordinate) + [
+            Activate(short_address),
         ]
 
-    def _set_y_coordinate_commands_builder(short_address: int, value: str) -> list[command.Command]:
+    def _set_y_coordinate_commands_builder(short_address: Address, value: str) -> list[command.Command]:
         try:
             y_coordinate = int(value)
         except ValueError as e:
             raise ValueError("Y coordinate must be integer") from e
-        return set_y_coordinate_commands_builder(GearShort(short_address), y_coordinate) + [
-            Activate(GearShort(short_address)),
+        return set_y_coordinate_commands_builder(short_address, y_coordinate) + [
+            Activate(short_address),
         ]
 
     return [
@@ -142,7 +144,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 ControlMeta("pushbutton", TranslatedTitle("X Coordinate Step Up", "Координата X шаг вверх")),
                 "0",
             ),
-            commands_builder=lambda short_address, _: [XCoordinateStepUp(GearShort(short_address))],
+            commands_builder=lambda short_address, _: [XCoordinateStepUp(short_address)],
         ),
         MqttControl(
             ControlInfo(
@@ -150,7 +152,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 ControlMeta("pushbutton", TranslatedTitle("X Coordinate Step Down", "Координата X шаг вниз")),
                 "0",
             ),
-            commands_builder=lambda short_address, _: [XCoordinateStepDown(GearShort(short_address))],
+            commands_builder=lambda short_address, _: [XCoordinateStepDown(short_address)],
         ),
         MqttControl(
             ControlInfo(
@@ -158,7 +160,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 ControlMeta("pushbutton", TranslatedTitle("Y Coordinate Step Up", "Координата Y шаг вверх")),
                 "0",
             ),
-            commands_builder=lambda short_address, _: [YCoordinateStepUp(GearShort(short_address))],
+            commands_builder=lambda short_address, _: [YCoordinateStepUp(short_address)],
         ),
         MqttControl(
             ControlInfo(
@@ -166,7 +168,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 ControlMeta("pushbutton", TranslatedTitle("Y Coordinate Step Down", "Координата Y шаг вниз")),
                 "0",
             ),
-            commands_builder=lambda short_address, _: [YCoordinateStepDown(GearShort(short_address))],
+            commands_builder=lambda short_address, _: [YCoordinateStepDown(short_address)],
         ),
         MqttControl(
             ControlInfo(

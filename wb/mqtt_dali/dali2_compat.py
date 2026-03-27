@@ -17,6 +17,9 @@ class Dali2CommandsCompatibilityLayer:
         self.SetSearchAddrM = control_device.SearchAddrM
         self.SetSearchAddrL = control_device.SearchAddrL
         self.ProgramShortAddress = control_device.ProgramShortAddress
+        self.QueryVersionNumber = control_device.QueryVersionNumber
+        self.ReadMemoryLocation = control_device.ReadMemoryLocation
+        self.DTR0 = control_device.DTR0
 
     def Initialise(self, short_address: Optional[int]) -> Command:
         """
@@ -59,15 +62,6 @@ class Dali2CommandsCompatibilityLayer:
             return None
         # Control device returns NumericResponse where value is int
         return resp.value
-
-    def DTR0(self, value: int) -> Command:
-        return control_device.DTR0(value)
-
-    def ReadMemoryLocation(self, short_address: int) -> Command:
-        return control_device.ReadMemoryLocation(DeviceShort(short_address))
-
-    def QueryVersionNumber(self, short_address: int) -> Command:
-        return control_device.QueryVersionNumber(DeviceShort(short_address))
 
     def Reset(self, short_address: Optional[int]) -> Command:
         return control_device.Reset(self.getAddress(short_address))

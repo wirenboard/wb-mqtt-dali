@@ -1,10 +1,10 @@
 # Type 8 RGBWAF
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Union
+from typing import List, Optional
 
 from dali import command
-from dali.address import GearBroadcast, GearGroup, GearShort
+from dali.address import Address
 from dali.gear.colour import Activate, SetTemporaryRGBDimLevel, SetTemporaryWAFDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
@@ -16,9 +16,6 @@ from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE = MASK - 1
 
-AddressFactory = Callable[[int], Union[GearShort, GearGroup, GearBroadcast]]
-ColourAddress = Union[GearShort, GearGroup, GearBroadcast]
-
 
 RGBW_COLOUR_COMPONENTS = [
     ColourComponent.RED,
@@ -28,9 +25,7 @@ RGBW_COLOUR_COMPONENTS = [
 ]
 
 
-def set_rgb_commands_builder(
-    address: ColourAddress, red: int, green: int, blue: int
-) -> list[command.Command]:
+def set_rgb_commands_builder(address: Address, red: int, green: int, blue: int) -> list[command.Command]:
     return [
         DTR0(red),
         DTR1(green),
@@ -40,7 +35,7 @@ def set_rgb_commands_builder(
 
 
 def set_waf_commands_builder(
-    address: ColourAddress, white: int, amber: int, free_colour: int
+    address: Address, white: int, amber: int, free_colour: int
 ) -> list[command.Command]:
     return [
         DTR0(white),
@@ -60,7 +55,7 @@ class RgbwafColourValues:
     free_colour: int = MASK
     components = RGBW_COLOUR_COMPONENTS
 
-    def get_write_commands(self, address: GearShort) -> List[command.Command]:
+    def get_write_commands(self, address: Address) -> List[command.Command]:
         return set_rgb_commands_builder(address, self.red, self.green, self.blue) + set_waf_commands_builder(
             address, self.white, self.amber, self.free_colour
         )
@@ -91,6 +86,7 @@ class RgbwafColourValues:
                     "title": "RGB",
                     "format": "dali-rgb",
                     "propertyOrder": 2,
+                    "default": "255;255;255",
                     "options": {
                         "grid_columns": 2,
                     },
@@ -101,6 +97,7 @@ class RgbwafColourValues:
                     "format": "dali-white",
                     "minimum": 0,
                     "maximum": MASK,
+                    "default": MASK,
                     "propertyOrder": 3,
                     "options": {
                         "grid_columns": 2,
@@ -112,8 +109,8 @@ class RgbwafColourValues:
         }
 
 
-def get_wanted_mqtt_controls(address_factory: AddressFactory) -> list[MqttControlBase]:
-    def _set_rgb_commands_builder(short_address: int, value: str) -> list[command.Command]:
+def get_wanted_mqtt_controls() -> list[MqttControlBase]:
+    def _set_rgb_commands_builder(short_address: Address, value: str) -> list[command.Command]:
         components = value.split(";")
         if len(components) != 3:
             raise ValueError("RGB value must be in format 'R;G;B'")
@@ -124,17 +121,19 @@ def get_wanted_mqtt_controls(address_factory: AddressFactory) -> list[MqttContro
             blue = min(blue, MAX_COLOUR_VALUE)
         except ValueError as e:
             raise ValueError("RGB components must be integers") from e
-        address = address_factory(short_address)
-        return set_rgb_commands_builder(address, red, green, blue) + [Activate(address)]
+        return set_rgb_commands_builder(short_address, red, green, blue) + [
+            Activate(short_address),
+        ]
 
-    def _set_white_commands_builder(short_address: int, value: str) -> list[command.Command]:
+    def _set_white_commands_builder(short_address: Address, value: str) -> list[command.Command]:
         try:
             white = int(value)
             white = min(white, MAX_COLOUR_VALUE)
         except ValueError as e:
             raise ValueError("white component must be integer") from e
-        address = address_factory(short_address)
-        return set_waf_commands_builder(address, white, MASK, MASK) + [Activate(address)]
+        return set_waf_commands_builder(short_address, white, MASK, MASK) + [
+            Activate(short_address),
+        ]
 
     return [
         MqttControl(
@@ -177,7 +176,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 "0",
             ),
         ),
-        *get_wanted_mqtt_controls(GearShort),
+        *get_wanted_mqtt_controls(),
     ]
 
 

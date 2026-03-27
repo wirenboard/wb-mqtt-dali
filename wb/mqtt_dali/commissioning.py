@@ -453,15 +453,15 @@ class Commissioning:
             high = 0xFFFFFF
             while low < high:
                 high = 0xFFFFFF
-                found_addr = await self.find_next_device(low, high)
-                if found_addr is None:
+                found_rand_addr = await self.find_next_device(low, high)
+                if found_rand_addr is None:
                     log.info("No device found, exiting")
                     break
 
                 resp = await self._query_short_address_with_retry()
                 await self.driver.send(self._cmds.Withdraw())
-                random_address_conflicts |= await self._process_found_device(found_addr, resp)
-                low = found_addr
+                random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
+                low = found_rand_addr + 1
 
             if len(random_address_conflicts) == 0:  # it's O(1)!
                 log.info(

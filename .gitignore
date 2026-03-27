@@ -180,3 +180,4 @@ config.local.*
 pyproject.toml
 .config
 standards/
+deploy.sh

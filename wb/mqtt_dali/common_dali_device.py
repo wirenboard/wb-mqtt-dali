@@ -220,6 +220,7 @@ class DaliDeviceBase:
         self.params: dict = {}
         self.schema: dict = {}
         self.logger = logging.getLogger()
+        self.is_initialized = False
 
         self._bus_id = bus_id
         self._default_name_prefix = default_name_prefix
@@ -233,8 +234,8 @@ class DaliDeviceBase:
             self._name = name
 
         self._parameter_handlers: list[SettingsParamBase] = []
+        self._group_parameter_handlers: list[SettingsParamBase] = []
 
-        self._controls_lock = asyncio.Lock()
         self._controls: dict[str, MqttControlBase] = {}
         self._polling_controls: list[MqttControlBase] = []
 
@@ -246,6 +247,8 @@ class DaliDeviceBase:
                 self._common_schema = json.load(f)
 
         self._gtin_db = gtin_db
+
+        self._initialize_lock = asyncio.Lock()
 
     @property
     def mqtt_id(self) -> str:
@@ -285,11 +288,30 @@ class DaliDeviceBase:
     def default_mqtt_id(self) -> str:
         return f"{self._bus_id}_{self._default_mqtt_id_part}{self.address.short}"
 
+    async def initialize(self, driver: WBDALIDriver) -> None:
+        async with self._initialize_lock:
+            if self.is_initialized:
+                return
+            [parameter_handlers, mqtt_controls, group_parameter_handlers] = await self._initialize_impl(
+                driver
+            )
+            parameter_handlers.append(GeneralMemoryParams(self._compat, self._gtin_db))
+            self._parameter_handlers = parameter_handlers
+            self._group_parameter_handlers = group_parameter_handlers
+            self._controls.clear()
+            self._polling_controls.clear()
+            for control in mqtt_controls:
+                if control.is_readable():
+                    self._polling_controls.append(control)
+                self._controls[control.control_info.id] = control
+            self.is_initialized = True
+
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         if self.params and not force_reload:
             return
-        parameter_handlers: list[SettingsParamBase] = [GeneralMemoryParams(self._compat, self._gtin_db)]
-        parameter_handlers.extend(await self._get_parameter_handlers(driver))
+
+        await self.initialize(driver)
+
         params = {
             "short_address": self.address.short,
             "random_address": hex(self.address.random),
@@ -299,24 +321,32 @@ class DaliDeviceBase:
         schema = deepcopy(self._common_schema)
         awaitables = [
             param_handler.read(driver, self._compat.getAddress(self.address.short))
-            for param_handler in parameter_handlers
+            for param_handler in self._parameter_handlers
         ]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
-        for param, result in zip(parameter_handlers, results):
+        for param, result in zip(self._parameter_handlers, results):
             if isinstance(result, BaseException):
                 raise RuntimeError(f'Error reading "{param.name.en}": {result}') from result
             params.update(result)
-        schemas = [param_handler.get_schema(False) for param_handler in parameter_handlers]
+        schemas = [param_handler.get_schema(False) for param_handler in self._parameter_handlers]
         for type_schema in schemas:
             if type_schema is not None:
                 merge_json_schemas(schema, type_schema)
-        self._parameter_handlers = parameter_handlers
+
         self.params = params
         self.schema = schema
 
     async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before applying parameters."
+            )
+
         if not self.params:
-            await self.load_info(driver)
+            raise RuntimeError(
+                f"Device {self.name} info is not loaded. Call load_info() before applying parameters."
+            )
+
         jsonschema.validate(
             instance=new_values, schema=self.schema, format_checker=jsonschema.draft4_format_checker
         )
@@ -331,11 +361,19 @@ class DaliDeviceBase:
         self.params.update(updated_parameters)
         await self._apply_common_parameters(driver, new_values)
 
-    async def get_mqtt_controls(self, driver: WBDALIDriver) -> list[ControlInfo]:
-        await self._update_mqtt_controls_list(driver)
+    def get_mqtt_controls(self) -> list[ControlInfo]:
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before getting MQTT controls."
+            )
         return [descriptor.control_info for descriptor in self._controls.values()]
 
     async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before executing control."
+            )
+
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
             await driver.send_commands(
@@ -343,7 +381,11 @@ class DaliDeviceBase:
             )
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
-        await self._update_mqtt_controls_list(driver)
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before polling controls."
+            )
+
         queries = []
         for descriptor in self._polling_controls:
             queries.append(descriptor.get_query(self._compat.getAddress(self.address.short)))
@@ -377,8 +419,14 @@ class DaliDeviceBase:
             )
         return res
 
-    def setLogger(self, logger: logging.Logger) -> None:
+    def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
+
+    def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
+        return self._group_parameter_handlers
+
+    def get_common_mqtt_controls(self) -> list[MqttControlBase]:
+        return []
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
         self.name = new_values.get("name", self.name)
@@ -395,24 +443,8 @@ class DaliDeviceBase:
         self.params["name"] = self.name
         self.params["mqtt_id"] = self.mqtt_id
 
-    async def _update_mqtt_controls_list(self, driver: WBDALIDriver) -> None:
-        async with self._controls_lock:
-            if not self._controls:
-                controls = await self._get_mqtt_controls(driver)
-                self._polling_controls = []
-                self._controls = {}
-                for control in controls:
-                    if control.is_readable():
-                        self._polling_controls.append(control)
-                    self._controls[control.control_info.id] = control
-
-    async def get_group_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
-        return []
-
     # Must be implemented by subclasses
-    async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
+    async def _initialize_impl(
+        self, driver: WBDALIDriver
+    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
         raise NotImplementedError()
-
-    # Can be implemented by subclasses to provide controls for MQTT topics
-    async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
-        return []

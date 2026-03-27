@@ -151,7 +151,12 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                     "minimum": 0,
                     "maximum": 15,
                     "default": 0,
-                    "options": {"grid_columns": 6},
+                    "options": {
+                        "grid_columns": 6,
+                        "wb": {
+                            "show_editor": True,
+                        }
+                    },
                 },
                 "fade_rate": {
                     "type": "number",
@@ -160,7 +165,12 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                     "minimum": 1,
                     "maximum": 15,
                     "default": 1,
-                    "options": {"grid_columns": 6},
+                    "options": {
+                        "grid_columns": 6,
+                        "wb": {
+                            "show_editor": True,
+                        }
+                    },
                 },
             },
             "translations": {
@@ -169,7 +179,6 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                     "Fade Rate": "Скорость затухания",
                 },
             },
-            "required": ["fade_time", "fade_rate"],
         }
 
 

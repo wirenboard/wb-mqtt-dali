@@ -155,7 +155,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                         "grid_columns": 6,
                         "wb": {
                             "show_editor": True,
-                        }
+                        },
                     },
                 },
                 "fade_rate": {
@@ -169,7 +169,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                         "grid_columns": 6,
                         "wb": {
                             "show_editor": True,
-                        }
+                        },
                     },
                 },
             },

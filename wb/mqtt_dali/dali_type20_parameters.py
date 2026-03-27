@@ -1,7 +1,5 @@
 # Type 20 Demand response
 
-from dali.address import GearShort
-
 from .common_dali_device import MqttControl, MqttControlBase
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo
@@ -30,8 +28,8 @@ class LoadSheddingConditionParam(NumberGearParam):
             "type_20_load_shedding_condition",
         )
 
-    def get_schema(self) -> dict:
-        schema = super().get_schema()
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        schema = super().get_schema(group_and_broadcast)
         add_enum(
             schema["properties"][self.property_name],
             [
@@ -114,7 +112,7 @@ class Type20Parameters(TypeParameters):
                     ),
                     "0",
                 ),
-                query_builder=lambda short_address: QueryLoadSheddingCondition(GearShort(short_address)),
+                query_builder=QueryLoadSheddingCondition,
                 value_formatter=lambda response: str(response.value),
             ),
         ]

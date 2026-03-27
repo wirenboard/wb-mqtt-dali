@@ -2,7 +2,7 @@ import asyncio
 from enum import IntEnum
 from typing import Optional
 
-from dali.address import GearShort
+from dali.address import Address, GearShort
 from dali.gear.general import QueryDeviceType, QueryNextDeviceType
 from dali.sequences import sleep as seq_sleep
 
@@ -30,7 +30,7 @@ from .dali_type4_parameters import Type4Parameters
 from .dali_type5_parameters import Type5Parameters
 from .dali_type6_parameters import Type6Parameters
 from .dali_type7_parameters import Type7Parameters
-from .dali_type8_parameters import Type8Parameters
+from .dali_type8_parameters import ColourType, Type8Parameters
 from .dali_type16_parameters import Type16Parameters
 from .dali_type17_parameters import Type17Parameters
 from .dali_type20_parameters import Type20Parameters
@@ -77,7 +77,7 @@ def request_with_retry_sequence(cmd):
     raise RuntimeError(f"No response to {cmd}")
 
 
-def query_device_types_sequence(addr):
+def query_device_types_sequence(addr: Address):
     """Obtain a list of part 2xx device types supported by control gear"""
     r = yield from request_with_retry_sequence(QueryDeviceType(addr))
     if r.raw_value.as_integer < 254:
@@ -114,26 +114,50 @@ class DaliDevice(DaliDeviceBase):
             address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
         )
         self.types: list[int] = []
-        self.groups: list[bool] = []
 
         self._type8_handler: Optional[Type8Parameters] = None
         self._types_lock = asyncio.Lock()
         self._type_handlers: list[TypeParameters] = []
         self._dimming_curve_state = DimmingCurveState()
+        self._groups_parameter = GroupsParam()
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         await super().load_info(driver, force_reload)
-        self._sync_groups_from_params()
         self.params["types"] = self.types
 
     async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
         await super().apply_parameters(driver, new_values)
-        self._sync_groups_from_params()
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
         res = await super().poll_controls(driver)
         if self._type8_handler is not None:
             res.extend(await self._type8_handler.poll_controls(driver, self.address.short))
+        return res
+
+    @property
+    def groups(self) -> set[int]:
+        return self._groups_parameter.groups
+
+    @property
+    def dt8_colour_type(self) -> Optional[ColourType]:
+        return self._type8_handler.default_colour_type if self._type8_handler is not None else None
+
+    async def get_group_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
+        await self._read_mandatory_info(driver)
+        res: list[SettingsParamBase] = [
+            MaxLevelParam(),
+            MinLevelParam(),
+            FadeTimeFadeRateParam(),
+        ]
+        # Colour control has own scenes, power on level and system failure level parameters
+        if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
+            res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
+        for type_handler in self._type_handlers:
+            if type_handler != self._type8_handler:
+                res.extend(type_handler._parameters)
+            else:
+                if self._type8_handler is not None:
+                    res.extend(self._type8_handler.get_group_parameters())
         return res
 
     async def _get_mqtt_controls(self, driver: WBDALIDriver) -> list[MqttControlBase]:
@@ -150,7 +174,7 @@ class DaliDevice(DaliDeviceBase):
     async def _get_parameter_handlers(self, driver: WBDALIDriver) -> list[SettingsParamBase]:
         await self._read_mandatory_info(driver)
         res: list[SettingsParamBase] = [
-            GroupsParam(),
+            self._groups_parameter,
             MaxLevelParam(),
             MinLevelParam(),
             FadeTimeFadeRateParam(),
@@ -159,25 +183,24 @@ class DaliDevice(DaliDeviceBase):
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
             res.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
-            res.append(type_handler)
+            res.extend(type_handler._parameters)
         return res
 
     async def _read_mandatory_info(self, driver: WBDALIDriver) -> None:
         async with self._types_lock:
             if self.types:
                 return
-            types = await driver.run_sequence(query_device_types_sequence(GearShort(self.address.short)))
+
+            address = GearShort(self.address.short)
+
+            await self._groups_parameter.read(driver, address)
+
+            types = await driver.run_sequence(query_device_types_sequence(address))
             if types is None:
                 raise RuntimeError(
                     f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
                 )
             self.types = types
-            groups = (await GroupsParam().read(driver, self.address.short))["groups"]
-            if groups is None:
-                raise RuntimeError(
-                    f"Device at short address {self.address.short} did not respond to QueryGroups*"
-                )
-            self.groups = groups
 
             gear_type_params = {
                 DaliDeviceType.SELF_CONTAINED_EMERGENCY_LIGHTING: Type1Parameters(),
@@ -211,9 +234,4 @@ class DaliDevice(DaliDeviceBase):
                     continue
 
             for handler in self._type_handlers:
-                await handler.read_mandatory_info(driver, self.address.short)
-
-    def _sync_groups_from_params(self) -> None:
-        groups = self.params.get("groups")
-        if groups is not None:
-            self.groups = groups
+                await handler.read_mandatory_info(driver, address)

@@ -130,12 +130,11 @@ def bus_to_json(bus: ApplicationController) -> dict:
                 lambda dev: {
                     "id": dev.uid,
                     "name": dev.name,
-                    "groups": [],
+                    "groups": sorted(dev.groups),
                 },
                 bus.dali_devices + bus.dali2_devices,
             )
         ),
-        "groups": [],
     }
 
 
@@ -224,6 +223,16 @@ class Gateway:
             "Editor",
             "GetGateway",
             self.get_gateway_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "GetGroup",
+            self.get_group_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "SetGroup",
+            self.set_group_rpc_handler,
         )
 
     async def stop(self) -> None:
@@ -388,6 +397,26 @@ class Gateway:
                     }
         raise ValueError("Bus not found")
 
+    async def get_group_rpc_handler(self, params: dict):
+        group_id = params.get("groupId")
+        if group_id is None:
+            raise ValueError("groupId parameter is required")
+        bus, group_index = self._get_bus_and_group_index_by_id(group_id)
+        if bus is None or group_index is None:
+            raise ValueError(f"Group {group_id} not found")
+        return await bus.load_group_info(group_index)
+
+    async def set_group_rpc_handler(self, params: dict):
+        group_id = params.get("groupId")
+        if group_id is None:
+            raise ValueError("groupId parameter is required")
+        new_params = params.get("config", {})
+        bus, group_index = self._get_bus_and_group_index_by_id(group_id)
+        if bus is None or group_index is None:
+            raise ValueError(f"Group {group_id} not found")
+        await bus.apply_group_parameters(group_index, new_params)
+        return {}
+
     async def get_gateway_rpc_handler(self, params: dict):
         return {"config": {}, "schema": {}}
 
@@ -397,6 +426,24 @@ class Gateway:
                 if bus.uid != bus_id and bus.websocket_config.enabled and bus.websocket_config.port == port:
                     return True
         return False
+
+    def _get_bus_and_group_index_by_id(
+        self, group_id: str
+    ) -> Tuple[Optional[ApplicationController], Optional[int]]:
+        bus_uid, sep, index_str = group_id.rpartition("_g")
+        if not sep:
+            return None, None
+        try:
+            group_index = int(index_str)
+        except ValueError:
+            return None, None
+        if not 0 <= group_index <= 15:
+            return None, None
+        for gw in self.wb_dali_gateways:
+            for bus in gw.buses:
+                if bus.uid == bus_uid:
+                    return bus, group_index
+        return None, None
 
     def _get_bus_and_device_by_id(
         self, device_id: str

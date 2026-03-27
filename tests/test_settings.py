@@ -111,7 +111,7 @@ async def test_write_no_write_commands(number_settings_param):
 
 
 def test_get_schema(number_settings_param):
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert "properties" in schema
     assert "translations" not in schema
     assert schema["properties"]["test_property"]["title"] == "test_name"
@@ -120,7 +120,7 @@ def test_get_schema(number_settings_param):
 @pytest.mark.asyncio
 async def test_get_schema_with_options(number_settings_param):
     number_settings_param.grid_columns = 2
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert "properties" in schema
     assert "options" in schema["properties"]["test_property"]
     assert schema["properties"]["test_property"]["options"]["grid_columns"] == 2
@@ -129,7 +129,7 @@ async def test_get_schema_with_options(number_settings_param):
 @pytest.mark.asyncio
 async def test_get_schema_read_only(number_settings_param):
     number_settings_param._is_read_only = True
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert "options" in schema["properties"]["test_property"]
     assert schema["properties"]["test_property"]["options"] == {"wb": {"read_only": True}}
 
@@ -137,7 +137,7 @@ async def test_get_schema_read_only(number_settings_param):
 @pytest.mark.asyncio
 async def test_get_schema_translations(number_settings_param):
     number_settings_param.name.ru = "тестовое_имя"
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert "translations" in schema
     assert schema["translations"]["ru"]["test_name"] == "тестовое_имя"
 
@@ -145,7 +145,7 @@ async def test_get_schema_translations(number_settings_param):
 @pytest.mark.asyncio
 async def test_get_schema_default_value(number_settings_param):
     number_settings_param.default = 10
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert "default" in schema["properties"]["test_property"]
     assert schema["properties"]["test_property"]["default"] == 10
 
@@ -153,7 +153,7 @@ async def test_get_schema_default_value(number_settings_param):
 @pytest.mark.asyncio
 async def test_get_schema_property_order(number_settings_param):
     number_settings_param.property_order = 1
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert "propertyOrder" in schema["properties"]["test_property"]
     assert schema["properties"]["test_property"]["propertyOrder"] == 1
 
@@ -222,7 +222,7 @@ async def test_settings_param_group_get_schema(number_settings_param):
     )
     group._parameters = [number_settings_param]
 
-    schema = group.get_schema()
+    schema = group.get_schema(False)
     assert "properties" in schema
     assert "group_property" in schema["properties"]
     assert schema["properties"]["group_property"]["title"] == "group_name"

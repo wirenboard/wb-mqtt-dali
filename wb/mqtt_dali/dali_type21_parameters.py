@@ -1,6 +1,5 @@
 # Type 21 Thermal lamp protection
 
-from dali.address import GearShort
 from dali.command import Response
 
 from .common_dali_device import MqttControl, MqttControlBase
@@ -37,7 +36,7 @@ class Type21Parameters(TypeParameters):
                     ),
                     "0",
                 ),
-                query_builder=lambda short_address: QueryFailureStatus(GearShort(short_address)),
+                query_builder=QueryFailureStatus,
                 value_formatter=_format_failure_status,
             ),
         ]

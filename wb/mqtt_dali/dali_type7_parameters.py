@@ -82,9 +82,9 @@ class ErrorHoldOffTimeParam(NumberGearParam):
 
 
 class Type7Parameters(TypeParameters):
-    async def read(self, driver: WBDALIDriver, short_address: int) -> dict:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         try:
-            features = await query_response(driver, QueryFeatures(GearShort(short_address)))
+            features = await query_response(driver, QueryFeatures(short_address))
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read switching function features: {e}") from e
         res = []
@@ -96,7 +96,6 @@ class Type7Parameters(TypeParameters):
         if getattr(features, "adjustable_holdoff_time") is True:
             res.append(ErrorHoldOffTimeParam())
         self._parameters = res
-        return await super().read(driver, short_address)
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
 
@@ -129,7 +128,7 @@ class Type7Parameters(TypeParameters):
                     ),
                     "0",
                 ),
-                query_builder=lambda short_address: QuerySwitchStatus(GearShort(short_address)),
+                query_builder=QuerySwitchStatus,
                 value_formatter=format_last_acted,
             ),
         ]

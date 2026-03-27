@@ -1,5 +1,6 @@
 # Type 6 LED modules
 
+from dali.address import GearShort
 from dali.gear.led import (
     QueryDimmingCurve,
     QueryFastFadeTime,
@@ -42,5 +43,5 @@ class Type6Parameters(TypeParameters):
             FastFadeTimeParam(),
         ]
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: int) -> None:
+    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
         await self._dimming_curve_parameter.read(driver, short_address)

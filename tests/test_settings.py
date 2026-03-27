@@ -121,7 +121,7 @@ def test_get_schema(number_settings_param):
 
 def test_get_schema_multiplier(number_settings_param):
     number_settings_param.multiplier = 50
-    schema = number_settings_param.get_schema()
+    schema = number_settings_param.get_schema(False)
     assert schema["properties"]["test_property"]["multipleOf"] == 50
 
 

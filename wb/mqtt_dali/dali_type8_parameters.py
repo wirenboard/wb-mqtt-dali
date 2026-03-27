@@ -241,6 +241,11 @@ class ColourState(SettingsParamBase):
                             },
                         }
                     },
+                    "options": {
+                        "wb": {
+                            "show_editor": True,
+                        },
+                    },
                     "propertyOrder": self._property_order,
                     "required": ["level"],
                 },

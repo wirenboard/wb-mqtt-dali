@@ -6,7 +6,13 @@ from timeit import default_timer
 from typing import Any, Optional, Union
 
 import paho.mqtt.client as mqtt
-from dali.address import DeviceBroadcast, GearBroadcast, GearGroup
+from dali.address import (
+    DeviceBroadcast,
+    DeviceShort,
+    GearBroadcast,
+    GearGroup,
+    InstanceNumber,
+)
 from dali.command import Command, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
@@ -22,6 +28,7 @@ from .dali_controls import make_controls
 from .dali_device import DaliDevice
 from .dali_type8_rgbwaf import get_wanted_mqtt_controls as rgbwaf_mqtt_controls
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
+from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import (
     ControlInfo,
     DeviceChange,
@@ -72,11 +79,17 @@ class ApplicationControllerConfig:
 class ApplicationControllerTaskType(Enum):
     APPLY_SETTING = auto()
     APPLY_GROUP_SETTING = auto()
-    LOAD_GROUP_INFO = auto()
     COMMISSIONING = auto()
     LOAD_INFO = auto()
-    REFRESH_GROUP_VIRTUAL_DEVICES = auto()
     EXECUTE_CONTROL = auto()
+    APPLY_BUS_SETTING = auto()
+
+
+@dataclass
+class PollingState:
+    devices: list = field(default_factory=list)
+    last_poll_time: float = 0.0
+    poll_turn: bool = True
 
 
 @dataclass
@@ -119,7 +132,7 @@ class GroupVirtualDevice:
         if control is not None and control.is_writable():
             await driver.send_commands(control.get_setup_commands(GearGroup(self.group_number), value))
 
-    def setLogger(self, logger: logging.Logger) -> None:
+    def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
 
 
@@ -137,7 +150,7 @@ class BroadcastVirtualDevice:
             ]
         }
 
-    async def get_mqtt_controls(self, _driver: Union[WBDALIDriver, WBDALIDriverOld]) -> list[ControlInfo]:
+    def get_mqtt_controls(self) -> list[ControlInfo]:
         return [control.control_info for control in self._controls.values()]
 
     async def execute_control(
@@ -150,11 +163,61 @@ class BroadcastVirtualDevice:
         if control is not None and control.is_writable():
             await driver.send_commands(control.get_setup_commands(GearBroadcast(), value))
 
-    def setLogger(self, logger: logging.Logger) -> None:
+    def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
 
 
 ControllableDevice = Union[DaliDevice, Dali2Device, BroadcastVirtualDevice, GroupVirtualDevice]
+
+
+async def try_initialize_device(
+    device: Union[DaliDevice, Dali2Device],
+    driver,
+    publisher: DevicePublisher,
+    scheduler: DeviceInitScheduler,
+    control_handler,
+    logger: logging.Logger,
+    current_time: float,
+) -> bool:
+    """Try to initialize device. Publish on success or error. Returns True on success."""
+    mqtt_id = device.mqtt_id
+    is_retry = scheduler.get_retry_count(mqtt_id) > 0
+    try:
+        await device.initialize(driver)
+        if publisher.has_device(mqtt_id):
+            await publisher.remove_device(mqtt_id)
+        await publish_device(device, publisher, control_handler)
+        scheduler.record_success(mqtt_id)
+        if is_retry:
+            logger.info("Device %s initialized successfully after retry", device.name)
+        return True
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        delay = scheduler.record_failure(mqtt_id, current_time)
+        if not is_retry:
+            logger.warning("Failed to initialize device %s, retrying in %.0fs: %s", device.name, delay, e)
+        if not publisher.has_device(mqtt_id):
+            await publish_device(device, publisher, control_handler, error=True)
+        return False
+
+
+async def publish_device(
+    device: Union[DaliDevice, Dali2Device],
+    publisher: DevicePublisher,
+    control_handler,
+    error: bool = False,
+) -> None:
+    if error:
+        common_controls = device.get_common_mqtt_controls()
+        controls = [c.control_info for c in common_controls]
+    else:
+        controls = device.get_mqtt_controls()
+    device_info = DeviceInfo(device.mqtt_id, device.name, controls)
+    await publisher.add_device(device_info)
+    await publisher.register_control_handler(device.mqtt_id, "+", control_handler)
+    if error:
+        for control in common_controls:
+            if control.is_readable():
+                await publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
 
 
 class ApplicationController:
@@ -223,6 +286,7 @@ class ApplicationController:
         self._tasks_queue: asyncio.Queue[ApplicationControllerTask] = asyncio.Queue()
 
         self._in_quiescent_mode = False
+        self._init_scheduler = DeviceInitScheduler()
 
         self._controls_to_execute: dict[tuple[ControllableDevice, str], str] = {}
 
@@ -248,22 +312,16 @@ class ApplicationController:
 
         try:
             await self._dev.initialize()
-            if self.dali2_devices:
-                await self._dev_inst_map.async_autodiscover(
-                    self._dev, [d.address.short for d in self.dali2_devices]
-                )
         except Exception as e:
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
-        self._update_dali2_devices_instances({d.address.short: d for d in self.dali2_devices})
-
         await self._device_publisher.initialize()
         broadcast_device_info = DeviceInfo(
             self._broadcast_device.mqtt_id,
             self._broadcast_device.name,
-            await self._broadcast_device.get_mqtt_controls(self._dev),
+            self._broadcast_device.get_mqtt_controls(),
         )
         await self._device_publisher.add_device(broadcast_device_info)
         await self._device_publisher.register_control_handler(
@@ -272,25 +330,13 @@ class ApplicationController:
             self._handle_on_topic,
         )
         self._devices_by_mqtt_id[self._broadcast_device.mqtt_id] = self._broadcast_device
-        self._broadcast_device.setLogger(self.logger)
+        self._broadcast_device.set_logger(self.logger)
 
+        current_time = default_timer()
         for device in self.dali_devices + self.dali2_devices:
-            try:
-                controls = await device.get_mqtt_controls(self._dev)
-            except Exception as e:
-                self.logger.error("Failed to get controls for device %s: %s", device.name, e)
-                controls = []
-            device_info = DeviceInfo(device.mqtt_id, device.name, controls)
-            await self._device_publisher.add_device(device_info)
-            await self._device_publisher.register_control_handler(
-                device.mqtt_id,
-                "+",
-                self._handle_on_topic,
-            )
             self._devices_by_mqtt_id[device.mqtt_id] = device
-            device.setLogger(self.logger)
-
-        await self._refresh_group_virtual_devices()
+            device.set_logger(self.logger)
+            self._init_scheduler.schedule(device.mqtt_id, current_time)
 
         async with self._state_lock:
             self._state = ApplicationControllerState.READY
@@ -334,6 +380,7 @@ class ApplicationController:
             pass
 
         self._controls_to_execute.clear()
+        self._init_scheduler.clear()
 
         async with self._websocket_lock:
             await self._stop_websocket()
@@ -376,21 +423,11 @@ class ApplicationController:
 
         new_mqtt_id = device.mqtt_id
         if old_mqtt_id != new_mqtt_id:
-            device_info = DeviceInfo(
-                new_mqtt_id,
-                device.name,
-                await device.get_mqtt_controls(self._dev),
-            )
-            await self._device_publisher.add_device(device_info)
-            await self._device_publisher.register_control_handler(
-                device.mqtt_id,
-                "+",
-                self._handle_on_topic,
-            )
             await self._device_publisher.remove_device(old_mqtt_id)
             self._devices_by_mqtt_id.pop(old_mqtt_id, None)
+            await publish_device(device, self._device_publisher, self._handle_on_topic)
             self._devices_by_mqtt_id[new_mqtt_id] = device
-            device.setLogger(self.logger)
+            device.set_logger(self.logger)
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
@@ -400,15 +437,16 @@ class ApplicationController:
             self._dali2_devices_by_addr[device.address.short] = device
 
         if isinstance(device, DaliDevice):
-            await self._refresh_group_virtual_devices_through_queue()
+            await self._refresh_group_virtual_devices()
 
     async def load_group_info(self, group_index: int) -> dict:
-        async with self._state_lock:
-            if self._state != ApplicationControllerState.READY:
-                raise RuntimeError("ApplicationController must be initialized")
-            task = ApplicationControllerTask(ApplicationControllerTaskType.LOAD_GROUP_INFO, group_index)
-            self._tasks_queue.put_nowait(task)
-        return await task.future
+        res = {}
+        for device in self.dali_devices:
+            if device.is_initialized and group_index in device.groups:
+                handlers = device.get_group_parameter_handlers()
+                for handler in handlers:
+                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
+        return res
 
     async def apply_group_parameters(self, group_index: int, new_params: dict) -> None:
         async with self._state_lock:
@@ -417,6 +455,23 @@ class ApplicationController:
             task = ApplicationControllerTask(
                 ApplicationControllerTaskType.APPLY_GROUP_SETTING, (group_index, new_params)
             )
+            self._tasks_queue.put_nowait(task)
+        await task.future
+
+    async def load_bus_info(self) -> dict:
+        res = {}
+        for device in self.dali_devices:
+            if device.is_initialized:
+                handlers = device.get_group_parameter_handlers()
+                for handler in handlers:
+                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
+        return res
+
+    async def apply_bus_parameters(self, new_params: dict) -> None:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.APPLY_BUS_SETTING, new_params)
             self._tasks_queue.put_nowait(task)
         await task.future
 
@@ -449,21 +504,12 @@ class ApplicationController:
                 self.websocket_config = config
                 self._run_websocket()
 
-    async def _load_group_info_task(self, group_index: int) -> dict:
-        res = {}
-        for device in self.dali_devices:
-            if group_index in device.groups:
-                handlers = await device.get_group_parameter_handlers(self._dev)
-                for handler in handlers:
-                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
-        return res
-
     async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
         group_parameter_handlers = []
         group_parameter_types: set[tuple[str, str]] = set()
         for device in self.dali_devices:
-            if group_index in device.groups:
-                handlers = await device.get_group_parameter_handlers(self._dev)
+            if device.is_initialized and group_index in device.groups:
+                handlers = device.get_group_parameter_handlers()
                 for handler in handlers:
                     handler_key = (type(handler).__name__, getattr(handler, "property_name", ""))
                     if handler_key not in group_parameter_types:
@@ -471,6 +517,20 @@ class ApplicationController:
                         group_parameter_handlers.append(handler)
         for handler in group_parameter_handlers:
             await handler.write(self._dev, GearGroup(group_index), new_params)
+
+    async def _apply_bus_parameters_task(self, new_params: dict) -> None:
+        bus_parameter_handlers = []
+        bus_parameter_types: set[tuple[str, str]] = set()
+        for device in self.dali_devices:
+            if device.is_initialized:
+                handlers = device.get_group_parameter_handlers()
+                for handler in handlers:
+                    handler_key = (type(handler).__name__, getattr(handler, "property_name", ""))
+                    if handler_key not in bus_parameter_types:
+                        bus_parameter_types.add(handler_key)
+                        bus_parameter_handlers.append(handler)
+        for handler in bus_parameter_handlers:
+            await handler.write(self._dev, GearBroadcast(), new_params)
 
     async def _commissioning_task(self):
         start_time = default_timer()
@@ -505,24 +565,18 @@ class ApplicationController:
         }
         removed_ids = [d.mqtt_id for d in self.dali_devices if d.address.short in removed_short_addresses]
         changes = DeviceChange(removed=removed_ids)
-        for device in created_devices:
-            changes.added.append(
-                DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
-            )
-            device.setLogger(self.logger)
-
         await self._device_publisher.rebuild(changes)
+
+        for removed_id in removed_ids:
+            self._devices_by_mqtt_id.pop(removed_id, None)
+            self._init_scheduler.remove(removed_id)
+
         for device in created_devices:
-            await self._device_publisher.register_control_handler(
-                device.mqtt_id,
-                "+",
-                self._handle_on_topic,
-            )
+            device.set_logger(self.logger)
+            await self._try_init_new_device(device)
 
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
-        for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
         await self._refresh_group_virtual_devices()
 
@@ -533,35 +587,24 @@ class ApplicationController:
 
         created_devices = changed_devices + new_devices
         new_dali2_devices = unchanged_devices + created_devices
-        if new_dali2_devices:
-            await self._dev_inst_map.async_autodiscover(
-                self._dev, [d.address.short for d in new_dali2_devices]
-            )
-            self._update_dali2_devices_instances({d.address.short: d for d in created_devices})
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
             d.short for d in commissioning_result.missing
         }
         removed_ids = [d.mqtt_id for d in self.dali2_devices if d.address.short in removed_short_addresses]
         changes = DeviceChange(removed=removed_ids)
-        for device in created_devices:
-            changes.added.append(
-                DeviceInfo(device.mqtt_id, device.name, await device.get_mqtt_controls(self._dev))
-            )
-            device.setLogger(self.logger)
-
         await self._device_publisher.rebuild(changes)
+
+        for removed_id in removed_ids:
+            self._devices_by_mqtt_id.pop(removed_id, None)
+            self._init_scheduler.remove(removed_id)
+
         for device in created_devices:
-            await self._device_publisher.register_control_handler(
-                device.mqtt_id,
-                "+",
-                self._handle_on_topic,
-            )
+            device.set_logger(self.logger)
+            await self._try_init_new_device(device)
 
         self.dali2_devices = new_dali2_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
-        for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
@@ -626,16 +669,45 @@ class ApplicationController:
             self._handle_on_topic,
         )
         self._devices_by_mqtt_id[device.mqtt_id] = device
-        device.setLogger(self.logger)
+        device.set_logger(self.logger)
 
-    async def _refresh_group_virtual_devices_through_queue(self) -> None:
-        async with self._state_lock:
-            if self._state != ApplicationControllerState.READY:
+    async def _try_init_new_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
+        current_time = default_timer()
+        self._devices_by_mqtt_id[device.mqtt_id] = device
+        self._init_scheduler.schedule(device.mqtt_id, current_time)
+        await self._do_init_device(device.mqtt_id, current_time)
+
+    async def _do_init_device(self, mqtt_id: str, current_time: float) -> None:
+        device = self._devices_by_mqtt_id.get(mqtt_id)
+        if device is None or not isinstance(device, (DaliDevice, Dali2Device)):
+            self._init_scheduler.remove(mqtt_id)
+            return
+        if device.is_initialized:
+            self._init_scheduler.remove(mqtt_id)
+            return
+        success = await try_initialize_device(
+            device,
+            self._dev,
+            self._device_publisher,
+            self._init_scheduler,
+            self._handle_on_topic,
+            self.logger,
+            current_time,
+        )
+        if success:
+            if isinstance(device, DaliDevice):
                 await self._refresh_group_virtual_devices()
-                return
-            task = ApplicationControllerTask(ApplicationControllerTaskType.REFRESH_GROUP_VIRTUAL_DEVICES)
-            self._tasks_queue.put_nowait(task)
-        await task.future
+            elif isinstance(device, Dali2Device):
+                self._update_dali2_device_instance_map(device)
+
+    def _update_dali2_device_instance_map(self, device: Dali2Device) -> None:
+        addr = DeviceShort(device.address.short)
+        for inst_num, inst_params in device.instances.items():
+            self._dev_inst_map.add_type(
+                short_address=addr,
+                instance_number=InstanceNumber(inst_num),
+                instance_type=inst_params.instance_type,
+            )
 
     async def _refresh_group_virtual_devices(self) -> None:
         active_groups = set(self._get_active_group_numbers())
@@ -666,18 +738,38 @@ class ApplicationController:
             await self._publish_group_virtual_device(device)
             self._group_devices_by_number[group_number] = device
 
-    def _update_dali2_devices_instances(self, dali2_devices_by_addr: dict[int, Dali2Device]) -> None:
-        for (addr, inst_num), inst_type in self._dev_inst_map.mapping.items():
-            device = dali2_devices_by_addr.get(addr)
-            if device is not None:
-                self.logger.debug(
-                    "Adding instance %d of type %d to DALI 2 device %s", inst_num, inst_type, device.name
-                )
-                device.add_instance(inst_num, inst_type)
+    async def _poll_step(self, state: "PollingState", current_time: float) -> float:
+        """Execute one poll/init step. Returns queue_timeout for next iteration."""
+        # First-attempt batch — fast startup, no interleaving needed
+        first_attempt_ids = self._init_scheduler.get_first_attempt_ready(current_time)
+        if first_attempt_ids:
+            for mqtt_id in first_attempt_ids:
+                await self._do_init_device(mqtt_id, current_time)
+            return 0.001
+
+        # Alternate: poll one device, then retry-init one device
+        if state.poll_turn and state.last_poll_time + self._polling_interval <= current_time:
+            if not state.devices:
+                state.devices = [d for d in self.dali_devices if d.is_initialized]
+            if state.devices:
+                await self._poll_device(state.devices.pop())
+                if not state.devices:
+                    state.last_poll_time = current_time
+                state.poll_turn = False
+                return 0.001
+            state.last_poll_time = current_time
+
+        retry_id = self._init_scheduler.get_one_retry_ready(current_time)
+        if retry_id:
+            await self._do_init_device(retry_id, current_time)
+            state.poll_turn = True
+            return 0.001
+
+        state.poll_turn = True
+        return 1.0
 
     async def _polling_loop(self) -> None:
-        devices = []
-        next_poll_time = default_timer()
+        state = PollingState(last_poll_time=default_timer() - self._polling_interval)
         queue_timeout = 0.001
         item = None
         while True:
@@ -686,19 +778,10 @@ class ApplicationController:
                     if item is None:
                         item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
                 except asyncio.TimeoutError:
-                    current_timer = default_timer()
-                    if next_poll_time <= current_timer:
-                        if self._in_quiescent_mode:
-                            queue_timeout = 1.0
-                            continue
-                        if not devices:
-                            devices = list(self.dali_devices)
-                        if devices:
-                            await self._poll_device(devices.pop())
-                            queue_timeout = 0.001
-                        if not devices:
-                            next_poll_time = current_timer + self._polling_interval
-                            queue_timeout = 1.0
+                    if self._in_quiescent_mode:
+                        queue_timeout = 1.0
+                        continue
+                    queue_timeout = await self._poll_step(state, default_timer())
                     continue
 
                 if self._in_quiescent_mode:
@@ -744,23 +827,18 @@ class ApplicationController:
                     try:
                         if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
                             await self._commissioning_task()
-                            devices = list(self.dali_devices)
+                            state.devices.clear()
                         elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
                             device, force_reload = item.data
                             await device.load_info(self._dev, force_reload)
                         elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
                             device, new_params = item.data
                             await device.apply_parameters(self._dev, new_params)
-                        elif item.task_type == ApplicationControllerTaskType.REFRESH_GROUP_VIRTUAL_DEVICES:
-                            await self._refresh_group_virtual_devices()
-                        elif item.task_type == ApplicationControllerTaskType.LOAD_GROUP_INFO:
-                            group_index = item.data
-                            result = await self._load_group_info_task(group_index)
-                            if not item.future.done():
-                                item.future.set_result(result)
                         elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
                             group_index, new_params = item.data
                             await self._apply_group_parameters_task(group_index, new_params)
+                        elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
+                            await self._apply_bus_parameters_task(item.data)
                         if not item.future.done():
                             item.future.set_result(None)
                     except Exception as e:

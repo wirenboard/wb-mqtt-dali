@@ -474,7 +474,7 @@ class WBDALIDriver:
                 resp_waiter.command,
                 resp_pointer,
             )
-            resp_future.set_result(BackwardFrameError(0))
+            resp_future.set_result(None)
             return
         # Unknown status
         self.logger.error(
@@ -485,7 +485,7 @@ class WBDALIDriver:
             backward_frame_byte,
             resp,
         )
-        resp_future.set_result(BackwardFrameError(0))
+        resp_future.set_result(None)
 
     async def run_sequence(self, seq, progress=None) -> Any:
         """

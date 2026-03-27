@@ -19,7 +19,7 @@ from .settings import SettingsParamName
 class DeadtimeTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Deadtime timer", "Таймер задержки"),
+            SettingsParamName("Deadtime timer, ms", "Таймер задержки, мс"),
             "deadtime_timer",
             instance_number,
             QueryDeadtimeTimer,
@@ -27,12 +27,14 @@ class DeadtimeTimerParam(InstanceParam):
         )
         self.grid_columns = 4
         self.property_order = 10
+        self.multiplier = 50  # IEC 62386-303 Table 4: T_incr = 50 ms
+        self.maximum = 255 * 50
 
 
 class HoldTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Hold timer", "Таймер удержания"),
+            SettingsParamName("Hold timer, s", "Таймер удержания, с"),
             "hold_timer",
             instance_number,
             QueryHoldTimer,
@@ -40,12 +42,14 @@ class HoldTimerParam(InstanceParam):
         )
         self.grid_columns = 4
         self.property_order = 11
+        self.multiplier = 10  # IEC 62386-303 Table 4: T_incr = 10 s
+        self.maximum = 255 * 10
 
 
 class ReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Report timer", "Таймер отчёта"),
+            SettingsParamName("Report timer, s", "Таймер отчёта, с"),
             "report_timer",
             instance_number,
             QueryReportTimer,
@@ -53,6 +57,7 @@ class ReportTimerParam(InstanceParam):
         )
         self.grid_columns = 4
         self.property_order = 12
+        # IEC 62386-303 Table 4: T_incr = 1 s, raw value = seconds directly
 
 
 def build_type3_occupancy_sensor_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:

@@ -23,7 +23,7 @@ from .settings import SettingsParamName
 class AlarmReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Alarm report timer", "Таймер аварийного отчёта"),
+            SettingsParamName("Alarm report timer, s", "Таймер аварийного отчёта, с"),
             "alarm_report_timer",
             instance_number,
             QueryAlarmReportTimer,
@@ -31,12 +31,14 @@ class AlarmReportTimerParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 10
+        self.multiplier = 5  # IEC 62386-306 Table 6: T_incr = 5 s
+        self.maximum = 255 * 5
 
 
 class DeadtimeTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Deadtime timer", "Таймер задержки"),
+            SettingsParamName("Deadtime timer, ms", "Таймер задержки, мс"),
             "deadtime_timer",
             instance_number,
             QueryDeadtimeTimer,
@@ -44,12 +46,14 @@ class DeadtimeTimerParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 11
+        self.multiplier = 50  # IEC 62386-306 Table 6: T_incr = 50 ms
+        self.maximum = 255 * 50
 
 
 class HysteresisParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Hysteresis", "Гистерезис"),
+            SettingsParamName("Hysteresis, %", "Гистерезис, %"),
             "hysteresis",
             instance_number,
             QueryHysteresis,
@@ -57,6 +61,7 @@ class HysteresisParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 12
+        self.maximum = 25  # IEC 62386-306: hysteresis range is 0..25 %
 
 
 class HysteresisMinParam(InstanceParam):
@@ -75,7 +80,7 @@ class HysteresisMinParam(InstanceParam):
 class ReportTimerParam(InstanceParam):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Report timer", "Таймер отчёта"),
+            SettingsParamName("Report timer, s", "Таймер отчёта, с"),
             "report_timer",
             instance_number,
             QueryReportTimer,
@@ -83,6 +88,8 @@ class ReportTimerParam(InstanceParam):
         )
         self.grid_columns = 3
         self.property_order = 14
+        self.multiplier = 5  # IEC 62386-306 Table 6: T_incr = 5 s
+        self.maximum = 255 * 5
 
 
 def build_type6_general_purpose_sensor_parameters(instance_number: InstanceNumber) -> List[InstanceParam]:

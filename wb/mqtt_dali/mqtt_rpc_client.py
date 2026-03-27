@@ -15,6 +15,7 @@ async def wait_for_rpc_endpoint(
     service: str,
     method: str,
     mqtt_dispatcher: MQTTDispatcher,
+    timeout: float = 5.0,
 ) -> None:
     fut = asyncio.get_running_loop().create_future()
 
@@ -22,11 +23,21 @@ async def wait_for_rpc_endpoint(
         if not fut.done():
             fut.set_result(None)
 
+    def timeout_callback():
+        if not fut.done():
+            fut.set_exception(TimeoutError("Timeout waiting for RPC endpoint"))
+
+    timeout_handler = asyncio.get_running_loop().call_later(
+        timeout,
+        timeout_callback,
+    )
+
     topic = get_topic_path(driver, service, method)
     await mqtt_dispatcher.subscribe(topic, on_response)
     try:
         await fut
     finally:
+        timeout_handler.cancel()
         await mqtt_dispatcher.unsubscribe(topic, on_response)
 
 

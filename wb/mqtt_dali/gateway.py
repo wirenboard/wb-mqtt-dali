@@ -173,13 +173,22 @@ class Gateway:
         self._gtin_db = gtin_db
 
     async def start(self) -> None:
-        await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
-        await wait_for_rpc_endpoint(
-            "wb-mqtt-serial",
-            "config",
-            "Load",
-            self._mqtt_dispatcher,
-        )
+        try:
+            await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.debug("Failed to remove old MQTT topics for wb-mqtt-dali: %s", e)
+
+        try:
+            await wait_for_rpc_endpoint(
+                "wb-mqtt-serial",
+                "config",
+                "Load",
+                self._mqtt_dispatcher,
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.warning("wb-mqtt-serial RPC endpoint is not available: %s", e)
+            raise RuntimeError("Required RPC endpoint wb-mqtt-serial/config/Load is not available") from e
+
         res = await asyncio.gather(
             *[gw.start() for gw in self.wb_dali_gateways],
             return_exceptions=True,

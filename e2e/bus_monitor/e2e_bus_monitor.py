@@ -16,6 +16,8 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import FRAME_COUNTER_MODULO
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
+from wb.mqtt_dali.bus_traffic import BusTrafficItem
+
 
 EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
@@ -96,15 +98,15 @@ async def main(argv):
     total_frames = 0
     got_frames = 0
 
-    def bus_monitor_callback(_frame, _source, frame_counter):
+    def bus_monitor_callback(frame: BusTrafficItem):
         nonlocal last_frame_counter, missed_frames, got_frames
         if last_frame_counter is None:
-            last_frame_counter = frame_counter
-        elif frame_counter is not None:
-            delta = (frame_counter - last_frame_counter - 1) % FRAME_COUNTER_MODULO
+            last_frame_counter = frame.frame_counter
+        elif frame.frame_counter is not None:
+            delta = (frame.frame_counter - last_frame_counter - 1) % FRAME_COUNTER_MODULO
             missed_frames += delta
-            last_frame_counter = frame_counter
-        if frame_counter is not None:
+            last_frame_counter = frame.frame_counter
+        if frame.frame_counter is not None:
             got_frames += 1
 
     async with client:

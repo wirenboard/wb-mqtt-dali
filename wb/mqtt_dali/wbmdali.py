@@ -6,7 +6,7 @@ import logging
 import random
 import string
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Sequence, Union
+from typing import Any, List, Optional, Sequence, Union
 
 import paho.mqtt.client as mqtt
 from dali.command import Command, Response, from_frame
@@ -16,6 +16,7 @@ from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
+from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
 from .mqtt_dispatcher import MQTTDispatcher
 
 ERR_START_BIT = 0x100  # не получен старт бит
@@ -44,30 +45,11 @@ class WBDALIConfig:
     queue_start_modbus_address: int = 1920
 
 
-class BusTrafficCallbacks:
-    """Helper class for callback registration"""
-
-    def __init__(self) -> None:
-        self._callbacks = set()
-
-    def register(self, func: Callable[[Frame, str, Optional[int]], None]) -> Callable[[], None]:
-
-        def cleanup():
-            self._callbacks.discard(func)
-
-        self._callbacks.add(func)
-        return cleanup
-
-    def invoke(self, frame: Frame, source: str) -> None:
-        for func in self._callbacks:
-            func(frame, source)
-
-
 @dataclass
 class SendQueueItem:
     future: asyncio.Future
     command: Command
-    source: str
+    source: BusTrafficSource
     timeout_handler: Optional[asyncio.Handle] = None
 
     def cancel_timeout(self) -> None:
@@ -119,7 +101,7 @@ class WBDALIDriver:
         self.dev_inst_map = dev_inst_map
 
         # Register to be called back with bus traffic
-        self.bus_traffic = BusTrafficCallbacks()
+        self.bus_traffic = BusTrafficCallbacks(config.queue_size)
 
         self._send_queue: asyncio.Queue[SendQueueItem] = asyncio.Queue(maxsize=self.config.queue_size)
 
@@ -263,7 +245,7 @@ class WBDALIDriver:
         frame = ForwardFrame(24, int(message.payload) >> 8)
         cmd = from_frame(frame, dev_inst_map=self.dev_inst_map)
         self.logger.debug("Received FF24: %s", cmd)
-        self.bus_traffic.invoke(frame, "bus")
+        self.bus_traffic.notify_bus_frame(frame, 0)
 
     async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
         self.logger.debug(
@@ -305,17 +287,21 @@ class WBDALIDriver:
                 resp,
                 resp & ~ERR_STILL_SENDING,
             )
-            resp_future.set_result(BackwardFrameError(0))
+            response_frame = BackwardFrameError(0)
+            resp_future.set_result(response_frame)
+            self.bus_traffic.notify_command(resp_waiter.command.frame, response_frame, resp_waiter.source, 0)
             return
 
         if (resp & ERR_TIMEOUT) != 0:
             self.logger.debug("Timeout waiting for response")
-            resp_future.set_result(None)
+            response_frame = None
+            resp_future.set_result(response_frame)
+            self.bus_traffic.notify_command(resp_waiter.command.frame, response_frame, resp_waiter.source, 0)
             return
 
-        backward_frame = BackwardFrame(resp & ~ERR_STILL_SENDING)
-        resp_future.set_result(backward_frame)
-        self.bus_traffic.invoke(backward_frame, "bus")
+        response_frame = BackwardFrame(resp & ~ERR_STILL_SENDING)
+        resp_future.set_result(response_frame)
+        self.bus_traffic.notify_command(resp_waiter.command.frame, response_frame, resp_waiter.source, 0)
 
     async def run_sequence(self, seq, progress=None) -> Any:
         """
@@ -349,15 +335,17 @@ class WBDALIDriver:
                         if progress:
                             progress(cmd)
                     elif isinstance(cmd, list):
-                        response = await self._send_commands_internal(cmd, source="WB", lock_queue=False)
+                        response = await self._send_commands_internal(
+                            cmd, BusTrafficSource.WB, lock_queue=False
+                        )
                     else:
-                        response = (await self._send_commands_internal([cmd], source="WB", lock_queue=False))[
-                            0
-                        ]
+                        response = (
+                            await self._send_commands_internal([cmd], BusTrafficSource.WB, lock_queue=False)
+                        )[0]
         finally:
             seq.close()
 
-    async def send(self, cmd: Command, source: str = "WB") -> Optional[Response]:
+    async def send(self, cmd: Command, source: BusTrafficSource = BusTrafficSource.WB) -> Optional[Response]:
         """
         Send a DALI command to the bus and optionally wait for a response.
         Args:
@@ -372,7 +360,7 @@ class WBDALIDriver:
         return (await self.send_commands([cmd], source=source))[0]
 
     async def send_commands(
-        self, commands: Sequence[Command], source: str = "WB"
+        self, commands: Sequence[Command], source: BusTrafficSource = BusTrafficSource.WB
     ) -> List[Optional[Response]]:
         """
         Send a sequence of DALI commands to the bus and optionally wait for responses.
@@ -427,7 +415,6 @@ class WBDALIDriver:
                     self.logger.debug("Skipping cancelled queue item: %s", str(item.command))
                     continue
 
-                self.bus_traffic.invoke(item.command.frame, item.source)
                 batch.append(item)
                 self._next_queue_index += 1
 
@@ -453,6 +440,9 @@ class WBDALIDriver:
                     waiter_to_clear = self._waiting_for_responses.get(index)
                     if waiter_to_clear is not None and not waiter_to_clear.future.done():
                         waiter_to_clear.future.set_result(None)
+                        self.bus_traffic.notify_command(
+                            waiter_to_clear.command.frame, None, waiter_to_clear.source, 0
+                        )
                         self.logger.error(
                             "Timeout waiting for response %s for queue index %d",
                             waiter_to_clear.command,
@@ -474,7 +464,7 @@ class WBDALIDriver:
             )
 
     async def _send_commands_internal(
-        self, commands: Sequence[Command], source: str, lock_queue: bool
+        self, commands: Sequence[Command], source: BusTrafficSource, lock_queue: bool
     ) -> list[Optional[Response]]:
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug("send: %s", ", ".join(str(cmd) for cmd in commands))

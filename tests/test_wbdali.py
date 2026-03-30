@@ -12,6 +12,7 @@ import paho.mqtt.client as mqtt
 from dali.command import Command, Response
 from dali.frame import BackwardFrame, ForwardFrame
 
+from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver, encode_frame_for_modbus
 
@@ -354,34 +355,26 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.prepare_driver(driver)
 
         callback_invoked = asyncio.Event()
-        received_frame = None
+        received_request_frame = None
+        received_response_frame = None
         received_source = None
 
-        def traffic_callback(frame, source, _frame_counter):
-            nonlocal received_frame, received_source
-            received_frame = frame
-            received_source = source
+        def traffic_callback(item: BusTrafficItem):
+            nonlocal received_request_frame, received_response_frame, received_source
+            received_request_frame = item.request
+            received_response_frame = item.response
+            received_source = item.request_source
             callback_invoked.set()
 
         driver.bus_traffic.register(traffic_callback)
 
-        # Monitor commands
         cmd = _MockCommand(sendtwice=False, response_class=None)
-        fut = asyncio.gather(driver.send(cmd, source="test_source"))
-        await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
-        self.assertEqual(received_source, "test_source")
-        self.assertEqual(cmd.frame, received_frame)
+        fut = asyncio.gather(driver.send(cmd, source=BusTrafficSource.LUNATONE))
 
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
 
-        # Reset for response monitoring
-        callback_invoked.clear()
-        received_frame = None
-        received_source = None
-
-        # Monitor response
         message = mqtt.MQTTMessage(
             topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
         )
@@ -389,8 +382,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.mock_mqtt_dispatcher._dispatch_message(message)
         await fut
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
-        self.assertEqual(received_source, "bus")
-        self.assertEqual(BackwardFrame(0x12), received_frame)
+        self.assertEqual(received_source, BusTrafficSource.LUNATONE)
+        self.assertEqual(cmd.frame, received_request_frame)
+        self.assertEqual(BackwardFrame(0x12), received_response_frame)
 
     async def test_handle_ff24_message(self):
         """Test handling of 24-bit forward frame messages."""
@@ -399,8 +393,8 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         callback_invoked = asyncio.Event()
 
-        def traffic_callback(frame, source, _frame_counter):
-            if source == "bus":
+        def traffic_callback(item: BusTrafficItem):
+            if item.request_source == BusTrafficSource.BUS:
                 callback_invoked.set()
 
         driver.bus_traffic.register(traffic_callback)

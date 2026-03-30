@@ -20,6 +20,7 @@ from dali.gear.colour import tc_kelvin_mirek
 from dali.gear.general import EnableDeviceType
 
 from .asyncio_utils import OneShotTasks
+from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult
 from .common_dali_device import MqttControlBase
 from .dali2_controls import publish_dali2_event
@@ -36,7 +37,7 @@ from .device_publisher import (
     DevicePublisher,
     TranslatedTitle,
 )
-from .fake_lunatone_iot import LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE, run_websocket
+from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .utils import merge_json_schemas
@@ -919,13 +920,13 @@ class ApplicationController:
             self._quiescent_mode_timer.cancel()
             self._quiescent_mode_timer = None
 
-    def _handle_bus_traffic_frame(self, frame: Frame, source: str, frame_counter: Optional[int]) -> None:
+    def _handle_bus_traffic_frame(self, item: BusTrafficItem) -> None:
         incoming_command = None
-        if not frame.error and isinstance(frame, ForwardFrame):
+        if not item.request.error and isinstance(item.request, ForwardFrame):
             incoming_command = from_frame(
-                frame, dev_inst_map=self._dev_inst_map, devicetype=self._last_bus_traffic_device_type
+                item.request, dev_inst_map=self._dev_inst_map, devicetype=self._last_bus_traffic_device_type
             )
-            if source in ["bus", LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE]:
+            if item.request_source in [BusTrafficSource.BUS, BusTrafficSource.LUNATONE]:
                 try:
                     if isinstance(incoming_command, StartQuiescentMode):
                         self._one_shot_tasks.add(self._handle_start_quiescent_mode(), "Start quiescent mode")
@@ -952,42 +953,71 @@ class ApplicationController:
                             "Publish DALI 2 event to MQTT",
                         )
 
-        self._publish_bus_traffic(frame, source, frame_counter, incoming_command)
+        self._publish_bus_traffic(item, incoming_command)
 
     def _publish_bus_traffic(
-        self, frame: Frame, source: str, frame_counter: Optional[int], decoded_command: Optional[Command]
+        self,
+        bus_traffic_item: BusTrafficItem,
+        decoded_request_command: Optional[Command],
     ) -> None:
-        if decoded_command is not None and isinstance(decoded_command, EnableDeviceType):
-            self._last_bus_traffic_device_type = decoded_command.param
+        if decoded_request_command is not None and isinstance(decoded_request_command, EnableDeviceType):
+            self._last_bus_traffic_device_type = decoded_request_command.param
         else:
             self._last_bus_traffic_device_type = 0
 
         if self.bus_monitor_enabled:
-            if frame.error:
-                command_str = " Error"
-            elif decoded_command is not None:
-                command_str = f" {decoded_command}"
-            else:
-                command_str = ""
+            request_msg = format_command(bus_traffic_item.request, decoded_request_command)
 
-            frame_length = len(frame)
-            if frame_length <= 16:
-                frame_value = f"   {frame.as_integer:04x}"
-            elif frame_length <= 24:
-                frame_value = f" {frame.as_integer:06x}"
+            if bus_traffic_item.request_source == BusTrafficSource.BUS:
+                request_msg = f"<<{request_msg} (fc: {bus_traffic_item.frame_counter})"
             else:
-                frame_value = f"{frame.as_integer:07x}"
-
-            frame_type = "FF" if isinstance(frame, ForwardFrame) else "BF"
-
-            if source == "bus":
-                msg = f"<<{frame_value} {frame_type}{frame_length}{command_str}"
-                if frame_counter is not None:
-                    msg = msg + f" (fc: {frame_counter})"
-            else:
-                msg = f">>{frame_value} {frame_type}{frame_length}{command_str} (src: {source})"
+                if bus_traffic_item.request_source == BusTrafficSource.LUNATONE:
+                    request_msg = f">>{request_msg} (from lunatone)"
+                else:
+                    request_msg = f">>{request_msg}"
 
             self._one_shot_tasks.add(
-                self._mqtt_dispatcher.client.publish(self._bus_monitor_topic, msg, qos=2, retain=False),
+                self._mqtt_dispatcher.client.publish(
+                    self._bus_monitor_topic, request_msg, qos=2, retain=False
+                ),
                 "Publish DALI bus traffic to MQTT",
             )
+
+            if bus_traffic_item.response is not None:
+                response_msg = f"<<{format_response(bus_traffic_item.response, decoded_request_command)}"
+
+                self._one_shot_tasks.add(
+                    self._mqtt_dispatcher.client.publish(
+                        self._bus_monitor_topic, response_msg, qos=2, retain=False
+                    ),
+                    "Publish DALI bus traffic to MQTT",
+                )
+
+
+def format_frame(frame: Frame) -> str:
+    frame_length = len(frame)
+    if frame_length <= 16:
+        frame_value = f"   {frame.as_integer:04x}"
+    elif frame_length <= 24:
+        frame_value = f" {frame.as_integer:06x}"
+    else:
+        frame_value = f"{frame.as_integer:07x}"
+
+    frame_type = "FF" if isinstance(frame, ForwardFrame) else "BF"
+    return f"{frame_value} {frame_type}{frame_length:<2}"
+
+
+def format_command(frame: Frame, decoded_command: Optional[Command]) -> str:
+    if frame.error:
+        return f"{format_frame(frame)} Error"
+    if decoded_command is not None:
+        return f"{format_frame(frame)} {decoded_command}"
+    return format_frame(frame)
+
+
+def format_response(frame: Frame, decoded_command: Optional[Command]) -> str:
+    if frame.error:
+        return f"{format_frame(frame)} Error"
+    if decoded_command is not None and decoded_command.response is not None:
+        return f"{format_frame(frame)} {decoded_command.response(frame)}"
+    return format_frame(frame)

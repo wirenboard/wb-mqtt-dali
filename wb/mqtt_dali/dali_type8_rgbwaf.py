@@ -109,7 +109,7 @@ class RgbwafColourValues:
         }
 
 
-def get_wanted_mqtt_controls() -> list[MqttControlBase]:
+def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
     def _set_rgb_commands_builder(short_address: Address, value: str) -> list[command.Command]:
         components = value.split(";")
         if len(components) != 3:
@@ -135,32 +135,32 @@ def get_wanted_mqtt_controls() -> list[MqttControlBase]:
             Activate(short_address),
         ]
 
-    return [
-        MqttControl(
-            ControlInfo(
-                "set_rgb",
-                ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")),
-                "0;0;0",
-            ),
-            commands_builder=_set_rgb_commands_builder,
+    setup_rgb_control = MqttControl(
+        ControlInfo(
+            "set_rgb",
+            ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")),
+            "0;0;0",
         ),
-        MqttControl(
-            ControlInfo(
-                "set_white",
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Wanted White", "Желаемый белый"),
-                    minimum=0,
-                    maximum=MAX_COLOUR_VALUE,
-                ),
-                "0",
+        commands_builder=_set_rgb_commands_builder,
+    )
+
+    setup_white_control = MqttControl(
+        ControlInfo(
+            "set_white",
+            ControlMeta(
+                "range",
+                TranslatedTitle("Wanted White", "Желаемый белый"),
+                minimum=0,
+                maximum=MAX_COLOUR_VALUE,
             ),
-            commands_builder=_set_white_commands_builder,
+            "0",
         ),
-    ]
+        commands_builder=_set_white_commands_builder,
+    )
 
+    if only_setup_controls:
+        return [setup_rgb_control, setup_white_control]
 
-def get_mqtt_controls() -> list[MqttControlBase]:
     return [
         MqttControl(
             ControlInfo(
@@ -169,6 +169,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 "0;0;0",
             ),
         ),
+        setup_rgb_control,
         MqttControl(
             ControlInfo(
                 "current_white",
@@ -176,7 +177,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                 "0",
             ),
         ),
-        *get_wanted_mqtt_controls(),
+        setup_white_control,
     ]
 
 

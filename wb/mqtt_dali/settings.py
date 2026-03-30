@@ -122,8 +122,8 @@ class NumberSettingsParam(SettingsParamBase):
         self.minimum = 0
         self.maximum = 255
         self.multiplier = 1
-        self.grid_columns = None
-        self.property_order = None
+        self.grid_columns: Optional[int] = None
+        self.property_order: Optional[int] = None
         self.default: Optional[int] = None
         self.format: Optional[str] = None
         self.value = None

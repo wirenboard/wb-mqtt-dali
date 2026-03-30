@@ -82,6 +82,19 @@ class ActualLevelControl(MqttControlBase):
 def make_controls() -> list[MqttControlBase]:
     return [
         MqttControl(
+            ControlInfo(
+                "dapc",
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Direct Arc Power Control", "Задать яркость"),
+                    minimum=0,
+                    maximum=254,
+                ),
+                "0",
+            ),
+            commands_builder=handle_dapc,
+        ),
+        MqttControl(
             ControlInfo("off", ControlMeta("pushbutton", TranslatedTitle("Off", "Выкл"))),
             commands_builder=lambda short_address, _: [Off(short_address)],
         ),
@@ -128,19 +141,6 @@ def make_controls() -> list[MqttControlBase]:
                 ControlMeta("pushbutton", TranslatedTitle("On And Step Up", "Вкл и шаг вверх")),
             ),
             commands_builder=lambda short_address, _: [OnAndStepUp(short_address)],
-        ),
-        MqttControl(
-            ControlInfo(
-                "dapc",
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Direct Arc Power Control", "Задать яркость"),
-                    minimum=0,
-                    maximum=254,
-                ),
-                "0",
-            ),
-            commands_builder=handle_dapc,
         ),
         MqttControl(
             ControlInfo(

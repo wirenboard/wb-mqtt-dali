@@ -32,12 +32,14 @@ class FastFadeTimeParam(NumberGearParam):
         )
         self.minimum = 0
         self.maximum = 27
+        self.grid_columns = 6
 
 
 class Type6Parameters(TypeParameters):
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__()
         self._dimming_curve_parameter = Type6DimmingCurveParam(dimming_curve_state)
+        self._dimming_curve_parameter.grid_columns = 6
         self._parameters = [
             self._dimming_curve_parameter,
             FastFadeTimeParam(),

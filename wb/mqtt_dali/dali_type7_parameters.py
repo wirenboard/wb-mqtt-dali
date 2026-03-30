@@ -35,6 +35,7 @@ class UpSwitchOnThresholdParam(NumberGearParam):
             "type_7_up_switch_on_threshold",
         )
         self.minimum = 1
+        self.grid_columns = 6
 
 
 class UpSwitchOffThresholdParam(NumberGearParam):
@@ -47,6 +48,7 @@ class UpSwitchOffThresholdParam(NumberGearParam):
             "type_7_up_switch_off_threshold",
         )
         self.minimum = 1
+        self.grid_columns = 6
 
 
 class DownSwitchOnThresholdParam(NumberGearParam):
@@ -58,6 +60,7 @@ class DownSwitchOnThresholdParam(NumberGearParam):
             SettingsParamName("Down switch on threshold", "Нижний порог включения переключателя"),
             "type_7_down_switch_on_threshold",
         )
+        self.grid_columns = 6
 
 
 class DownSwitchOffThresholdParam(NumberGearParam):
@@ -69,6 +72,7 @@ class DownSwitchOffThresholdParam(NumberGearParam):
             SettingsParamName("Down switch off threshold", "Нижний порог выключения переключателя"),
             "type_7_down_switch_off_threshold",
         )
+        self.grid_columns = 6
 
 
 class ErrorHoldOffTimeParam(NumberGearParam):

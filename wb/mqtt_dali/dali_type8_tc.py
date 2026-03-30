@@ -131,6 +131,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 "4000",
             ),
         ),
+        *get_wanted_mqtt_controls(tc_min_mirek, tc_max_mirek),
         MqttControl(
             ControlInfo(
                 "colour_temperature_step_warmer",
@@ -147,7 +148,6 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepCooler(short_address)],
         ),
-        *get_wanted_mqtt_controls(tc_min_mirek, tc_max_mirek),
     ]
 
 

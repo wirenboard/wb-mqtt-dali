@@ -26,7 +26,7 @@ from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_controls import make_controls
 from .dali_device import DaliDevice
-from .dali_type8_rgbwaf import get_wanted_mqtt_controls as rgbwaf_mqtt_controls
+from .dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import (
@@ -114,7 +114,7 @@ class GroupVirtualDevice:
             control.control_info.id: control
             for control in [
                 *make_controls(),
-                *rgbwaf_mqtt_controls(),
+                *rgbwaf_mqtt_controls(only_setup_controls=True),
                 *tc_mqtt_controls(MIN_TC_MIREK_BROADCAST, MAX_TC_MIREK_BROADCAST),
             ]
         }
@@ -145,7 +145,7 @@ class BroadcastVirtualDevice:
             control.control_info.id: control
             for control in [
                 *make_controls(),
-                *rgbwaf_mqtt_controls(),
+                *rgbwaf_mqtt_controls(only_setup_controls=True),
                 *tc_mqtt_controls(MIN_TC_MIREK_BROADCAST, MAX_TC_MIREK_BROADCAST),
             ]
         }

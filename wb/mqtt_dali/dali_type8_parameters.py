@@ -516,7 +516,7 @@ class Type8Parameters(TypeParameters):
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
         if self._current_colour_type == ColourType.RGBWAF:
-            return dali_type8_rgbwaf.get_mqtt_controls()
+            return dali_type8_rgbwaf.get_mqtt_controls(only_setup_controls=False)
         if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
             return dali_type8_tc.get_mqtt_controls(self._limits.tc_min_mirek, self._limits.tc_max_mirek)
         if self._current_colour_type == ColourType.PRIMARY_N:

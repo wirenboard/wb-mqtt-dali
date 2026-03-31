@@ -1,8 +1,15 @@
+import asyncio
 from enum import IntEnum
 from typing import Optional
 
 from dali.address import Address, GearShort
-from dali.gear.general import QueryDeviceType, QueryNextDeviceType
+from dali.gear.general import (
+    IdentifyDevice,
+    QueryDeviceType,
+    QueryNextDeviceType,
+    RecallMaxLevel,
+    RecallMinLevel,
+)
 from dali.sequences import sleep as seq_sleep
 
 from .common_dali_device import (
@@ -39,7 +46,7 @@ from .dali_type50_parameters import Type50Parameters
 from .dali_type52_parameters import Type52Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
-from .wbdali_utils import WBDALIDriver
+from .wbdali_utils import WBDALIDriver, query_response
 
 
 class DaliDeviceType(IntEnum):
@@ -118,6 +125,34 @@ class DaliDevice(DaliDeviceBase):
         self._type_handlers: list[TypeParameters] = []
         self._dimming_curve_state = DimmingCurveState()
         self._groups_parameter = GroupsParam()
+
+    async def identify(self, driver: WBDALIDriver) -> None:
+        address = GearShort(self.address.short)
+        # Old gear that does not support QUERY VERSION NUMBER returns 1.
+        # If the device does not respond or returns 1, assume old gear and fall back to
+        # the deprecated blink method (INITIALISE → RECALL MAX/MIN alternating → TERMINATE).
+        use_identify_cmd = False
+        for _ in range(2):
+            try:
+                v = await query_response(driver, self._compat.QueryVersionNumber(address))
+            except Exception:
+                continue
+            if v.value == 1:
+                continue
+            use_identify_cmd = True
+            break
+        if use_identify_cmd:
+            await driver.send(IdentifyDevice(address))
+        else:
+            await driver.send(self._compat.Initialise(self.address.short))
+            try:
+                for _ in range(5):
+                    await driver.send(RecallMaxLevel(address))
+                    await asyncio.sleep(0.5)
+                    await driver.send(RecallMinLevel(address))
+                    await asyncio.sleep(0.5)
+            finally:
+                await driver.send(self._compat.Terminate())
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         await super().load_info(driver, force_reload)

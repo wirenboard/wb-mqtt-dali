@@ -15,6 +15,7 @@ from dali.device.general import (
     EnableApplicationController,
     EnableInstance,
     EnablePowerCycleNotification,
+    IdentifyDevice,
     QueryApplicationControlEnabled,
     QueryDeviceGroupsEightToFifteen,
     QueryDeviceGroupsSixteenToTwentyThree,
@@ -446,6 +447,9 @@ class Dali2Device(DaliDeviceBase):
 
     def add_instance(self, index: int, instance_type: int) -> None:
         self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
+
+    async def identify(self, driver: WBDALIDriver) -> None:
+        await driver.send(IdentifyDevice(DeviceShort(self.address.short)))
 
     async def _initialize_impl(
         self, driver: WBDALIDriver

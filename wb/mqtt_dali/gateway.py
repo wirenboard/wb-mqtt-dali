@@ -243,6 +243,11 @@ class Gateway:
             "SetGroup",
             self.set_group_rpc_handler,
         )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "IdentifyDevice",
+            self.identify_device_rpc_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -392,6 +397,16 @@ class Gateway:
         if bus is None or group_index is None:
             raise ValueError(f"Group {group_id} not found")
         await bus.apply_group_parameters(group_index, new_params)
+        return {}
+
+    async def identify_device_rpc_handler(self, params: dict):
+        device_id = params.get("deviceId")
+        if device_id is None:
+            raise ValueError("deviceId parameter is required")
+        bus, device = self._get_bus_and_device_by_id(device_id)
+        if bus is None or device is None:
+            raise ValueError(f"Device {device_id} not found")
+        await bus.identify_device(device)
         return {}
 
     async def get_gateway_rpc_handler(self, params: dict):

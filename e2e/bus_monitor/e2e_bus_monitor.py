@@ -12,12 +12,11 @@ from dali.address import GearShort
 from dali.gear.general import QueryActualLevel
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
+from wb.mqtt_dali.bus_traffic import BusTrafficItem
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import FRAME_COUNTER_MODULO
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
-from wb.mqtt_dali.bus_traffic import BusTrafficItem
-
 
 EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6

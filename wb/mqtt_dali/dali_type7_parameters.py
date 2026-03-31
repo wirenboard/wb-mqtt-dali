@@ -36,6 +36,7 @@ class UpSwitchOnThresholdParam(NumberGearParam):
         )
         self.minimum = 1
         self.grid_columns = 6
+        self.format = "dali-level"
 
 
 class UpSwitchOffThresholdParam(NumberGearParam):
@@ -49,6 +50,7 @@ class UpSwitchOffThresholdParam(NumberGearParam):
         )
         self.minimum = 1
         self.grid_columns = 6
+        self.format = "dali-level"
 
 
 class DownSwitchOnThresholdParam(NumberGearParam):
@@ -61,6 +63,7 @@ class DownSwitchOnThresholdParam(NumberGearParam):
             "type_7_down_switch_on_threshold",
         )
         self.grid_columns = 6
+        self.format = "dali-level"
 
 
 class DownSwitchOffThresholdParam(NumberGearParam):
@@ -73,6 +76,7 @@ class DownSwitchOffThresholdParam(NumberGearParam):
             "type_7_down_switch_off_threshold",
         )
         self.grid_columns = 6
+        self.format = "dali-level"
 
 
 class ErrorHoldOffTimeParam(NumberGearParam):
@@ -81,7 +85,8 @@ class ErrorHoldOffTimeParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Error holdoff time", "Время задержки ошибки"), "type_7_error_holdoff_time"
+            SettingsParamName("Error holdoff time, s", "Время задержки ошибки, с"),
+            "type_7_error_holdoff_time",
         )
 
 

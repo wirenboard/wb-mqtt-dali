@@ -20,7 +20,7 @@ class EmergencyLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Emergency level", "Уровень аварийного освещения"), "type_1_emergency_level"
+            SettingsParamName("Emergency level", "Яркость аварийного освещения"), "type_1_emergency_level"
         )
         self.format = "dali-level"
 

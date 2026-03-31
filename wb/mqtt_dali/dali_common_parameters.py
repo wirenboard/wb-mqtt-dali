@@ -38,7 +38,7 @@ class MaxLevelParam(NumberGearParam):
     set_command_class = SetMaxLevel
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Max level", "Максимальный уровень"), "max_level")
+        super().__init__(SettingsParamName("Max level", "Максимальная яркость"), "max_level")
         self.maximum = 254
         self.default = 254
         self.format = "dali-level"
@@ -51,7 +51,7 @@ class MinLevelParam(NumberGearParam):
     set_command_class = SetMinLevel
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Min level", "Минимальный уровень"), "min_level")
+        super().__init__(SettingsParamName("Min level", "Минимальная яркость"), "min_level")
         self.maximum = 254
         self.format = "dali-level"
         self.grid_columns = 6
@@ -64,7 +64,7 @@ class PowerOnLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Power on level", "Уровень при включении питания"), "power_on_level"
+            SettingsParamName("Power on level", "Яркость при включении питания"), "power_on_level"
         )
         self.default = 254
         self.format = "dali-level"
@@ -78,7 +78,7 @@ class SystemFailureLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("System failure level", "Уровень при сбое"), "system_failure_level"
+            SettingsParamName("System failure level", "Яркость при сбое"), "system_failure_level"
         )
         self.default = 254
         self.format = "dali-level"

@@ -117,14 +117,14 @@ def make_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "recall_max_level",
-                ControlMeta("pushbutton", TranslatedTitle("Recall Max Level", "Максимальный уровень")),
+                ControlMeta("pushbutton", TranslatedTitle("Recall Max Level", "Максимальная яркость")),
             ),
             commands_builder=lambda short_address, _: [RecallMaxLevel(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "recall_min_level",
-                ControlMeta("pushbutton", TranslatedTitle("Recall Min Level", "Минимальный уровень")),
+                ControlMeta("pushbutton", TranslatedTitle("Recall Min Level", "Минимальная яркость")),
             ),
             commands_builder=lambda short_address, _: [RecallMinLevel(short_address)],
         ),

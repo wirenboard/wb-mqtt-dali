@@ -38,7 +38,7 @@ _FIELD_SPECS = [
         oem.InputPowerMinimumDim,
         "power_at_min_dim",
         "Power at minimum dim level, W",
-        "Мощность при минимальном уровне, Вт",
+        "Мощность при минимальной яркости, Вт",
         "integer",
     ),
     (

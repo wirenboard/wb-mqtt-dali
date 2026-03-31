@@ -13,6 +13,7 @@ from .common_dali_device import (
 )
 from .dali_common_parameters import (
     FadeTimeFadeRateParam,
+    GroupScenesSettings,
     GroupsParam,
     MaxLevelParam,
     MinLevelParam,
@@ -215,7 +216,9 @@ class DaliDevice(DaliDeviceBase):
         ]
         # Colour control has own scenes, power on level and system failure level parameters
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
-            group_parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
+            group_parameter_handlers.extend(
+                [GroupScenesSettings(), PowerOnLevelParam(), SystemFailureLevelParam()]
+            )
         for type_handler in self._type_handlers:
             if type_handler != self._type8_handler:
                 group_parameter_handlers.extend(type_handler._parameters)

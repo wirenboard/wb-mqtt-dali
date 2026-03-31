@@ -58,7 +58,8 @@ class ReductionFactor1Param(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Reduction factor 1", "Коэффициент снижения 1"), "type_20_reduction_factor_1"
+            SettingsParamName("Reduction factor 1, %", "Коэффициент снижения 1, %"),
+            "type_20_reduction_factor_1",
         )
         self.maximum = 100
 
@@ -69,7 +70,8 @@ class ReductionFactor2Param(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Reduction factor 2", "Коэффициент снижения 2"), "type_20_reduction_factor_2"
+            SettingsParamName("Reduction factor 2, %", "Коэффициент снижения 2, %"),
+            "type_20_reduction_factor_2",
         )
         self.maximum = 100
 
@@ -80,7 +82,8 @@ class ReductionFactor3Param(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Reduction factor 3", "Коэффициент снижения 3"), "type_20_reduction_factor_3"
+            SettingsParamName("Reduction factor 3, %", "Коэффициент снижения 3, %"),
+            "type_20_reduction_factor_3",
         )
         self.maximum = 100
 

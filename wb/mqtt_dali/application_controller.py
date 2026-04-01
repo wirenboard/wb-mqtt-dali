@@ -84,6 +84,7 @@ class ApplicationControllerTaskType(Enum):
     LOAD_INFO = auto()
     EXECUTE_CONTROL = auto()
     APPLY_BUS_SETTING = auto()
+    IDENTIFY_DEVICE = auto()
 
 
 @dataclass
@@ -476,6 +477,14 @@ class ApplicationController:
             self._tasks_queue.put_nowait(task)
         await task.future
 
+    async def identify_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.IDENTIFY_DEVICE, device)
+            self._tasks_queue.put_nowait(task)
+        await task.future
+
     async def setup_websocket(self, config: WebSocketConfig) -> None:
         async with self._state_lock:
             if self._state != ApplicationControllerState.READY:
@@ -840,6 +849,8 @@ class ApplicationController:
                             await self._apply_group_parameters_task(group_index, new_params)
                         elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
                             await self._apply_bus_parameters_task(item.data)
+                        elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
+                            await item.data.identify(self._dev)
                         if not item.future.done():
                             item.future.set_result(None)
                     except Exception as e:

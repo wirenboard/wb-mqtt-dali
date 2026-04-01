@@ -164,6 +164,22 @@ channels:
     parameters:
       clientId:
         $ref: '#/components/parameters/clientId'
+  wbdaliEditorIdentifyDevice:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/IdentifyDevice/{clientId}'
+    messages:
+      wbdaliEditorIdentifyDevice:
+        $ref: '#/components/messages/wbdaliEditorIdentifyDevice'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorIdentifyDeviceReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/IdentifyDevice/{clientId}/reply'
+    messages:
+      wbdaliEditorIdentifyDeviceReply:
+        $ref: '#/components/messages/wbdaliEditorIdentifyDeviceReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
 operations:
   wbdaliEditorGetList:
     action: send
@@ -295,6 +311,19 @@ operations:
         $ref: '#/channels/wbdaliEditorScanBusReply'
       messages:
         - $ref: '#/channels/wbdaliEditorScanBusReply/messages/wbdaliEditorScanBusReply'
+  wbdaliEditorIdentifyDevice:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorIdentifyDevice'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorIdentifyDevice/messages/wbdaliEditorIdentifyDevice'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorIdentifyDeviceReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorIdentifyDeviceReply/messages/wbdaliEditorIdentifyDeviceReply'
 components:
   messages:
     wbdaliEditorGetList:
@@ -377,6 +406,14 @@ components:
       name: editorScanBusReply
       payload:
         $ref: '#/components/schemas/wbdaliEditorScanBusReplyPayload'
+    wbdaliEditorIdentifyDevice:
+      name: editorIdentifyDevice
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorIdentifyDevicePayload'
+    wbdaliEditorIdentifyDeviceReply:
+      name: editorIdentifyDeviceReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorIdentifyDeviceReplyPayload'
   schemas:
     deviceItem:
       type: object
@@ -691,6 +728,31 @@ components:
           type: number
         result:
           $ref: '#/components/schemas/busItem'
+      required:
+        - id
+        - result
+    wbdaliEditorIdentifyDevicePayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            deviceId:
+              type: string
+          required:
+            - deviceId
+      required:
+        - id
+        - params
+    wbdaliEditorIdentifyDeviceReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
       required:
         - id
         - result

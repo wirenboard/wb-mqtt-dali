@@ -37,9 +37,8 @@ except ImportError:
 from websockets.typing import Data
 
 from .asyncio_utils import OneShotTasks
+from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .wbdali_utils import WBDALIDriver
-
-LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE = "lunatone-iot-emulator"
 
 
 class LunatoneIotProtocolError(RuntimeError):
@@ -197,7 +196,7 @@ async def emulate(
                         # this is useful for commands unknown to python-dali, like eDALI
                         command.response = dali.command.Response
 
-                    resp = await driver.send(command, LUNATONE_IOT_EMULATOR_WBDALIDRIVER_SOURCE)
+                    resp = await driver.send(command, BusTrafficSource.LUNATONE)
                     # FIXME: error handling
                     await frame_result(websocket, line, SendingResult.SENT, logger)
                     if send_twice:
@@ -231,20 +230,47 @@ def publish_traffic(
     websocket,
     logger: logging.Logger,
     one_shot_tasks: OneShotTasks,
-) -> Callable[[dali.frame.Frame, str, Optional[int]], None]:
-    def _traffic_filter(frame: dali.frame.Frame, _source: str, _frame_counter: Optional[int]) -> None:
+) -> Callable[[BusTrafficItem], None]:
+    def _traffic_filter(bus_traffic_item: BusTrafficItem) -> None:
         logger.debug(
             "WS >> daliMonitor: %sbits=%d %s",
-            "FRAMING ERROR " if frame.error else "",
-            len(frame),
-            " ".join(f"{b:02x}" for b in frame.as_byte_sequence),
+            "FRAMING ERROR " if bus_traffic_item.request.error else "",
+            len(bus_traffic_item.request),
+            " ".join(f"{b:02x}" for b in bus_traffic_item.request.as_byte_sequence),
         )
         one_shot_tasks.add(
             websocket.send(
-                json.dumps(_msg_dali_monitor(0, len(frame), frame.as_byte_sequence, frame.error is True))
+                json.dumps(
+                    _msg_dali_monitor(
+                        0,
+                        len(bus_traffic_item.request),
+                        bus_traffic_item.request.as_byte_sequence,
+                        bus_traffic_item.request.error is True,
+                    )
+                )
             ),
             "Publish DALI bus traffic to websocket",
         )
+        if bus_traffic_item.response is not None:
+            logger.debug(
+                "WS >> daliMonitor (response): %sbits=%d %s",
+                "FRAMING ERROR " if bus_traffic_item.response.error else "",
+                len(bus_traffic_item.response),
+                " ".join(f"{b:02x}" for b in bus_traffic_item.response.as_byte_sequence),
+            )
+            one_shot_tasks.add(
+                websocket.send(
+                    json.dumps(
+                        _msg_dali_monitor(
+                            0,
+                            len(bus_traffic_item.response),
+                            bus_traffic_item.response.as_byte_sequence,
+                            bus_traffic_item.response.error is True,
+                        )
+                    )
+                ),
+                "Publish DALI bus traffic to websocket",
+            )
 
     return _traffic_filter
 

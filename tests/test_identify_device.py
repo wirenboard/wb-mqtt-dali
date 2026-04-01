@@ -1,6 +1,6 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import asyncio
 import pytest
 from dali.address import DeviceShort, GearShort
 from dali.device.general import IdentifyDevice as DeviceIdentifyDevice

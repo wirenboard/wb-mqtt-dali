@@ -356,38 +356,45 @@ class GroupScenesSettings(SettingsParamBase):
     def get_schema(self, group_and_broadcast: bool) -> dict:
         return {
             "properties": {
-                "index": {
-                    "type": "number",
-                    "title": "Scene number",
-                    "propertyOrder": -1,
-                    "enum": list(range(SCENES_TOTAL)),
-                    "default": 0,
-                },
-                "enabled": {
-                    "type": "boolean",
-                    "title": "Part of the scene",
-                    "propertyOrder": 0,
-                    "format": "switch",
-                    "default": False,
-                },
-                "level": {
-                    "type": "integer",
-                    "title": "Light level",
-                    "format": "dali-level",
-                    "minimum": 0,
-                    "maximum": 254,
-                    "propertyOrder": 2,
-                    "options": {
-                        "grid_columns": 4,
+                self.property_name: {
+                    "type": "object",
+                    "title": self.name.en,
+                    "properties": {
+                        "index": {
+                            "type": "number",
+                            "title": "Scene number",
+                            "propertyOrder": -1,
+                            "enum": list(range(SCENES_TOTAL)),
+                            "default": 0,
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "title": "Part of the scene",
+                            "propertyOrder": 0,
+                            "format": "switch",
+                            "default": False,
+                        },
+                        "level": {
+                            "type": "integer",
+                            "title": "Light level",
+                            "format": "dali-level",
+                            "minimum": 0,
+                            "maximum": 254,
+                            "propertyOrder": 2,
+                            "options": {
+                                "grid_columns": 4,
+                            },
+                        },
                     },
+                    "required": ["index", "enabled", "level"],
                 },
             },
-            "required": ["index", "enabled", "level"],
             "translations": {
                 "ru": {
                     "Part of the scene": "Часть сцены",
                     "Scene number": "Номер сцены",
                     "Light level": "Яркость",
+                    self.name.en: self.name.ru,
                 },
             },
         }

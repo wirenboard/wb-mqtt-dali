@@ -386,7 +386,7 @@ class ScenesSettings(SettingsParamBase):
         return schema
 
 
-class GroupScenesSettings(ColourState):
+class ColourGroupScenesSettings(ColourState):
     def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(
             SettingsParamName("Scenes", "Сцены"),
@@ -561,7 +561,7 @@ class Type8Parameters(TypeParameters):
         return [
             PowerOnColourState(self.default_colour_type, limits),
             SystemFailureColourState(self.default_colour_type, limits),
-            GroupScenesSettings(self.default_colour_type, limits),
+            ColourGroupScenesSettings(self.default_colour_type, limits),
         ]
 
     async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: Address) -> ColourType:

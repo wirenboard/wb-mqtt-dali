@@ -2,6 +2,7 @@
 
 import asyncio
 import enum
+import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Callable, Generator, List, Optional, Union
@@ -37,8 +38,11 @@ from .utils import merge_json_schema_properties, merge_translations
 from .wbdali_utils import (
     MASK,
     WBDALIDriver,
+    check_query_response,
     is_broadcast_or_group_address,
+    is_transmission_error_response,
     query_response,
+    send_commands_with_retry,
 )
 
 
@@ -86,6 +90,17 @@ REPORT_COLOUR_TAGS = {
 }
 
 
+def is_valid_colour_query_response(cmd_item: command.Command, response: Optional[command.Response]) -> bool:
+    if is_transmission_error_response(response):
+        return False
+    if getattr(cmd_item, "response", None) is not None:
+        try:
+            check_query_response(response)
+        except RuntimeError:
+            return False
+    return True
+
+
 @dataclass
 class ColourSettings:
     colour_type: ColourType
@@ -127,15 +142,18 @@ def query_colour_with_level(
     List[Optional[command.Response]],
     ColourSettings,
 ]:
-    resp = yield [cmd, DTR0(QueryColourValueDTR.ReportColourType), QueryColourValue(address)]
+    first_batch = [cmd, DTR0(QueryColourValueDTR.ReportColourType), QueryColourValue(address)]
+    for _ in range(3):
+        resp = yield first_batch
+        if len(resp) == len(first_batch) and all(
+            is_valid_colour_query_response(command_item, response)
+            for command_item, response in zip(first_batch, resp)
+        ):
+            break
+    else:
+        raise RuntimeError(f"Failed to get {cmd}: transmission error")
 
-    if resp[0] is None or resp[0].raw_value is None:
-        raise RuntimeError(f"Failed to get {cmd}")
     level = resp[0].raw_value.as_integer
-
-    if resp[-1] is None or resp[-1].raw_value is None:
-        raise RuntimeError(f"Failed to get colour type for {cmd}")
-
     colour_type = resp[-1].raw_value.as_integer
     # Colour type is set to MASK, so all colours are also MASK
     if MASK == colour_type:
@@ -143,37 +161,50 @@ def query_colour_with_level(
 
     res = ColourSettings(ColourType(colour_type), level)
 
-    cmds = []
-    for colour_component in res.colour.components:
-        cmds.append(DTR0(colour_tags[colour_component]))
-        cmds.append(QueryColourValue(address))
-        # Only RGBWAF has one byte colour components
-        if res.colour_type != ColourType.RGBWAF:
-            cmds.append(QueryContentDTR0(address))
+    pending_components = list(res.colour.components)
+    last_error = "unknown error"
+    for _ in range(3):
+        commands = []
+        for colour_component in pending_components:
+            commands.append(DTR0(colour_tags[colour_component]))
+            commands.append(QueryColourValue(address))
+            if res.colour_type != ColourType.RGBWAF:
+                commands.append(QueryContentDTR0(address))
 
-    resp = yield cmds
+        responses = yield commands
+        response_index = 0
+        next_pending_components = []
 
-    try:
-        resp_iter = iter(resp)
-        for colour_component in res.colour.components:
-            # Pass DTR0 response
-            next(resp_iter)
-            # QueryColourValue response
-            msb_item = next(resp_iter)
-            if msb_item is None or msb_item.raw_value is None:
-                raise RuntimeError(f"Failed to get {colour_component.value} for {cmd}")
+        for colour_component in pending_components:
+            component_commands = [DTR0(colour_tags[colour_component]), QueryColourValue(address)]
+            if res.colour_type != ColourType.RGBWAF:
+                component_commands.append(QueryContentDTR0(address))
+            component_responses = responses[response_index : response_index + len(component_commands)]
+            response_index += len(component_commands)
+
+            if not all(
+                is_valid_colour_query_response(command_item, response)
+                for command_item, response in zip(component_commands, component_responses)
+            ):
+                last_error = "invalid response"
+                next_pending_components.append(colour_component)
+                continue
+
+            msb_item = component_responses[1]
             value = msb_item.raw_value.as_integer
             if res.colour_type != ColourType.RGBWAF:
-                value <<= 8
-                # QueryContentDTR0 response
-                lsb_item = next(resp_iter)
-                if lsb_item is None or lsb_item.raw_value is None:
-                    raise RuntimeError(f"Failed to get {colour_component.value} LSB for {cmd}")
-                value |= lsb_item.raw_value.as_integer
+                lsb_item = component_responses[2]
+                value = (value << 8) | lsb_item.raw_value.as_integer
             setattr(res.colour, colour_component.value, value)
-    except StopIteration as e:
-        raise RuntimeError("Unexpected end of responses") from e
-    return res
+
+        if not next_pending_components:
+            return res
+        pending_components = next_pending_components
+
+    pending_names = [component.value for component in pending_components]
+    raise RuntimeError(
+        f"Failed to get colour components for {cmd}: {pending_names}; last error: {last_error}"
+    )
 
 
 class ColourState(SettingsParamBase):
@@ -200,10 +231,18 @@ class ColourState(SettingsParamBase):
         self._default_colour_type = default_colour_type
         self._limits = limits
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         return await self._read_impl(driver, short_address)
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         if self.property_name not in value:
             return {}
         values = value.get(self.property_name, {})
@@ -215,7 +254,7 @@ class ColourState(SettingsParamBase):
             return {}
         cmds = new_state.colour.get_write_commands(short_address)
         cmds.extend([DTR0(new_state.level), self._setup_command_class(short_address)])
-        await driver.send_commands(cmds)
+        await send_commands_with_retry(driver, cmds, logger)
         if is_for_single_device and self._read_after_save:
             return await self._read_impl(driver, short_address)
         self.value = new_state
@@ -292,16 +331,24 @@ class SceneSettings(ColourState):
         )
         self._scene_number = scene_number
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
-        return self._to_json(await super().read(driver, short_address))
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        return self._to_json(await super().read(driver, short_address, logger))
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         values_to_set = deepcopy(value)
         if value.get("enabled", True):
             values_to_set["level"] = value.get("level", 0)
         else:
             values_to_set["level"] = MASK
-        res = await super().write(driver, short_address, {self.property_name: values_to_set})
+        res = await super().write(driver, short_address, {self.property_name: values_to_set}, logger=logger)
         return self._to_json(res)
 
     def _to_json(self, read_response: dict) -> dict:
@@ -323,20 +370,28 @@ class ScenesSettings(SettingsParamBase):
         self._scenes = [SceneSettings(i, default_colour_type, limits) for i in range(SCENES_TOTAL)]
         self._scene_values = [{} for _ in range(SCENES_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         self._scene_values = await asyncio.gather(
-            *[scene.read(driver, short_address) for scene in self._scenes]
+            *[scene.read(driver, short_address, logger) for scene in self._scenes]
         )
         return {self.property_name: self._scene_values}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         if self._scenes[0].value is None:
             raise RuntimeError("Cannot write scenes before reading them")
         if self.property_name not in value:
             return {}
         results = await asyncio.gather(
             *[
-                scene.write(driver, short_address, scene_value)
+                scene.write(driver, short_address, scene_value, logger)
                 for scene, scene_value in zip(self._scenes, value.get(self.property_name, []))
             ]
         )
@@ -399,7 +454,13 @@ class ColourGroupScenesSettings(ColourState):
             limits,
         )
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         if self.property_name not in value:
             return {}
         self._setup_command_class = lambda address: SetScene(address, value.get("index", 0))
@@ -408,7 +469,7 @@ class ColourGroupScenesSettings(ColourState):
             values_to_set["level"] = value.get("level", 0)
         else:
             values_to_set["level"] = MASK
-        await super().write(driver, short_address, {self.property_name: values_to_set})
+        await super().write(driver, short_address, {self.property_name: values_to_set}, logger)
         return {}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
@@ -498,13 +559,26 @@ class Type8Parameters(TypeParameters):
     def default_colour_type(self) -> ColourType:
         return self._current_colour_type if self._current_colour_type is not None else ColourType.RGBWAF
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
+    async def read_mandatory_info(
+        self,
+        driver: WBDALIDriver,
+        short_address: GearShort,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
         async with self._colour_type_lock:
             if self._current_colour_type is None:
-                self._current_colour_type = await self._read_current_colour_type(driver, short_address)
+                self._current_colour_type = await self._read_current_colour_type(
+                    driver,
+                    short_address,
+                    logger,
+                )
                 if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
                     self._limits.tc_min_mirek, self._limits.tc_max_mirek = (
-                        await dali_type8_tc.read_colour_temperature_limits_mirek(driver, short_address)
+                        await dali_type8_tc.read_colour_temperature_limits_mirek(
+                            driver,
+                            short_address,
+                            logger,
+                        )
                     )
         parameters = [
             CurrentColourState(self.default_colour_type, self._limits),
@@ -564,8 +638,13 @@ class Type8Parameters(TypeParameters):
             ColourGroupScenesSettings(self.default_colour_type, limits),
         ]
 
-    async def _read_current_colour_type(self, driver: WBDALIDriver, short_address: Address) -> ColourType:
-        res = await query_response(driver, QueryColourStatus(short_address))
+    async def _read_current_colour_type(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        logger: Optional[logging.Logger] = None,
+    ) -> ColourType:
+        res = await query_response(driver, QueryColourStatus(short_address), logger)
         if getattr(res, "colour_type_xy_active") is True:
             return ColourType.XY
         if getattr(res, "colour_type_colour_temperature_Tc_active") is True:

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -8,9 +9,11 @@ from dali.command import Command
 from .utils import merge_json_schema_properties, merge_translations
 from .wbdali_utils import (
     WBDALIDriver,
-    check_query_response,
     is_broadcast_or_group_address,
     query_int,
+    query_response,
+    query_responses,
+    send_with_retry,
 )
 
 
@@ -24,10 +27,18 @@ class SettingsParamBase:
     def __init__(self, name: SettingsParamName) -> None:
         self.name = name
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         return {}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         """
         Write extended gear parameters to a DALI device.
 
@@ -66,14 +77,22 @@ class BooleanSettingsParam(SettingsParamBase):
         self.value = None
         self._is_read_only = False
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
-        response = await driver.send(self._query_factory(short_address))
-        if response is None or response.value is None:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        response = await query_response(driver, self._query_factory(short_address), logger)
+        if response.value is None:
             raise RuntimeError(f"Failed to read {self.property_name} state")
         self.value = bool(response.value)
         return {self.property_name: self.value}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         if self.property_name not in value:
             return {}
 
@@ -82,10 +101,10 @@ class BooleanSettingsParam(SettingsParamBase):
             return {}
 
         command_factory = self._enable_factory if bool(value_to_set) else self._disable_factory
-        await driver.send(command_factory(short_address))
+        await send_with_retry(driver, command_factory(short_address), logger)
         if is_broadcast_or_group_address(short_address):
             return {}
-        return await self.read(driver, short_address)
+        return await self.read(driver, short_address, logger)
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         schema: dict = {
@@ -129,11 +148,19 @@ class NumberSettingsParam(SettingsParamBase):
         self.value = None
         self._is_read_only = False
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
-        self.value = await query_int(driver, self.get_read_command(short_address)) * self.multiplier
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        self.value = await query_int(driver, self.get_read_command(short_address), logger) * self.multiplier
         return {self.property_name: self.value}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         if self.property_name not in value:
             return {}
         value_to_set = value[self.property_name]
@@ -143,11 +170,10 @@ class NumberSettingsParam(SettingsParamBase):
         commands = self.get_write_commands(short_address, raw)
         if not is_broadcast_or_group_address(short_address):
             commands.append(self.get_read_command(short_address))
-        responses = await driver.send_commands(commands)
+        responses = await query_responses(driver, commands, logger)
         if is_broadcast_or_group_address(short_address):
             return {}
         res = responses[-1]
-        check_query_response(res)
         self.value = res.raw_value.as_integer * self.multiplier
         return {self.property_name: self.value}
 
@@ -202,9 +228,11 @@ class SettingsParamGroup(SettingsParamBase):
         self._property_name = property_name
         self._parameters: list[SettingsParamBase] = []
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         res = {}
-        awaitables = [param.read(driver, short_address) for param in self._parameters]
+        awaitables = [param.read(driver, short_address, logger) for param in self._parameters]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         for param, result in zip(self._parameters, results):
             if isinstance(result, BaseException):
@@ -213,11 +241,19 @@ class SettingsParamGroup(SettingsParamBase):
                 res.update(result)
         return {self._property_name: res}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         if self._property_name not in value:
             return {}
         instance_value = value[self._property_name]
-        awaitables = [param.write(driver, short_address, instance_value) for param in self._parameters]
+        awaitables = [
+            param.write(driver, short_address, instance_value, logger) for param in self._parameters
+        ]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
         res = {}
         for param, result in zip(self._parameters, results):

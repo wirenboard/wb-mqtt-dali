@@ -35,9 +35,7 @@ class Dali2CommandsCompatibilityLayer:
             return control_device.Initialise(0x7F)
         return control_device.Initialise(short_address)
 
-    def QueryShortAddressResponseValue(
-        self, resp: Union[NumericResponse, NumericResponseMask]
-    ) -> Optional[int]:
+    def QueryShortAddressResponseValue(self, resp: Response) -> Optional[int]:
         value = resp.value
         if isinstance(value, int):
             return value

@@ -26,6 +26,7 @@ from .send_command import (
 )
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
+from .wbdali_utils import send_commands_with_retry, send_with_retry
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
 from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
@@ -286,21 +287,25 @@ async def send_command_service(gateway: str, args, old_gateway: bool):
             loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
             if repeat == 1:
-                response = await driver.send(cmd)
+                response = await send_with_retry(driver, cmd, logging.getLogger())
                 print(format_response(response))
             else:
                 scheduled = 0
                 printed = 0
                 bs = min(SEND_BATCH_SIZE, repeat) if repeat > 0 else SEND_BATCH_SIZE
                 scheduled += bs
-                current_task = asyncio.create_task(driver.send_commands([cmd] * bs))
+                current_task = asyncio.create_task(
+                    send_commands_with_retry(driver, [cmd] * bs, logging.getLogger())
+                )
                 next_task = None
                 try:
                     while not cancel_event.is_set():
                         bs = min(SEND_BATCH_SIZE, repeat - scheduled) if repeat > 0 else SEND_BATCH_SIZE
                         if bs > 0 and not cancel_event.is_set():
                             scheduled += bs
-                            next_task = asyncio.create_task(driver.send_commands([cmd] * bs))
+                            next_task = asyncio.create_task(
+                                send_commands_with_retry(driver, [cmd] * bs, logging.getLogger())
+                            )
                         else:
                             next_task = None
                         responses = await current_task

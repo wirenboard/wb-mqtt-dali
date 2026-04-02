@@ -1,3 +1,6 @@
+import logging
+from typing import Optional
+
 from dali.address import Address
 from dali.gear.general import (
     DTR0,
@@ -25,8 +28,12 @@ from .settings import SettingsParamBase, SettingsParamName
 from .wbdali_utils import (
     MASK,
     WBDALIDriver,
-    check_query_response,
     is_broadcast_or_group_address,
+    query_response,
+    query_responses,
+    query_responses_retry_from_first_failed,
+    query_responses_retry_only_failed,
+    send_commands_with_retry,
 )
 
 SCENES_TOTAL = 16
@@ -93,9 +100,10 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         self._fade_time = None
         self._fade_rate = None
 
-    async def read(self, driver: WBDALIDriver, short_address: Address):
-        value = await driver.send(QueryFadeTimeFadeRate(short_address))
-        check_query_response(value)
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        value = await query_response(driver, QueryFadeTimeFadeRate(short_address), logger)
         self._fade_time = value.fade_time
         self._fade_rate = value.fade_rate
         return {
@@ -103,7 +111,13 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             "fade_rate": value.fade_rate,
         }
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         fade_rate_to_set = value.get("fade_rate")
         fade_time_to_set = value.get("fade_time")
 
@@ -127,13 +141,12 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             commands.append(SetFadeRate(short_address))
         if is_for_single_device:
             commands.append(QueryFadeTimeFadeRate(short_address))
-        responses = await driver.send_commands(commands)
+        responses = await query_responses(driver, commands, logger)
 
         if not is_for_single_device:
             return {}
 
         last_response = responses[-1]
-        check_query_response(last_response)
         self._fade_time = last_response.fade_time
         self._fade_rate = last_response.fade_rate
         return {
@@ -188,18 +201,25 @@ class GroupsParam(SettingsParamBase):
         self._groups = [False for _ in range(GROUPS_TOTAL)]
         self._group_indexes = set()
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         groups = []
         commands = [QueryGroupsZeroToSeven(short_address), QueryGroupsEightToFifteen(short_address)]
-        responses = await driver.send_commands(commands)
+        responses = await query_responses_retry_only_failed(driver, commands, logger)
         for response in responses:
-            check_query_response(response)
             groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
         self._groups = groups
         self._group_indexes = {i for i, in_group in enumerate(groups) if in_group}
         return {"groups": groups}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         groups_to_set = value.get("groups")
         if groups_to_set is None:
             return {}
@@ -217,10 +237,9 @@ class GroupsParam(SettingsParamBase):
             return {}
         commands.append(QueryGroupsZeroToSeven(short_address))
         commands.append(QueryGroupsEightToFifteen(short_address))
-        responses = await driver.send_commands(commands)
+        responses = await query_responses_retry_from_first_failed(driver, commands, logger=logger)
         groups = []
         for response in responses[-2:]:
-            check_query_response(response)
             groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
         self._groups = groups
         self._group_indexes = {i for i, in_group in enumerate(groups) if in_group}
@@ -236,17 +255,24 @@ class ScenesParam(SettingsParamBase):
         super().__init__(SettingsParamName("Scenes", "Сцены"))
         self._scenes = [MASK for _ in range(SCENES_TOTAL)]
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         commands = [QuerySceneLevel(short_address, scene_number) for scene_number in range(SCENES_TOTAL)]
-        responses = await driver.send_commands(commands)
+        responses = await query_responses_retry_only_failed(driver, commands, logger)
         res = []
         for response in responses:
-            check_query_response(response)
             res.append(response.raw_value.as_integer)
         self._scenes = res
         return self._scenes_to_json()
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         scenes = value.get("scenes")
         if scenes is None:
             return {}
@@ -268,10 +294,9 @@ class ScenesParam(SettingsParamBase):
                 modified_scene_indexes.append(i)
         if not commands:
             return {}
-        responses = await driver.send_commands(commands)
+        responses = await query_responses_retry_from_first_failed(driver, commands, 3, logger)
         for idx, scene_index in enumerate(modified_scene_indexes):
             response = responses[idx * 3 + 2]
-            check_query_response(response)
             self._scenes[scene_index] = response.raw_value.as_integer
         return self._scenes_to_json()
 
@@ -338,7 +363,13 @@ class GroupScenesSettings(SettingsParamBase):
         super().__init__(SettingsParamName("Scenes", "Сцены"))
         self.property_name = "scenes"
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         scenes = value.get(self.property_name)
         if scenes is None:
             return {}
@@ -350,7 +381,7 @@ class GroupScenesSettings(SettingsParamBase):
         if index is None:
             raise ValueError("Scene index is required")
         commands = [DTR0(value_to_set), SetScene(short_address, index)]
-        await driver.send_commands(commands)
+        await send_commands_with_retry(driver, commands, logger)
         return {}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:

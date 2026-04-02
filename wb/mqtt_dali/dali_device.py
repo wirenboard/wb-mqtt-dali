@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from enum import IntEnum
 from typing import Optional
 
@@ -12,7 +13,6 @@ from dali.gear.general import (
     RecallMinLevel,
     Terminate,
 )
-from dali.sequences import sleep as seq_sleep
 
 from .common_dali_device import (
     ControlPollResult,
@@ -50,7 +50,13 @@ from .dali_type50_parameters import Type50Parameters
 from .dali_type52_parameters import Type52Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
-from .wbdali_utils import WBDALIDriver, query_response
+from .wbdali_utils import (
+    WBDALIDriver,
+    check_query_response,
+    query_response,
+    send_commands_with_retry,
+    send_with_retry,
+)
 
 
 class DaliDeviceType(IntEnum):
@@ -78,13 +84,15 @@ class DaliDeviceType(IntEnum):
 
 def request_with_retry_sequence(cmd):
     """Helper function to perform a sequence with retries on failure"""
-    for attempt in range(3):
+    last_error = "unknown error"
+    for _ in range(3):
         result = yield cmd
-        if result is not None and result.raw_value is not None and not result.raw_value.error:
+        try:
+            check_query_response(result)
             return result
-        if attempt > 1:
-            yield seq_sleep(0.3)
-    raise RuntimeError(f"No response to {cmd}")
+        except RuntimeError as e:
+            last_error = str(e)
+    raise RuntimeError(f"No response to {cmd} after 3 attempts; last error: {last_error}")
 
 
 def query_device_types_sequence(addr: Address):
@@ -138,19 +146,19 @@ class DaliDevice(DaliDeviceBase):
         use_identify_cmd = False
         for _ in range(2):
             try:
-                v = await query_response(driver, self._compat.QueryVersionNumber(address))
+                v = await query_response(driver, self._compat.QueryVersionNumber(address), self.logger)
             except Exception:
                 continue
             use_identify_cmd = v.value != 1
             break
         if use_identify_cmd:
-            await driver.send(IdentifyDevice(address))
+            await send_with_retry(driver, IdentifyDevice(address), self.logger)
         else:
             setup_rgb = (
                 self._type8_handler is not None
                 and self._type8_handler.default_colour_type == ColourType.RGBWAF
             )
-            await legacy_identify_sequence(driver, address, setup_rgb)
+            await legacy_identify_sequence(driver, address, setup_rgb, self.logger)
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         await super().load_info(driver, force_reload)
@@ -178,7 +186,7 @@ class DaliDevice(DaliDeviceBase):
     ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
         address = GearShort(self.address.short)
 
-        await self._groups_parameter.read(driver, address)
+        await self._groups_parameter.read(driver, address, self.logger)
 
         types = await driver.run_sequence(query_device_types_sequence(address))
         if types is None:
@@ -219,7 +227,7 @@ class DaliDevice(DaliDeviceBase):
                 continue
 
         for handler in self._type_handlers:
-            await handler.read_mandatory_info(driver, address)
+            await handler.read_mandatory_info(driver, address, self.logger)
 
         # Parameter handlers for settings page in UI
         parameter_handlers: list[SettingsParamBase] = [
@@ -261,18 +269,25 @@ class DaliDevice(DaliDeviceBase):
         return (parameter_handlers, mqtt_controls, group_parameter_handlers)
 
 
-async def legacy_identify_sequence(driver: WBDALIDriver, address: GearShort, setup_rgb: bool) -> None:
+async def legacy_identify_sequence(
+    driver: WBDALIDriver,
+    address: GearShort,
+    setup_rgb: bool,
+    logger: Optional[logging.Logger] = None,
+) -> None:
 
-    await driver.send(Initialise(address=address.address))
+    await send_with_retry(driver, Initialise(address=address.address), logger)
     if setup_rgb:
-        await driver.send_commands(
-            set_rgb_commands_builder(address, MAX_COLOUR_VALUE, MAX_COLOUR_VALUE, MAX_COLOUR_VALUE)
+        await send_commands_with_retry(
+            driver,
+            set_rgb_commands_builder(address, MAX_COLOUR_VALUE, MAX_COLOUR_VALUE, MAX_COLOUR_VALUE),
+            logger=logger,
         )
     try:
         for _ in range(5):
-            await driver.send(RecallMaxLevel(address))
+            await send_with_retry(driver, RecallMaxLevel(address), logger)
             await asyncio.sleep(0.5)
-            await driver.send(RecallMinLevel(address))
+            await send_with_retry(driver, RecallMinLevel(address), logger)
             await asyncio.sleep(0.5)
     finally:
-        await driver.send(Terminate())
+        await send_with_retry(driver, Terminate(), logger)

@@ -41,9 +41,7 @@ class DaliCommandsCompatibilityLayer:
             return control_gear.ProgramShortAddress("MASK")
         return control_gear.ProgramShortAddress(short_address)
 
-    def QueryShortAddressResponseValue(
-        self, resp: Union[NumericResponse, NumericResponseMask]
-    ) -> Optional[int]:
+    def QueryShortAddressResponseValue(self, resp: Response) -> Optional[int]:
         value = resp.value
         if isinstance(value, int):
             return value >> 1

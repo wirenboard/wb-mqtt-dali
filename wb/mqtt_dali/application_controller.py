@@ -13,7 +13,7 @@ from dali.address import (
     GearGroup,
     InstanceNumber,
 )
-from dali.command import Command, from_frame
+from dali.command import Command, Response, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame
 from dali.gear.colour import tc_kelvin_mirek
@@ -42,7 +42,12 @@ from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .utils import merge_json_schemas
 from .wbdali import WBDALIConfig, WBDALIDriver
-from .wbdali_utils import AsyncDeviceInstanceTypeMapper
+from .wbdali_error_response import WbGatewayTransmissionError
+from .wbdali_utils import (
+    AsyncDeviceInstanceTypeMapper,
+    send_commands_with_retry,
+    send_with_retry,
+)
 from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
 from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
@@ -132,7 +137,11 @@ class GroupVirtualDevice:
     ) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(control.get_setup_commands(GearGroup(self.group_number), value))
+            await send_commands_with_retry(
+                driver,
+                control.get_setup_commands(GearGroup(self.group_number), value),
+                self.logger,
+            )
 
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -163,7 +172,9 @@ class BroadcastVirtualDevice:
     ) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(control.get_setup_commands(GearBroadcast(), value))
+            await send_commands_with_retry(
+                driver, control.get_setup_commands(GearBroadcast(), value), self.logger
+            )
 
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -546,7 +557,7 @@ class ApplicationController:
         start_time = default_timer()
 
         await asyncio.sleep(1)
-        await self._dev.send(StartQuiescentMode(DeviceBroadcast()))
+        await send_with_retry(self._dev, StartQuiescentMode(DeviceBroadcast()), self.logger)
         try:
             self.logger.debug("Commissioning for DALI 1.0 devices")
             obj = Commissioning(self._dev, [d.address for d in self.dali_devices], dali2=False)
@@ -555,7 +566,7 @@ class ApplicationController:
             obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], dali2=True)
             res_dali2 = await obj.smart_extend()
         finally:
-            await self._dev.send(StopQuiescentMode(DeviceBroadcast()))
+            await send_with_retry(self._dev, StopQuiescentMode(DeviceBroadcast()), self.logger)
 
         end_time = default_timer()
         self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
@@ -994,8 +1005,11 @@ class ApplicationController:
                 "Publish DALI bus traffic to MQTT",
             )
 
-            if bus_traffic_item.response is not None:
-                response_msg = f"<<{format_response(bus_traffic_item.response, decoded_request_command)}"
+            if bus_traffic_item.response is not None and (
+                isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
+                or (bus_traffic_item.response._expected and bus_traffic_item.response.raw_value is not None)
+            ):
+                response_msg = f"<<{format_response(bus_traffic_item.response)}"
 
                 self._one_shot_tasks.add(
                     self._mqtt_dispatcher.client.publish(
@@ -1026,9 +1040,7 @@ def format_command(frame: Frame, decoded_command: Optional[Command]) -> str:
     return format_frame(frame)
 
 
-def format_response(frame: Frame, decoded_command: Optional[Command]) -> str:
-    if frame.error:
-        return f"{format_frame(frame)} Error"
-    if decoded_command is not None and decoded_command.response is not None:
-        return f"{format_frame(frame)} {decoded_command.response(frame)}"
-    return format_frame(frame)
+def format_response(response: Response) -> str:
+    if isinstance(response, WbGatewayTransmissionError):
+        return str(response)
+    return f"{format_frame(response.raw_value)} {response}"

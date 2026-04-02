@@ -1,5 +1,8 @@
 # Type 7 Switching function
 
+import logging
+from typing import Optional
+
 from dali.address import GearShort
 from dali.command import Response
 
@@ -91,9 +94,14 @@ class ErrorHoldOffTimeParam(NumberGearParam):
 
 
 class Type7Parameters(TypeParameters):
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
+    async def read_mandatory_info(
+        self,
+        driver: WBDALIDriver,
+        short_address: GearShort,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
         try:
-            features = await query_response(driver, QueryFeatures(short_address))
+            features = await query_response(driver, QueryFeatures(short_address), logger)
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read switching function features: {e}") from e
         res = []

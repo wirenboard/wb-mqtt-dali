@@ -1,6 +1,9 @@
 # Type 17 Dimming curve selection
 
 
+import logging
+from typing import Optional
+
 from dali.address import GearShort
 
 from .dali_dimming_curve import DimmingCurveState
@@ -23,5 +26,10 @@ class Type17Parameters(TypeParameters):
         self._dimming_curve_parameter = Type17DimmingCurveParam(dimming_curve_state)
         self._parameters = [self._dimming_curve_parameter]
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
-        await self._dimming_curve_parameter.read(driver, short_address)
+    async def read_mandatory_info(
+        self,
+        driver: WBDALIDriver,
+        short_address: GearShort,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
+        await self._dimming_curve_parameter.read(driver, short_address, logger)

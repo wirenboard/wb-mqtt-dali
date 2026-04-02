@@ -258,20 +258,17 @@ class ScenesParam(SettingsParamBase):
             else:
                 values_to_set[i] = scene.get("level", MASK)
 
-        is_for_single_device = not is_broadcast_or_group_address(short_address)
         commands = []
         modified_scene_indexes = []
         for i in range(SCENES_TOTAL):
-            if not is_for_single_device or self._scenes[i] != values_to_set[i]:
-                commands.extend([DTR0(values_to_set[i]), SetScene(short_address, i)])
-                if is_for_single_device:
-                    commands.append(QuerySceneLevel(short_address, i))
+            if self._scenes[i] != values_to_set[i]:
+                commands.extend(
+                    [DTR0(values_to_set[i]), SetScene(short_address, i), QuerySceneLevel(short_address, i)]
+                )
                 modified_scene_indexes.append(i)
         if not commands:
             return {}
         responses = await driver.send_commands(commands)
-        if not is_for_single_device:
-            return {}
         for idx, scene_index in enumerate(modified_scene_indexes):
             response = responses[idx * 3 + 2]
             check_query_response(response)
@@ -334,3 +331,70 @@ class ScenesParam(SettingsParamBase):
             else:
                 result_scenes.append({"enabled": True, "level": scene_value})
         return {"scenes": result_scenes}
+
+
+class GroupScenesSettings(SettingsParamBase):
+    def __init__(self) -> None:
+        super().__init__(SettingsParamName("Scenes", "Сцены"))
+        self.property_name = "scenes"
+
+    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+        scenes = value.get(self.property_name)
+        if scenes is None:
+            return {}
+        if scenes.get("enabled", False) is False:
+            value_to_set = MASK
+        else:
+            value_to_set = scenes.get("level", MASK)
+        index = scenes.get("index")
+        if index is None:
+            raise ValueError("Scene index is required")
+        commands = [DTR0(value_to_set), SetScene(short_address, index)]
+        await driver.send_commands(commands)
+        return {}
+
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        return {
+            "properties": {
+                self.property_name: {
+                    "type": "object",
+                    "title": self.name.en,
+                    "properties": {
+                        "index": {
+                            "type": "number",
+                            "title": "Scene number",
+                            "propertyOrder": -1,
+                            "enum": list(range(SCENES_TOTAL)),
+                            "default": 0,
+                        },
+                        "enabled": {
+                            "type": "boolean",
+                            "title": "Part of the scene",
+                            "propertyOrder": 0,
+                            "format": "switch",
+                            "default": False,
+                        },
+                        "level": {
+                            "type": "integer",
+                            "title": "Light level",
+                            "format": "dali-level",
+                            "minimum": 0,
+                            "maximum": 254,
+                            "propertyOrder": 2,
+                            "options": {
+                                "grid_columns": 4,
+                            },
+                        },
+                    },
+                    "required": ["index", "enabled", "level"],
+                },
+            },
+            "translations": {
+                "ru": {
+                    "Part of the scene": "Часть сцены",
+                    "Scene number": "Номер сцены",
+                    "Light level": "Яркость",
+                    self.name.en: self.name.ru,
+                },
+            },
+        }

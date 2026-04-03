@@ -24,12 +24,12 @@ from dali.gear.general import (
     Withdraw,
 )
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
     BinarySearchAddressFinder,
     Commissioning,
     SearchAddress,
 )
-from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
 
 

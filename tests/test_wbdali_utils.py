@@ -232,6 +232,44 @@ async def test_query_responses_retry_from_first_failed_raises_after_exhausted():
 
 
 @pytest.mark.asyncio
+async def test_query_responses_retry_from_first_failed_empty_commands_returns_empty():
+    driver = FakeDriver(send_commands_results=[])
+
+    result = await query_responses_retry_from_first_failed(driver, [], logger=LOGGER)
+
+    assert result == []
+    assert driver.send_commands_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_size", [0, -1])
+async def test_query_responses_retry_from_first_failed_invalid_batch_size_raises(batch_size):
+    commands = [FakeCommand("c1")]
+    driver = FakeDriver(send_commands_results=[["ok1"]])
+
+    with pytest.raises(ValueError, match="positive integer"):
+        await query_responses_retry_from_first_failed(driver, commands, batch_size=batch_size, logger=LOGGER)
+
+
+@pytest.mark.asyncio
+async def test_query_responses_retry_from_first_failed_batch_rounding_retries_from_group_start():
+    commands = [FakeCommand("c1"), FakeCommand("c2"), FakeCommand("c3"), FakeCommand("c4")]
+    driver = FakeDriver(
+        send_commands_results=[
+            ["ok1", "ok2", "ok3", WbGatewayTransmissionError()],
+            ["ok3", "ok4"],
+        ]
+    )
+
+    result = await query_responses_retry_from_first_failed(driver, commands, batch_size=2, logger=LOGGER)
+
+    assert result == ["ok1", "ok2", "ok3", "ok4"]
+    assert driver.send_commands_history == [commands, commands[2:]]
+    retry_command_names = [str(cmd) for cmd in driver.send_commands_history[1]]
+    assert retry_command_names == ["c3", "c4"]
+
+
+@pytest.mark.asyncio
 async def test_query_responses_retry_only_failed_retries_sparse_indexes():
     commands = [FakeCommand("c1"), FakeCommand("c2"), FakeCommand("c3"), FakeCommand("c4")]
     driver = FakeDriver(
@@ -245,6 +283,16 @@ async def test_query_responses_retry_only_failed_retries_sparse_indexes():
 
     assert result == ["ok1", "ok2", "ok3", "ok4"]
     assert driver.send_commands_history == [commands, [commands[1], commands[3]]]
+
+
+@pytest.mark.asyncio
+async def test_query_responses_retry_only_failed_empty_commands_returns_empty():
+    driver = FakeDriver(send_commands_results=[])
+
+    result = await query_responses_retry_only_failed(driver, [], LOGGER)
+
+    assert result == []
+    assert driver.send_commands_calls == 0
 
 
 @pytest.mark.asyncio

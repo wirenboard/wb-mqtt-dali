@@ -446,6 +446,8 @@ class Commissioning:
             log.info("Start binary search (%d)", binary_search_counter)
             low = 0
             high = 0xFFFFFF
+            last_found_rand_addr: Optional[int] = None
+            same_found_counter = 0
             while low < high:
                 high = 0xFFFFFF
                 found_rand_addr = await self.find_next_device(low, high)
@@ -453,10 +455,22 @@ class Commissioning:
                     log.info("No device found, exiting")
                     break
 
+                if found_rand_addr == last_found_rand_addr:
+                    same_found_counter += 1
+                else:
+                    same_found_counter = 1
+                    last_found_rand_addr = found_rand_addr
+
+                if same_found_counter >= 3:
+                    raise RuntimeError(
+                        "smart_extend stuck: same random address "
+                        f"0x{found_rand_addr:06x} found repeatedly"
+                    )
+
                 resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
                 await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
-                low = found_rand_addr + 1
+                low = found_rand_addr
 
             if len(random_address_conflicts) == 0:  # it's O(1)!
                 log.info(

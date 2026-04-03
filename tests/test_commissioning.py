@@ -1034,3 +1034,26 @@ class TestCommissioning(unittest.TestCase):
             self.assertEqual(set_search_calls, expected_calls)
 
         asyncio.run(run_test())
+
+    def test_smart_extend_raises_on_repeated_found_random_address(self):
+        """Test smart_extend fails fast if binary search repeatedly returns same random address."""
+
+        async def run_test():
+            fake_bus = FakeDALIBus(devices={0: 0x123456})
+            original_send = fake_bus.send
+
+            async def mock_send(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+                if isinstance(cmd, Withdraw):
+                    # Simulate broken bus behavior: WITHDRAW has no effect,
+                    # so the same random address is discovered repeatedly.
+                    return MockResponse(value=None)
+                return await original_send(cmd, source=source)
+
+            fake_bus.send = mock_send
+
+            commissioning = Commissioning(fake_bus, [])
+
+            with self.assertRaisesRegex(RuntimeError, "same random address"):
+                await commissioning.smart_extend()
+
+        asyncio.run(run_test())

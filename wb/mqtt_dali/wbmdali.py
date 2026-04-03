@@ -333,13 +333,18 @@ class WBDALIDriver:
         """
 
         response: Union[Response, List[Response]] = Response(None)
+        started = False
         try:
             async with self._send_queue_lock:
                 while True:
                     try:
                         # Note that 'send()' here refers to the Python
                         # 'generator' paradigm, not to the DALI driver!
-                        cmd = seq.send(response)
+                        if not started:
+                            cmd = next(seq)
+                            started = True
+                        else:
+                            cmd = seq.send(response)
                     except StopIteration as r:
                         return r.value
                     response = Response(None)

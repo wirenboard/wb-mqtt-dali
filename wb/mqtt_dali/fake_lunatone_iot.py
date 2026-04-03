@@ -38,7 +38,7 @@ from websockets.typing import Data
 
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
-from .wbdali_utils import WBDALIDriver, send_with_retry
+from .wbdali_utils import WBDALIDriver, is_transmission_error_response, send_with_retry
 
 
 class LunatoneIotProtocolError(RuntimeError):
@@ -256,7 +256,11 @@ def publish_traffic(
             ),
             "Publish DALI bus traffic to websocket",
         )
-        if bus_traffic_item.response is not None and bus_traffic_item.response.raw_value is not None:
+        if (
+            not is_transmission_error_response(bus_traffic_item.response)
+            and bus_traffic_item.response is not None
+            and bus_traffic_item.response.raw_value is not None
+        ):
             logger.debug(
                 "WS >> daliMonitor (response): %sbits=%d %s",
                 "FRAMING ERROR " if bus_traffic_item.response.raw_value.error else "",

@@ -425,10 +425,11 @@ class WBDALIDriver:
             self.logger.debug(
                 "%s (%d) status 0: No transmission", resp_waiter.send_item.command, resp_pointer
             )
-            resp_future.set_result(NoTransmission())
+            response = NoTransmission()
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                NoTransmission(),
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -497,10 +498,11 @@ class WBDALIDriver:
                 resp_waiter.send_item.command,
                 resp_pointer,
             )
-            resp_future.set_result(NoPowerOnBus())
+            response = NoPowerOnBus()
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                NoPowerOnBus(),
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -661,10 +663,11 @@ class WBDALIDriver:
                 def timeout_callback(index=current_index):
                     waiter_to_clear = self._waiting_for_responses.get(index)
                     if waiter_to_clear is not None and not waiter_to_clear.send_item.future.done():
-                        waiter_to_clear.send_item.future.set_result(NoResponseFromGateway())
+                        response = NoResponseFromGateway()
+                        waiter_to_clear.send_item.future.set_result(response)
                         self.bus_traffic.notify_command(
                             waiter_to_clear.send_item.command.frame,
-                            NoResponseFromGateway(),
+                            response,
                             waiter_to_clear.send_item.source,
                             waiter_to_clear.sequence_id,
                         )

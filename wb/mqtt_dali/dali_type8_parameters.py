@@ -145,7 +145,7 @@ def query_colour_with_level(
     first_batch = [cmd, DTR0(QueryColourValueDTR.ReportColourType), QueryColourValue(address)]
     for _ in range(3):
         resp = yield first_batch
-        if len(resp) == len(first_batch) and all(
+        if all(
             is_valid_colour_query_response(command_item, response)
             for command_item, response in zip(first_batch, resp)
         ):

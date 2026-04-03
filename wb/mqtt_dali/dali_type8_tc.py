@@ -186,21 +186,11 @@ async def read_colour_temperature_limits_mirek(
     warmest = MAX_TC_MIREK
     msb_item = resp[2]
     lsb_item = resp[3]
-    if (
-        msb_item is not None
-        and msb_item.raw_value is not None
-        and lsb_item is not None
-        and lsb_item.raw_value is not None
-    ):
+    if msb_item.raw_value is not None and lsb_item.raw_value is not None:
         warmest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
     coolest = MIN_TC_MIREK
     msb_item = resp[5]
     lsb_item = resp[6]
-    if (
-        msb_item is not None
-        and msb_item.raw_value is not None
-        and lsb_item is not None
-        and lsb_item.raw_value is not None
-    ):
+    if msb_item.raw_value is not None and lsb_item.raw_value is not None:
         coolest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
     return coolest, warmest

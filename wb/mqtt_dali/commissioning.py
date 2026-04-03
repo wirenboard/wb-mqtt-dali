@@ -19,6 +19,7 @@ from .wbdali_utils import (
     query_response,
     query_responses_retry_from_first_failed,
     query_responses_retry_only_failed,
+    send_commands_with_retry,
     send_with_retry,
 )
 
@@ -428,7 +429,7 @@ class Commissioning:
             cmds.append(self._cmds.Withdraw())
 
         random_address_conflicts = set()
-        responses = await query_responses_retry_from_first_failed(self.driver, cmds, logger=log)
+        responses = await send_commands_with_retry(self.driver, cmds, logger=log)
         for i, (short, rand_addr) in enumerate(known_rand_addrs):
             resp = responses[query_cmd_indicies[i]]  # QueryShortAddress response
             random_address_conflicts |= await self._process_found_device(rand_addr, resp)

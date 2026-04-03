@@ -451,7 +451,9 @@ class DaliDeviceBase:
 
         res = []
         for descriptor, response in zip(self._polling_controls, responses):
-            if response is None or response.raw_value is None or response.raw_value.error:
+            try:
+                check_query_response(response)
+            except RuntimeError:
                 res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
                 continue
 

@@ -214,8 +214,9 @@ async def query_responses(
                         cmds,
                         resp,
                     )
-                continue
-        return responses
+                break
+        if last_error is None:
+            return responses
     raise RuntimeError(f"Error in response for {cmds}: {last_error}")
 
 

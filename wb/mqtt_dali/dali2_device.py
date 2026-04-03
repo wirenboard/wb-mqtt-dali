@@ -489,13 +489,13 @@ class Dali2Device(DaliDeviceBase):
             self.logger,
         )
         num_instances = num_instances_rsp.value
-        commands = []
-        for i in range(num_instances):
-            commands.append(QueryInstanceEnabled(device=addr, instance=InstanceNumber(i)))
-            commands.append(QueryInstanceType(device=addr, instance=InstanceNumber(i)))
-        instances = await query_responses_retry_only_failed(driver, commands, self.logger)
-        for i in range(num_instances):
-            self.add_instance(instances[2 * i].value, instances[2 * i + 1].value)
+        instance_types = await query_responses_retry_only_failed(
+            driver,
+            [QueryInstanceType(device=addr, instance=InstanceNumber(i)) for i in range(num_instances)],
+            self.logger,
+        )
+        for i, instance_type in enumerate(instance_types):
+            self.add_instance(i, instance_type.value)
 
         parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,

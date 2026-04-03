@@ -65,6 +65,7 @@ async def test_write(number_settings_param):
     number_settings_param.value = 50
     value_to_set = {"test_property": 100}
     mock_write_command = MagicMock()
+    mock_write_command.response = None
     mock_read_command = MagicMock()
 
     with (
@@ -157,7 +158,9 @@ async def test_write_with_multiplier(number_settings_param):
 
     def capture_write_commands(short_address, raw):
         captured_raw.append(raw)
-        return [MagicMock()]
+        cmd = MagicMock()
+        cmd.response = None
+        return [cmd]
 
     with (
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
@@ -193,7 +196,9 @@ async def test_write_rounding_with_multiplier(number_settings_param):
 
     def capture_write_commands(short_address, raw):
         captured_raw.append(raw)
-        return [MagicMock()]
+        cmd = MagicMock()
+        cmd.response = None
+        return [cmd]
 
     with (
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
@@ -218,7 +223,9 @@ async def test_write_multiplier_one_sends_raw_unchanged(number_settings_param):
 
     def capture_write_commands(short_address, raw):
         captured_raw.append(raw)
-        return [MagicMock()]
+        cmd = MagicMock()
+        cmd.response = None
+        return [cmd]
 
     with (
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),

@@ -484,6 +484,8 @@ async def test_poll_controls_returns_error_when_raw_value_has_error():
 
     response = MagicMock()
     response.raw_value = MagicMock()
+    response._expected = True
+    response._error_acceptable = False
     response.raw_value.error = True
 
     d._polling_controls = [control]

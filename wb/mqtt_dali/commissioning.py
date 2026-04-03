@@ -463,8 +463,7 @@ class Commissioning:
 
                 if same_found_counter >= 3:
                     raise RuntimeError(
-                        "smart_extend stuck: same random address "
-                        f"0x{found_rand_addr:06x} found repeatedly"
+                        "smart_extend stuck: same random address " f"0x{found_rand_addr:06x} found repeatedly"
                     )
 
                 resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)

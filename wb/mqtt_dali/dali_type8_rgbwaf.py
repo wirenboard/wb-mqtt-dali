@@ -93,7 +93,7 @@ class RgbwafColourValues:
                 },
                 "white": {
                     "type": "integer",
-                    "title": "White",
+                    "title": "W",
                     "format": "dali-white",
                     "minimum": 0,
                     "maximum": MASK,
@@ -105,7 +105,6 @@ class RgbwafColourValues:
                 },
             },
             "required": ["rgb", "white"],
-            "translations": {"ru": {"White": "Белый"}},
         }
 
 
@@ -130,7 +129,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
             white = int(value)
             white = min(white, MAX_COLOUR_VALUE)
         except ValueError as e:
-            raise ValueError("white component must be integer") from e
+            raise ValueError("W component must be integer") from e
         return set_waf_commands_builder(short_address, white, MASK, MASK) + [
             Activate(short_address),
         ]
@@ -149,7 +148,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
             "set_white",
             ControlMeta(
                 "range",
-                TranslatedTitle("Wanted White", "Желаемый белый"),
+                TranslatedTitle("Wanted W", "Желаемый W"),
                 minimum=0,
                 maximum=MAX_COLOUR_VALUE,
             ),
@@ -173,7 +172,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 "current_white",
-                ControlMeta(title=TranslatedTitle("Current White", "Текущий белый"), read_only=True),
+                ControlMeta(title=TranslatedTitle("Current W", "Текущий W"), read_only=True),
                 "0",
             ),
         ),

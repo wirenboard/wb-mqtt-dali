@@ -113,11 +113,17 @@ def read_memory_bank(
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
 ):
-    last_address = yield from bank.LastAddress.read(short_address)
-    if isinstance(last_address, location.FlagValue):
-        raise ResponseError(
-            f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
-        )
+    for i in range(3):
+        try:
+            last_address = yield from bank.LastAddress.read(short_address)
+            if isinstance(last_address, location.FlagValue):
+                raise ResponseError(
+                    f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
+                )
+            break
+        except Exception:
+            if i == 2:
+                raise
     # Reading the last address also sets DTR1 appropriately
 
     # Bank 0 has a useful value at address 0x02; all other banks
@@ -130,9 +136,11 @@ def read_memory_bank(
     last_error = "unknown error"
     for _ in range(3):
         current_address = start_address + first_unread_index
-        yield from request_with_retry_sequence(compat.DTR0(current_address))
-
         remaining_count = commands_count - first_unread_index
+        if remaining_count <= 0:
+            break
+
+        yield from request_with_retry_sequence(compat.DTR0(current_address))
         responses = yield [compat.ReadMemoryLocation(short_address) for _ in range(remaining_count)]
 
         next_unread_index: Optional[int] = None
@@ -143,6 +151,13 @@ def read_memory_bank(
             except RuntimeError as e:
                 next_unread_index = i
                 last_error = str(e)
+                break
+            # ReadMemoryLocation may return no raw value if the location is not implemented,
+            # but we expect it to be implemented for all addresses up to the last address,
+            # so treat this as an error
+            if response.raw_value is None:
+                next_unread_index = i
+                last_error = "no raw value in response"
                 break
             raw_data[start_address + i] = response.raw_value.as_integer
 

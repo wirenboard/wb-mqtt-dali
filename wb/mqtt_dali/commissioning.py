@@ -21,6 +21,7 @@ from .wbdali_utils import (
     query_responses_retry_only_failed,
     send_commands_with_retry,
     send_with_retry,
+    check_query_response,
 )
 
 log = logging.getLogger("commissioning")
@@ -466,7 +467,13 @@ class Commissioning:
                         "smart_extend stuck: same random address " f"0x{found_rand_addr:06x} found repeatedly"
                     )
 
-                resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
+                for _ in range(3):
+                    resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
+                    try:
+                        check_query_response(resp)
+                        break
+                    except Exception:
+                        pass
                 await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
                 low = found_rand_addr
@@ -603,15 +610,34 @@ class Commissioning:
             )
             low = 0
             high = 0xFFFFFF
+            last_found_rand_addr: Optional[int] = None
+            same_found_counter = 0
             while low < high:
                 found_addr = await self.find_next_device(low, high)
                 if found_addr is None:
                     break
 
-                resp = await self.driver.send_commands(
-                    [self._cmds.QueryShortAddress(), self._cmds.Withdraw()]
-                )
-                self._print_binary_search_iteration_info(found_addr, resp[0])
+                if found_addr == last_found_rand_addr:
+                    same_found_counter += 1
+                else:
+                    same_found_counter = 1
+                    last_found_rand_addr = found_addr
+
+                if same_found_counter >= 3:
+                    raise RuntimeError(
+                        "smart_extend stuck: same random address " f"0x{found_addr:06x} found repeatedly"
+                    )
+
+                for _ in range(3):
+                    resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
+                    try:
+                        check_query_response(resp)
+                        break
+                    except Exception:
+                        await asyncio.sleep(0.3)
+                        pass
+                await send_with_retry(self.driver, self._cmds.Withdraw(), log)
+                self._print_binary_search_iteration_info(found_addr, resp)
                 low = found_addr
                 res.append(found_addr)
         finally:

@@ -182,10 +182,10 @@ async def query_response(
         resp = await driver.send(cmd)
         last_error = check_command_failed(cmd, resp)
         if last_error is not None:
-            if logger is not None and attempt < MAX_COMMAND_RETRIES:
+            if logger is not None:
                 logger.warning(
                     "DALI send retry %d/%d for %s: %s",
-                    attempt + 1,
+                    attempt,
                     MAX_COMMAND_RETRIES,
                     cmd,
                     resp,
@@ -206,10 +206,10 @@ async def query_responses(
         for command, resp in zip(cmds, responses):
             last_error = check_command_failed(command, resp)
             if last_error is not None:
-                if logger is not None and attempt < MAX_COMMAND_RETRIES:
+                if logger is not None:
                     logger.warning(
                         "DALI send retry %d/%d for %s: %s",
-                        attempt + 1,
+                        attempt,
                         MAX_COMMAND_RETRIES,
                         cmds,
                         resp,
@@ -245,14 +245,14 @@ def has_transmission_error(responses: Sequence[Optional[Response]]) -> bool:
 
 
 def check_command_failed(cmd: Command, resp: Optional[Response]) -> Optional[str]:
+    if is_transmission_error_response(resp):
+        return str(resp)
     if getattr(cmd, "response", None) is not None:
         try:
             check_query_response(resp)
             return None
         except RuntimeError as exc:
             return str(exc)
-    if is_transmission_error_response(resp):
-        return str(resp)
     return None
 
 
@@ -301,10 +301,10 @@ async def query_responses_retry_from_first_failed(
         pending_commands = pending_commands[first_failed_pos:]
         pending_indexes = pending_indexes[first_failed_pos:]
 
-        if logger is not None and attempt < MAX_COMMAND_RETRIES:
+        if logger is not None:
             logger.warning(
                 "DALI batch retry-from-first %d/%d: failed at index %d (%s): %s",
-                attempt + 1,
+                attempt,
                 MAX_COMMAND_RETRIES,
                 last_failed_index,
                 last_failed_command,
@@ -356,10 +356,10 @@ async def query_responses_retry_only_failed(
         pending_indexes = next_pending_indexes
         pending_commands = next_pending_commands
 
-        if logger is not None and attempt < MAX_COMMAND_RETRIES:
+        if logger is not None:
             logger.warning(
                 "DALI batch retry-only-failed %d/%d: pending indexes %s",
-                attempt + 1,
+                attempt,
                 MAX_COMMAND_RETRIES,
                 pending_indexes,
             )

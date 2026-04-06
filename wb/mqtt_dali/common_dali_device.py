@@ -19,7 +19,23 @@ from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schemas
-from .wbdali_utils import WBDALIDriver
+from .wbdali_utils import (
+    WBDALIDriver,
+    check_query_response,
+    is_transmission_error_response,
+    query_response,
+    send_commands_with_retry,
+)
+
+
+def request_with_retry_sequence(cmd):
+    last_error = "unknown error"
+    for _ in range(3):
+        result = yield cmd
+        if not is_transmission_error_response(result):
+            return result
+        last_error = str(result)
+    raise RuntimeError(f"No response to {cmd} after 3 attempts; last error: {last_error}")
 
 
 class MqttControlBase:
@@ -97,30 +113,65 @@ def read_memory_bank(
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
 ):
-    last_address = yield from bank.LastAddress.read(short_address)
-    if isinstance(last_address, location.FlagValue):
-        raise ResponseError(
-            f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
-        )
+    for i in range(3):
+        try:
+            last_address = yield from bank.LastAddress.read(short_address)
+            if isinstance(last_address, location.FlagValue):
+                raise ResponseError(
+                    f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
+                )
+            break
+        except Exception:
+            if i == 2:
+                raise
     # Reading the last address also sets DTR1 appropriately
 
     # Bank 0 has a useful value at address 0x02; all other banks
     # use this for the lock/latch byte
     start_address = 0x02 if bank.address == 0 else 0x03
-    yield compat.DTR0(start_address)
-    raw_data = [None] * start_address
     commands_count = last_address - start_address + 1
-    r = yield [compat.ReadMemoryLocation(short_address) for _ in range(commands_count)]
-    for i in range(commands_count):
-        if r[i].raw_value is not None:
-            if r[i].raw_value.error:
-                raise ResponseError(
-                    f"Framing error while reading memory bank "
-                    f"{short_address} location {i + start_address}"
-                )
-            raw_data.append(r[i].raw_value.as_integer)
-        else:
-            raw_data.append(None)
+    raw_data = [None] * start_address + [None] * commands_count
+
+    first_unread_index = 0
+    last_error = "unknown error"
+    for _ in range(3):
+        current_address = start_address + first_unread_index
+        remaining_count = commands_count - first_unread_index
+        if remaining_count <= 0:
+            break
+
+        yield from request_with_retry_sequence(compat.DTR0(current_address))
+        responses = yield [compat.ReadMemoryLocation(short_address) for _ in range(remaining_count)]
+
+        next_unread_index: Optional[int] = None
+        for offset, response in enumerate(responses):
+            i = first_unread_index + offset
+            try:
+                check_query_response(response)
+            except RuntimeError as e:
+                next_unread_index = i
+                last_error = str(e)
+                break
+            # ReadMemoryLocation may return no raw value if the location is not implemented,
+            # but we expect it to be implemented for all addresses up to the last address,
+            # so treat this as an error
+            if response.raw_value is None:
+                next_unread_index = i
+                last_error = "no raw value in response"
+                break
+            raw_data[start_address + i] = response.raw_value.as_integer
+
+        if next_unread_index is None:
+            break
+        first_unread_index = next_unread_index
+    else:
+        failed_address = start_address + first_unread_index
+        raise RuntimeError(
+            f"Failed to read memory bank {bank.address} for {short_address}: "
+            f"stopped at location {failed_address} (offset {first_unread_index}) "
+            f"after 3 attempts; last error: {last_error}"
+        )
+
     result = {}
     for memory_value in bank.values:
         try:
@@ -152,14 +203,23 @@ class GeneralMemoryParams(SettingsParamBase):
         self._compat = compat
         self._gtin_db = gtin_db
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         res = {}
         try:
-            v = await driver.send(self._compat.QueryVersionNumber(short_address))
-            if v is None or v.raw_value is None or v.value == 1:
+            try:
+                v = await query_response(
+                    driver,
+                    self._compat.QueryVersionNumber(short_address),
+                    logger,
+                )
+                if v.value == 1:
+                    bank0 = info.BANK_0_legacy
+                else:
+                    bank0 = info.BANK_0
+            except RuntimeError:
                 bank0 = info.BANK_0_legacy
-            else:
-                bank0 = info.BANK_0
             self._update_info(
                 res, await driver.run_sequence(read_memory_bank(bank0, short_address, self._compat))
             )
@@ -320,7 +380,11 @@ class DaliDeviceBase:
         }
         schema = deepcopy(self._common_schema)
         awaitables = [
-            param_handler.read(driver, self._compat.getAddress(self.address.short))
+            param_handler.read(
+                driver,
+                self._compat.getAddress(self.address.short),
+                self.logger,
+            )
             for param_handler in self._parameter_handlers
         ]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
@@ -354,7 +418,12 @@ class DaliDeviceBase:
         for param_handler in self._parameter_handlers:
             try:
                 updated_parameters.update(
-                    await param_handler.write(driver, self._compat.getAddress(self.address.short), new_values)
+                    await param_handler.write(
+                        driver,
+                        self._compat.getAddress(self.address.short),
+                        new_values,
+                        self.logger,
+                    )
                 )
             except Exception as e:
                 raise RuntimeError(f'Error writing "{param_handler.name.en}": {e}') from e
@@ -376,8 +445,10 @@ class DaliDeviceBase:
 
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await driver.send_commands(
-                control.get_setup_commands(self._compat.getAddress(self.address.short), value)
+            await send_commands_with_retry(
+                driver,
+                control.get_setup_commands(self._compat.getAddress(self.address.short), value),
+                self.logger,
             )
 
     async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
@@ -391,11 +462,13 @@ class DaliDeviceBase:
             queries.append(descriptor.get_query(self._compat.getAddress(self.address.short)))
         if not queries:
             return []
-        responses = await driver.send_commands(queries)
+        responses = await send_commands_with_retry(driver, queries, self.logger)
 
         res = []
         for descriptor, response in zip(self._polling_controls, responses):
-            if response is None or response.raw_value is None or response.raw_value.error:
+            try:
+                check_query_response(response)
+            except RuntimeError:
                 res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
                 continue
 
@@ -434,8 +507,10 @@ class DaliDeviceBase:
 
         new_short_address = new_values.get("short_address", self.address.short)
         if new_short_address != self.address.short:
-            await driver.send_commands(
-                self._compat.setShortAddressCommands(self.address.short, new_short_address)
+            await send_commands_with_retry(
+                driver,
+                self._compat.setShortAddressCommands(self.address.short, new_short_address),
+                self.logger,
             )
             self.address.short = new_short_address
 

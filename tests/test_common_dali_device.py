@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from dali.address import GearShort
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
@@ -373,7 +374,7 @@ async def test_load_info_uses_correct_short_address_for_read():
 
         await d.load_info(driver)
 
-    mock_gmp_instance.read.assert_awaited_once_with(driver, GearShort(42))
+    mock_gmp_instance.read.assert_awaited_once_with(driver, GearShort(42), d.logger)
 
 
 @pytest.mark.asyncio
@@ -431,7 +432,7 @@ async def test_poll_controls_returns_error_when_response_is_none():
 
     res = await d.poll_controls(driver)
 
-    driver.send_commands.assert_awaited_once_with(["Q1"])
+    driver.send_commands.assert_awaited_once_with(["Q1"], BusTrafficSource.WB)
     assert len(res) == 1
     assert res[0].control_id == "c1"
     assert res[0].value == ""
@@ -483,6 +484,8 @@ async def test_poll_controls_returns_error_when_raw_value_has_error():
 
     response = MagicMock()
     response.raw_value = MagicMock()
+    response._expected = True
+    response._error_acceptable = False
     response.raw_value.error = True
 
     d._polling_controls = [control]
@@ -640,7 +643,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
 
     res = await d.poll_controls(driver)
 
-    driver.send_commands.assert_awaited_once_with(["Q1", "Q2", "Q3"])
+    driver.send_commands.assert_awaited_once_with(["Q1", "Q2", "Q3"], BusTrafficSource.WB)
     assert [x.control_id for x in res] == ["regular", "alarm", "bad"]
     assert res[0].value == "11"
     assert res[1].value == "0"
@@ -728,8 +731,8 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
         await d.apply_parameters(driver, new_values)
 
-    h1.write.assert_awaited_once_with(driver, GearShort(33), new_values)
-    h2.write.assert_awaited_once_with(driver, GearShort(33), new_values)
+    h1.write.assert_awaited_once_with(driver, GearShort(33), new_values, d.logger)
+    h2.write.assert_awaited_once_with(driver, GearShort(33), new_values, d.logger)
     assert d.params["existing"] == "keep"
     assert d.params["p1"] == "v1"
     assert d.params["p2"] == 2

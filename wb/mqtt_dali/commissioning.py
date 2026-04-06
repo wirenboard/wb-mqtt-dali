@@ -5,14 +5,24 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Union
 
 from dali.address import DeviceBroadcast, DeviceShort, GearShort
-from dali.command import NumericResponse, NumericResponseMask
+from dali.command import Response
 from dali.device import general as control_device
 from dali.gear import general as control_gear
 
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDeviceAddress
-from .wbdali_utils import MASK, AsyncDeviceInstanceTypeMapper, WBDALIDriver
+from .wbdali_utils import (
+    MASK,
+    AsyncDeviceInstanceTypeMapper,
+    WBDALIDriver,
+    check_query_response,
+    query_response,
+    query_responses_retry_from_first_failed,
+    query_responses_retry_only_failed,
+    send_commands_with_retry,
+    send_with_retry,
+)
 
 log = logging.getLogger("commissioning")
 
@@ -124,7 +134,7 @@ class Commissioning:
 
     async def set_search_addr(self, addr: int) -> None:
         await asyncio.gather(
-            *(self.driver.send(cmd) for cmd in self._set_search_addr(addr)),
+            *(send_with_retry(self.driver, cmd, log) for cmd in self._set_search_addr(addr)),
         )
 
     async def compare(self, addr: int) -> bool:
@@ -135,11 +145,9 @@ class Commissioning:
         Returns True if a device responded or framing error occurred, False otherwise.
         """
 
-        r = await asyncio.gather(
-            *(self.driver.send(cmd) for cmd in self._set_search_addr(addr)),
-            self.driver.send(self._cmds.Compare()),
-        )
-        return r[-1].value is True
+        commands = [*self._set_search_addr(addr), self._cmds.Compare()]
+        responses = await query_responses_retry_from_first_failed(self.driver, commands, logger=log)
+        return responses[-1].value is True
 
     def _pick_new_short_address(self, found_addr: int) -> Optional[int]:
         if self.available_addresses:
@@ -166,9 +174,9 @@ class Commissioning:
                 new_addr,
                 found_addr,
             )
-            await self.driver.send(self._cmds.ProgramShortAddress(new_addr))
+            await send_with_retry(self.driver, self._cmds.ProgramShortAddress(new_addr), log)
             await asyncio.sleep(0.3)  # Wait for flash write
-            r = await self.driver.send(self._cmds.VerifyShortAddress(new_addr))
+            r = await query_response(self.driver, self._cmds.VerifyShortAddress(new_addr), log)
             if r.value is True:
                 log.info("Short address %d programmed successfully", new_addr)
                 return new_addr
@@ -177,7 +185,7 @@ class Commissioning:
                 "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
                 new_addr,
             )
-            r = await self.driver.send(self._cmds.QueryShortAddress())
+            r = await query_response(self.driver, self._cmds.QueryShortAddress(), log)
             short_addr = self._cmds.QueryShortAddressResponseValue(r)
             if short_addr == new_addr:
                 log.info(
@@ -209,14 +217,12 @@ class Commissioning:
             log.info("Randomising devices with short address %s", short_addr)
         # "RANDOMISE" accepted by all initialized devices, even the ones which are already withdrawn
         # that's why we'll need to initialise only unaddressed ones
-        await self.driver.send(self._cmds.Terminate())
-        await self.driver.send(self._cmds.Initialise(short_addr))
-        await self.driver.send(self._cmds.Randomise())
+        await send_with_retry(self.driver, self._cmds.Terminate(), log)
+        await send_with_retry(self.driver, self._cmds.Initialise(short_addr), log)
+        await send_with_retry(self.driver, self._cmds.Randomise(), log)
         await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
 
-    async def _process_found_device(
-        self, found_addr: int, query_short_resp: Union[NumericResponseMask, NumericResponse]
-    ) -> set[Optional[int]]:
+    async def _process_found_device(self, found_addr: int, query_short_resp: Response) -> set[Optional[int]]:
         """Returns empty set if no random address conflict,
         or set of short addresses that need to be randomised
         """
@@ -245,7 +251,7 @@ class Commissioning:
                 found_addr,
             )
             await self.set_search_addr(found_addr)
-            await self.driver.send(self._cmds.ProgramShortAddress(MASK))
+            await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
             random_address_conflicts.add(
                 None
             )  # None means "unset short address", so we can use it to mark devices with unset short address
@@ -282,7 +288,7 @@ class Commissioning:
                         "Mark 0x%06x for readdressing by resetting its short address",
                         found_addr,
                     )
-                    await self.driver.send(self._cmds.ProgramShortAddress(MASK))
+                    await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
                     random_address_conflicts.add(None)
                 else:
                     log.warning(
@@ -321,13 +327,6 @@ class Commissioning:
 
         return random_address_conflicts
 
-    async def _query_short_address_with_retry(self) -> Union[NumericResponse, NumericResponseMask]:
-        for _ in range(3):  # try up to 3 times, to eliminate transient errors
-            resp = await self.driver.send(self._cmds.QueryShortAddress())
-            if resp is not None and resp.raw_value is not None and not resp.raw_value.error:
-                return resp
-        return resp
-
     async def smart_extend(self) -> CommissioningResult:  # pylint: disable=R0912 disable=R0914 disable=R0915
         # Есть весёлая железка, с таким поведением:
         #   на запросы QUERY RANDOM ADDRESS H/M/L не отвечает вообще
@@ -340,13 +339,11 @@ class Commissioning:
             *[get_random_address(x, self._cmds, self.driver) for x in short_addr_present]
         )
 
-        rand_address_errors: list[int] = []
         known_rand_addrs: list[tuple[int, int]] = []
         rand_addr_frequency: dict[int, int] = {}
         for short, addr in zip(short_addr_present, rand_addresses):
             if addr is None:
                 log.error("Failed to get random address for device %d", short)
-                rand_address_errors.append(short)
             else:
                 log.info("Device %d has random address 0x%06x", short, addr)
                 known_rand_addrs.append((short, addr))
@@ -374,9 +371,9 @@ class Commissioning:
 
             short_sent_randomise.append(short)
             known_rand_addrs.remove((short, rand))
-            await self.driver.send(self._cmds.Terminate())
-            await self.driver.send(self._cmds.Initialise(short))
-            await self.driver.send(self._cmds.Randomise())
+            await send_with_retry(self.driver, self._cmds.Terminate(), log)
+            await send_with_retry(self.driver, self._cmds.Initialise(short), log)
+            await send_with_retry(self.driver, self._cmds.Randomise(), log)
 
         if short_sent_randomise:
             await asyncio.sleep(0.1)  # wait for new random addresses to be generated
@@ -394,9 +391,8 @@ class Commissioning:
                     log.info("Device %d has NEW random address 0x%06x", short, addr)
                     known_rand_addrs.append((short, addr))
 
-        await asyncio.gather(
-            self.driver.send(self._cmds.Terminate()), self.driver.send(self._cmds.Initialise(MASK))
-        )
+        await send_with_retry(self.driver, self._cmds.Terminate(), log)
+        await send_with_retry(self.driver, self._cmds.Initialise(MASK), log)
 
         self.available_addresses = list(range(64))
         for short in short_addr_present:
@@ -434,7 +430,7 @@ class Commissioning:
             cmds.append(self._cmds.Withdraw())
 
         random_address_conflicts = set()
-        responses = await self.driver.send_commands(cmds)
+        responses = await send_commands_with_retry(self.driver, cmds, logger=log)
         for i, (short, rand_addr) in enumerate(known_rand_addrs):
             resp = responses[query_cmd_indicies[i]]  # QueryShortAddress response
             random_address_conflicts |= await self._process_found_device(rand_addr, resp)
@@ -451,6 +447,8 @@ class Commissioning:
             log.info("Start binary search (%d)", binary_search_counter)
             low = 0
             high = 0xFFFFFF
+            last_found_rand_addr: Optional[int] = None
+            same_found_counter = 0
             while low < high:
                 high = 0xFFFFFF
                 found_rand_addr = await self.find_next_device(low, high)
@@ -458,10 +456,27 @@ class Commissioning:
                     log.info("No device found, exiting")
                     break
 
-                resp = await self._query_short_address_with_retry()
-                await self.driver.send(self._cmds.Withdraw())
+                if found_rand_addr == last_found_rand_addr:
+                    same_found_counter += 1
+                else:
+                    same_found_counter = 1
+                    last_found_rand_addr = found_rand_addr
+
+                if same_found_counter >= 3:
+                    raise RuntimeError(
+                        "smart_extend stuck: same random address " f"0x{found_rand_addr:06x} found repeatedly"
+                    )
+
+                for _ in range(3):
+                    resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
+                    try:
+                        check_query_response(resp)
+                        break
+                    except Exception:
+                        pass
+                await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
-                low = found_rand_addr + 1
+                low = found_rand_addr
 
             if len(random_address_conflicts) == 0:  # it's O(1)!
                 log.info(
@@ -479,7 +494,7 @@ class Commissioning:
                 await self._randomise_by_short(short)
             random_address_conflicts = set()
 
-        await self.driver.send(self._cmds.Terminate())
+        await send_with_retry(self.driver, self._cmds.Terminate(), log)
 
         # Classification based purely on old_devices (from file) and found_devices (current scan)
         # Build reverse maps random -> short
@@ -521,7 +536,14 @@ class Commissioning:
         short_addr_present = []
         if self._is_dali2:
             responses = await asyncio.gather(
-                *[self.driver.send(control_device.QueryDeviceStatus(DeviceShort(i))) for i in range(64)]
+                *[
+                    send_with_retry(
+                        self.driver,
+                        control_device.QueryDeviceStatus(DeviceShort(i)),
+                        log,
+                    )
+                    for i in range(64)
+                ]
             )
             for i, resp in enumerate(responses):
                 if resp and resp.raw_value is not None:
@@ -529,7 +551,14 @@ class Commissioning:
                     log.info("Control device with short addr %d is present", i)
         else:
             responses = await asyncio.gather(
-                *[self.driver.send(control_gear.QueryControlGearPresent(GearShort(i))) for i in range(64)]
+                *[
+                    send_with_retry(
+                        self.driver,
+                        control_gear.QueryControlGearPresent(GearShort(i)),
+                        log,
+                    )
+                    for i in range(64)
+                ]
             )
             for i, resp in enumerate(responses):
                 if resp and resp.value:
@@ -581,15 +610,34 @@ class Commissioning:
             )
             low = 0
             high = 0xFFFFFF
+            last_found_rand_addr: Optional[int] = None
+            same_found_counter = 0
             while low < high:
                 found_addr = await self.find_next_device(low, high)
                 if found_addr is None:
                     break
 
-                resp = await self.driver.send_commands(
-                    [self._cmds.QueryShortAddress(), self._cmds.Withdraw()]
-                )
-                self._print_binary_search_iteration_info(found_addr, resp[0])
+                if found_addr == last_found_rand_addr:
+                    same_found_counter += 1
+                else:
+                    same_found_counter = 1
+                    last_found_rand_addr = found_addr
+
+                if same_found_counter >= 3:
+                    raise RuntimeError(
+                        "smart_extend stuck: same random address " f"0x{found_addr:06x} found repeatedly"
+                    )
+
+                for _ in range(3):
+                    resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
+                    try:
+                        check_query_response(resp)
+                        break
+                    except Exception:
+                        await asyncio.sleep(0.3)
+                        pass
+                await send_with_retry(self.driver, self._cmds.Withdraw(), log)
+                self._print_binary_search_iteration_info(found_addr, resp)
                 low = found_addr
                 res.append(found_addr)
         finally:
@@ -604,28 +652,17 @@ async def get_random_address(
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
     driver: WBDALIDriver,
 ) -> Optional[int]:
-    parts: list[Optional[int]] = [None for _ in range(3)]
     commands = [
         compat.QueryRandomAddressH(short_address),
         compat.QueryRandomAddressM(short_address),
         compat.QueryRandomAddressL(short_address),
     ]
-    for _ in range(3):  # try up to 3 times, to eliminate transient errors
-        commands_to_send = []
-        for i, part in enumerate(parts):
-            if part is None:
-                commands_to_send.append(commands[i])
-        responses = await driver.send_commands(commands_to_send)
-        resp_iter = iter(responses)
-        complete = True
-        for i, part in enumerate(parts):
-            if part is None:
-                parts[i] = compat.QueryRandomAddressResponseValue(next(resp_iter))
-                if parts[i] is None:
-                    complete = False
-        if complete:
-            return parts[0] << 16 | parts[1] << 8 | parts[2]
-    return None
+    try:
+        responses = await query_responses_retry_only_failed(driver, commands, log)
+    except RuntimeError:
+        return None
+    parts = [compat.QueryRandomAddressResponseValue(resp) for resp in responses]
+    return parts[0] << 16 | parts[1] << 8 | parts[2]
 
 
 async def search_short(driver: WBDALIDriver, dali2: bool) -> list[DaliDeviceAddress]:
@@ -643,7 +680,7 @@ async def search_short(driver: WBDALIDriver, dali2: bool) -> list[DaliDeviceAddr
     try:
         if dali2:
             mapper = AsyncDeviceInstanceTypeMapper()
-            await mapper.async_autodiscover(driver)
+            await mapper.async_autodiscover(driver, logger=log)
             sorted_items = sorted(mapper.mapping.items(), key=lambda x: x[0][0] * 100 + x[0][1])
             last_short_addr = None
             for (addr, inst_num), inst_type in sorted_items:

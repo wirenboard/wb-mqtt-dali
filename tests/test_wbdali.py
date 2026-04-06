@@ -8,6 +8,8 @@ try:
 except ImportError:
     from mock import MagicMock
 
+from typing import Optional
+
 import paho.mqtt.client as mqtt
 from dali.command import Command, Response
 from dali.frame import BackwardFrame, ForwardFrame
@@ -15,6 +17,7 @@ from dali.frame import BackwardFrame, ForwardFrame
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver, encode_frame_for_modbus
+from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway, NoTransmission
 
 
 class MockMqttClient:
@@ -179,7 +182,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
         await self.simulate_timeout_response_from_gateway(0)
         result = (await fut)[0]
-        self.assertIsNone(result)
+        self.assertIsInstance(result, NoTransmission)
 
     async def test_send_command_with_response(self):
         """Test sending a command that expects a response."""
@@ -220,7 +223,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.simulate_timeout_response_from_gateway(0, 2)
 
         result = (await fut)[0]
-        self.assertIsNone(result)
+        self.assertIsInstance(result, NoTransmission)
 
     async def test_send_single_command_rpc_request(self):
         """Test adding a single command to the send buffer."""
@@ -268,7 +271,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             if i < 2:
                 message.payload = str(0x0150 + i).encode()
             else:
-                message.payload = str(0).encode()
+                message.payload = str(0x0200).encode()  # status 2, transmission without response
             await self.mock_mqtt_dispatcher._dispatch_message(message)
 
         results = (await fut)[0]
@@ -277,7 +280,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0].data, 0x50)
         self.assertIsInstance(results[1], MockResponse)
         self.assertEqual(results[1].data, 0x51)
-        self.assertIsNone(results[2])
+        self.assertIsNone(results[2].raw_value)
 
     async def test_batch_independent_commands(self):
         """Test adding multiple independent commands to the send buffer."""
@@ -324,7 +327,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         # Don't send any response, let it timeout
         result = await driver.send(cmd)
         self.assertIsNotNone(result)
-        self.assertIsNone(result.raw_value)
+        self.assertIsInstance(result, NoResponseFromGateway)
 
     async def test_handle_reply_message_with_framing_error(self):
         """Test handling a reply message with a framing error."""
@@ -356,13 +359,13 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         callback_invoked = asyncio.Event()
         received_request_frame = None
-        received_response_frame = None
+        received_response: Optional[Response] = None
         received_source = None
 
         def traffic_callback(item: BusTrafficItem):
-            nonlocal received_request_frame, received_response_frame, received_source
+            nonlocal received_request_frame, received_response, received_source
             received_request_frame = item.request
-            received_response_frame = item.response
+            received_response = item.response
             received_source = item.request_source
             callback_invoked.set()
 
@@ -384,7 +387,8 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
         self.assertEqual(received_source, BusTrafficSource.LUNATONE)
         self.assertEqual(cmd.frame, received_request_frame)
-        self.assertEqual(BackwardFrame(0x12), received_response_frame)
+        self.assertIsNotNone(received_response)
+        self.assertEqual(BackwardFrame(0x12), received_response.raw_value)
 
     async def test_handle_ff24_message(self):
         """Test handling of 24-bit forward frame messages."""

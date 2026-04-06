@@ -1,5 +1,6 @@
 # Type 8 Colour Temperature
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -19,7 +20,7 @@ from dali.gear.general import DTR0, DTR1, QueryActualLevel, QueryContentDTR0
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
-from .wbdali_utils import WBDALIDriver
+from .wbdali_utils import WBDALIDriver, send_commands_with_retry
 from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE_2BYTES = MASK_2BYTES - 1
@@ -168,7 +169,9 @@ def handle_poll_controls_result(new_colour: Optional[ColourTemperatureValue]) ->
 
 
 async def read_colour_temperature_limits_mirek(
-    driver: WBDALIDriver, short_address: Address
+    driver: WBDALIDriver,
+    short_address: Address,
+    logger: Optional[logging.Logger] = None,
 ) -> tuple[int, int]:
     cmds = [
         QueryActualLevel(short_address),
@@ -179,25 +182,15 @@ async def read_colour_temperature_limits_mirek(
         QueryColourValue(short_address),
         QueryContentDTR0(short_address),
     ]
-    resp = await driver.send_commands(cmds)
+    resp = await send_commands_with_retry(driver, cmds, logger)
     warmest = MAX_TC_MIREK
     msb_item = resp[2]
     lsb_item = resp[3]
-    if (
-        msb_item is not None
-        and msb_item.raw_value is not None
-        and lsb_item is not None
-        and lsb_item.raw_value is not None
-    ):
+    if msb_item.raw_value is not None and lsb_item.raw_value is not None:
         warmest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
     coolest = MIN_TC_MIREK
     msb_item = resp[5]
     lsb_item = resp[6]
-    if (
-        msb_item is not None
-        and msb_item.raw_value is not None
-        and lsb_item is not None
-        and lsb_item.raw_value is not None
-    ):
+    if msb_item.raw_value is not None and lsb_item.raw_value is not None:
         coolest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
     return coolest, warmest

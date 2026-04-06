@@ -1,5 +1,8 @@
 # Type 50 Memory bank 1 extension (luminaire information)
 
+import logging
+from typing import Optional
+
 from dali.address import Address
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import oem
@@ -98,7 +101,9 @@ class Type50MemoryBankParam(SettingsParamBase):
         self._values: dict = {}
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         try:
             raw = await driver.run_sequence(read_memory_bank(oem.BANK_1, short_address, self._compat))
         except (MemoryLocationNotImplemented, ResponseError) as e:

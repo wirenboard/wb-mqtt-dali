@@ -1,5 +1,8 @@
 # Type 4 Supply voltage controller for incandescent lamps
 
+import logging
+from typing import Optional
+
 from dali.address import GearShort
 from dali.gear.incandescent import QueryDimmingCurve, SelectDimmingCurve
 
@@ -22,5 +25,10 @@ class Type4Parameters(TypeParameters):
         self._dimming_curve_parameter = Type4DimmingCurveParam(dimming_curve_state)
         self._parameters = [self._dimming_curve_parameter]
 
-    async def read_mandatory_info(self, driver: WBDALIDriver, short_address: GearShort) -> None:
-        await self._dimming_curve_parameter.read(driver, short_address)
+    async def read_mandatory_info(
+        self,
+        driver: WBDALIDriver,
+        short_address: GearShort,
+        logger: Optional[logging.Logger] = None,
+    ) -> None:
+        await self._dimming_curve_parameter.read(driver, short_address, logger)

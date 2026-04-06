@@ -19,6 +19,14 @@ from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
 from .mqtt_dispatcher import MQTTDispatcher
+from .wbdali_error_response import (
+    NoPowerOnBus,
+    NoResponseFromGateway,
+    NoTransmission,
+    TransmissionCancelled,
+    UnknownResponseStatus,
+    WbGatewayTransmissionError,
+)
 
 WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
@@ -154,7 +162,7 @@ class BusMonitorFrameHandler:
 
 @dataclass
 class SendQueueItem:
-    future: asyncio.Future
+    future: asyncio.Future[Response]
     command: Command
     source: BusTrafficSource
 
@@ -311,7 +319,7 @@ class WBDALIDriver:
         for resp_waiter in self._waiting_for_responses.values():
             resp_waiter.cancel_timeout()
             if not resp_waiter.send_item.future.done():
-                resp_waiter.send_item.future.set_result(None)
+                resp_waiter.send_item.future.set_result(TransmissionCancelled())
         self._waiting_for_responses.clear()
 
         # Unsubscribe from all reply topics
@@ -417,11 +425,11 @@ class WBDALIDriver:
             self.logger.debug(
                 "%s (%d) status 0: No transmission", resp_waiter.send_item.command, resp_pointer
             )
-            response_frame = None
-            resp_future.set_result(response_frame)
+            response = NoTransmission()
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                response_frame,
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -434,11 +442,14 @@ class WBDALIDriver:
                 resp_pointer,
                 backward_frame_byte,
             )
-            response_frame = BackwardFrame(backward_frame_byte)
-            resp_future.set_result(response_frame)
+            if resp_waiter.send_item.command.response is not None:
+                response = resp_waiter.send_item.command.response(BackwardFrame(backward_frame_byte))
+            else:
+                response = Response(BackwardFrame(backward_frame_byte))
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                response_frame,
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -448,11 +459,14 @@ class WBDALIDriver:
             self.logger.debug(
                 "%s (%d) status 2: Transmission without response", resp_waiter.send_item.command, resp_pointer
             )
-            response_frame = None
-            resp_future.set_result(response_frame)
+            if resp_waiter.send_item.command.response is not None:
+                response = resp_waiter.send_item.command.response(None)
+            else:
+                response = Response(None)
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                response_frame,
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -465,11 +479,14 @@ class WBDALIDriver:
                 resp_pointer,
                 backward_frame_byte,
             )
-            response_frame = BackwardFrameError(backward_frame_byte)
-            resp_future.set_result(response_frame)
+            if resp_waiter.send_item.command.response is not None:
+                response = resp_waiter.send_item.command.response(BackwardFrameError(backward_frame_byte))
+            else:
+                response = Response(BackwardFrameError(backward_frame_byte))
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                response_frame,
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -481,11 +498,11 @@ class WBDALIDriver:
                 resp_waiter.send_item.command,
                 resp_pointer,
             )
-            response_frame = None
-            resp_future.set_result(response_frame)
+            response = NoPowerOnBus()
+            resp_future.set_result(response)
             self.bus_traffic.notify_command(
                 resp_waiter.send_item.command.frame,
-                response_frame,
+                response,
                 resp_waiter.send_item.source,
                 resp_waiter.sequence_id,
             )
@@ -499,11 +516,11 @@ class WBDALIDriver:
             backward_frame_byte,
             resp,
         )
-        response_frame = None
-        resp_future.set_result(response_frame)
+        response = UnknownResponseStatus()
+        resp_future.set_result(response)
         self.bus_traffic.notify_command(
             resp_waiter.send_item.command.frame,
-            response_frame,
+            response,
             resp_waiter.send_item.source,
             resp_waiter.sequence_id,
         )
@@ -522,17 +539,22 @@ class WBDALIDriver:
         :return: Depends on the sequence being used
         """
 
-        response: Union[Optional[Response], List[Optional[Response]]] = None
+        response: Union[Response, List[Response]] = Response(None)
+        started = False
         try:
             async with self._send_queue_lock:
                 while True:
                     try:
                         # Note that 'send()' here refers to the Python
                         # 'generator' paradigm, not to the DALI driver!
-                        cmd = seq.send(response)
+                        if not started:
+                            cmd = next(seq)
+                            started = True
+                        else:
+                            cmd = seq.send(response)
                     except StopIteration as r:
                         return r.value
-                    response = None
+                    response = Response(None)
                     logging.debug("got command from sequence: %s", cmd)
                     if isinstance(cmd, seq_sleep):
                         await asyncio.sleep(cmd.delay)
@@ -550,7 +572,7 @@ class WBDALIDriver:
         finally:
             seq.close()
 
-    async def send(self, cmd: Command, source: BusTrafficSource = BusTrafficSource.WB) -> Optional[Response]:
+    async def send(self, cmd: Command, source: BusTrafficSource = BusTrafficSource.WB) -> Response:
         """
         Send a DALI command to the bus and optionally wait for a response.
         Args:
@@ -558,15 +580,16 @@ class WBDALIDriver:
                 optional response handler.
             source (str): The source identifier for logging and tracking purposes.
         Returns:
-            Optional[Response]: The response from the DALI device if cmd.response is set,
-                otherwise None.
+            Response: The response from the DALI device if cmd.response is set,
+                otherwise Response(None).
+                Internal transmission errors are returned as WbGatewayTransmissionError or its subclasses.
         """
 
         return (await self.send_commands([cmd], source=source))[0]
 
     async def send_commands(
         self, commands: Sequence[Command], source: BusTrafficSource = BusTrafficSource.WB
-    ) -> List[Optional[Response]]:
+    ) -> List[Response]:
         """
         Send a sequence of DALI commands to the bus and optionally wait for responses.
         Send order is preserved, but commands are sent in batches
@@ -577,8 +600,9 @@ class WBDALIDriver:
             commands (list[Command]): The list of DALI commands to send.
             source (str): The source identifier for logging and tracking purposes.
         Returns:
-            list[Optional[Response]]: The list of responses from the DALI devices
-                if commands have responses set, otherwise None.
+            list[Response]: The list of responses from the DALI devices
+                if commands have responses set, otherwise Response(None).
+                Internal transmission errors are returned as WbGatewayTransmissionError or its subclasses.
         """
 
         return await self._send_commands_internal(commands, source, lock_queue=True)
@@ -634,7 +658,7 @@ class WBDALIDriver:
             except Exception as e:
                 self.logger.error("Error processing queue item: %s", e)
                 if item is not None and not item.future.done():
-                    item.future.set_result(None)
+                    item.future.set_result(WbGatewayTransmissionError())
 
     async def _send_to_gateway(self, items: list[SendQueueItem], start_index: int) -> None:
         if len(items) > 0:
@@ -644,10 +668,11 @@ class WBDALIDriver:
                 def timeout_callback(index=current_index):
                     waiter_to_clear = self._waiting_for_responses.get(index)
                     if waiter_to_clear is not None and not waiter_to_clear.send_item.future.done():
-                        waiter_to_clear.send_item.future.set_result(None)
+                        response = NoResponseFromGateway()
+                        waiter_to_clear.send_item.future.set_result(response)
                         self.bus_traffic.notify_command(
                             waiter_to_clear.send_item.command.frame,
-                            None,
+                            response,
                             waiter_to_clear.send_item.source,
                             waiter_to_clear.sequence_id,
                         )
@@ -684,7 +709,7 @@ class WBDALIDriver:
 
     async def _send_commands_internal(
         self, commands: Sequence[Command], source: BusTrafficSource, lock_queue: bool
-    ) -> list[Optional[Response]]:
+    ) -> list[Response]:
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug("send: %s", ", ".join(str(cmd) for cmd in commands))
         commands_to_send = []
@@ -704,17 +729,14 @@ class WBDALIDriver:
             if lock_queue:
                 self._send_queue_lock.release()
 
-        response_frames = await asyncio.gather(*response_futures)
-        responses: list[Optional[Response]] = []
+        responses = await asyncio.gather(*response_futures)
+        filtered_responses: list[Response] = []
         i = 0
         for cmd in commands:
             # Skip additional EnableDeviceType commands
             if cmd.devicetype != 0:
                 i += 1
-            if cmd.response is None:
-                responses.append(None)
-            else:
-                responses.append(cmd.response(response_frames[i]))
+            filtered_responses.append(responses[i])
             i += 1
 
-        return responses
+        return filtered_responses

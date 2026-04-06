@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.settings import (
     NumberSettingsParam,
     SettingsParamGroup,
@@ -48,7 +49,7 @@ async def test_read(number_settings_param):
         patch("wb.mqtt_dali.settings.query_int", mock_query_int),
     ):
         result = await number_settings_param.read(mock_driver, mock_address)
-        mock_query_int.assert_called_once_with(mock_driver, mock_commands_list)
+        mock_query_int.assert_called_once_with(mock_driver, mock_commands_list, None)
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100
 
@@ -64,6 +65,7 @@ async def test_write(number_settings_param):
     number_settings_param.value = 50
     value_to_set = {"test_property": 100}
     mock_write_command = MagicMock()
+    mock_write_command.response = None
     mock_read_command = MagicMock()
 
     with (
@@ -71,7 +73,10 @@ async def test_write(number_settings_param):
         patch.object(number_settings_param, "get_read_command", return_value=mock_read_command),
     ):
         result = await number_settings_param.write(mock_driver, mock_address, value_to_set)
-        mock_driver.send_commands.assert_called_once_with([mock_write_command, mock_read_command])
+        mock_driver.send_commands.assert_called_once_with(
+            [mock_write_command, mock_read_command],
+            BusTrafficSource.WB,
+        )
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100
 
@@ -153,7 +158,9 @@ async def test_write_with_multiplier(number_settings_param):
 
     def capture_write_commands(short_address, raw):
         captured_raw.append(raw)
-        return [MagicMock()]
+        cmd = MagicMock()
+        cmd.response = None
+        return [cmd]
 
     with (
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
@@ -189,7 +196,9 @@ async def test_write_rounding_with_multiplier(number_settings_param):
 
     def capture_write_commands(short_address, raw):
         captured_raw.append(raw)
-        return [MagicMock()]
+        cmd = MagicMock()
+        cmd.response = None
+        return [cmd]
 
     with (
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
@@ -214,7 +223,9 @@ async def test_write_multiplier_one_sends_raw_unchanged(number_settings_param):
 
     def capture_write_commands(short_address, raw):
         captured_raw.append(raw)
-        return [MagicMock()]
+        cmd = MagicMock()
+        cmd.response = None
+        return [cmd]
 
     with (
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),

@@ -1,5 +1,8 @@
 # Type 52 Diagnostics and maintenance (IEC 62386-253:2023)
 
+import logging
+from typing import Optional
+
 from dali.address import Address
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory.diagnostics import (
@@ -82,7 +85,9 @@ class Type52Parameters(TypeParameters):
         super().__init__()
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         cg: dict = {}
         ls: dict = {}
         try:

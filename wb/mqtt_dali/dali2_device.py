@@ -1,3 +1,4 @@
+import logging
 from typing import Optional, Type
 
 from dali.address import Address, DeviceShort, InstanceNumber
@@ -38,7 +39,6 @@ from dali.device.general import (
     SetInstanceGroup2,
     SetPrimaryInstanceGroup,
 )
-from dali.device.helpers import check_bad_rsp
 
 from .common_dali_device import DaliDeviceBase, MqttControlBase
 from .dali2_compat import Dali2CommandsCompatibilityLayer
@@ -66,7 +66,13 @@ from .settings import (
     SettingsParamGroup,
     SettingsParamName,
 )
-from .wbdali_utils import WBDALIDriver, check_query_response
+from .wbdali_utils import (
+    WBDALIDriver,
+    query_response,
+    query_responses,
+    query_responses_retry_only_failed,
+    send_with_retry,
+)
 
 
 class ApplicationActiveParam(BooleanSettingsParam):
@@ -280,7 +286,9 @@ class InstanceTypeParam(SettingsParamBase):
         self.instance_type_name = self.INSTANCE_TYPE_NAMES.get(instance_type, f"Unknown ({instance_type})")
         self.property_name = "instance_type"
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
         return {self.property_name: self.instance_type_name}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
@@ -308,13 +316,21 @@ class DeviceGroupsParam(SettingsParamBase):
         self._groups = [False] * self.TOTAL_GROUPS
         self._group_indexes: set[int] = set()
 
-    async def read(self, driver: WBDALIDriver, short_address: Address) -> dict:
-        updated_groups = await self._query_all_groups(driver, short_address)
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        updated_groups = await self._query_all_groups(driver, short_address, logger)
         self._groups = updated_groups
         self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
         return {self.property_name: updated_groups}
 
-    async def write(self, driver: WBDALIDriver, short_address: Address, value: dict) -> dict:
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
         groups_to_set = value.get(self.property_name)
         if groups_to_set is None:
             return {}
@@ -361,7 +377,7 @@ class DeviceGroupsParam(SettingsParamBase):
             return {}
 
         query_commands = self._build_query_commands(short_address)
-        responses = await driver.send_commands(commands + query_commands)
+        responses = await query_responses(driver, commands + query_commands, logger)
         updated_groups = self._parse_group_responses(responses[-len(query_commands) :])
         self._groups = updated_groups
         self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
@@ -384,8 +400,17 @@ class DeviceGroupsParam(SettingsParamBase):
     def groups(self) -> set[int]:
         return self._group_indexes
 
-    async def _query_all_groups(self, driver: WBDALIDriver, short_address: Address) -> list[bool]:
-        responses = await driver.send_commands(self._build_query_commands(short_address))
+    async def _query_all_groups(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        logger: Optional[logging.Logger] = None,
+    ) -> list[bool]:
+        responses = await query_responses_retry_only_failed(
+            driver,
+            self._build_query_commands(short_address),
+            logger,
+        )
         return self._parse_group_responses(responses)
 
     def _build_query_commands(self, address: Address) -> list[Command]:
@@ -399,7 +424,6 @@ class DeviceGroupsParam(SettingsParamBase):
     def _parse_group_responses(self, responses: list) -> list[bool]:
         groups: list[bool] = []
         for response in responses:
-            check_query_response(response)
             raw_value = response.raw_value.as_integer
             groups.extend(((raw_value >> bit) & 1) == 1 for bit in range(8))
         return groups[: self.TOTAL_GROUPS]
@@ -449,31 +473,29 @@ class Dali2Device(DaliDeviceBase):
         self.instances[index] = InstanceParameters(InstanceNumber(index), instance_type)
 
     async def identify(self, driver: WBDALIDriver) -> None:
-        await driver.send(IdentifyDevice(DeviceShort(self.address.short)))
+        await send_with_retry(driver, IdentifyDevice(DeviceShort(self.address.short)), self.logger)
 
     async def _initialize_impl(
         self, driver: WBDALIDriver
     ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
         addr = DeviceShort(self.address.short)
-        await self._groups_parameter.read(driver, addr)
+        await self._groups_parameter.read(driver, addr, self.logger)
 
         # Per-device instance discovery
         self.instances.clear()
-        num_instances_rsp = await driver.send(QueryNumberOfInstances(device=addr))
-        if check_bad_rsp(num_instances_rsp):
-            raise RuntimeError(
-                f"Device at address {self.address.short} did not respond to QueryNumberOfInstances"
-            )
+        num_instances_rsp = await query_response(
+            driver,
+            QueryNumberOfInstances(device=addr),
+            self.logger,
+        )
         num_instances = num_instances_rsp.value
-        for inst_int in range(num_instances):
-            inst = InstanceNumber(inst_int)
-            enabled_rsp = await driver.send(QueryInstanceEnabled(device=addr, instance=inst))
-            if check_bad_rsp(enabled_rsp) or not enabled_rsp.value:
-                continue
-            type_rsp = await driver.send(QueryInstanceType(device=addr, instance=inst))
-            if check_bad_rsp(type_rsp):
-                continue
-            self.add_instance(inst_int, type_rsp.value)
+        instance_types = await query_responses_retry_only_failed(
+            driver,
+            [QueryInstanceType(device=addr, instance=InstanceNumber(i)) for i in range(num_instances)],
+            self.logger,
+        )
+        for i, instance_type in enumerate(instance_types):
+            self.add_instance(i, instance_type.value)
 
         parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,

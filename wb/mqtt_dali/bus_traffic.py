@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
 
+from dali.command import Response
 from dali.frame import Frame
 
 
@@ -16,8 +17,8 @@ class BusTrafficItem:
     # Request raw frame object
     request: Frame
 
-    # Matching response raw frame object
-    response: Optional[Frame]
+    # Matching response
+    response: Optional[Response]
 
     # Identifier of the request frame source
     request_source: BusTrafficSource
@@ -54,7 +55,7 @@ class BusTrafficCallbacks:
     def notify_command(
         self,
         request: Frame,
-        response: Optional[Frame],
+        response: Response,
         source: BusTrafficSource,
         sequence_id: int,
     ) -> None:

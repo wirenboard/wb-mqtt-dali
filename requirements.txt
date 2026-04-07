@@ -1,7 +1,7 @@
-asyncio-mqtt @ git+https://github.com/wirenboard/python-asyncio-mqtt@dev/v0.10.0
+aiomqtt==2.3.1
 json-rpc==1.13.0
-jsonschema==3.2.0
-mqttrpc @ git+https://github.com/wirenboard/python-mqtt-rpc@main
-paho-mqtt==1.5.1
+jsonschema==4.19.2
+mqttrpc @ git+https://github.com/wirenboard/python-mqtt-rpc@feature/trixie
+paho-mqtt==2.1.0
 python-dali @ git+https://github.com/wirenboard/python-dali@dev/v0.11
 websockets==8.1

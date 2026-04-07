@@ -161,7 +161,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                     "type": "number",
                     "title": "Fade Time, s",
                     "propertyOrder": 19,
-                    "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+                    "enum": list(range(16)),
                     "default": 0,
                     "options": {
                         "enum_titles": [
@@ -192,7 +192,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                     "type": "number",
                     "title": "Fade Rate, steps/s",
                     "propertyOrder": 20,
-                    "enum": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+                    "enum": list(range(1, 16)),
                     "default": 1,
                     "options": {
                         "enum_titles": [

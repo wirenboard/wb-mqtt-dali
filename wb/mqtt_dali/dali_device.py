@@ -240,7 +240,7 @@ class DaliDevice(DaliDeviceBase):
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
             parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
-            parameter_handlers.extend(type_handler._parameters)
+            parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
 
         # MQTT controls
         mqtt_controls: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
@@ -261,7 +261,7 @@ class DaliDevice(DaliDeviceBase):
             )
         for type_handler in self._type_handlers:
             if type_handler != self._type8_handler:
-                group_parameter_handlers.extend(type_handler._parameters)
+                group_parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
             else:
                 if self._type8_handler is not None:
                     group_parameter_handlers.extend(self._type8_handler.get_group_parameters())

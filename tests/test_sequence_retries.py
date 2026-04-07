@@ -8,6 +8,8 @@ from wb.mqtt_dali.common_dali_device import (
 from wb.mqtt_dali.dali_device import request_with_retry_sequence
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
+# pylint: disable=protected-access
+
 
 def _ok_response():
     response = MagicMock()

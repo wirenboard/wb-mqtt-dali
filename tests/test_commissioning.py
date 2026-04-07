@@ -32,6 +32,8 @@ from wb.mqtt_dali.commissioning import (
 )
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
 
+# pylint: disable=unsupported-binary-operation
+
 
 def search_sequence(cmd_cls, values):
     seq = []

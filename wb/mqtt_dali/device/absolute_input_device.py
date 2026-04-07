@@ -12,7 +12,7 @@ from dali.device import general
 instance_type = 2  # pylint: disable=C0103
 
 
-class PositionEvent(general._Event):
+class PositionEvent(general._Event):  # pylint: disable=protected-access
     _instance_type = instance_type
     _event_info = 0
 

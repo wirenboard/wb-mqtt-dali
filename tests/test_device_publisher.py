@@ -12,6 +12,8 @@ from wb.mqtt_dali.device_publisher import (
 )
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
+# pylint: disable=protected-access,redefined-outer-name,comparison-with-callable,too-many-public-methods
+
 
 class MockMessage:  # pylint: disable=too-few-public-methods
     def __init__(self, topic: str, payload: bytes = b""):

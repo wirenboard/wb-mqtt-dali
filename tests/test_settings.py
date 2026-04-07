@@ -9,6 +9,8 @@ from wb.mqtt_dali.settings import (
     SettingsParamName,
 )
 
+# pylint: disable=protected-access,redefined-outer-name
+
 
 @pytest.fixture
 def number_settings_param():

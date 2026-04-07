@@ -12,7 +12,7 @@ from dali.device import general
 instance_type = 6  # pylint: disable=C0103
 
 
-class MeasurementEvent(general._Event):
+class MeasurementEvent(general._Event):  # pylint: disable=protected-access
     _instance_type = instance_type
     _event_info = 0
 

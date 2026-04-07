@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# pylint: disable=duplicate-code
+
 import asyncio
 import json
 import logging

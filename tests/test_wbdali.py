@@ -19,6 +19,8 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver, encode_frame_for_modbus
 from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway, NoTransmission
 
+# pylint: disable=line-too-long, protected-access
+
 
 class MockMqttClient:
     def __init__(self, *_args, **_kwargs):
@@ -68,7 +70,9 @@ class MockMqttClient:
 
 
 class _MockCommand(Command):
-    def __init__(self, sendtwice=False, response_class=None, data=[0x12, 0x34]):
+    def __init__(self, sendtwice=False, response_class=None, data=None):
+        if data is None:
+            data = [0x12, 0x34]
         super().__init__(ForwardFrame(16, data))
         self.sendtwice = sendtwice
         self.response = response_class

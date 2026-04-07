@@ -1,5 +1,7 @@
 # Type 4 light sensor
 
+# pylint: disable=duplicate-code
+
 from typing import List
 
 from dali.address import InstanceNumber

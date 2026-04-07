@@ -1,5 +1,4 @@
 import logging
-from timeit import default_timer
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,6 +10,8 @@ from wb.mqtt_dali.application_controller import (
     publish_device,
     try_initialize_device,
 )
+
+# pylint: disable=protected-access,too-many-public-methods
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_init_scheduler import (
     INIT_RETRY_INITIAL_DELAY,

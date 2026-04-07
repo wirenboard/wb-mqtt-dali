@@ -157,7 +157,7 @@ async def emulate(
                     raise LunatoneIotProtocolError(f'No "type" field in this JSON packet: {message}')
                 if message["type"] == "filtering":
                     logger.debug("WS << NOOP filtering: %s", message)
-                    # FIXME: do we need to implement this?
+                    # Filtering is intentionally ignored by this emulator.
                     pass  # pylint: disable=W0107
                 elif message["type"] == "daliFrame":
                     try:
@@ -202,7 +202,6 @@ async def emulate(
                         logger,
                         BusTrafficSource.LUNATONE,
                     )
-                    # FIXME: error handling
                     await frame_result(websocket, line, SendingResult.SENT, logger)
                     if send_twice:
                         # As per docs, just send the confirmation twice.

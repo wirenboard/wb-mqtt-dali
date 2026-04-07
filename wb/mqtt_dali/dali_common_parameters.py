@@ -1,6 +1,8 @@
 import logging
 from typing import Optional
 
+# pylint: disable=duplicate-code
+
 from dali.address import Address
 from dali.gear.general import (
     DTR0,

@@ -7,6 +7,8 @@ from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
+# pylint: disable=protected-access,invalid-name
+
 # Prevent file system access in __init__ by providing a non-empty common schema
 DaliDeviceBase._common_schema = {"title": "test-schema"}
 

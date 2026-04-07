@@ -71,7 +71,7 @@ def build_command_registry() -> Dict[str, CommandInfo]:
     registry: Dict[str, CommandInfo] = {}
 
     # --- Gear standard commands (from dali.gear.general) ---
-    gear_standard_base = gear_general._StandardCommand
+    gear_standard_base = gear_general._StandardCommand  # pylint: disable=protected-access
     for name, cls in _collect_commands(gear_general, gear_standard_base).items():
         if name == "UnknownGearCommand":
             continue
@@ -130,7 +130,7 @@ def build_command_registry() -> Dict[str, CommandInfo]:
             )
 
     # --- Device standard commands (FF24 prefix) ---
-    device_std_base = device_general._StandardDeviceCommand
+    device_std_base = device_general._StandardDeviceCommand  # pylint: disable=protected-access
     for name, cls in _collect_commands(device_general, device_std_base).items():
         if name == "UnknownDeviceCommand":
             continue
@@ -143,7 +143,7 @@ def build_command_registry() -> Dict[str, CommandInfo]:
         )
 
     # --- Device instance commands from dali.device.general (FF24.Ix prefix) ---
-    device_inst_base = device_general._StandardInstanceCommand
+    device_inst_base = device_general._StandardInstanceCommand  # pylint: disable=protected-access
     for name, cls in _collect_commands(device_general, device_inst_base).items():
         key = f"FF24.Ix.{name}"
         registry[key] = CommandInfo(

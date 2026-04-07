@@ -7,6 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Callable, Generator, List, Optional, Union
 
+# pylint: disable=duplicate-code
+
 from dali import command
 from dali.address import Address, GearShort
 from dali.gear.colour import (

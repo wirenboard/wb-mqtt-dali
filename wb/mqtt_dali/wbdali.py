@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# pylint: disable=duplicate-code
+
 import asyncio
 import json
 import logging
@@ -142,7 +144,7 @@ class BusMonitorFrameHandler:
                 self._logger.debug("Unexpected broken BF: %s", hex(frame_data))
             else:
                 frame = ForwardFrame(frame_length, frame_data)
-                frame._error = True
+                frame._error = True  # pylint: disable=protected-access
                 self._logger.debug("Unexpected broken FF%d: %s", frame_length, hex(frame_data))
         else:
             if is_backward:

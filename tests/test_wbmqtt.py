@@ -14,6 +14,8 @@ from wb.mqtt_dali.wbmqtt import (
     retain_hack,
 )
 
+# pylint: disable=protected-access,redefined-outer-name,too-many-public-methods
+
 
 class MockMessage:  # pylint: disable=too-few-public-methods
     def __init__(self, topic: str, payload: bytes = b""):

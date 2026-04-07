@@ -8,6 +8,8 @@ from jsonrpc.exceptions import (
     JSONRPCInvalidRequest,
     JSONRPCMethodNotFound,
 )
+
+# pylint: disable=protected-access,redefined-outer-name
 from mqttrpc.protocol import MQTTRPC10Request
 
 from wb.mqtt_dali.mqtt_rpc_server import (

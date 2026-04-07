@@ -1,5 +1,7 @@
 # Type 6 general purpose sensor
 
+# pylint: disable=duplicate-code
+
 from typing import List
 
 from dali.address import InstanceNumber

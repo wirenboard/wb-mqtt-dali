@@ -223,7 +223,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "ru": {
                     "Fade Time, s": "Время затухания, с",
                     "Fade Rate, steps/s": "Скорость затухания, шаг/с",
-                    "no fade": "без затухания"
+                    "no fade": "без затухания",
                 },
             },
         }

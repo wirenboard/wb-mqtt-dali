@@ -51,7 +51,6 @@ class MqttControlBase:
 
     def get_query(self, short_address: Address) -> Optional[Command]:
         del short_address
-        return None
 
     def format_response(self, response: Response) -> str:
         del response

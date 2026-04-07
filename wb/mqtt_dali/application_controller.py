@@ -365,7 +365,7 @@ class ApplicationController:
             if self._state in (ApplicationControllerState.UNINITIALIZED, ApplicationControllerState.STOPPING):
                 return
             if self._state == ApplicationControllerState.INITIALIZING:
-                raise RuntimeError("ApplicationController %s must be initialized to stop" % self.uid)
+                raise RuntimeError(f"ApplicationController {self.uid} must be initialized to stop")
             self._state = ApplicationControllerState.STOPPING
 
         self._bus_traffic_cleanup()

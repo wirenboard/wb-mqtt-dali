@@ -250,7 +250,7 @@ class DevicePublisher:
 
         device = self._devices[device_id]
 
-        handlers_to_remove = [key for key in self._control_handlers.keys() if key.startswith(device_id)]
+        handlers_to_remove = [key for key in self._control_handlers if key.startswith(device_id)]
 
         for handler_key in handlers_to_remove:
             parts = handler_key.split("/", 1)

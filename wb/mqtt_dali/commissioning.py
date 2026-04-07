@@ -472,7 +472,7 @@ class Commissioning:
                     try:
                         check_query_response(resp)
                         break
-                    except Exception:
+                    except RuntimeError:
                         pass
                 await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
@@ -633,9 +633,8 @@ class Commissioning:
                     try:
                         check_query_response(resp)
                         break
-                    except Exception:
+                    except RuntimeError:
                         await asyncio.sleep(0.3)
-                        pass
                 await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 self._print_binary_search_iteration_info(found_addr, resp)
                 low = found_addr

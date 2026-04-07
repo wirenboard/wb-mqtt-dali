@@ -352,7 +352,7 @@ async def query_responses_retry_only_failed(
         if not next_pending_indexes:
             return list(full_responses)
 
-        last_failed_reasons = {index: reason for index, reason in failed_info}
+        last_failed_reasons = dict(failed_info)
         pending_indexes = next_pending_indexes
         pending_commands = next_pending_commands
 

@@ -1,4 +1,4 @@
-import asyncio_mqtt as aiomqtt
+import aiomqtt
 from dali.address import DeviceShort
 from dali.device.general import _Event
 from dali.device.light import LightEvent

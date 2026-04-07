@@ -58,7 +58,8 @@ class MockMQTTClient:
     def add_message(self, topic: str, payload: bytes = b""):
         self._messages.append(MockMessage(topic, payload))
 
-    def unfiltered_messages(self):
+    @property
+    def messages(self):
         return MockMessageIterator(self)
 
 

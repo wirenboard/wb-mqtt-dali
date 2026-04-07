@@ -150,7 +150,7 @@ def query_colour_with_level(  # pylint: disable=too-many-locals
         if all(
             is_valid_colour_query_response(command_item, response)
             for command_item, response in zip(first_batch, resp)
-):  # pylint: disable=too-many-locals
+        ):  # pylint: disable=too-many-locals
             break
     else:
         raise RuntimeError(f"Failed to get {cmd}: transmission error")

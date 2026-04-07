@@ -614,7 +614,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         return await self._send_commands_internal(commands, source, lock_queue=True)
 
-    async def _queue_sender(self) -> None:  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
+    async def _queue_sender(
+        self,
+    ) -> None:  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
         batch: list[SendQueueItem] = []
         timeout = None
         while True:

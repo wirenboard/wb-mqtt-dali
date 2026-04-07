@@ -245,7 +245,9 @@ async def short_search_service(gateway: str, args, dali2: bool, old_gateway: boo
     return EXIT_SUCCESS
 
 
-async def send_command_service(gateway: str, args, old_gateway: bool):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
+async def send_command_service(
+    gateway: str, args, old_gateway: bool
+):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     registry = build_command_registry()
 
     data = int(args.data, 0) if args.data is not None else None

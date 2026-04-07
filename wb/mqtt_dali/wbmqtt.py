@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
-import asyncio_mqtt as aiomqtt
+import aiomqtt
 
 from .mqtt_dispatcher import MQTTDispatcher
 
@@ -303,28 +303,24 @@ async def remove_topics_by_driver(
 
 def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
     urlparse_result = urlparse(broker_url)
+    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
+    client_kwargs = {
+        "identifier": f"wb-mqtt-dali-{client_id_suffix}",
+        "logger": logging.getLogger("mqtt_client"),
+        "transport": "websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
+    }
     if urlparse_result.scheme == "unix":
-        hostname = urlparse_result.path
-        port = 0
+        client_kwargs["hostname"] = urlparse_result.path
     else:
         if urlparse_result.hostname is None:
             raise ValueError("No MQTT hostname specified")
         if urlparse_result.port is None:
             raise ValueError("No MQTT port specified")
-        hostname = urlparse_result.hostname
-        port = urlparse_result.port
-    auth = {}
+        client_kwargs["hostname"] = urlparse_result.hostname
+        client_kwargs["port"] = urlparse_result.port
+
     if urlparse_result.username:
-        auth["username"] = urlparse_result.username
+        client_kwargs["username"] = urlparse_result.username
     if urlparse_result.password:
-        auth["password"] = urlparse_result.password
-    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-    client = aiomqtt.Client(
-        client_id=f"wb-mqtt-dali-{client_id_suffix}",
-        hostname=hostname,
-        port=port,
-        transport="websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
-        logger=logging.getLogger("mqtt_client"),
-        **auth,
-    )
-    return client
+        client_kwargs["password"] = urlparse_result.password
+    return aiomqtt.Client(**client_kwargs)

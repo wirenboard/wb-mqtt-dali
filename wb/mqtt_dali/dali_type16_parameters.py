@@ -1,5 +1,7 @@
 # Type 16 Thermal gear protection
 
+# pylint: disable=duplicate-code
+
 from dali.command import Response
 
 from .common_dali_device import MqttControl, MqttControlBase

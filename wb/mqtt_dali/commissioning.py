@@ -304,7 +304,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     # ещё не были найдены, потому что по результатам сканирования всех коротких адресов
                     # мы уже вычеркнули те короткие адреса, на которые кто-то отвечал
                     new_short_addr = await self._assign_short_address(found_addr)
-                    # TODO: что если не удалось запрограммировать новый короткий адрес?
+                    # TODO: что если не удалось запрограммировать новый короткий адрес?  # pylint: disable=fixme
                     self._add_device(new_short_addr, found_addr)
             else:
                 if found_addr == 0xFFFFFF:

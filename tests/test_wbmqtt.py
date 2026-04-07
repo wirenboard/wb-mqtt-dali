@@ -15,7 +15,7 @@ from wb.mqtt_dali.wbmqtt import (
 )
 
 
-class MockMessage:
+class MockMessage:  # pylint: disable=too-few-public-methods
     def __init__(self, topic: str, payload: bytes = b""):
         self.topic = topic
         self.payload = payload
@@ -642,7 +642,7 @@ class TestRemoveTopicsByDriver:
             assert len(clear_calls) == 0
 
 
-class TestIntegration:
+class TestIntegration:  # pylint: disable=too-few-public-methods
     @pytest.mark.asyncio
     async def test_device_lifecycle(self, mock_client):
         device = Device(mock_client, "test_dev", "test_driver", "Test Device")

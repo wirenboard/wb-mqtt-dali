@@ -225,7 +225,7 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority
     return result
 
 
-class WBDALIDriver:
+class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     def __init__(
         self,
         config: WBDALIConfig,
@@ -385,7 +385,9 @@ class WBDALIDriver:
             msg="0000",
         )
 
-    async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
+    async def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
+        self, message: mqtt.MQTTMessage
+    ) -> None:
         """Handle reply message from the DALI bus.
 
         Message payload format:
@@ -610,7 +612,7 @@ class WBDALIDriver:
 
         return await self._send_commands_internal(commands, source, lock_queue=True)
 
-    async def _queue_sender(self) -> None:
+    async def _queue_sender(self) -> None:  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
         batch: list[SendQueueItem] = []
         timeout = None
         while True:
@@ -658,7 +660,7 @@ class WBDALIDriver:
                         self._batch_start_index = 0
                         self._next_queue_index = 0
 
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Error processing queue item: %s", e)
                 if item is not None and not item.future.done():
                     item.future.set_result(WbGatewayTransmissionError())

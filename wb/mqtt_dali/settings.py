@@ -60,8 +60,8 @@ class SettingsParamBase:
         return {}
 
 
-class BooleanSettingsParam(SettingsParamBase):
-    def __init__(
+class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instance-attributes
+    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
         self,
         name: SettingsParamName,
         property_name: str,
@@ -138,7 +138,7 @@ class BooleanSettingsParam(SettingsParamBase):
         return schema
 
 
-class NumberSettingsParam(SettingsParamBase):
+class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instance-attributes
     def __init__(self, name: SettingsParamName, property_name: str) -> None:
         super().__init__(name)
         self.property_name = property_name

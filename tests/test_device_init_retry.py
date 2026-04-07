@@ -341,7 +341,7 @@ class TestTryInitializeDevice:
         publisher.set_control_error.assert_not_awaited()
 
 
-class TestPublishDevice:
+class TestPublishDevice:  # pylint: disable=too-few-public-methods
     @pytest.mark.asyncio
     async def test_publish_normal(self):
         """publish_device with error=False uses get_mqtt_controls."""

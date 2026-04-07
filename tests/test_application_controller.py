@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from wb.mqtt_dali.application_controller import ApplicationController
 
 
-class TestApplicationControllerVirtualGroups:
+class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-methods
     def test_get_active_group_numbers(self):
         controller = ApplicationController.__new__(ApplicationController)
         controller.dali_devices = [

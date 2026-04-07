@@ -87,7 +87,7 @@ def encode_frame_for_modbus(dali_frame: Frame) -> int:
     raise ValueError(f"Unsupported frame length: {frame_len}")
 
 
-class WBDALIDriver:
+class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     """
     A driver for WB-MDALI gateway v1.0
     """
@@ -448,7 +448,7 @@ class WBDALIDriver:
                         self._batch_start_index = 0
                         self._next_queue_index = 0
 
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Error processing queue item: %s", e)
                 if item is not None and not item.future.done():
                     item.future.set_result(WbGatewayTransmissionError())

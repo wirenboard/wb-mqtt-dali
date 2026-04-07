@@ -139,6 +139,7 @@ def bus_to_json(bus: ApplicationController) -> dict:
 
 
 class Gateway:
+    # pylint: disable=too-many-locals, too-many-branches
     def __init__(
         self,
         config: dict,
@@ -324,7 +325,7 @@ class Gateway:
                 if bus.uid == bus_id:
                     try:
                         schema = await bus.load_bus_info()
-                    except Exception as e:
+                    except Exception as e:  # pylint: disable=broad-exception-caught
                         logging.error("Failed to load bus info for bus %s: %s", bus_id, e)
                         schema = {
                             "type": "object",

@@ -95,7 +95,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         return found_addr
 
 
-class Commissioning:
+class Commissioning:  # pylint: disable=too-many-instance-attributes
     def __init__(
         self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress], dali2: bool = False
     ) -> None:
@@ -222,7 +222,9 @@ class Commissioning:
         await send_with_retry(self.driver, self._cmds.Randomise(), log)
         await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
 
-    async def _process_found_device(self, found_addr: int, query_short_resp: Response) -> set[Optional[int]]:
+    async def _process_found_device(  # pylint: disable=too-many-branches
+        self, found_addr: int, query_short_resp: Response
+    ) -> set[Optional[int]]:
         """Returns empty set if no random address conflict,
         or set of short addresses that need to be randomised
         """
@@ -664,7 +666,7 @@ async def get_random_address(
     return parts[0] << 16 | parts[1] << 8 | parts[2]
 
 
-async def search_short(driver: WBDALIDriver, dali2: bool) -> list[DaliDeviceAddress]:
+async def search_short(driver: WBDALIDriver, dali2: bool) -> list[DaliDeviceAddress]:  # pylint: disable=too-many-branches
     if dali2:
         cmds = Dali2CommandsCompatibilityLayer()
     else:

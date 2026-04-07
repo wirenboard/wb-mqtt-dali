@@ -278,5 +278,5 @@ class DevicePublisher:
             payload = message.payload.decode("utf-8") if message.payload else ""
             self.logger.debug("%s: %s", msg, payload)
             self._on_topic_running_handlers.add(handler.callback(message), msg)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("%s error: %s", msg, e, exc_info=True)

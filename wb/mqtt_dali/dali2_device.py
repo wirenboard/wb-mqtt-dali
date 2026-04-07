@@ -189,7 +189,7 @@ class EventPriorityParam(NumberSettingsParam):
         return schema
 
 
-class InstanceGroupParamBase(NumberSettingsParam):
+class InstanceGroupParamBase(NumberSettingsParam):  # pylint: disable=abstract-method
     def __init__(self, name: SettingsParamName, property_name: str, instance_number: InstanceNumber) -> None:
         super().__init__(name, property_name)
         self._instance_number = instance_number
@@ -324,7 +324,7 @@ class DeviceGroupsParam(SettingsParamBase):
         self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
         return {self.property_name: updated_groups}
 
-    async def write(
+    async def write(  # pylint: disable=too-many-locals
         self,
         driver: WBDALIDriver,
         short_address: Address,
@@ -450,7 +450,7 @@ class DeviceGroupsParam(SettingsParamBase):
 
 
 class Dali2Device(DaliDeviceBase):
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
         self,
         address: DaliDeviceAddress,
         bus_id: str,

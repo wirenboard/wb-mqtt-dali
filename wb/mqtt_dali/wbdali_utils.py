@@ -41,6 +41,7 @@ MAX_COMMAND_RETRIES = 3
 
 
 class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
+    # pylint: disable=too-many-locals, too-many-branches
     """A version of DeviceInstanceTypeMapper taking advantage of
     sending of multiple DALI commands in parallel
     """
@@ -256,7 +257,7 @@ def check_command_failed(cmd: Command, resp: Optional[Response]) -> Optional[str
     return None
 
 
-async def query_responses_retry_from_first_failed(
+async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-locals
     driver: WBDALIDriver,
     commands: Sequence[Command],
     batch_size: int = 1,
@@ -318,7 +319,7 @@ async def query_responses_retry_from_first_failed(
     )
 
 
-async def query_responses_retry_only_failed(
+async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
     driver: WBDALIDriver,
     commands: Sequence[Command],
     logger: Optional[logging.Logger] = None,

@@ -139,7 +139,7 @@ async def emulate(
     websocket: WebSocketServerProtocol,
     driver: WBDALIDriver,
     logger: logging.Logger,
-):  # pylint: disable=R0912 disable=R0915
+):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     one_shot_tasks = OneShotTasks(logger)
     unregister_bus_traffic_watcher = driver.bus_traffic.register(
         publish_traffic(websocket, logger, one_shot_tasks)

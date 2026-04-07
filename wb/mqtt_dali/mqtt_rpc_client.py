@@ -41,7 +41,7 @@ async def wait_for_rpc_endpoint(
         await mqtt_dispatcher.unsubscribe(topic, on_response)
 
 
-async def rpc_call(
+async def rpc_call(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: str,
     service: str,
     method: str,

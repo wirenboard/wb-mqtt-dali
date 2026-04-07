@@ -181,7 +181,7 @@ def test_name_none_at_init_uses_default():
     DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}
 
 
-class ConcreteDaliDevice(DaliDeviceBase):
+class ConcreteDaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
     """Concrete subclass that implements the abstract method."""
 
     def __init__(self, *args, extra_param_handlers=None, **kwargs):

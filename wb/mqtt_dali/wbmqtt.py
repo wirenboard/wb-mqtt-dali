@@ -20,7 +20,7 @@ class TranslatedTitle:
         return not self.en and not self.ru
 
 
-class ControlMeta:
+class ControlMeta:  # pylint: disable=too-many-instance-attributes, too-few-public-methods, too-many-arguments, too-many-positional-arguments
     def __init__(
         self,
         control_type: str = "value",
@@ -188,7 +188,9 @@ class Device:
         meta_json = json.dumps(meta_dict)
         await self._publish(self._base_topic + "/meta", meta_json)
 
-    async def _publish_control_meta(self, mqtt_control_name: str, meta: ControlMeta) -> None:
+    async def _publish_control_meta(  # pylint: disable=too-many-branches
+        self, mqtt_control_name: str, meta: ControlMeta
+    ) -> None:
         meta_dict = {
             "type": meta.control_type,
             "readonly": meta.read_only,

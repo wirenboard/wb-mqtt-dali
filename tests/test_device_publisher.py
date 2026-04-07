@@ -13,13 +13,13 @@ from wb.mqtt_dali.device_publisher import (
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
 
-class MockMessage:
+class MockMessage:  # pylint: disable=too-few-public-methods
     def __init__(self, topic: str, payload: bytes = b""):
         self.topic = topic
         self.payload = payload
 
 
-class MockMQTTClient:
+class MockMQTTClient:  # pylint: disable=too-few-public-methods
     def __init__(self):
         self.publish = AsyncMock()
         self.subscribe = AsyncMock()
@@ -85,7 +85,7 @@ class TestDeviceChange:
         assert change.removed == removed
 
 
-class TestControlHandler:
+class TestControlHandler:  # pylint: disable=too-few-public-methods
     def test_initialization(self):
         def callback(_msg):
             pass

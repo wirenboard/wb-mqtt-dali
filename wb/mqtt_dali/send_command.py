@@ -218,7 +218,7 @@ def build_device_address(
     return None
 
 
-def parse_and_build_command(
+def parse_and_build_command(  # pylint: disable=too-many-arguments, too-many-positional-arguments, too-many-return-statements, too-many-branches, too-many-statements
     command_name: str,
     registry: Dict[str, CommandInfo],
     address: Optional[int] = None,

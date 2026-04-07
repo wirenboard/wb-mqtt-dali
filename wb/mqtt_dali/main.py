@@ -245,7 +245,7 @@ async def short_search_service(gateway: str, args, dali2: bool, old_gateway: boo
     return EXIT_SUCCESS
 
 
-async def send_command_service(gateway: str, args, old_gateway: bool):
+async def send_command_service(gateway: str, args, old_gateway: bool):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     registry = build_command_registry()
 
     data = int(args.data, 0) if args.data is not None else None
@@ -330,7 +330,7 @@ async def send_command_service(gateway: str, args, old_gateway: bool):
     return EXIT_SUCCESS
 
 
-async def main(argv):
+async def main(argv):  # pylint: disable=too-many-return-statements
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
         "-c",

@@ -11,7 +11,7 @@ class DimmingCurveType(IntEnum):
     LINEAR = 1
 
 
-class DimmingCurveState:
+class DimmingCurveState:  # pylint: disable=too-few-public-methods
 
     def __init__(self) -> None:
         self.curve_type = DimmingCurveType.LOGARITHMIC

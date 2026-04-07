@@ -110,7 +110,7 @@ class Type50MemoryBankParam(SettingsParamBase):
             raise RuntimeError(f"Failed to read DT50 memory bank: {e}") from e
 
         self._values = {}
-        for oem_class, key, title_en, title_ru, json_type in _FIELD_SPECS:
+        for oem_class, key, _, _, json_type in _FIELD_SPECS:
             value = raw.get(oem_class)
             if value is None or isinstance(value, FlagValue):
                 continue

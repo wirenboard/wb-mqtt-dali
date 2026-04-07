@@ -5,6 +5,7 @@ from dali.command import Command, Response
 from dali.gear.general import (
     DAPC,
     Down,
+    GoToLastActiveLevel,
     GoToScene,
     Off,
     OnAndStepUp,
@@ -93,6 +94,10 @@ def make_controls() -> list[MqttControlBase]:
                 "0",
             ),
             commands_builder=handle_dapc,
+        ),
+        MqttControl(
+            ControlInfo("on", ControlMeta("pushbutton", TranslatedTitle("On", "Вкл"))),
+            commands_builder=lambda short_address, _: [GoToLastActiveLevel(short_address)],
         ),
         MqttControl(
             ControlInfo("off", ControlMeta("pushbutton", TranslatedTitle("Off", "Выкл"))),

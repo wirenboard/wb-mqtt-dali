@@ -666,7 +666,9 @@ async def get_random_address(
     return parts[0] << 16 | parts[1] << 8 | parts[2]
 
 
-async def search_short(driver: WBDALIDriver, dali2: bool) -> list[DaliDeviceAddress]:  # pylint: disable=too-many-branches
+async def search_short(  # pylint: disable=too-many-branches
+    driver: WBDALIDriver, dali2: bool
+) -> list[DaliDeviceAddress]:
     if dali2:
         cmds = Dali2CommandsCompatibilityLayer()
     else:

@@ -1,6 +1,4 @@
 import asyncio
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,27 +14,24 @@ class MockMessage:  # pylint: disable=R0903
         self.payload = payload
 
 
+class EmptyAsyncIterator:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
 class MockClient:
     def __init__(self):
         self.subscribe = AsyncMock()
         self.unsubscribe = AsyncMock()
-        self._message_generator = None
         self._client = MagicMock()
         self._client._client_id = "test-client-id"
+        self.messages = EmptyAsyncIterator()
 
     def set_message_generator(self, generator):
-        self._message_generator = generator
-
-    @asynccontextmanager
-    async def unfiltered_messages(self) -> AsyncIterator:
-        if self._message_generator is None:
-
-            async def empty_generator():
-                yield
-
-            yield empty_generator()
-        else:
-            yield self._message_generator
+        self.messages = generator
 
     async def __aenter__(self):
         return self

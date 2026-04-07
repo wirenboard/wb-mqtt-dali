@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Callable, Dict, Optional, Set
 
-import asyncio_mqtt as aiomqtt
+import aiomqtt
 import paho.mqtt.client as mqtt
 
 MessageCallback = Callable[[mqtt.MQTTMessage], None]
@@ -55,15 +55,14 @@ class MQTTDispatcher:
         self._running = True
         loop = asyncio.get_running_loop()
         try:
-            async with self.client.unfiltered_messages() as messages:
-                async for message in messages:
-                    start = loop.time()
-                    self._dispatch_message(message)
-                    elapsed = loop.time() - start
-                    if elapsed > 0.1:
-                        logging.warning(
-                            "Dispatching message on topic %s took %.2f seconds", message.topic, elapsed
-                        )
+            async for message in self.client.messages:
+                start = loop.time()
+                self._dispatch_message(message)
+                elapsed = loop.time() - start
+                if elapsed > 0.1:
+                    logging.warning(
+                        "Dispatching message on topic %s took %.2f seconds", message.topic, elapsed
+                    )
         except Exception as e:
             logging.error(e)
             raise

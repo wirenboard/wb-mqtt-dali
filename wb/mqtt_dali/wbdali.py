@@ -19,10 +19,12 @@ from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
 from .mqtt_dispatcher import MQTTDispatcher
+from .overheat_rate_limiter import OverheatRateLimiter
 from .wbdali_error_response import (
     NoPowerOnBus,
     NoResponseFromGateway,
     NoTransmission,
+    Overheat,
     TransmissionCancelled,
     UnknownResponseStatus,
     WbGatewayTransmissionError,
@@ -257,6 +259,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._queue_sender_task: Optional[asyncio.Task] = None
 
         self._mqtt_dispatcher = mqtt_dispatcher
+        self._overheat_rate_limiter = OverheatRateLimiter()
 
         client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
         self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
@@ -401,6 +404,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                    2 - transmission without response
                    3 - broken response
                    4 - transmission impossible (no power on bus)
+                   5 - gateway overheat
         """
         resp = int(message.payload.decode())
 
@@ -427,6 +431,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         if resp_future.done():
             self.logger.debug("Response future already done for pointer: %d", resp_pointer)
             return
+
+        if status != 5:
+            self._overheat_rate_limiter.on_non_overheat_response()
 
         if status == 0:
             # No transmission
@@ -515,6 +522,24 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
+        if status == 5:
+            # Gateway overheat
+            self.logger.error(
+                "%s (%d) status 5: Gateway overheat",
+                resp_waiter.send_item.command,
+                resp_pointer,
+            )
+            self._overheat_rate_limiter.on_overheat()
+            response = Overheat()
+            resp_future.set_result(response)
+            self.bus_traffic.notify_command(
+                resp_waiter.send_item.command.frame,
+                response,
+                resp_waiter.send_item.source,
+                resp_waiter.sequence_id,
+            )
+            return
+
         # Unknown status
         self.logger.error(
             "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
@@ -672,6 +697,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
     async def _send_to_gateway(self, items: list[SendQueueItem], start_index: int) -> None:
         if len(items) > 0:
+            await self._overheat_rate_limiter.wait_before_send()
             regs_32bit = []
             for current_index, item in enumerate(items, start_index):
 

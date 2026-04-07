@@ -21,7 +21,7 @@ from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway, NoTransmis
 
 
 class MockMqttClient:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *_args, **_kwargs):
         self._client = MagicMock()
         self._client._client_id = "test-wbdali-client"
         self._messages_to_broker = asyncio.Queue()

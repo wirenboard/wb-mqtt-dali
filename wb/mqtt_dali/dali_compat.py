@@ -7,7 +7,7 @@ from dali.gear import general as control_gear
 from .wbdali_utils import MASK
 
 
-class DaliCommandsCompatibilityLayer:
+class DaliCommandsCompatibilityLayer:  # pylint: disable=too-many-instance-attributes, invalid-name
     def __init__(self) -> None:
         self.Compare = control_gear.Compare
         self.QueryShortAddress = control_gear.QueryShortAddress

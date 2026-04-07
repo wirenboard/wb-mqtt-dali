@@ -87,7 +87,7 @@ class TestDeviceChange:
 
 class TestControlHandler:
     def test_initialization(self):
-        def callback(msg):
+        def callback(_msg):
             pass
 
         handler = ControlHandler("device1", "control1", callback)
@@ -113,7 +113,7 @@ class TestDevicePublisher:
         assert mock_client.publish.call_count > 0
 
     @pytest.mark.asyncio
-    async def test_add_device(self, publisher, mock_client):
+    async def test_add_device(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -128,7 +128,7 @@ class TestDevicePublisher:
         assert publisher.has_device("dev1")
 
     @pytest.mark.asyncio
-    async def test_add_device_with_no_title(self, publisher, mock_client):
+    async def test_add_device_with_no_title(self, publisher):
         device_info = DeviceInfo("dev1")
         await publisher.add_device(device_info)
 
@@ -137,7 +137,7 @@ class TestDevicePublisher:
         assert device._device_title is None
 
     @pytest.mark.asyncio
-    async def test_add_device_duplicate(self, publisher, mock_client):
+    async def test_add_device_duplicate(self, publisher):
         device_info = DeviceInfo("dev1", "Device 1")
         await publisher.add_device(device_info)
         with pytest.raises(RuntimeError) as e:
@@ -145,7 +145,7 @@ class TestDevicePublisher:
         assert str(e.value) == "Device dev1 already exists"
 
     @pytest.mark.asyncio
-    async def test_remove_device(self, publisher, mock_client):
+    async def test_remove_device(self, publisher):
         device_info = DeviceInfo("dev1", "Device 1")
 
         await publisher.add_device(device_info)
@@ -160,7 +160,7 @@ class TestDevicePublisher:
         publisher.logger.warning.assert_called_with("Device %s not found for removal", "nonexistent")
 
     @pytest.mark.asyncio
-    async def test_rebuild_with_changes(self, publisher, mock_client):
+    async def test_rebuild_with_changes(self, publisher):
         initial_devices = [
             DeviceInfo("dev1", "Device 1"),
             DeviceInfo("dev2", "Device 2"),
@@ -249,7 +249,7 @@ class TestDevicePublisher:
         mock_dispatcher.subscribe.assert_called()
 
     @pytest.mark.asyncio
-    async def test_register_duplicate_handler(self, publisher, mock_dispatcher, caplog):
+    async def test_register_duplicate_handler(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -267,7 +267,7 @@ class TestDevicePublisher:
         assert str(e.value) == "Handler already registered for dev1/ctrl1"
 
     @pytest.mark.asyncio
-    async def test_unregister_control_handler(self, publisher, mock_dispatcher):
+    async def test_unregister_control_handler(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -286,7 +286,7 @@ class TestDevicePublisher:
         assert "dev1/ctrl1" not in publisher._control_handlers
 
     @pytest.mark.asyncio
-    async def test_handle_on_message(self, publisher, mock_dispatcher):
+    async def test_handle_on_message(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -306,7 +306,7 @@ class TestDevicePublisher:
         callback.assert_called_once_with(message)
 
     @pytest.mark.asyncio
-    async def test_handle_on_message_with_error(self, publisher, mock_dispatcher, caplog):
+    async def test_handle_on_message_with_error(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -362,7 +362,7 @@ class TestDevicePublisher:
         assert publisher.has_device("dev2") is False
 
     @pytest.mark.asyncio
-    async def test_cleanup(self, publisher, mock_client, mock_dispatcher):
+    async def test_cleanup(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -387,7 +387,7 @@ class TestDevicePublisher:
         assert topic == "/devices/test_bus_dev1/controls/ctrl1/on"
 
     @pytest.mark.asyncio
-    async def test_concurrent_operations(self, publisher, mock_client):
+    async def test_concurrent_operations(self, publisher):
         device_infos = [
             DeviceInfo(
                 f"dev{i}",
@@ -408,7 +408,7 @@ class TestDevicePublisher:
         assert len(publisher._devices) == 0
 
     @pytest.mark.asyncio
-    async def test_remove_device_removes_handlers(self, publisher, mock_dispatcher):
+    async def test_remove_device_removes_handlers(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -434,7 +434,7 @@ class TestDevicePublisher:
         assert "dev1/ctrl2" not in publisher._control_handlers
 
     @pytest.mark.asyncio
-    async def test_add_control_with_all_fields(self, publisher, mock_client):
+    async def test_add_control_with_all_fields(self, publisher):
         device_info = DeviceInfo(
             "dev1",
             "Device 1",

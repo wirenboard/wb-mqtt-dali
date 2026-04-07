@@ -87,7 +87,8 @@ class BusMonitorFrameHandler:
 
         delta = self.get_frame_counter_delta(self._last_frame_counter, frame_counter)
         if delta == 2 and self._out_of_order_frame is None:
-            # Allow one backward jump without logging a warning, to handle the case when the gateway queue jumps from 4th to 1st item
+            # Allow one backward jump without logging a warning, to handle the case
+            # when the gateway queue jumps from 4th to 1st item
             # N -> N+2 -> N+1 -> N+3 -> N+4
             self._out_of_order_frame = raw_value
             self._last_frame_counter = frame_counter
@@ -217,7 +218,7 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority
         result |= 1 << 28
 
     # Bits [31..29] - priority (0-5)
-    if not (0 <= priority <= 5):
+    if priority < 0 or priority > 5:
         raise ValueError(f"Priority must be 0-5, got {priority}")
     result |= (priority & 0x7) << 29
 
@@ -299,7 +300,8 @@ class WBDALIDriver:
         self.logger.debug("Subscribing to FF24 topic...")
         for i in range(1, 5):
             await self._mqtt_dispatcher.subscribe(
-                f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+                f"/devices/{self.config.device_name}/controls/"
+                f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
                 self._bus_monitor_frame_handler.handle,
             )
 
@@ -332,7 +334,8 @@ class WBDALIDriver:
         if self._mqtt_dispatcher.is_running:
             for i in range(1, 5):
                 await self._mqtt_dispatcher.unsubscribe(
-                    f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+                    f"/devices/{self.config.device_name}/controls/"
+                    f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
                 )
         self.logger.debug("Deinitialized successfully")
 

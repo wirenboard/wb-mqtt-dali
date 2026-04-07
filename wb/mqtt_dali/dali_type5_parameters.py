@@ -21,9 +21,6 @@ class Type5DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
-        super().__init__(dimming_curve_state)
-
 
 class Type5Parameters(TypeParameters):
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:

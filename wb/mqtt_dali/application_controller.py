@@ -501,7 +501,8 @@ class ApplicationController:
             if self._state != ApplicationControllerState.READY:
                 self.websocket_config = config
                 self.logger.debug(
-                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, just saving config",
+                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, "
+                    "just saving config",
                 )
                 return
 

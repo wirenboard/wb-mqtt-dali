@@ -30,6 +30,7 @@ class SettingsParamBase:
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
+        del driver, short_address, logger
         return {}
 
     async def write(
@@ -51,9 +52,11 @@ class SettingsParamBase:
             dict: An empty dictionary if nothing was changed or if short_address is group or broadcast,
             otherwise a dictionary with the updated parameter values.
         """
+        del driver, short_address, value, logger
         return {}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
+        del group_and_broadcast
         return {}
 
 
@@ -107,6 +110,7 @@ class BooleanSettingsParam(SettingsParamBase):
         return await self.read(driver, short_address, logger)
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
+        del group_and_broadcast
         schema: dict = {
             "properties": {
                 self.property_name: {

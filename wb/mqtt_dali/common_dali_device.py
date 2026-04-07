@@ -49,13 +49,13 @@ class MqttControlBase:
     def is_writable(self) -> bool:
         return False
 
-    def get_query(self, short_address: Address) -> Optional[Command]:
+    def get_query(self, _short_address: Address) -> Optional[Command]:
         return None
 
-    def format_response(self, response: Response) -> str:
+    def format_response(self, _response: Response) -> str:
         return ""
 
-    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
+    def get_setup_commands(self, _short_address: Address, _value_to_set: str) -> list[Command]:
         return []
 
 

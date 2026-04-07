@@ -51,7 +51,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_add_endpoint(self, rpc_server, mock_mqtt_dispatcher):
-        async def test_handler(params):
+        async def test_handler(_params):
             return {"result": "test"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
@@ -63,7 +63,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_remove_endpoint(self, rpc_server, mock_mqtt_dispatcher):
-        async def test_handler(params):
+        async def test_handler(_params):
             return {"result": "test"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
@@ -78,7 +78,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_remove_endpoint_error(self, rpc_server, mock_mqtt_dispatcher):
-        async def test_handler(params):
+        async def test_handler(_params):
             return {"result": "test"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
@@ -90,7 +90,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_stop(self, rpc_server, mock_mqtt_dispatcher):
-        async def test_handler(params):
+        async def test_handler(_params):
             return {"result": "test"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
@@ -212,7 +212,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_process_callback(self, rpc_server, mock_mqtt_dispatcher):
-        async def test_handler(params):
+        async def test_handler(_params):
             return {"result": "success"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
@@ -234,7 +234,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_process_callback_publish_error(self, rpc_server, mock_mqtt_dispatcher):
-        async def test_handler(params):
+        async def test_handler(_params):
             return {"result": "success"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)

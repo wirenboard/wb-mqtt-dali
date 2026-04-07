@@ -259,7 +259,7 @@ class Gateway:
             if isinstance(r, Exception):
                 raise r
 
-    async def get_list_rpc_handler(self, params: dict):
+    async def get_list_rpc_handler(self, _params: dict):
         await self._update_gateways()
         async with self._config_lock:
             return list(
@@ -409,7 +409,7 @@ class Gateway:
         await bus.identify_device(device)
         return {}
 
-    async def get_gateway_rpc_handler(self, params: dict):
+    async def get_gateway_rpc_handler(self, _params: dict):
         return {"config": {}, "schema": {}}
 
     def _is_websocket_port_in_use(self, port: int, bus_id: str) -> bool:

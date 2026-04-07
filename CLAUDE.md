@@ -13,23 +13,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+## Environment Setup
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -U pip
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+```
+
+- Always use tools from `.venv/bin/...`.
+
 ### Linting
 ```bash
-black --check --line-length 110 wb/ tests/    # Check formatting
-isort --check-only wb/ tests/                 # Check import ordering
-pylint wb/ tests/                             # Run pylint (must score 10.0)
+.venv/bin/black --check wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/isort --check-only --profile black wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/pylint --rcfile=pyproject.toml wb/ tests/ e2e/ bin/wb-mqtt-dali
 
 # Auto-fix formatting
-black --line-length 110 wb/ tests/
-isort wb/ tests/
+.venv/bin/isort --profile black wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/black wb/ tests/ e2e/ bin/wb-mqtt-dali
 ```
+
+### Mandatory Verification Pipeline (after any code change)
+```bash
+.venv/bin/isort --profile black wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/black wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/pylint --rcfile=pyproject.toml wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/pytest
+```
+
+- Do not commit if any command above fails.
+- Never create a git commit without explicit user approval in the current conversation.
+- Never modify existing tests without explicit user approval in the current conversation.
 
 ### Testing
 ```bash
-pytest                        # Run all tests
-pytest tests/test_foo.py      # Run a single test file
-pytest -k test_function_name  # Run a specific test by name
-pytest --cov                  # With coverage (CI requires ≥74%)
+.venv/bin/pytest
+.venv/bin/pytest tests/test_foo.py
+.venv/bin/pytest -k test_function_name
 ```
 
 ### Building
@@ -85,15 +106,13 @@ Parameter modules follow the naming pattern `dali_type{N}_parameters.py` (50+ ty
 
 ## Code Style
 
-- Max line length: **110 characters**
-- Pylint must pass at **score 10.0** (fail-under = 10.0)
-- Max 5 function arguments, max 7 class attributes (pylint enforced)
-- Black + isort (black-compatible profile) are required before commits
+- Code style and lint rules are defined in `pyproject.toml`.
+- The canonical baseline for Python style config is:
+  `https://github.com/wirenboard/codestyle/blob/master/python/config/pyproject.toml`
 
 ### Key Design Notes
 
 - All I/O is `asyncio`-based. Tests use `unittest.IsolatedAsyncioTestCase`.
 - Black/Pylint configured in `pyproject.toml`.
-- **Always run `isort --profile black` on any new or modified files before committing.**
 - Python 3.9+ required (`.python-version` pins 3.9.2).
 - `doc/Internals.md` contains sequence diagrams for initialization, RPC rescanning, quiescent mode, and settings flow — read it before modifying `application_controller.py` or `commissioning.py`.

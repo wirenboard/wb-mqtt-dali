@@ -1,7 +1,7 @@
 from typing import Optional, Union
 
 from dali.address import DeviceBroadcast, DeviceShort, GearBroadcast, GearShort
-from dali.command import Command, NumericResponse, NumericResponseMask, Response
+from dali.command import Command, Response
 from dali.gear import general as control_gear
 
 from .wbdali_utils import MASK

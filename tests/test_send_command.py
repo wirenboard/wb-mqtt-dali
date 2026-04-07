@@ -12,6 +12,8 @@ from wb.mqtt_dali.send_command import (
     parse_and_build_command,
 )
 
+# pylint: disable=import-outside-toplevel
+
 
 class TestBuildCommandRegistry(unittest.TestCase):
     def setUp(self):

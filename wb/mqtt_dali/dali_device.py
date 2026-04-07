@@ -120,7 +120,7 @@ def query_device_types_sequence(addr: Address):
 
 class DaliDevice(DaliDeviceBase):
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         address: DaliDeviceAddress,
         bus_id: str,
@@ -147,7 +147,7 @@ class DaliDevice(DaliDeviceBase):
         for _ in range(2):
             try:
                 v = await query_response(driver, self._compat.QueryVersionNumber(address), self.logger)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 continue
             use_identify_cmd = v.value != 1
             break
@@ -181,7 +181,7 @@ class DaliDevice(DaliDeviceBase):
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
         return [ActualLevelControl(self._dimming_curve_state), *CONTROLS]
 
-    async def _initialize_impl(
+    async def _initialize_impl(  # pylint: disable=too-many-branches
         self, driver: WBDALIDriver
     ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
         address = GearShort(self.address.short)
@@ -240,7 +240,7 @@ class DaliDevice(DaliDeviceBase):
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
             parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
-            parameter_handlers.extend(type_handler._parameters)
+            parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
 
         # MQTT controls
         mqtt_controls: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
@@ -261,7 +261,7 @@ class DaliDevice(DaliDeviceBase):
             )
         for type_handler in self._type_handlers:
             if type_handler != self._type8_handler:
-                group_parameter_handlers.extend(type_handler._parameters)
+                group_parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
             else:
                 if self._type8_handler is not None:
                     group_parameter_handlers.extend(self._type8_handler.get_group_parameters())

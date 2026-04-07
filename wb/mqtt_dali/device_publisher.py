@@ -250,7 +250,7 @@ class DevicePublisher:
 
         device = self._devices[device_id]
 
-        handlers_to_remove = [key for key in self._control_handlers.keys() if key.startswith(device_id)]
+        handlers_to_remove = [key for key in self._control_handlers if key.startswith(device_id)]
 
         for handler_key in handlers_to_remove:
             parts = handler_key.split("/", 1)
@@ -278,5 +278,5 @@ class DevicePublisher:
             payload = message.payload.decode("utf-8") if message.payload else ""
             self.logger.debug("%s: %s", msg, payload)
             self._on_topic_running_handlers.add(handler.callback(message), msg)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("%s error: %s", msg, e, exc_info=True)

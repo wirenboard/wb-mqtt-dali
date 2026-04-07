@@ -7,6 +7,8 @@ import pytest
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 
+# pylint: disable=redefined-outer-name
+
 
 class MockMessage:  # pylint: disable=R0903
     def __init__(self, topic: str, payload: bytes):

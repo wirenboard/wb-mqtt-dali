@@ -71,7 +71,7 @@ def build_command_registry() -> Dict[str, CommandInfo]:
     registry: Dict[str, CommandInfo] = {}
 
     # --- Gear standard commands (from dali.gear.general) ---
-    gear_standard_base = gear_general._StandardCommand
+    gear_standard_base = gear_general._StandardCommand  # pylint: disable=protected-access
     for name, cls in _collect_commands(gear_general, gear_standard_base).items():
         if name == "UnknownGearCommand":
             continue
@@ -130,7 +130,7 @@ def build_command_registry() -> Dict[str, CommandInfo]:
             )
 
     # --- Device standard commands (FF24 prefix) ---
-    device_std_base = device_general._StandardDeviceCommand
+    device_std_base = device_general._StandardDeviceCommand  # pylint: disable=protected-access
     for name, cls in _collect_commands(device_general, device_std_base).items():
         if name == "UnknownDeviceCommand":
             continue
@@ -143,7 +143,7 @@ def build_command_registry() -> Dict[str, CommandInfo]:
         )
 
     # --- Device instance commands from dali.device.general (FF24.Ix prefix) ---
-    device_inst_base = device_general._StandardInstanceCommand
+    device_inst_base = device_general._StandardInstanceCommand  # pylint: disable=protected-access
     for name, cls in _collect_commands(device_general, device_inst_base).items():
         key = f"FF24.Ix.{name}"
         registry[key] = CommandInfo(
@@ -218,7 +218,7 @@ def build_device_address(
     return None
 
 
-def parse_and_build_command(
+def parse_and_build_command(  # pylint: disable=too-many-arguments, R0917, too-many-return-statements, too-many-branches, too-many-statements
     command_name: str,
     registry: Dict[str, CommandInfo],
     address: Optional[int] = None,
@@ -263,7 +263,7 @@ def parse_and_build_command(
         if (info.kind == "device_standard") and (group < 0 or group > 31):
             raise ValueError(f"--group must be in range 0-31, got {group}")
 
-    if info.kind == "gear_special" or info.kind == "device_special":
+    if info.kind in ("gear_special", "device_special"):
         if address is not None:
             raise ValueError(f"Command '{command_name}' is a special command and does not take --address")
         if group is not None:

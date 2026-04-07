@@ -3,6 +3,8 @@ Commands and responses from IEC 62386 part 222, Device Type 21
 Thermal lamp protection
 """
 
+# pylint: disable=duplicate-code
+
 from dali import command
 from dali.gear.general import _StandardCommand
 

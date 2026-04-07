@@ -8,7 +8,7 @@ from .settings import NumberSettingsParam, SettingsParamName
 
 
 class InstanceParam(NumberSettingsParam):
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         name: SettingsParamName,
         property_name: str,

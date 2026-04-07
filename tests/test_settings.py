@@ -9,6 +9,8 @@ from wb.mqtt_dali.settings import (
     SettingsParamName,
 )
 
+# pylint: disable=protected-access,redefined-outer-name
+
 
 @pytest.fixture
 def number_settings_param():
@@ -156,7 +158,7 @@ async def test_write_with_multiplier(number_settings_param):
     ]
     captured_raw = []
 
-    def capture_write_commands(short_address, raw):
+    def capture_write_commands(_short_address, raw):
         captured_raw.append(raw)
         cmd = MagicMock()
         cmd.response = None
@@ -194,7 +196,7 @@ async def test_write_rounding_with_multiplier(number_settings_param):
     ]
     captured_raw = []
 
-    def capture_write_commands(short_address, raw):
+    def capture_write_commands(_short_address, raw):
         captured_raw.append(raw)
         cmd = MagicMock()
         cmd.response = None
@@ -221,7 +223,7 @@ async def test_write_multiplier_one_sends_raw_unchanged(number_settings_param):
     ]
     captured_raw = []
 
-    def capture_write_commands(short_address, raw):
+    def capture_write_commands(_short_address, raw):
         captured_raw.append(raw)
         cmd = MagicMock()
         cmd.response = None

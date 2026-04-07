@@ -1,5 +1,7 @@
 # Type 2 absolute input devices
 
+# pylint: disable=duplicate-code
+
 from typing import List
 
 from dali.address import InstanceNumber

@@ -50,12 +50,14 @@ class MqttControlBase:
         return False
 
     def get_query(self, short_address: Address) -> Optional[Command]:
-        return None
+        del short_address
 
     def format_response(self, response: Response) -> str:
+        del response
         return ""
 
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
+        del short_address, value_to_set
         return []
 
 
@@ -108,7 +110,7 @@ class DaliDeviceAddress:
     random: int
 
 
-def read_memory_bank(
+def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
@@ -121,7 +123,7 @@ def read_memory_bank(
                     f"Cannot read memory bank {bank.address}: last address location is {last_address.value}"
                 )
             break
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             if i == 2:
                 raise
     # Reading the last address also sets DTR1 appropriately
@@ -261,7 +263,7 @@ class GeneralMemoryParams(SettingsParamBase):
                 dst[param] = value
 
 
-class DaliDeviceBase:
+class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, R0917
     _common_schema = {}
 
     def __init__(

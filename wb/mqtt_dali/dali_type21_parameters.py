@@ -1,5 +1,7 @@
 # Type 21 Thermal lamp protection
 
+# pylint: disable=duplicate-code
+
 from dali.command import Response
 
 from .common_dali_device import MqttControl, MqttControlBase

@@ -69,7 +69,7 @@ class WebSocketConfig:
 
 
 @dataclass
-class ApplicationControllerConfig:
+class ApplicationControllerConfig:  # pylint: disable=too-many-instance-attributes
     gateway_mqtt_device_id: str
     # Gateway bus number starting from 1
     bus: int
@@ -183,7 +183,7 @@ class BroadcastVirtualDevice:
 ControllableDevice = Union[DaliDevice, Dali2Device, BroadcastVirtualDevice, GroupVirtualDevice]
 
 
-async def try_initialize_device(
+async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
     device: Union[DaliDevice, Dali2Device],
     driver,
     publisher: DevicePublisher,
@@ -233,7 +233,7 @@ async def publish_device(
                 await publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
 
 
-class ApplicationController:
+class ApplicationController:  # pylint: disable=too-many-instance-attributes
     def __init__(
         self,
         config: ApplicationControllerConfig,
@@ -365,7 +365,7 @@ class ApplicationController:
             if self._state in (ApplicationControllerState.UNINITIALIZED, ApplicationControllerState.STOPPING):
                 return
             if self._state == ApplicationControllerState.INITIALIZING:
-                raise RuntimeError("ApplicationController %s must be initialized to stop" % self.uid)
+                raise RuntimeError(f"ApplicationController {self.uid} must be initialized to stop")
             self._state = ApplicationControllerState.STOPPING
 
         self._bus_traffic_cleanup()
@@ -501,7 +501,8 @@ class ApplicationController:
             if self._state != ApplicationControllerState.READY:
                 self.websocket_config = config
                 self.logger.debug(
-                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, just saving config",
+                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, "
+                    "just saving config",
                 )
                 return
 
@@ -789,7 +790,7 @@ class ApplicationController:
         state.poll_turn = True
         return 1.0
 
-    async def _polling_loop(self) -> None:
+    async def _polling_loop(self) -> None:  # pylint: disable=too-many-branches, too-many-statements
         state = PollingState(last_poll_time=default_timer() - self._polling_interval)
         queue_timeout = 0.001
         item = None
@@ -864,7 +865,7 @@ class ApplicationController:
                             await item.data.identify(self._dev)
                         if not item.future.done():
                             item.future.set_result(None)
-                    except Exception as e:
+                    except Exception as e:  # pylint: disable=broad-exception-caught
                         if not item.future.done():
                             item.future.set_exception(e)
                     finally:
@@ -877,7 +878,7 @@ class ApplicationController:
     async def _poll_device(self, device: DaliDevice) -> None:
         try:
             responses = await device.poll_controls(self._dev)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.exception("Error polling device %s: %s", device.name, str(e))
             return
         tasks = []
@@ -1007,7 +1008,10 @@ class ApplicationController:
 
             if bus_traffic_item.response is not None and (
                 isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
-                or (bus_traffic_item.response._expected and bus_traffic_item.response.raw_value is not None)
+                or (
+                    getattr(bus_traffic_item.response, "_expected", False)
+                    and bus_traffic_item.response.raw_value is not None
+                )
             ):
                 response_msg = f"<<{format_response(bus_traffic_item.response)}"
 

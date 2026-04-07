@@ -10,6 +10,8 @@ from wb.mqtt_dali.dali_type50_parameters import (
     Type50Parameters,
 )
 
+# pylint: disable=protected-access,redefined-outer-name,import-outside-toplevel
+
 
 def _make_raw(overrides: dict) -> dict:
     """Build a minimal bank-1 raw dict with all values unknown (FlagValue.MASK),

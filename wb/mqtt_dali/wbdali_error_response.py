@@ -72,7 +72,6 @@ class TransmissionCancelled(WbGatewayTransmissionError):
         return "transmission cancelled"
 
 
-# TODO: store status in error
 class UnknownResponseStatus(WbGatewayTransmissionError):
     @property
     def raw_value(self):

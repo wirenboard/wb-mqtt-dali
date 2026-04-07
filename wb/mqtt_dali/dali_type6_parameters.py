@@ -21,9 +21,6 @@ class Type6DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
 
-    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
-        super().__init__(dimming_curve_state)
-
 
 class FastFadeTimeParam(NumberGearParam):
     query_command_class = QueryFastFadeTime

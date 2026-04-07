@@ -45,6 +45,8 @@ from .wbdali_utils import (
     send_commands_with_retry,
 )
 
+# pylint: disable=duplicate-code
+
 
 class ColourType(enum.Enum):
     XY = 0x10
@@ -132,7 +134,7 @@ class ColourSettings:
         return res
 
 
-def query_colour_with_level(
+def query_colour_with_level(  # pylint: disable=too-many-locals
     address: GearShort,
     cmd: command.Command,
     colour_tags: dict[ColourComponent, QueryColourValueDTR],
@@ -148,7 +150,7 @@ def query_colour_with_level(
         if all(
             is_valid_colour_query_response(command_item, response)
             for command_item, response in zip(first_batch, resp)
-        ):
+        ):  # pylint: disable=too-many-locals
             break
     else:
         raise RuntimeError(f"Failed to get {cmd}: transmission error")
@@ -207,8 +209,8 @@ def query_colour_with_level(
     )
 
 
-class ColourState(SettingsParamBase):
-    def __init__(
+class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attributes
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         name: SettingsParamName,
         property_name: str,
@@ -615,7 +617,7 @@ class Type8Parameters(TypeParameters):
                     address, QueryActualLevel(address), ACTUAL_LEVEL_COLOUR_TAGS, self._current_colour_type
                 )
             )
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             set_error = True
         if not set_error and resp.colour_type != self._current_colour_type:
             set_error = True

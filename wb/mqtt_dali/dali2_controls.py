@@ -214,7 +214,9 @@ async def publish_event(
     )
 
 
-async def publish_dali2_event(command: _Event, device_mqtt_id: str, mqtt_client: aiomqtt.Client) -> None:
+async def publish_dali2_event(  # pylint: disable=too-many-return-statements
+    command: _Event, device_mqtt_id: str, mqtt_client: aiomqtt.Client
+) -> None:
 
     if isinstance(command, LightEvent):
         await publish_event(

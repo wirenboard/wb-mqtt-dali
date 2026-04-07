@@ -36,6 +36,9 @@ from .wbdali_utils import (
     send_commands_with_retry,
 )
 
+# pylint: disable=duplicate-code
+
+
 SCENES_TOTAL = 16
 GROUPS_TOTAL = 16
 

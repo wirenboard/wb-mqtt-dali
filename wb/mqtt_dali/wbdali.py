@@ -28,6 +28,9 @@ from .wbdali_error_response import (
     WbGatewayTransmissionError,
 )
 
+# pylint: disable=duplicate-code
+
+
 WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
@@ -87,7 +90,8 @@ class BusMonitorFrameHandler:
 
         delta = self.get_frame_counter_delta(self._last_frame_counter, frame_counter)
         if delta == 2 and self._out_of_order_frame is None:
-            # Allow one backward jump without logging a warning, to handle the case when the gateway queue jumps from 4th to 1st item
+            # Allow one backward jump without logging a warning, to handle the case
+            # when the gateway queue jumps from 4th to 1st item
             # N -> N+2 -> N+1 -> N+3 -> N+4
             self._out_of_order_frame = raw_value
             self._last_frame_counter = frame_counter
@@ -141,7 +145,7 @@ class BusMonitorFrameHandler:
                 self._logger.debug("Unexpected broken BF: %s", hex(frame_data))
             else:
                 frame = ForwardFrame(frame_length, frame_data)
-                frame._error = True
+                frame._error = True  # pylint: disable=protected-access
                 self._logger.debug("Unexpected broken FF%d: %s", frame_length, hex(frame_data))
         else:
             if is_backward:
@@ -217,14 +221,14 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority
         result |= 1 << 28
 
     # Bits [31..29] - priority (0-5)
-    if not (0 <= priority <= 5):
+    if priority < 0 or priority > 5:
         raise ValueError(f"Priority must be 0-5, got {priority}")
     result |= (priority & 0x7) << 29
 
     return result
 
 
-class WBDALIDriver:
+class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     def __init__(
         self,
         config: WBDALIConfig,
@@ -299,7 +303,8 @@ class WBDALIDriver:
         self.logger.debug("Subscribing to FF24 topic...")
         for i in range(1, 5):
             await self._mqtt_dispatcher.subscribe(
-                f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+                f"/devices/{self.config.device_name}/controls/"
+                f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
                 self._bus_monitor_frame_handler.handle,
             )
 
@@ -332,7 +337,8 @@ class WBDALIDriver:
         if self._mqtt_dispatcher.is_running:
             for i in range(1, 5):
                 await self._mqtt_dispatcher.unsubscribe(
-                    f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+                    f"/devices/{self.config.device_name}/controls/"
+                    f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
                 )
         self.logger.debug("Deinitialized successfully")
 
@@ -382,7 +388,9 @@ class WBDALIDriver:
             msg="0000",
         )
 
-    async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
+    async def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
+        self, message: mqtt.MQTTMessage
+    ) -> None:
         """Handle reply message from the DALI bus.
 
         Message payload format:
@@ -607,7 +615,9 @@ class WBDALIDriver:
 
         return await self._send_commands_internal(commands, source, lock_queue=True)
 
-    async def _queue_sender(self) -> None:
+    async def _queue_sender(
+        self,
+    ) -> None:  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
         batch: list[SendQueueItem] = []
         timeout = None
         while True:
@@ -655,7 +665,7 @@ class WBDALIDriver:
                         self._batch_start_index = 0
                         self._next_queue_index = 0
 
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Error processing queue item: %s", e)
                 if item is not None and not item.future.done():
                     item.future.set_result(WbGatewayTransmissionError())

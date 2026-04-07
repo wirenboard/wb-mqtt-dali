@@ -139,6 +139,7 @@ def bus_to_json(bus: ApplicationController) -> dict:
 
 
 class Gateway:
+    # pylint: disable=too-many-locals, too-many-branches
     def __init__(
         self,
         config: dict,
@@ -259,7 +260,7 @@ class Gateway:
             if isinstance(r, Exception):
                 raise r
 
-    async def get_list_rpc_handler(self, params: dict):
+    async def get_list_rpc_handler(self, _params: dict):
         await self._update_gateways()
         async with self._config_lock:
             return list(
@@ -324,7 +325,7 @@ class Gateway:
                 if bus.uid == bus_id:
                     try:
                         schema = await bus.load_bus_info()
-                    except Exception as e:
+                    except Exception as e:  # pylint: disable=broad-exception-caught
                         logging.error("Failed to load bus info for bus %s: %s", bus_id, e)
                         schema = {
                             "type": "object",
@@ -409,7 +410,7 @@ class Gateway:
         await bus.identify_device(device)
         return {}
 
-    async def get_gateway_rpc_handler(self, params: dict):
+    async def get_gateway_rpc_handler(self, _params: dict):
         return {"config": {}, "schema": {}}
 
     def _is_websocket_port_in_use(self, port: int, bus_id: str) -> bool:

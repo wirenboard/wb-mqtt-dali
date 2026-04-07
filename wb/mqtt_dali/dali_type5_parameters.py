@@ -14,15 +14,10 @@ from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, TypeParameters
 from .wbdali_utils import WBDALIDriver, query_response
 
-# TODO: Output range is write only
-
 
 class Type5DimmingCurveParam(DimmingCurveParam):
     query_command_class = QueryDimmingCurve
     set_command_class = SelectDimmingCurve
-
-    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
-        super().__init__(dimming_curve_state)
 
 
 class Type5Parameters(TypeParameters):

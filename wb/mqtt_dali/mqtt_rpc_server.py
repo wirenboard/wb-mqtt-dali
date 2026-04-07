@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import uuid
 from typing import Awaitable, Callable, Union
 
 import paho.mqtt.client as mqtt

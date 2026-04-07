@@ -3,6 +3,8 @@ Commands and responses from IEC 62386 part 217, Device Type 16
 Thermal gear protection
 """
 
+# pylint: disable=duplicate-code
+
 from dali import command
 from dali.gear.general import _StandardCommand
 

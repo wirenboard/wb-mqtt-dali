@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # pylint: disable=C0103
+# pylint: disable=duplicate-code
 
 import argparse
 import asyncio
@@ -80,7 +81,7 @@ async def run_cmd(cmd: str):
         print(stderr)
 
 
-async def main(argv):
+async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
     parser = argparse.ArgumentParser(
         description="Wiren Board MQTT DALI Bridge E2E commissioning test. Resets DALI devices before test"
     )
@@ -200,8 +201,8 @@ async def main(argv):
         right = bins[i + 1]
         cnt = counts[i]
         bar_len = int((cnt / max_count) * bar_max_width) if max_count > 0 else 0
-        bar = "█" * bar_len
-        print(f"[{left:.3f} — {right:.3f}) | {cnt:3d} | {bar}")
+        histogram = "█" * bar_len
+        print(f"[{left:.3f} — {right:.3f}) | {cnt:3d} | {histogram}")
 
     # Statistics
     total = len(elapsed_time)

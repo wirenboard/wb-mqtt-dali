@@ -1,11 +1,11 @@
 from typing import Optional, Union
 
 from dali.address import DeviceBroadcast, DeviceShort, GearBroadcast, GearShort
-from dali.command import Command, NumericResponse, NumericResponseMask, Response
+from dali.command import Command, NumericResponse, Response
 from dali.device import general as control_device
 
 
-class Dali2CommandsCompatibilityLayer:
+class Dali2CommandsCompatibilityLayer:  # pylint: disable=too-many-instance-attributes, invalid-name
     def __init__(self) -> None:
         self.Compare = control_device.Compare
         self.QueryShortAddress = control_device.QueryShortAddress

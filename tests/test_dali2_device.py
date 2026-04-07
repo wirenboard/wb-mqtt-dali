@@ -5,6 +5,8 @@ from dali.address import DeviceShort
 
 from wb.mqtt_dali.dali2_device import DeviceGroupsParam
 
+# pylint: disable=protected-access
+
 
 @pytest.mark.asyncio
 async def test_device_groups_write_updates_expected_masks(monkeypatch):

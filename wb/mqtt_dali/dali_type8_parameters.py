@@ -210,7 +210,7 @@ def query_colour_with_level(  # pylint: disable=too-many-locals
 
 
 class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attributes
-    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         name: SettingsParamName,
         property_name: str,

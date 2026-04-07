@@ -120,7 +120,7 @@ def query_device_types_sequence(addr: Address):
 
 class DaliDevice(DaliDeviceBase):
 
-    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         address: DaliDeviceAddress,
         bus_id: str,

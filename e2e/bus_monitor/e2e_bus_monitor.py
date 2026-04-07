@@ -1,3 +1,5 @@
+# pylint: disable=duplicate-code
+
 import argparse
 import asyncio
 import logging
@@ -60,7 +62,7 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
     return client
 
 
-async def main(argv):
+async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
     parser = argparse.ArgumentParser(
         description="Wiren Board MQTT DALI Bridge E2E bus monitor test. "
         "Expects that bus 1 and bus 2 are connected to each other. "

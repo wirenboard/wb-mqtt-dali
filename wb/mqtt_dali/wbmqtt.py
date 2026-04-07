@@ -20,7 +20,7 @@ class TranslatedTitle:
         return not self.en and not self.ru
 
 
-class ControlMeta:  # pylint: disable=too-many-instance-attributes, too-few-public-methods, too-many-arguments, too-many-positional-arguments
+class ControlMeta:  # pylint: disable=too-many-instance-attributes, too-few-public-methods, too-many-arguments, R0917
     def __init__(
         self,
         control_type: str = "value",

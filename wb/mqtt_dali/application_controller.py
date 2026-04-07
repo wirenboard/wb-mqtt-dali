@@ -183,7 +183,7 @@ class BroadcastVirtualDevice:
 ControllableDevice = Union[DaliDevice, Dali2Device, BroadcastVirtualDevice, GroupVirtualDevice]
 
 
-async def try_initialize_device(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
     device: Union[DaliDevice, Dali2Device],
     driver,
     publisher: DevicePublisher,

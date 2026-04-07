@@ -4,6 +4,7 @@ from typing import Optional
 
 class DaliDatabase:
     def __init__(self, csv_fname: str) -> None:
+        # pylint: disable=line-too-long
         # here is example of csv file contents:
         # dali_product_id,brand_name,product_name,product_part_number,gtin,DALI Parts
         # 11125,Philips,Xi CR 40W .2-1.05A SDMP 230 C123 TR sXt,9290040147,8721103129109,"101,102,150,207,250,251,252,253"

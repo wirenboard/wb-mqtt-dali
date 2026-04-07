@@ -1,8 +1,6 @@
 import logging
 from typing import Optional
 
-# pylint: disable=duplicate-code
-
 from dali.address import Address
 from dali.gear.general import (
     DTR0,
@@ -37,6 +35,9 @@ from .wbdali_utils import (
     query_responses_retry_only_failed,
     send_commands_with_retry,
 )
+
+# pylint: disable=duplicate-code
+
 
 SCENES_TOTAL = 16
 GROUPS_TOTAL = 16

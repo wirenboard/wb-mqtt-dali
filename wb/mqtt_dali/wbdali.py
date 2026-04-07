@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-# pylint: disable=duplicate-code
-
 import asyncio
 import json
 import logging
@@ -29,6 +27,9 @@ from .wbdali_error_response import (
     UnknownResponseStatus,
     WbGatewayTransmissionError,
 )
+
+# pylint: disable=duplicate-code
+
 
 WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0

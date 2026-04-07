@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-# pylint: disable=duplicate-code
-
 import asyncio
 import json
 import logging
@@ -25,6 +23,9 @@ from .wbdali_error_response import (
     TransmissionCancelled,
     WbGatewayTransmissionError,
 )
+
+# pylint: disable=duplicate-code
+
 
 ERR_START_BIT = 0x100  # не получен старт бит
 ERR_BIT_TIME = 0x200  # неверное время бита

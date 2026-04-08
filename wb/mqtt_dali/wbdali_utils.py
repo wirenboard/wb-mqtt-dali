@@ -225,7 +225,7 @@ def check_query_response(resp: Optional[Response]) -> None:
     if resp is None:
         raise RuntimeError("no response")
     raw_value = resp.raw_value
-    error_acceptable = getattr(resp, "_error_acceptable", False)
+    error_acceptable = getattr(resp, "_error_acceptable", False) is True
     if raw_value is None and not error_acceptable:
         raise RuntimeError("no response")
     if raw_value is not None and raw_value.error and not error_acceptable:

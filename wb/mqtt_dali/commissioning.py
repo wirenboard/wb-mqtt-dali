@@ -18,7 +18,6 @@ from .wbdali_utils import (
     WBDALIDriver,
     check_query_response,
     query_response,
-    query_responses_retry_from_first_failed,
     query_responses_retry_only_failed,
     send_commands_with_retry,
     send_with_retry,

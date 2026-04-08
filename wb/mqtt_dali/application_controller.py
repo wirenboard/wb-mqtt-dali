@@ -1008,10 +1008,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
             if bus_traffic_item.response is not None and (
                 isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
-                or (
-                    getattr(bus_traffic_item.response, "_expected", False)
-                    and bus_traffic_item.response.raw_value is not None
-                )
+                or bus_traffic_item.response.raw_value is not None
             ):
                 response_msg = f"<<{format_response(bus_traffic_item.response)}"
 

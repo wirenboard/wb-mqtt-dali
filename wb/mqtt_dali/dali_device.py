@@ -186,8 +186,6 @@ class DaliDevice(DaliDeviceBase):
     ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
         address = GearShort(self.address.short)
 
-        await self._groups_parameter.read(driver, address, self.logger)
-
         types = await driver.run_sequence(query_device_types_sequence(address))
         if types is None:
             raise RuntimeError(
@@ -228,6 +226,8 @@ class DaliDevice(DaliDeviceBase):
 
         for handler in self._type_handlers:
             await handler.read_mandatory_info(driver, address, self.logger)
+
+        await self._groups_parameter.read(driver, address, self.logger)
 
         # Parameter handlers for settings page in UI
         parameter_handlers: list[SettingsParamBase] = [

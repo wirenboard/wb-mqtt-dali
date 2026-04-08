@@ -132,7 +132,7 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
     # use this for the lock/latch byte
     start_address = 0x02 if bank.address == 0 else 0x03
     commands_count = last_address - start_address + 1
-    raw_data = [None] * start_address + [None] * commands_count
+    raw_data = [None] * start_address
 
     first_unread_index = 0
     last_error = "unknown error"

@@ -146,7 +146,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         """
 
         commands = [*self._set_search_addr(addr), self._cmds.Compare()]
-        responses = await query_responses_retry_from_first_failed(self.driver, commands, logger=log)
+        responses = await send_commands_with_retry(self.driver, commands, logger=log)
         return responses[-1].value is True
 
     def _pick_new_short_address(self, found_addr: int) -> Optional[int]:
@@ -636,7 +636,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         check_query_response(resp)
                         break
                     except RuntimeError:
-                        await asyncio.sleep(0.3)
+                        pass
                 await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 self._print_binary_search_iteration_info(found_addr, resp)
                 low = found_addr

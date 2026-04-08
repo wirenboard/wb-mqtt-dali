@@ -154,13 +154,6 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
                 next_unread_index = i
                 last_error = str(e)
                 break
-            # ReadMemoryLocation may return no raw value if the location is not implemented,
-            # but we expect it to be implemented for all addresses up to the last address,
-            # so treat this as an error
-            if response.raw_value is None:
-                next_unread_index = i
-                last_error = "no raw value in response"
-                break
             raw_data[start_address + i] = response.raw_value.as_integer
 
         if next_unread_index is None:

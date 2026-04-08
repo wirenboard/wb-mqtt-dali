@@ -57,9 +57,11 @@ class ShortTimerParam(InstanceParam):
             QueryShortTimer,
             SetShortTimer,
         )
+        self.default = 200  # IEC 62386-301 Table 4, Table 9
         self.property_order = 10
         self.grid_columns = 3
         self.multiplier = 20  # IEC 62386-301 Table 4: T_incr = 20 ms
+        self.minimum = 200  # IEC 62386-301 Table 9
         self.maximum = 255 * 20
 
 

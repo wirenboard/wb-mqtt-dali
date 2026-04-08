@@ -1,10 +1,12 @@
-from typing import Callable
+import logging
+from typing import Callable, Optional
 
 from dali.address import Address, InstanceNumber
 from dali.command import Command
 from dali.device.general import DTR0
 
 from .settings import NumberSettingsParam, SettingsParamName
+from .wbdali_utils import WBDALIDriver
 
 
 class InstanceParam(NumberSettingsParam):
@@ -20,6 +22,28 @@ class InstanceParam(NumberSettingsParam):
         self._query_command = query_command
         self._set_command = set_command
         self._instance_number = instance_number
+
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        try:
+            return await super().read(driver, short_address, logger)
+        except RuntimeError:
+            # If the device doesn't support this parameter, just return {} instead of raising an error.
+            return {}
+
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
+        try:
+            return await super().write(driver, short_address, value, logger)
+        except RuntimeError:
+            # If the device doesn't support this parameter, just return {} instead of raising an error.
+            return {}
 
     def get_read_command(self, short_address: Address) -> Command:
         return self._query_command(short_address, self._instance_number)

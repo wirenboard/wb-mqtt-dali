@@ -25,6 +25,8 @@ from .wbdali_utils import (
 
 log = logging.getLogger("commissioning")
 
+MAX_SHORT_ADDRESS = 63
+
 
 @dataclass
 class ChangedDevice:
@@ -275,6 +277,17 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 new_short_addr = await self._assign_short_address(found_addr)
                 if new_short_addr is not None:
                     self._add_device(new_short_addr, found_addr)
+
+        # short_addr is not in valid range
+        elif isinstance(short_addr, int) and short_addr > MAX_SHORT_ADDRESS:
+            log.warning(
+                "Invalid short address %d read from device at 0x%06x. Mark it for readdressing",
+                short_addr,
+                found_addr,
+            )
+            await self.set_search_addr(found_addr)
+            await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
+            random_address_conflicts.add(None)
         else:
             if short_addr in self.found_devices:
                 await self.set_search_addr(found_addr)
@@ -395,7 +408,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         await send_with_retry(self.driver, self._cmds.Terminate(), log)
         await send_with_retry(self.driver, self._cmds.Initialise(MASK), log)
 
-        self.available_addresses = list(range(64))
+        self.available_addresses = list(range(MAX_SHORT_ADDRESS + 1))
         for short in short_addr_present:
             if short in self.available_addresses:
                 self.available_addresses.remove(short)
@@ -543,7 +556,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         control_device.QueryDeviceStatus(DeviceShort(i)),
                         log,
                     )
-                    for i in range(64)
+                    for i in range(MAX_SHORT_ADDRESS + 1)
                 ]
             )
             for i, resp in enumerate(responses):
@@ -558,7 +571,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         control_gear.QueryControlGearPresent(GearShort(i)),
                         log,
                     )
-                    for i in range(64)
+                    for i in range(MAX_SHORT_ADDRESS + 1)
                 ]
             )
             for i, resp in enumerate(responses):
@@ -700,7 +713,7 @@ async def search_short(  # pylint: disable=too-many-branches
                 print(f"    instance {inst_num}: type {inst_type}")
         else:
             responses = await driver.send_commands(
-                [control_gear.QueryControlGearPresent(GearShort(i)) for i in range(64)]
+                [control_gear.QueryControlGearPresent(GearShort(i)) for i in range(MAX_SHORT_ADDRESS + 1)]
             )
             for i, resp in enumerate(responses):
                 if resp and resp.value:

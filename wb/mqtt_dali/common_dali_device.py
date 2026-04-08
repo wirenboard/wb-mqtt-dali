@@ -149,12 +149,18 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
         for offset, response in enumerate(responses):
             i = first_unread_index + offset
             try:
-                check_query_response(response)
+                if response.raw_value is not None:
+                    if response.raw_value.error:
+                        next_unread_index = i
+                        last_error = "framing error"
+                        break
+                    raw_data.append(response.raw_value.as_integer)
+                else:
+                    raw_data.append(None)
             except RuntimeError as e:
                 next_unread_index = i
                 last_error = str(e)
                 break
-            raw_data[start_address + i] = response.raw_value.as_integer
 
         if next_unread_index is None:
             break

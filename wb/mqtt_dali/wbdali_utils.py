@@ -226,9 +226,9 @@ def check_query_response(resp: Optional[Response]) -> None:
         raise RuntimeError("no response")
     raw_value = resp.raw_value
     error_acceptable = getattr(resp, "_error_acceptable", False)
-    if raw_value is None:
+    if raw_value is None and not error_acceptable:
         raise RuntimeError("no response")
-    if raw_value.error and not error_acceptable:
+    if raw_value is not None and raw_value.error and not error_acceptable:
         raise RuntimeError("framing error")
 
 

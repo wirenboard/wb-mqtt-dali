@@ -42,10 +42,6 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-- Do not commit if any command above fails.
-- Never create a git commit without explicit user approval in the current conversation.
-- Never modify existing tests without explicit user approval in the current conversation.
-
 ### Testing
 ```bash
 .venv/bin/pytest
@@ -57,6 +53,13 @@ python3 -m venv .venv
 ```bash
 python setup.py build   # Build package
 ```
+
+## Agent Workflow Rules
+
+- Never create a git commit without explicit user approval in the current conversation.
+- Never modify existing tests without explicit user approval in the current conversation.
+- Do not rename local variables unless it is functionally required.
+- Do not introduce temporary local variables for single or double use; introduce them only if used 3+ times or if they materially improve readability.
 
 ## Architecture
 

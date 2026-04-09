@@ -188,7 +188,7 @@ async def query_response(
                     "DALI send retry %d/%d for %s: %s",
                     attempt,
                     MAX_COMMAND_RETRIES,
-                    cmd,
+                    str(cmd),
                     resp,
                 )
             continue
@@ -212,7 +212,7 @@ async def query_responses(
                         "DALI send retry %d/%d for %s: %s",
                         attempt,
                         MAX_COMMAND_RETRIES,
-                        cmds,
+                        [str(cmd) for cmd in cmds],
                         resp,
                     )
                 break
@@ -226,10 +226,11 @@ def check_query_response(resp: Optional[Response]) -> None:
         raise RuntimeError("no response")
     raw_value = resp.raw_value
     error_acceptable = getattr(resp, "_error_acceptable", False) is True
-    if raw_value is None and not error_acceptable:
-        raise RuntimeError("no response")
-    if raw_value is not None and raw_value.error and not error_acceptable:
-        raise RuntimeError("framing error")
+    if not error_acceptable:
+        if raw_value is None:
+            raise RuntimeError("no response")
+        if raw_value.error is True:
+            raise RuntimeError("framing error")
 
 
 def is_broadcast_or_group_address(addr: Address) -> bool:
@@ -307,7 +308,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
                 attempt,
                 MAX_COMMAND_RETRIES,
                 last_failed_index,
-                last_failed_command,
+                str(last_failed_command),
                 last_failed_reason,
             )
 
@@ -358,15 +359,16 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
 
         if logger is not None:
             logger.warning(
-                "DALI batch retry-only-failed %d/%d: pending indexes %s",
+                "DALI batch retry-only-failed %d/%d for %s",
                 attempt,
                 MAX_COMMAND_RETRIES,
-                pending_indexes,
+                [str(command) for command in commands],
             )
 
+    commands_str = [str(command) for command in commands]
     raise RuntimeError(
         "DALI batch retry-only-failed failed after "
-        f"{MAX_COMMAND_RETRIES} attempts for indexes {pending_indexes}: {last_failed_reasons}"
+        f"{MAX_COMMAND_RETRIES} attempts for commands {commands_str}: {last_failed_reasons}"
     )
 
 
@@ -382,7 +384,9 @@ async def send_with_retry(
         if not is_transmission_error_response(response):
             return response
         if logger is not None:
-            logger.warning("DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, cmd, response)
+            logger.warning(
+                "DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response
+            )
     return response
 
 
@@ -399,8 +403,9 @@ async def send_commands_with_retry(
             return responses
         if logger is not None:
             logger.warning(
-                "DALI send_commands retry %d/%d failed",
+                "DALI send_commands retry %d/%d failed for %s",
                 attempt,
                 MAX_COMMAND_RETRIES,
+                [str(cmd) for cmd in commands],
             )
     return responses

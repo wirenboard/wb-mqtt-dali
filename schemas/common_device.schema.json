@@ -159,7 +159,10 @@
       "maximum": 63,
       "default": 0,
       "options": {
-        "grid_columns": 6
+        "grid_columns": 6,
+        "wb": {
+          "new_row": true
+        }
       }
     },
     "random_address": {

@@ -30,7 +30,7 @@ class DoubleTimerParam(InstanceParam):
         self.property_order = 11
         self.grid_columns = 3
         self.multiplier = 20  # IEC 62386-301 Table 4: T_incr = 20 ms
-        self.maximum = 255 * 20
+        self.maximum = 100 * self.multiplier
 
 
 class RepeatTimerParam(InstanceParam):
@@ -45,7 +45,8 @@ class RepeatTimerParam(InstanceParam):
         self.property_order = 12
         self.grid_columns = 3
         self.multiplier = 20  # IEC 62386-301 Table 4: T_incr = 20 ms
-        self.maximum = 255 * 20
+        self.minimum = 5 * self.multiplier
+        self.maximum = 100 * self.multiplier
 
 
 class ShortTimerParam(InstanceParam):
@@ -57,12 +58,11 @@ class ShortTimerParam(InstanceParam):
             QueryShortTimer,
             SetShortTimer,
         )
-        self.default = 200  # IEC 62386-301 Table 4, Table 9
         self.property_order = 10
         self.grid_columns = 3
         self.multiplier = 20  # IEC 62386-301 Table 4: T_incr = 20 ms
-        self.minimum = 200  # IEC 62386-301 Table 9
-        self.maximum = 255 * 20
+        self.minimum = 10 * self.multiplier  # IEC 62386-301 Table 9
+        self.maximum = 255 * self.multiplier
 
 
 class StuckTimerParam(InstanceParam):
@@ -76,6 +76,7 @@ class StuckTimerParam(InstanceParam):
         )
         self.property_order = 13
         self.grid_columns = 3
+        self.minimum = 5
         # IEC 62386-301 Table 4: T_incr = 1 s, raw value = seconds directly
 
 

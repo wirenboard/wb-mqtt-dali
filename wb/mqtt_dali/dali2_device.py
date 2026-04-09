@@ -66,6 +66,7 @@ from .settings import (
     SettingsParamGroup,
     SettingsParamName,
 )
+from .utils import add_enum, add_translations
 from .wbdali_utils import (
     WBDALIDriver,
     query_response,
@@ -89,7 +90,7 @@ class ApplicationActiveParam(BooleanSettingsParam):
 class PowerCycleNotificationParam(BooleanSettingsParam):
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Power cycle notification", "Уведомление о цикле питания"),
+            SettingsParamName("Power cycle notification", "Уведомление о перезагрузке по питанию"),
             "power_cycle_notification",
             QueryPowerCycleNotification,
             EnablePowerCycleNotification,
@@ -152,16 +153,27 @@ class EventSchemeParam(NumberSettingsParam):
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         schema = super().get_schema(group_and_broadcast)
-        schema["properties"][self.property_name]["enum"] = [0, 1, 2, 3, 4]
-        if "options" not in schema["properties"][self.property_name]:
-            schema["properties"][self.property_name]["options"] = {}
-        schema["properties"][self.property_name]["options"]["enum_titles"] = [
-            "instance type and number",
-            "device short and instance type",
-            "device short and instance number",
-            "device group and instance type",
-            "instance group and type",
-        ]
+        add_enum(
+            schema["properties"][self.property_name],
+            [
+                (0, "instance type and number"),
+                (1, "device short and instance type"),
+                (2, "device short and instance number"),
+                (3, "device group and instance type"),
+                (4, "instance group and type"),
+            ],
+        )
+        add_translations(
+            schema,
+            "ru",
+            {
+                "instance type and number": "тип и номер экземпляра",
+                "device short and instance type": "короткий адрес устройства и тип экземпляра",
+                "device short and instance number": "короткий адрес устройства и номер экземпляра",
+                "device group and instance type": "группа устройства и тип экземпляра",
+                "instance group and type": "группа экземпляра и тип",
+            },
+        )
         return schema
 
 
@@ -223,7 +235,7 @@ class InstanceGroup0Param(InstanceGroupParamBase):
 class InstanceGroup1Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Instance group 1", "Группа экземпляра 1"),
+            SettingsParamName("Instance group 1", "Первая группа экземпляра"),
             "instance_group_1",
             instance_number,
         )
@@ -242,7 +254,7 @@ class InstanceGroup1Param(InstanceGroupParamBase):
 class InstanceGroup2Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Instance group 2", "Группа экземпляра 2"),
+            SettingsParamName("Instance group 2", "Вторая группа экземпляра"),
             "instance_group_2",
             instance_number,
         )
@@ -282,26 +294,40 @@ class InstanceTypeParam(SettingsParamBase):
     }
 
     def __init__(self, instance_type: int) -> None:
-        super().__init__(SettingsParamName("Instance type", "Тип экземпляра"))
-        self.instance_type_name = self.INSTANCE_TYPE_NAMES.get(instance_type, f"Unknown ({instance_type})")
+        super().__init__(SettingsParamName("Instance type", "Тип"))
         self.property_name = "instance_type"
+        self.instance_type = instance_type
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        return {self.property_name: self.instance_type_name}
+        return {self.property_name: self.instance_type}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         return {
             "properties": {
                 self.property_name: {
-                    "type": "string",
+                    "type": "number",
+                    "enum": list(self.INSTANCE_TYPE_NAMES.keys()),
                     "title": self.name.en,
                     "options": {
+                        "enum_titles": list(self.INSTANCE_TYPE_NAMES.values()),
                         "wb": {"read_only": True},
                     },
                     "propertyOrder": 0,
                 }
+            },
+            "translations": {
+                "ru": {
+                    self.name.en: self.name.ru,
+                    "Generic (0)": "Универсальный (0)",
+                    "Push button (1)": "Кнопка (1)",
+                    "Absolute input device (2)": "Устройство ввода (2)",
+                    "Occupancy sensor (3)": "Датчик присутствия (3)",
+                    "Light sensor (4)": "Датчик освещённости (4)",
+                    "General purpose sensor (6)": "Датчик общего назначения (6)",
+                    "Feedback (32)": "Обратная связь (32)",
+                },
             },
         }
 

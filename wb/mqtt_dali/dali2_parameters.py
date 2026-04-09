@@ -29,8 +29,9 @@ class InstanceParam(NumberSettingsParam):
         try:
             return await super().read(driver, short_address, logger)
         except RuntimeError:
-            # If the device doesn't support this parameter, just return {} instead of raising an error.
-            return {}
+            # If the device doesn't support this parameter,
+            # return default value instead of raising an error.
+            return {self.property_name: self._get_default_value()}
 
     async def write(
         self,
@@ -42,8 +43,9 @@ class InstanceParam(NumberSettingsParam):
         try:
             return await super().write(driver, short_address, value, logger)
         except RuntimeError:
-            # If the device doesn't support this parameter, just return {} instead of raising an error.
-            return {}
+            # If the device doesn't support this parameter,
+            # return default value instead of raising an error.
+            return {self.property_name: self._get_default_value()}
 
     def get_read_command(self, short_address: Address) -> Command:
         return self._query_command(short_address, self._instance_number)
@@ -53,3 +55,10 @@ class InstanceParam(NumberSettingsParam):
             DTR0(value_to_set),
             self._set_command(short_address, self._instance_number),
         ]
+
+    def _get_default_value(self) -> int:
+        if self.default is not None:
+            return self.default
+        if self.minimum is not None:
+            return self.minimum
+        return 0

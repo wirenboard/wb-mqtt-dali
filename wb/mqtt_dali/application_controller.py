@@ -1044,4 +1044,10 @@ def format_command(frame: Frame, decoded_command: Optional[Command]) -> str:
 def format_response(response: Response) -> str:
     if isinstance(response, WbGatewayTransmissionError):
         return str(response)
+    if (
+        type(response) is Response  # pylint: disable=C0123
+        and response.raw_value is not None
+        and response.raw_value.error is not True
+    ):
+        return f"{format_frame(response.raw_value)} {response.raw_value.as_integer}"
     return f"{format_frame(response.raw_value)} {response}"

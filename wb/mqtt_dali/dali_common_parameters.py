@@ -162,12 +162,29 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             "properties": {
                 "fade_time": {
                     "type": "number",
-                    "title": "Fade Time",
+                    "title": "Fade Time, s",
                     "propertyOrder": 19,
-                    "minimum": 0,
-                    "maximum": 15,
+                    "enum": list(range(16)),
                     "default": 0,
                     "options": {
+                        "enum_titles": [
+                            "no fade",
+                            "0.7",
+                            "1.0",
+                            "1.4",
+                            "2.0",
+                            "2.8",
+                            "4.0",
+                            "5.7",
+                            "8.0",
+                            "11.3",
+                            "16.0",
+                            "22.6",
+                            "32.0",
+                            "45.3",
+                            "64.0",
+                            "90.5",
+                        ],
                         "grid_columns": 6,
                         "wb": {
                             "show_editor": True,
@@ -176,12 +193,28 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 },
                 "fade_rate": {
                     "type": "number",
-                    "title": "Fade Rate",
+                    "title": "Fade Rate, steps/s",
                     "propertyOrder": 20,
-                    "minimum": 1,
-                    "maximum": 15,
+                    "enum": list(range(1, 16)),
                     "default": 1,
                     "options": {
+                        "enum_titles": [
+                            "358",
+                            "253",
+                            "179",
+                            "127",
+                            "89.4",
+                            "63.3",
+                            "44.7",
+                            "31.6",
+                            "22.4",
+                            "15.8",
+                            "11.2",
+                            "7.9",
+                            "5.6",
+                            "4.0",
+                            "2.8",
+                        ],
                         "grid_columns": 6,
                         "wb": {
                             "show_editor": True,
@@ -191,8 +224,9 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             },
             "translations": {
                 "ru": {
-                    "Fade Time": "Время затухания",
-                    "Fade Rate": "Скорость затухания",
+                    "Fade Time, s": "Время затухания, с",
+                    "Fade Rate, steps/s": "Скорость затухания, шаг/с",
+                    "no fade": "без затухания",
                 },
             },
         }

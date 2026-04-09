@@ -365,9 +365,10 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
                 [str(command) for command in commands],
             )
 
+    commands_str = [str(command) for command in commands]
     raise RuntimeError(
         "DALI batch retry-only-failed failed after "
-        f"{MAX_COMMAND_RETRIES} attempts for commands {commands}: {last_failed_reasons}"
+        f"{MAX_COMMAND_RETRIES} attempts for commands {commands_str}: {last_failed_reasons}"
     )
 
 

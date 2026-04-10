@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Any, Optional, Union
+from typing import Any, Iterable, Optional, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import (
@@ -123,7 +123,7 @@ def build_virtual_device_controls(
     return {c.control_info.id: c for c in controls}
 
 
-def aggregate_capabilities(devices) -> AggregatedCapabilities:
+def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilities:
     has_rgbwaf = False
     has_tc = False
     tc_min_values: list[int] = []

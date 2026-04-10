@@ -96,7 +96,13 @@ def make_controls() -> list[MqttControlBase]:
             commands_builder=handle_dapc,
         ),
         MqttControl(
-            ControlInfo("on", ControlMeta("pushbutton", TranslatedTitle("On", "Вкл"))),
+            ControlInfo(
+                "go_to_last_active_level",
+                ControlMeta(
+                    "pushbutton",
+                    TranslatedTitle("Last Active Level", "Последняя активная яркость"),
+                ),
+            ),
             commands_builder=lambda short_address, _: [GoToLastActiveLevel(short_address)],
         ),
         MqttControl(

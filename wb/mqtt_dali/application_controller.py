@@ -147,6 +147,7 @@ def aggregate_capabilities(devices) -> AggregatedCapabilities:
         tc_max_mirek=max(tc_max_values) if tc_max_values else 0,
     )
 
+
 class AggregatedVirtualDevice:
     def __init__(
         self,
@@ -681,9 +682,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             address=GearGroup(group_number),
         )
 
-    async def _publish_virtual_device(
-        self, device: AggregatedVirtualDevice
-    ) -> None:
+    async def _publish_virtual_device(self, device: AggregatedVirtualDevice) -> None:
         device_info = DeviceInfo(
             device.mqtt_id,
             device.name,

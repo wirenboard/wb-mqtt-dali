@@ -71,7 +71,7 @@ def _make_controller(dali_devices=None):
         mqtt_id="bus_1_broadcast",
         name="Bus 1 Broadcast",
         capabilities=AggregatedCapabilities(),
-        address=GearBroadcast()
+        address=GearBroadcast(),
     )
     ctrl._handle_on_topic = AsyncMock()  # pylint: disable=protected-access
     return ctrl

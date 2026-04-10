@@ -39,6 +39,7 @@ from .dali_type4_parameters import Type4Parameters
 from .dali_type5_parameters import Type5Parameters
 from .dali_type6_parameters import Type6Parameters
 from .dali_type7_parameters import Type7Parameters
+from .dali_type8_common import Type8Limits
 from .dali_type8_parameters import ColourType, Type8Parameters
 from .dali_type8_rgbwaf import MAX_COLOUR_VALUE, set_rgb_commands_builder
 from .dali_type16_parameters import Type16Parameters
@@ -177,6 +178,15 @@ class DaliDevice(DaliDeviceBase):
     @property
     def dt8_colour_type(self) -> Optional[ColourType]:
         return self._type8_handler.default_colour_type if self._type8_handler is not None else None
+
+    @property
+    def dt8_tc_limits(self) -> Optional[Type8Limits]:
+        if (
+            self._type8_handler is not None
+            and self._type8_handler.default_colour_type == ColourType.COLOUR_TEMPERATURE
+        ):
+            return self._type8_handler.tc_limits
+        return None
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
         return [ActualLevelControl(self._dimming_curve_state), *CONTROLS]

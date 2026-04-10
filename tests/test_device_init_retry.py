@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from dali.address import GearBroadcast
 
 from wb.mqtt_dali.application_controller import (

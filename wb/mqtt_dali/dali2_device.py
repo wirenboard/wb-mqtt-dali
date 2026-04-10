@@ -103,7 +103,7 @@ class InstanceParameters(SettingsParamGroup):
         super().__init__(
             SettingsParamName(
                 f"Instance {instance_number.value}",
-                f"Экземпляр {instance_number.value}",
+                f"Датчик {instance_number.value}",
             ),
             f"instance{instance_number.value}",
         )
@@ -167,11 +167,11 @@ class EventSchemeParam(NumberSettingsParam):
             schema,
             "ru",
             {
-                "instance type and number": "тип и номер экземпляра",
-                "device short and instance type": "короткий адрес устройства и тип экземпляра",
-                "device short and instance number": "короткий адрес устройства и номер экземпляра",
-                "device group and instance type": "группа устройства и тип экземпляра",
-                "instance group and type": "группа экземпляра и тип",
+                "instance type and number": "тип и номер датчика",
+                "device short and instance type": "короткий адрес устройства и тип датчика",
+                "device short and instance number": "короткий адрес устройства и номер датчика",
+                "device group and instance type": "группа устройства и тип датчика",
+                "instance group and type": "группа датчика и тип",
             },
         )
         return schema
@@ -216,7 +216,7 @@ class InstanceGroupParamBase(NumberSettingsParam):  # pylint: disable=abstract-m
 class InstanceGroup0Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Primary instance group", "Основная группа экземпляра"),
+            SettingsParamName("Primary instance group", "Основная группа"),
             "instance_group_0",
             instance_number,
         )
@@ -235,7 +235,7 @@ class InstanceGroup0Param(InstanceGroupParamBase):
 class InstanceGroup1Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Instance group 1", "Первая группа экземпляра"),
+            SettingsParamName("Instance group 1", "Первая группа"),
             "instance_group_1",
             instance_number,
         )
@@ -254,7 +254,7 @@ class InstanceGroup1Param(InstanceGroupParamBase):
 class InstanceGroup2Param(InstanceGroupParamBase):
     def __init__(self, instance_number: InstanceNumber) -> None:
         super().__init__(
-            SettingsParamName("Instance group 2", "Вторая группа экземпляра"),
+            SettingsParamName("Instance group 2", "Вторая группа"),
             "instance_group_2",
             instance_number,
         )

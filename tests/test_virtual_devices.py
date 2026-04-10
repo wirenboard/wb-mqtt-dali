@@ -12,13 +12,13 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dali.address import GearGroup, GearBroadcast
+from dali.address import GearBroadcast, GearGroup
 from dali.gear.colour import tc_kelvin_mirek
 
 from wb.mqtt_dali.application_controller import (
     AggregatedCapabilities,
-    ApplicationController,
     AggregatedVirtualDevice,
+    ApplicationController,
     aggregate_capabilities,
     build_virtual_device_controls,
 )

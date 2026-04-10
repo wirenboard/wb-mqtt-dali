@@ -8,8 +8,8 @@ from dali.address import GearBroadcast
 
 from wb.mqtt_dali.application_controller import (
     AggregatedCapabilities,
-    ApplicationController,
     AggregatedVirtualDevice,
+    ApplicationController,
     PollingState,
     publish_device,
     try_initialize_device,

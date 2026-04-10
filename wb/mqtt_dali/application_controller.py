@@ -7,13 +7,13 @@ from typing import Any, Optional, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import (
+    Address,
     DeviceBroadcast,
     DeviceShort,
     GearBroadcast,
     GearGroup,
     InstanceNumber,
 )
-from dali.address import Address
 from dali.command import Command, Response, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.frame import ForwardFrame, Frame

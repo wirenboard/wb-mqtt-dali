@@ -1,7 +1,7 @@
 # pylint: disable=duplicate-code
 
 # Test arbitration on the bus by sending commands from two gateways to the same bus,
-# and checking that that no malformed frames are received.
+# and checking that both batches of requests complete successfully.
 # Expects that buses 1 of two gateways are connected to each other, and a DALI device is connected to the bus.
 # The test sends commands to a device from both gateways and checks that all requests are successful.
 
@@ -18,10 +18,6 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
-
-EXIT_SUCCESS = 0
-EXIT_NOTCONFIGURED = 6
-SEND_BATCH_SIZE = 16
 
 
 async def dispatcher(mqtt_dispatcher: MQTTDispatcher):

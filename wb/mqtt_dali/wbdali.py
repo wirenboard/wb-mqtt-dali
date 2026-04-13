@@ -238,7 +238,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ) -> None:
-        self.logger = logger.getChild(f"WBDALIDriver:{config.device_name}_bus{config.bus}")
+        self.logger = logger.getChild(f"{config.device_name}_bus{config.bus}")
         self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
 
         self.config = config

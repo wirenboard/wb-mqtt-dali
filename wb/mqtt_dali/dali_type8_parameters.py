@@ -561,6 +561,10 @@ class Type8Parameters(TypeParameters):
     def default_colour_type(self) -> ColourType:
         return self._current_colour_type if self._current_colour_type is not None else ColourType.RGBWAF
 
+    @property
+    def tc_limits(self) -> Type8Limits:
+        return self._limits
+
     async def read_mandatory_info(
         self,
         driver: WBDALIDriver,

@@ -88,7 +88,7 @@ class TestBuildVirtualDeviceControls:
         controls = build_virtual_device_controls(caps)
         # Basic controls come from make_controls() – dapc, on, off, up, down …
         assert "dapc" in controls
-        assert "on" in controls
+        assert "go_to_last_active_level" in controls
         assert "off" in controls
 
     def test_no_extra_colour_controls_without_dt8(self):

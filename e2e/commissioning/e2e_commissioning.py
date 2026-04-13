@@ -5,12 +5,8 @@
 import argparse
 import asyncio
 import logging
-import random
-import string
 import sys
-from urllib.parse import urlparse
 
-import asyncio_mqtt as aiomqtt
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from wb.mqtt_dali.commissioning import (
@@ -22,6 +18,7 @@ from wb.mqtt_dali.dali2_compat import Dali2CommandsCompatibilityLayer
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
 EXIT_SUCCESS = 0
 EXIT_NOTCONFIGURED = 6
@@ -33,35 +30,6 @@ async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
     except asyncio.CancelledError:
         # Allow graceful shutdown on cancellation; no cleanup needed here.
         pass
-
-
-def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
-    urlparse_result = urlparse(broker_url)
-    if urlparse_result.scheme == "unix":
-        hostname = urlparse_result.path
-        port = 0
-    else:
-        if urlparse_result.hostname is None:
-            raise ValueError("No MQTT hostname specified")
-        if urlparse_result.port is None:
-            raise ValueError("No MQTT port specified")
-        hostname = urlparse_result.hostname
-        port = urlparse_result.port
-    auth = {}
-    if urlparse_result.username:
-        auth["username"] = urlparse_result.username
-    if urlparse_result.password:
-        auth["password"] = urlparse_result.password
-    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-    client = aiomqtt.Client(
-        client_id=f"wb-mqtt-dali-{client_id_suffix}",
-        hostname=hostname,
-        port=port,
-        transport="websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
-        logger=logging.getLogger("mqtt_client"),
-        **auth,
-    )
-    return client
 
 
 async def run_cmd(cmd: str):

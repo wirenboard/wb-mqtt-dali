@@ -14,7 +14,6 @@ from dali.gear.colour import (
     QueryColourStatus,
     QueryColourValue,
     QueryColourValueDTR,
-    tc_kelvin_mirek,
 )
 from dali.gear.general import (
     DTR0,
@@ -463,12 +462,14 @@ class ColourGroupScenesSettings(ColourState):
         value: dict,
         logger: Optional[logging.Logger] = None,
     ) -> dict:
-        if self.property_name not in value:
+        scene_data = value.get(self.property_name)
+        if scene_data is None:
             return {}
-        self._setup_command_class = lambda address: SetScene(address, value.get("index", 0))
-        values_to_set = deepcopy(value)
-        if value.get("enabled", True):
-            values_to_set["level"] = value.get("level", 0)
+        index = scene_data.get("index", 0)
+        self._setup_command_class = lambda address: SetScene(address, index)
+        values_to_set = deepcopy(scene_data)
+        if scene_data.get("enabled", True):
+            values_to_set["level"] = scene_data.get("level", 0)
         else:
             values_to_set["level"] = MASK
         await super().write(driver, short_address, {self.property_name: values_to_set}, logger)
@@ -637,11 +638,10 @@ class Type8Parameters(TypeParameters):
         return []
 
     def get_group_parameters(self) -> list[SettingsParamBase]:
-        limits = Type8Limits(tc_kelvin_mirek(20000), tc_kelvin_mirek(50))
         return [
-            PowerOnColourState(self.default_colour_type, limits),
-            SystemFailureColourState(self.default_colour_type, limits),
-            ColourGroupScenesSettings(self.default_colour_type, limits),
+            PowerOnColourState(self.default_colour_type, self._limits),
+            SystemFailureColourState(self.default_colour_type, self._limits),
+            ColourGroupScenesSettings(self.default_colour_type, self._limits),
         ]
 
     async def _read_current_colour_type(

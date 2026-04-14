@@ -455,6 +455,11 @@ class GroupScenesSettings(SettingsParamBase):
                         },
                     },
                     "required": ["index", "enabled", "level"],
+                    "options": {
+                        "wb": {
+                            "show_editor": True,
+                        },
+                    },
                 },
             },
             "translations": {

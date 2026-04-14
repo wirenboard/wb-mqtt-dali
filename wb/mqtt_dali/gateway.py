@@ -368,9 +368,9 @@ class Gateway:
                         "polling_interval",
                         "bus_monitor_enabled",
                     ]:
-                        params.pop(key, None)
-                    if params:
-                        await bus.apply_bus_parameters(params)
+                        new_config.pop(key, None)
+                    if new_config:
+                        await bus.apply_bus_parameters(new_config)
                     await self._save_configuration()
                     return {
                         "websocket_enabled": new_websocket_config.enabled,

@@ -4,5 +4,5 @@
 	dh $@ --buildsystem=pybuild
 
 
-override_dh_systemd_enable:
-	dh_systemd_enable --name=wb-mqtt-dali
+override_dh_installsystemd:
+	dh_installsystemd --name=wb-mqtt-dali

@@ -21,7 +21,7 @@ import logging
 from copy import deepcopy
 from enum import Enum
 from http import HTTPStatus
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
 
 import dali.command
 import dali.frame
@@ -292,12 +292,13 @@ async def process_request(path: str, _request_headers: Headers) -> Optional[HTTP
 async def run_websocket(dev: WBDALIDriver, host: str, port: int, logger: logging.Logger) -> None:
     _log = logger.getChild("lunatone-iot-emulator")
     _log.info("Starting Lunatone IoT Gateway emulator on %s:%d", host, port)
-    func: Callable[[WebSocketServerProtocol, str], Awaitable[Any]] = lambda websocket, path: emulate(
-        websocket, dev, _log
-    )
+
+    async def _handler(websocket: WebSocketServerProtocol, _path: str = "") -> None:
+        await emulate(websocket, dev, _log)
+
     try:
         async with serve(
-            func,
+            _handler,
             host,
             port,
             process_request=process_request,

@@ -512,6 +512,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                     self.logger.info("Stop Lunatone IoT Gateway emulator")
                     await self._stop_websocket()
                     self.websocket_config = config
+                    self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
                     return
 
                 # Port changed, so stop existing websocket first

@@ -82,11 +82,11 @@ class MockMQTTDispatcher:
             prefix = topic.replace("/#", "")
             for message in self.client._messages:
                 if str(message.topic).startswith(prefix):
-                    await callback(message)
+                    callback(message)
         else:
             for message in self.client._messages:
                 if str(message.topic) == topic:
-                    await callback(message)
+                    callback(message)
 
     async def unsubscribe(self, topic):
         if topic in self._subscriptions:

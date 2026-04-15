@@ -130,7 +130,7 @@ async def test_dispatch_message(dispatcher):
     message = MockMessage("test/topic", b"test payload")
 
     await dispatcher.subscribe("test/topic", callback)
-    await dispatcher._dispatch_message(message)  # pylint: disable=W0212
+    dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
     callback.assert_called_once_with(message)
 
@@ -143,7 +143,7 @@ async def test_dispatch_message_multiple_callbacks(dispatcher):
 
     await dispatcher.subscribe("test/topic", callback1)
     await dispatcher.subscribe("test/topic", callback2)
-    await dispatcher._dispatch_message(message)  # pylint: disable=W0212
+    dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
     callback1.assert_called_once_with(message)
     callback2.assert_called_once_with(message)
@@ -153,7 +153,7 @@ async def test_dispatch_message_multiple_callbacks(dispatcher):
 async def test_dispatch_message_no_handlers(dispatcher):
     message = MockMessage("unknown/topic", b"test payload")
 
-    await dispatcher._dispatch_message(message)  # pylint: disable=W0212
+    dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
 
 @pytest.mark.asyncio

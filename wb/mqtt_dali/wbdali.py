@@ -67,7 +67,7 @@ class BusMonitorFrameHandler:
         self._bus_traffic = bus_traffic
         self._dev_inst_map = dev_inst_map
 
-    async def handle(self, message: mqtt.MQTTMessage) -> None:
+    def handle(self, message: mqtt.MQTTMessage) -> None:
         if message.retain:
             return
 
@@ -87,7 +87,7 @@ class BusMonitorFrameHandler:
 
         if self._last_frame_counter is None:
             self._last_frame_counter = frame_counter
-            await self._bus_traffic_invoke(raw_value)
+            self._bus_traffic_invoke(raw_value)
             return
 
         delta = self.get_frame_counter_delta(self._last_frame_counter, frame_counter)
@@ -101,8 +101,8 @@ class BusMonitorFrameHandler:
 
         if delta == -1 and self._out_of_order_frame is not None:
             try:
-                await self._bus_traffic_invoke(raw_value)
-                await self._bus_traffic_invoke(self._out_of_order_frame)
+                self._bus_traffic_invoke(raw_value)
+                self._bus_traffic_invoke(self._out_of_order_frame)
                 return
             finally:
                 self._out_of_order_frame = None
@@ -116,12 +116,12 @@ class BusMonitorFrameHandler:
 
         if self._out_of_order_frame is not None:
             try:
-                await self._bus_traffic_invoke(self._out_of_order_frame)
+                self._bus_traffic_invoke(self._out_of_order_frame)
             finally:
                 self._out_of_order_frame = None
 
         self._last_frame_counter = frame_counter
-        await self._bus_traffic_invoke(raw_value)
+        self._bus_traffic_invoke(raw_value)
 
     def get_frame_counter_delta(self, start: int, end: int) -> int:
         # It is ok to have a backward jump to one frame,
@@ -133,7 +133,7 @@ class BusMonitorFrameHandler:
             return end - start
         return end + FRAME_COUNTER_MODULO - start
 
-    async def _bus_traffic_invoke(self, raw_value: int) -> None:
+    def _bus_traffic_invoke(self, raw_value: int) -> None:
         frame_length = (raw_value >> 32) & 0xFF
         frame_mask = (1 << frame_length) - 1
         frame_data = raw_value & frame_mask
@@ -391,7 +391,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             msg="0000",
         )
 
-    async def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
+    def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
         self, message: mqtt.MQTTMessage
     ) -> None:
         """Handle reply message from the DALI bus.

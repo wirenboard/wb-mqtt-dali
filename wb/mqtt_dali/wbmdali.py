@@ -241,7 +241,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             msg="0000",
         )
 
-    async def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
+    def _handle_ff24_message(self, message: mqtt.MQTTMessage) -> None:
         self.logger.debug(
             "Received FF24 MQTT message: %s %s",
             message.topic,
@@ -255,7 +255,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self.logger.debug("Received FF24: %s", cmd)
         self.bus_traffic.notify_bus_frame(frame, 0)
 
-    async def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
+    def _handle_reply_message(self, message: mqtt.MQTTMessage) -> None:
         self.logger.debug(
             "Received message: %s %s",
             message.topic,

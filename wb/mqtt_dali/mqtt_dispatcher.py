@@ -1,11 +1,11 @@
 import asyncio
 import logging
-from typing import Awaitable, Callable, Dict, Optional, Set
+from typing import Callable, Dict, Optional, Set
 
 import asyncio_mqtt as aiomqtt
 import paho.mqtt.client as mqtt
 
-MessageCallback = Callable[[mqtt.MQTTMessage], Awaitable[None]]
+MessageCallback = Callable[[mqtt.MQTTMessage], None]
 
 
 class MQTTDispatcher:
@@ -53,30 +53,35 @@ class MQTTDispatcher:
 
     async def run(self) -> None:
         self._running = True
+        loop = asyncio.get_event_loop()
         try:
             async with self.client.unfiltered_messages() as messages:
                 async for message in messages:
-                    await self._dispatch_message(message)
+                    start = loop.time()
+                    self._dispatch_message(message)
+                    elapsed = loop.time() - start
+                    if elapsed > 0.1:
+                        logging.warning(
+                            "Dispatching message on topic %s took %.2f seconds", message.topic, elapsed
+                        )
         except Exception as e:
             logging.error(e)
             raise
         finally:
-            async with self._lock:
-                self._subscriptions.clear()
+            self._subscriptions.clear()
             self._running = False
 
-    async def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
+    def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
         topic = str(message.topic)
 
         callbacks = set()
-        async with self._lock:
-            for callback_topic, cbs in self._subscriptions.items():
-                if mqtt.topic_matches_sub(callback_topic, topic):
-                    callbacks.update(cbs)
+        for callback_topic, cbs in self._subscriptions.items():
+            if mqtt.topic_matches_sub(callback_topic, topic):
+                callbacks.update(cbs)
 
         for callback in callbacks:
             try:
-                await callback(message)
+                callback(message)
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logging.error("Error in callback for topic %s: %s", topic, e)
 

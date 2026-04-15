@@ -299,11 +299,11 @@ class TestDevicePublisher:
 
         await publisher.add_device(device_info)
 
-        callback = AsyncMock()
+        callback = MagicMock()
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
         message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
-        await publisher._handle_on_message("dev1/ctrl1", message)
+        publisher._handle_on_message("dev1/ctrl1", message)
 
         callback.assert_called_once_with(message)
 
@@ -323,7 +323,7 @@ class TestDevicePublisher:
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
         message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
-        await publisher._handle_on_message("dev1/ctrl1", message)
+        publisher._handle_on_message("dev1/ctrl1", message)
         if len(publisher._on_topic_running_handlers._tasks) > 0:
             await asyncio.gather(*publisher._on_topic_running_handlers._tasks, return_exceptions=True)
         assert len(publisher._on_topic_running_handlers._tasks) == 0

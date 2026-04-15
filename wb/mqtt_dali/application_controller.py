@@ -1036,7 +1036,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                 if bus_traffic_item.request_source == BusTrafficSource.LUNATONE:
                     request_msg = f">>{request_msg} (from lunatone)"
                 else:
-                    request_msg = f">>{request_msg}"
+                    request_msg = f">>{request_msg} {bus_traffic_item.frame_counter}"
 
             self._one_shot_tasks.add(
                 self._mqtt_dispatcher.client.publish(

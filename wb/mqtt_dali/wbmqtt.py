@@ -238,7 +238,7 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -
 
     event = asyncio.Event()
 
-    async def on_retain_hack(_message):
+    def on_retain_hack(_message):
         event.set()
 
     await mqtt_dispatcher.subscribe(retain_hack_topic, on_retain_hack)
@@ -260,7 +260,7 @@ async def remove_topics_by_driver(
     devices_to_remove = []
     devices_pattern = "/devices/#"
 
-    async def collect_devices(message):
+    def collect_devices(message):
         topic = str(message.topic)
         all_topics.append(topic)
         parts = topic.split("/")

@@ -103,7 +103,7 @@ class InstanceParameters(SettingsParamGroup):
         super().__init__(
             SettingsParamName(
                 f"Instance {instance_number.value}",
-                f"Датчик {instance_number.value}",
+                f"Компонент {instance_number.value}",
             ),
             f"instance{instance_number.value}",
         )
@@ -167,11 +167,11 @@ class EventSchemeParam(NumberSettingsParam):
             schema,
             "ru",
             {
-                "instance type and number": "тип и номер датчика",
-                "device short and instance type": "короткий адрес устройства и тип датчика",
-                "device short and instance number": "короткий адрес устройства и номер датчика",
-                "device group and instance type": "группа устройства и тип датчика",
-                "instance group and type": "группа датчика и тип",
+                "instance type and number": "тип и номер компонента",
+                "device short and instance type": "короткий адрес устройства и тип компонента",
+                "device short and instance number": "короткий адрес устройства и номер компонента",
+                "device group and instance type": "группа устройства и тип компонента",
+                "instance group and type": "группа компонента и тип",
             },
         )
         return schema
@@ -294,7 +294,7 @@ class InstanceTypeParam(SettingsParamBase):
     }
 
     def __init__(self, instance_type: int) -> None:
-        super().__init__(SettingsParamName("Instance type", "Тип"))
+        super().__init__(SettingsParamName("Instance type", "Тип компонента"))
         self.property_name = "instance_type"
         self.instance_type = instance_type
 
@@ -320,13 +320,13 @@ class InstanceTypeParam(SettingsParamBase):
             "translations": {
                 "ru": {
                     self.name.en: self.name.ru,
-                    "Generic (0)": "Универсальный (0)",
-                    "Push button (1)": "Кнопка (1)",
-                    "Absolute input device (2)": "Устройство ввода (2)",
-                    "Occupancy sensor (3)": "Датчик присутствия (3)",
-                    "Light sensor (4)": "Датчик освещённости (4)",
-                    "General purpose sensor (6)": "Датчик общего назначения (6)",
-                    "Feedback (32)": "Обратная связь (32)",
+                    "Generic": "Универсальный",
+                    "Push button": "Кнопка",
+                    "Absolute input device": "Устройство ввода",
+                    "Occupancy sensor": "Датчик присутствия",
+                    "Light sensor": "Датчик освещённости",
+                    "General purpose sensor": "Датчик общего назначения",
+                    "Feedback": "Обратная связь",
                 },
             },
         }

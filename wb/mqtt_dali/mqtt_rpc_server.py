@@ -67,7 +67,8 @@ class MQTTRPCServer:
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Failed to unsubscribe from RPC requests: %s", e)
 
-    async def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
+    def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
+        # TODO: !!!
         asyncio.create_task(self._process_callback(mqtt_message))
 
     async def _handle_request(self, mqtt_message: mqtt.MQTTMessage) -> str:

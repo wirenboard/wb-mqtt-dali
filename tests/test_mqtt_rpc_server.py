@@ -130,7 +130,7 @@ class TestMQTTRPCServer:
             return task
 
         with patch.object(asyncio, "create_task", side_effect=track_create_task):
-            await rpc_server._on_request(mqtt_message)
+            rpc_server._on_request(mqtt_message)
 
         assert len(created_tasks) == 1
 

@@ -268,7 +268,7 @@ class DevicePublisher:
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"
 
-    async def _handle_on_message(self, handler_key: str, message: mqtt.MQTTMessage) -> None:
+    def _handle_on_message(self, handler_key: str, message: mqtt.MQTTMessage) -> None:
         if handler_key not in self._control_handlers:
             return
 

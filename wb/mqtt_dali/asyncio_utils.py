@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from typing import Coroutine
 
 
 class OneShotTasks:
@@ -7,7 +8,7 @@ class OneShotTasks:
         self._tasks = []
         self._logger = logger
 
-    def add(self, coro, description: str) -> asyncio.Task:
+    def add(self, coro: Coroutine, description: str) -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._tasks.append(task)
         task.add_done_callback(lambda task: self._remove_task(task, description))

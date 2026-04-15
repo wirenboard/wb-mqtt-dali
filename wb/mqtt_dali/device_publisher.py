@@ -1,11 +1,11 @@
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union
 
 import paho.mqtt.client as mqtt
 
-from .asyncio_utils import OneShotTasks
 from .mqtt_dispatcher import MessageCallback, MQTTDispatcher
 from .wbmqtt import ControlMeta, Device, TranslatedTitle
 
@@ -40,7 +40,7 @@ class DeviceChange:
 
 
 class ControlHandler:  # pylint: disable=R0903
-    def __init__(self, device_id: str, control_id: str, callback: Callable):
+    def __init__(self, device_id: str, control_id: str, callback: MessageCallback):
         self.device_id = device_id
         self.control_id = control_id
         self.callback = callback
@@ -59,7 +59,6 @@ class DevicePublisher:
         self._control_handlers: Dict[str, ControlHandler] = {}
         self._initialized = False
         self._lock = asyncio.Lock()
-        self._on_topic_running_handlers = OneShotTasks(self.logger)
 
     async def initialize(self) -> None:
         async with self._lock:
@@ -85,8 +84,6 @@ class DevicePublisher:
                         for handler in self._control_handlers.values()
                     ]
                 )
-
-            await self._on_topic_running_handlers.stop()
 
             self._control_handlers.clear()
 
@@ -182,6 +179,9 @@ class DevicePublisher:
                 Callable to be invoked when a message is received for the subscribed topic.
         """
 
+        if inspect.iscoroutinefunction(callback) or inspect.iscoroutine(callback):
+            raise ValueError("Async callbacks are not supported. Please provide a synchronous callback.")
+
         async with self._lock:
             handler_key = f"{device_id}/{control_id}"
 
@@ -273,10 +273,16 @@ class DevicePublisher:
             return
 
         handler = self._control_handlers[handler_key]
-        msg = f"Handling /on message for {handler.device_id}/{handler.control_id}"
         try:
-            payload = message.payload.decode("utf-8") if message.payload else ""
-            self.logger.debug("%s: %s", msg, payload)
-            self._on_topic_running_handlers.add(handler.callback(message), msg)
+            if self.logger.isEnabledFor(logging.DEBUG):
+                payload = message.payload.decode("utf-8") if message.payload else ""
+                self.logger.debug("Handling %s/%s/on: %s", handler.device_id, handler.control_id, payload)
+            handler.callback(message)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.error("%s error: %s", msg, e, exc_info=True)
+            self.logger.error(
+                "Error handling %s/%s/on: %s",
+                handler.device_id,
+                handler.control_id,
+                e,
+                exc_info=True,
+            )

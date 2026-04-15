@@ -319,17 +319,14 @@ class TestDevicePublisher:
 
         await publisher.add_device(device_info)
 
-        callback = AsyncMock(side_effect=ValueError("Test error"))
+        callback = MagicMock(side_effect=ValueError("Test error"))
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
         message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
         publisher._handle_on_message("dev1/ctrl1", message)
-        if len(publisher._on_topic_running_handlers._tasks) > 0:
-            await asyncio.gather(*publisher._on_topic_running_handlers._tasks, return_exceptions=True)
-        assert len(publisher._on_topic_running_handlers._tasks) == 0
 
         publisher.logger.error.assert_called_once()
-        assert publisher.logger.error.call_args[0][0] == "%s raised an exception: %s"
+        assert publisher.logger.error.call_args[0][0] == "Error handling %s/%s/on: %s"
 
     @pytest.mark.asyncio
     async def test_get_device_ids(self, publisher):

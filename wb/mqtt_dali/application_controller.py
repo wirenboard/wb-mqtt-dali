@@ -36,6 +36,7 @@ from .device_publisher import (
     DeviceChange,
     DeviceInfo,
     DevicePublisher,
+    MessageCallback,
     TranslatedTitle,
 )
 from .fake_lunatone_iot import run_websocket
@@ -193,7 +194,7 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
     driver,
     publisher: DevicePublisher,
     scheduler: DeviceInitScheduler,
-    control_handler,
+    control_handler: MessageCallback,
     logger: logging.Logger,
     current_time: float,
 ) -> bool:
@@ -221,21 +222,21 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
 async def publish_device(
     device: Union[DaliDevice, Dali2Device],
     publisher: DevicePublisher,
-    control_handler,
+    control_handler: MessageCallback,
     error: bool = False,
 ) -> None:
     if error:
         common_controls = device.get_common_mqtt_controls()
         controls = [c.control_info for c in common_controls]
     else:
+        common_controls = []
         controls = device.get_mqtt_controls()
     device_info = DeviceInfo(device.mqtt_id, device.name, controls)
     await publisher.add_device(device_info)
     await publisher.register_control_handler(device.mqtt_id, "+", control_handler)
-    if error:
-        for control in common_controls:
-            if control.is_readable():
-                await publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
+    for control in common_controls:
+        if control.is_readable():
+            await publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
 
 
 class ApplicationController:  # pylint: disable=too-many-instance-attributes
@@ -433,7 +434,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         if old_mqtt_id != new_mqtt_id:
             await self._device_publisher.remove_device(old_mqtt_id)
             self._devices_by_mqtt_id.pop(old_mqtt_id, None)
-            await publish_device(device, self._device_publisher, self._handle_on_topic)
+            await publish_device(device, self._device_publisher, self._run_on_topic_handler)
             self._devices_by_mqtt_id[new_mqtt_id] = device
             device.set_logger(self.logger)
         else:
@@ -627,6 +628,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
+    def _run_on_topic_handler(self, message: mqtt.MQTTMessage) -> None:
+        self._one_shot_tasks.add(self._handle_on_topic(message), f"handle_on_topic for {message.topic}")
+
     async def _handle_on_topic(self, message: mqtt.MQTTMessage) -> None:
         topic_parts = message.topic.split("/")
         if len(topic_parts) < 5:
@@ -692,7 +696,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         await self._device_publisher.register_control_handler(
             device.mqtt_id,
             "+",
-            self._handle_on_topic,
+            self._run_on_topic_handler,
         )
         self._devices_by_mqtt_id[device.mqtt_id] = device
         device.set_logger(self.logger)
@@ -716,7 +720,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._dev,
             self._device_publisher,
             self._init_scheduler,
-            self._handle_on_topic,
+            self._run_on_topic_handler,
             self.logger,
             current_time,
         )

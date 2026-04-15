@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 from typing import Callable, Dict, Optional, Set
 
@@ -16,6 +17,8 @@ class MQTTDispatcher:
         self._lock = asyncio.Lock()
 
     async def subscribe(self, topic: str, callback: MessageCallback) -> None:
+        if inspect.iscoroutinefunction(callback) or inspect.iscoroutine(callback):
+            raise ValueError("Async callbacks are not supported. Please provide a synchronous callback.")
         async with self._lock:
             if topic not in self._subscriptions:
                 self._subscriptions[topic] = set()
@@ -53,7 +56,7 @@ class MQTTDispatcher:
 
     async def run(self) -> None:
         self._running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             async with self.client.unfiltered_messages() as messages:
                 async for message in messages:
@@ -68,8 +71,9 @@ class MQTTDispatcher:
             logging.error(e)
             raise
         finally:
-            self._subscriptions.clear()
-            self._running = False
+            async with self._lock:
+                self._subscriptions.clear()
+                self._running = False
 
     def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
         topic = str(message.topic)

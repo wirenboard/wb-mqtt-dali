@@ -126,7 +126,7 @@ async def test_clear_subscriptions(dispatcher, mock_client):
 
 @pytest.mark.asyncio
 async def test_dispatch_message(dispatcher):
-    callback = AsyncMock()
+    callback = MagicMock()
     message = MockMessage("test/topic", b"test payload")
 
     await dispatcher.subscribe("test/topic", callback)
@@ -137,8 +137,8 @@ async def test_dispatch_message(dispatcher):
 
 @pytest.mark.asyncio
 async def test_dispatch_message_multiple_callbacks(dispatcher):
-    callback1 = AsyncMock()
-    callback2 = AsyncMock()
+    callback1 = MagicMock()
+    callback2 = MagicMock()
     message = MockMessage("test/topic", b"test payload")
 
     await dispatcher.subscribe("test/topic", callback1)
@@ -158,13 +158,20 @@ async def test_dispatch_message_no_handlers(dispatcher):
 
 @pytest.mark.asyncio
 async def test_run_dispatcher(dispatcher, mock_client):
-    callback = AsyncMock()
-    message = MockMessage("test/topic", b"test payload")
+    fut = asyncio.Future()
+
+    original_message = MockMessage("test/topic", b"test payload")
+    incoming_message = None
+
+    def callback(message):
+        nonlocal incoming_message
+        incoming_message = message
+        fut.set_result(None)
 
     await dispatcher.subscribe("test/topic", callback)
 
     async def message_generator():
-        yield message
+        yield original_message
 
     mock_client.set_message_generator(message_generator())
 
@@ -172,14 +179,14 @@ async def test_run_dispatcher(dispatcher, mock_client):
 
     await asyncio.sleep(0.1)
 
-    await asyncio.wait_for(callback.wait_called(), timeout=1.0)
-    callback.assert_called_once_with(message)
+    await asyncio.wait_for(fut, timeout=1.0)
+    assert incoming_message == original_message
 
 
 @pytest.mark.asyncio
 async def test_get_subscribed_topics(dispatcher):
-    callback1 = AsyncMock()
-    callback2 = AsyncMock()
+    callback1 = MagicMock()
+    callback2 = MagicMock()
 
     await dispatcher.subscribe("topic1", callback1)
     await dispatcher.subscribe("topic2", callback2)

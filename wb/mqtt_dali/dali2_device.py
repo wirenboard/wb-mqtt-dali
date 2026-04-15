@@ -284,13 +284,13 @@ class InstanceActiveParam(BooleanSettingsParam):
 
 class InstanceTypeParam(SettingsParamBase):
     INSTANCE_TYPE_NAMES = {
-        0: "Generic (0)",
-        1: "Push button (1)",
-        2: "Absolute input device (2)",
-        3: "Occupancy sensor (3)",
-        4: "Light sensor (4)",
-        6: "General purpose sensor (6)",
-        32: "Feedback (32)",
+        0: "Generic",
+        1: "Push button",
+        2: "Absolute input device",
+        3: "Occupancy sensor",
+        4: "Light sensor",
+        6: "General purpose sensor",
+        32: "Feedback",
     }
 
     def __init__(self, instance_type: int) -> None:

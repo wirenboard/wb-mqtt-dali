@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Awaitable, Callable, Union
 
@@ -11,6 +10,7 @@ from jsonrpc.exceptions import (
 )
 from mqttrpc.protocol import MQTTRPC10Request, MQTTRPC10Response
 
+from .asyncio_utils import OneShotTasks
 from .mqtt_dispatcher import MQTTDispatcher
 
 RpcHandlerFunction = Callable[[dict], Awaitable[Union[dict, list, str, int, float, bool, None]]]
@@ -33,6 +33,7 @@ class MQTTRPCServer:
 
         self._endpoints: dict[str, RpcHandlerFunction] = {}
         self._mqtt_dispatcher = mqtt_dispatcher
+        self._one_shot_tasks = OneShotTasks(self.logger)
 
     async def start(self) -> None:
         self.logger.debug("Starting MQTT RPC Server for driver: %s", self.driver_name)
@@ -67,9 +68,10 @@ class MQTTRPCServer:
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Failed to unsubscribe from RPC requests: %s", e)
 
+        await self._one_shot_tasks.stop()
+
     def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
-        # TODO: !!!
-        asyncio.create_task(self._process_callback(mqtt_message))
+        self._one_shot_tasks.add(self._process_callback(mqtt_message), "_on_request")
 
     async def _handle_request(self, mqtt_message: mqtt.MQTTMessage) -> str:
         try:

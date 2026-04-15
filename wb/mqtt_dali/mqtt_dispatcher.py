@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import logging
 from typing import Callable, Dict, Optional, Set
 
@@ -17,8 +16,6 @@ class MQTTDispatcher:
         self._lock = asyncio.Lock()
 
     async def subscribe(self, topic: str, callback: MessageCallback) -> None:
-        if inspect.iscoroutinefunction(callback) or inspect.iscoroutine(callback):
-            raise ValueError("Async callbacks are not supported. Please provide a synchronous callback.")
         async with self._lock:
             if topic not in self._subscriptions:
                 self._subscriptions[topic] = set()

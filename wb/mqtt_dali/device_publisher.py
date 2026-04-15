@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Union
@@ -166,8 +165,7 @@ class DevicePublisher:
     ) -> None:
         """
         Register a handler to receive "on" control messages for a specific device/control.
-        The handler is executed in a separate asyncio Task,
-        so it can perform asynchronous operations without blocking MQTT message dispatching.
+        The handler is executed synchronously and must not block as it will block all MQTT-messages handling
 
         Parameters
         ----------
@@ -178,9 +176,6 @@ class DevicePublisher:
         callback : MessageCallback
                 Callable to be invoked when a message is received for the subscribed topic.
         """
-
-        if inspect.iscoroutinefunction(callback) or inspect.iscoroutine(callback):
-            raise ValueError("Async callbacks are not supported. Please provide a synchronous callback.")
 
         async with self._lock:
             handler_key = f"{device_id}/{control_id}"

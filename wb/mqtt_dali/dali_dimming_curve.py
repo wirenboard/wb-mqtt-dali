@@ -32,7 +32,7 @@ class DimmingCurveState:
         if level >= 100.0:
             return 254
         if self.curve_type == DimmingCurveType.LINEAR:
-            return round(level * 254.0 / 100.0)
+            return min(253, max(1, round(level * 254.0 / 100.0)))
         # Inverse of logarithmic_dimming_curve:
         # p = 10^((level-1)/253*3 - 1)  =>  level = (log10(p) + 1) * 253/3 + 1
-        return round((math.log10(level) + 1) * 253 / 3 + 1)
+        return min(253, max(1, round((math.log10(level) + 1) * 253 / 3 + 1)))

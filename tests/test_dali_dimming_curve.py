@@ -51,6 +51,11 @@ class TestDimmingCurveStateGetRawValue:
     def test_logarithmic_min(self):
         assert self.state.get_raw_value(0.1) == 1
 
+    def test_logarithmic_below_min_clamped(self):
+        """Level below 0.1% should clamp to raw=1, not go negative."""
+        assert self.state.get_raw_value(0.05) == 1
+        assert self.state.get_raw_value(0.001) == 1
+
     def test_logarithmic_roundtrip(self):
         """get_raw_value should be the inverse of get_level for all DALI values."""
         for raw in range(1, 254):

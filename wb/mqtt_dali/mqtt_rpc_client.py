@@ -19,7 +19,7 @@ async def wait_for_rpc_endpoint(
 ) -> None:
     fut = asyncio.get_running_loop().create_future()
 
-    async def on_response(_mqtt_message) -> None:
+    def on_response(_mqtt_message) -> None:
         if not fut.done():
             fut.set_result(None)
 
@@ -72,7 +72,7 @@ async def rpc_call(  # pylint: disable=too-many-arguments, R0917
     topic_str = f"{get_topic_path(driver, service, method)}/wb-mqtt-dali-{uuid.uuid4()}"
     fut = asyncio.get_running_loop().create_future()
 
-    async def on_response(mqtt_message: mqtt.MQTTMessage) -> None:
+    def on_response(mqtt_message: mqtt.MQTTMessage) -> None:
         if not fut.done():
             try:
                 response = MQTTRPC10Response.from_json(mqtt_message.payload.decode())

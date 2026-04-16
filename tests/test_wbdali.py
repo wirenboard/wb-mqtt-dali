@@ -97,7 +97,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.mock_mqtt_dispatcher = MQTTDispatcher(self.mock_mqtt_client)
         self.mock_logger = MagicMock(spec=logging.Logger)
 
-    async def simulate_timeout_response_from_gateway(self, queue_item_index: int, count: int = 1):
+    def simulate_timeout_response_from_gateway(self, queue_item_index: int, count: int = 1):
         """Simulate a timeout response from the gateway for a given batch start index."""
         for i in range(count):
             index = queue_item_index + i
@@ -106,7 +106,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{index}".encode()
             )
             message.payload = str(0).encode()
-            await self.mock_mqtt_dispatcher._dispatch_message(message)
+            self.mock_mqtt_dispatcher._dispatch_message(message)
 
     async def prepare_driver(self, driver: WBDALIDriver):
         await driver.initialize()
@@ -118,7 +118,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             await self.mock_mqtt_client.wait_for_publish(
                 topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
             )
-            await self.simulate_timeout_response_from_gateway(batch_start_index, len(cmds))
+            self.simulate_timeout_response_from_gateway(batch_start_index, len(cmds))
             await fut
 
     def test_encode_frame_for_modbus(self):
@@ -184,7 +184,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
-        await self.simulate_timeout_response_from_gateway(0)
+        self.simulate_timeout_response_from_gateway(0)
         result = (await fut)[0]
         self.assertIsInstance(result, NoTransmission)
 
@@ -203,7 +203,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
         )
         message.payload = str(0x0156).encode()
-        await self.mock_mqtt_dispatcher._dispatch_message(message)
+        self.mock_mqtt_dispatcher._dispatch_message(message)
         result = (await fut)[0]
         self.assertIsInstance(result, MockResponse)
         self.assertEqual(result.data, 0x56)
@@ -224,7 +224,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_data["params"]["count"], 2)
         self.assertEqual(payload_data["params"]["msg"], "12349000")
 
-        await self.simulate_timeout_response_from_gateway(0, 2)
+        self.simulate_timeout_response_from_gateway(0, 2)
 
         result = (await fut)[0]
         self.assertIsInstance(result, NoTransmission)
@@ -238,7 +238,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
-        await self.simulate_timeout_response_from_gateway(0)
+        self.simulate_timeout_response_from_gateway(0)
         await fut
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["id"], driver.rpc_id_counter)
@@ -276,7 +276,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
                 message.payload = str(0x0150 + i).encode()
             else:
                 message.payload = str(0x0200).encode()  # status 2, transmission without response
-            await self.mock_mqtt_dispatcher._dispatch_message(message)
+            self.mock_mqtt_dispatcher._dispatch_message(message)
 
         results = (await fut)[0]
         self.assertEqual(len(results), 3)
@@ -299,7 +299,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
-        await self.simulate_timeout_response_from_gateway(0, len(cmds))
+        self.simulate_timeout_response_from_gateway(0, len(cmds))
         await fut
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 6)
@@ -316,7 +316,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             await self.mock_mqtt_client.wait_for_publish(
                 topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
             )
-            await self.simulate_timeout_response_from_gateway(i)
+            self.simulate_timeout_response_from_gateway(i)
             await fut
             self.assertEqual(driver.rpc_id_counter, rpc_id + i + 1)
 
@@ -350,7 +350,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
         )
         message.payload = str(0x0300).encode()
-        await self.mock_mqtt_dispatcher._dispatch_message(message)
+        self.mock_mqtt_dispatcher._dispatch_message(message)
 
         result = (await fut)[0]
         self.assertIsNotNone(result)
@@ -386,7 +386,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
         )
         message.payload = str(0x0112).encode()
-        await self.mock_mqtt_dispatcher._dispatch_message(message)
+        self.mock_mqtt_dispatcher._dispatch_message(message)
         await fut
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
         self.assertEqual(received_source, BusTrafficSource.LUNATONE)
@@ -411,7 +411,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_1".encode()
         )
         message.payload = str(0x1A900180088863B).encode()
-        await self.mock_mqtt_dispatcher._dispatch_message(message)
+        self.mock_mqtt_dispatcher._dispatch_message(message)
 
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
 
@@ -438,7 +438,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_data["params"]["msg"], "1234800056788000")
         self.assertEqual(driver.batch_start_index, 0)
 
-        await self.simulate_timeout_response_from_gateway(0, 2)
+        self.simulate_timeout_response_from_gateway(0, 2)
 
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
@@ -448,6 +448,6 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_data["params"]["count"], 2)
         self.assertEqual(payload_data["params"]["msg"], "9abc8000")
 
-        await self.simulate_timeout_response_from_gateway(2)
+        self.simulate_timeout_response_from_gateway(2)
 
         await fut

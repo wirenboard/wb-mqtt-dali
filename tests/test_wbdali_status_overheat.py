@@ -85,7 +85,7 @@ class TestWBDALIStatusOverheat(unittest.IsolatedAsyncioTestCase):
             ).encode()
         )
         message.payload = str(0x0500).encode()
-        await self.mock_mqtt_dispatcher._dispatch_message(message)  # pylint: disable=protected-access
+        self.mock_mqtt_dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
         result = await fut
         self.assertIsInstance(result, Overheat)

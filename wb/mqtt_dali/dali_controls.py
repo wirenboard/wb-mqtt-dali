@@ -87,6 +87,7 @@ class WantedLevelControl(MqttControlBase):
             ControlInfo(
                 "wanted_level",
                 ControlMeta(
+                    "range",
                     title=TranslatedTitle("Wanted Level", "Желаемая яркость"),
                     units="%",
                     minimum=0,
@@ -98,9 +99,12 @@ class WantedLevelControl(MqttControlBase):
         self._dimming_curve_state = dimming_curve_state
 
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
-        level_in_percent = float(value_to_set)
+        try:
+            level_in_percent = float(value_to_set)
+        except ValueError as exc:
+            raise ValueError("Level must be a number between 0 and 100") from exc
         if not math.isfinite(level_in_percent) or level_in_percent < 0 or level_in_percent > 100:
-            raise ValueError("Level must be between 0 and 100")
+            raise ValueError("Level must be a number between 0 and 100")
         level = self._dimming_curve_state.get_raw_value(level_in_percent)
         return [DAPC(short_address, level)]
 

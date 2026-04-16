@@ -1,4 +1,7 @@
+from unittest.mock import MagicMock
+
 import pytest
+from dali.address import Address
 
 from wb.mqtt_dali.dali_controls import WantedLevelControl
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
@@ -56,6 +59,12 @@ class TestDimmingCurveStateGetRawValue:
         assert self.state.get_raw_value(0.05) == 1
         assert self.state.get_raw_value(0.001) == 1
 
+    def test_nan_returns_zero(self):
+        assert self.state.get_raw_value(float("nan")) == 0
+
+    def test_inf_returns_zero(self):
+        assert self.state.get_raw_value(float("inf")) == 0
+
     def test_logarithmic_roundtrip(self):
         """get_raw_value should be the inverse of get_level for all DALI values."""
         for raw in range(1, 254):
@@ -73,23 +82,29 @@ class TestDimmingCurveStateGetRawValue:
 class TestWantedLevelControlValidation:
     def setup_method(self):
         self.state = DimmingCurveState()  # pylint: disable=attribute-defined-outside-init
+        self.address = MagicMock(spec=Address)  # pylint: disable=attribute-defined-outside-init
 
     def test_nan_rejected(self):
         control = WantedLevelControl(self.state)
-        with pytest.raises(ValueError):
-            control.get_setup_commands(None, "nan")
+        with pytest.raises(ValueError, match="Level must be a number between 0 and 100"):
+            control.get_setup_commands(self.address, "nan")
 
     def test_inf_rejected(self):
         control = WantedLevelControl(self.state)
-        with pytest.raises(ValueError):
-            control.get_setup_commands(None, "inf")
+        with pytest.raises(ValueError, match="Level must be a number between 0 and 100"):
+            control.get_setup_commands(self.address, "inf")
 
     def test_negative_rejected(self):
         control = WantedLevelControl(self.state)
-        with pytest.raises(ValueError):
-            control.get_setup_commands(None, "-1")
+        with pytest.raises(ValueError, match="Level must be a number between 0 and 100"):
+            control.get_setup_commands(self.address, "-1")
 
     def test_over_100_rejected(self):
         control = WantedLevelControl(self.state)
-        with pytest.raises(ValueError):
-            control.get_setup_commands(None, "101")
+        with pytest.raises(ValueError, match="Level must be a number between 0 and 100"):
+            control.get_setup_commands(self.address, "101")
+
+    def test_non_numeric_rejected(self):
+        control = WantedLevelControl(self.state)
+        with pytest.raises(ValueError, match="Level must be a number between 0 and 100"):
+            control.get_setup_commands(self.address, "abc")

@@ -27,6 +27,8 @@ class DimmingCurveState:
         return round(logarithmic_dimming_curve(value_from_register), 3)
 
     def get_raw_value(self, level: float) -> int:
+        if not math.isfinite(level):
+            return 0
         if level <= 0.0:
             return 0
         if level >= 100.0:

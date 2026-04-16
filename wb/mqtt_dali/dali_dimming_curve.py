@@ -11,7 +11,7 @@ class DimmingCurveType(IntEnum):
     LINEAR = 1
 
 
-class DimmingCurveState:  # pylint: disable=too-few-public-methods
+class DimmingCurveState:
 
     def __init__(self) -> None:
         self.curve_type = DimmingCurveType.LOGARITHMIC
@@ -24,3 +24,13 @@ class DimmingCurveState:  # pylint: disable=too-few-public-methods
         if self.curve_type == DimmingCurveType.LINEAR:
             return round(value_from_register * 100.0 / 254.0, 3)
         return round(logarithmic_dimming_curve(value_from_register), 3)
+
+    def get_raw_value(self, level: float) -> int:
+        if level <= 0.0:
+            return 0
+        if level >= 100.0:
+            return 254
+        if self.curve_type == DimmingCurveType.LINEAR:
+            return round(level * 254.0 / 100.0)
+        # Inverse of logarithmic_dimming_curve
+        return round(10 ** (level / 100 - 1) * 253 + 1)

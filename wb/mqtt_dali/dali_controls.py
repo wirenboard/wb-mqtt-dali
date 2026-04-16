@@ -80,6 +80,28 @@ class ActualLevelControl(MqttControlBase):
         return True
 
 
+class WantedLevelControl(MqttControlBase):
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__(
+            ControlInfo(
+                "wanted_level",
+                ControlMeta(
+                    title=TranslatedTitle("Wanted Level", "Желаемая яркость"),
+                    units="%",
+                ),
+                "0",
+            )
+        )
+        self._dimming_curve_state = dimming_curve_state
+
+    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
+        level = self._dimming_curve_state.get_raw_value(float(value_to_set))
+        return [DAPC(short_address, level)]
+
+    def is_writeable(self) -> bool:
+        return True
+
+
 def make_controls() -> list[MqttControlBase]:
     return [
         MqttControl(
@@ -87,7 +109,7 @@ def make_controls() -> list[MqttControlBase]:
                 "dapc",
                 ControlMeta(
                     "range",
-                    TranslatedTitle("Direct Arc Power Control", "Задать яркость"),
+                    TranslatedTitle("Direct Arc Power Control", "Задать мощность"),
                     minimum=0,
                     maximum=254,
                 ),

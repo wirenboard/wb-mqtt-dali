@@ -212,8 +212,6 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
             schema["properties"][self.property_name]["default"] = self.default
         if self.property_order is not None:
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
-        if self.multiplier > 1:
-            schema["properties"][self.property_name]["multipleOf"] = self.multiplier
         return schema
 
     def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:

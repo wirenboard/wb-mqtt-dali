@@ -157,6 +157,9 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             "fade_rate": self._fade_rate,
         }
 
+    def has_changes(self, new_params: dict) -> bool:
+        return "fade_time" in new_params or "fade_rate" in new_params
+
     def get_schema(self, group_and_broadcast: bool) -> dict:
         return {
             "properties": {
@@ -282,6 +285,9 @@ class GroupsParam(SettingsParamBase):
         self._group_indexes = {i for i, in_group in enumerate(groups) if in_group}
         return {"groups": groups}
 
+    def has_changes(self, new_params: dict) -> bool:
+        return "groups" in new_params
+
     @property
     def groups(self) -> set[int]:
         return self._group_indexes
@@ -385,6 +391,9 @@ class ScenesParam(SettingsParamBase):
             },
         }
 
+    def has_changes(self, new_params: dict) -> bool:
+        return "scenes" in new_params
+
     def _scenes_to_json(self) -> dict:
         result_scenes = []
         for scene_value in self._scenes:
@@ -420,6 +429,9 @@ class GroupScenesSettings(SettingsParamBase):
         commands = [DTR0(value_to_set), SetScene(short_address, index)]
         await send_commands_with_retry(driver, commands, logger)
         return {}
+
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         return {

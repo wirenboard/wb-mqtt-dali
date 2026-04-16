@@ -427,12 +427,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         old_mqtt_id = device.mqtt_id
         old_short_address = device.address.short
-        await task.future
+        result = await task.future
 
         new_mqtt_id = device.mqtt_id
-        if old_mqtt_id != new_mqtt_id:
+        needs_republish = (
+            result is not None and result.needs_mqtt_controls_refresh
+        ) or old_mqtt_id != new_mqtt_id
+        if needs_republish:
             await self._device_publisher.remove_device(old_mqtt_id)
-            self._devices_by_mqtt_id.pop(old_mqtt_id, None)
+            if old_mqtt_id != new_mqtt_id:
+                self._devices_by_mqtt_id.pop(old_mqtt_id, None)
             await publish_device(device, self._device_publisher, self._handle_on_topic)
             self._devices_by_mqtt_id[new_mqtt_id] = device
             device.set_logger(self.logger)
@@ -535,6 +539,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         group_parameter_handlers.append(handler)
         for handler in group_parameter_handlers:
             await handler.write(self._dev, GearGroup(group_index), new_params)
+        for device in self.dali_devices:
+            if not device.is_initialized or group_index not in device.groups:
+                continue
+            try:
+                if await device.sync_controls_after_broadcast(self._dev, new_params):
+                    await self._device_publisher.remove_device(device.mqtt_id)
+                    await publish_device(device, self._device_publisher, self._handle_on_topic)
+                    self._devices_by_mqtt_id[device.mqtt_id] = device
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self.logger.warning("Failed to sync device %s: %s", device.name, exc)
 
     async def _apply_bus_parameters_task(self, new_params: dict) -> None:
         bus_parameter_handlers = []
@@ -549,6 +563,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         bus_parameter_handlers.append(handler)
         for handler in bus_parameter_handlers:
             await handler.write(self._dev, GearBroadcast(), new_params)
+        for device in self.dali_devices:
+            if not device.is_initialized:
+                continue
+            try:
+                if await device.sync_controls_after_broadcast(self._dev, new_params):
+                    await self._device_publisher.remove_device(device.mqtt_id)
+                    await publish_device(device, self._device_publisher, self._handle_on_topic)
+                    self._devices_by_mqtt_id[device.mqtt_id] = device
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self.logger.warning("Failed to sync device %s: %s", device.name, exc)
 
     async def _commissioning_task(self):
         start_time = default_timer()
@@ -894,7 +918,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                             await device.load_info(self._dev, force_reload)
                         elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
                             device, new_params = item.data
-                            await device.apply_parameters(self._dev, new_params)
+                            if not item.future.done():
+                                item.future.set_result(await device.apply_parameters(self._dev, new_params))
                         elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
                             group_index, new_params = item.data
                             await self._apply_group_parameters_task(group_index, new_params)

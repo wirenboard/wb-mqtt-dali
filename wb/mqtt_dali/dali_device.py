@@ -191,9 +191,16 @@ class DaliDevice(DaliDeviceBase):
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
         return [ActualLevelControl(self._dimming_curve_state), *CONTROLS]
 
+    def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        mqtt_controls: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
+        mqtt_controls.extend(CONTROLS)
+        for type_handler in self._type_handlers:
+            mqtt_controls.extend(type_handler.get_mqtt_controls())
+        return mqtt_controls
+
     async def _initialize_impl(  # pylint: disable=too-many-branches
         self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
+    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
         address = GearShort(self.address.short)
 
         types = await driver.run_sequence(query_device_types_sequence(address))
@@ -252,12 +259,6 @@ class DaliDevice(DaliDeviceBase):
         for type_handler in self._type_handlers:
             parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
 
-        # MQTT controls
-        mqtt_controls: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
-        mqtt_controls.extend(CONTROLS)
-        for type_handler in self._type_handlers:
-            mqtt_controls.extend(type_handler.get_mqtt_controls())
-
         # Group parameter handlers for group settings page in UI
         group_parameter_handlers: list[SettingsParamBase] = [
             MaxLevelParam(),
@@ -276,7 +277,7 @@ class DaliDevice(DaliDeviceBase):
                 if self._type8_handler is not None:
                     group_parameter_handlers.extend(self._type8_handler.get_group_parameters())
 
-        return (parameter_handlers, mqtt_controls, group_parameter_handlers)
+        return (parameter_handlers, group_parameter_handlers)
 
 
 async def legacy_identify_sequence(

@@ -191,7 +191,7 @@ class ConcreteDaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-a
         super().__init__(*args, **kwargs)
 
     async def _initialize_impl(self, driver):
-        return (self._extra_param_handlers, [], [])
+        return (self._extra_param_handlers, [])
 
 
 def _make_device(**kwargs):

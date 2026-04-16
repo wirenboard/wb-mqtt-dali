@@ -18,17 +18,16 @@ from dali.gear.colour import (
 from dali.gear.general import DTR0, DTR1, QueryActualLevel, QueryContentDTR0
 
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
-from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
+from .dali_type8_common import (
+    MASK_2BYTES,
+    MAX_TC_MIREK,
+    MIN_TC_MIREK,
+    ColourComponent,
+    Type8Limits,
+)
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import WBDALIDriver, send_commands_with_retry
 from .wbmqtt import TranslatedTitle
-
-MAX_COLOUR_VALUE_2BYTES = MASK_2BYTES - 1
-
-
-MAX_TC_MIREK = MAX_COLOUR_VALUE_2BYTES
-MIN_TC_MIREK = 1
-
 
 COLOR_TEMPERATURE_COLOUR_COMPONENTS = [
     ColourComponent.COLOUR_TEMPERATURE,
@@ -172,13 +171,19 @@ async def read_colour_temperature_limits_mirek(
     driver: WBDALIDriver,
     short_address: Address,
     logger: Optional[logging.Logger] = None,
-) -> tuple[int, int]:
+) -> Type8Limits:
     cmds = [
         QueryActualLevel(short_address),
         DTR0(QueryColourValueDTR.ColourTemperatureTcWarmest),
         QueryColourValue(short_address),
         QueryContentDTR0(short_address),
         DTR0(QueryColourValueDTR.ColourTemperatureTcCoolest),
+        QueryColourValue(short_address),
+        QueryContentDTR0(short_address),
+        DTR0(QueryColourValueDTR.ColourTemperatureTcPhysicalWarmest),
+        QueryColourValue(short_address),
+        QueryContentDTR0(short_address),
+        DTR0(QueryColourValueDTR.ColourTemperatureTcPhysicalCoolest),
         QueryColourValue(short_address),
         QueryContentDTR0(short_address),
     ]
@@ -193,4 +198,19 @@ async def read_colour_temperature_limits_mirek(
     lsb_item = resp[6]
     if msb_item.raw_value is not None and lsb_item.raw_value is not None:
         coolest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
-    return coolest, warmest
+    physical_warmest = MAX_TC_MIREK
+    msb_item = resp[8]
+    lsb_item = resp[9]
+    if msb_item.raw_value is not None and lsb_item.raw_value is not None:
+        physical_warmest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
+    physical_coolest = MIN_TC_MIREK
+    msb_item = resp[11]
+    lsb_item = resp[12]
+    if msb_item.raw_value is not None and lsb_item.raw_value is not None:
+        physical_coolest = (msb_item.raw_value.as_integer << 8) | lsb_item.raw_value.as_integer
+    return Type8Limits(
+        tc_min_mirek=coolest,
+        tc_max_mirek=warmest,
+        tc_phys_min_mirek=physical_coolest,
+        tc_phys_max_mirek=physical_warmest,
+    )

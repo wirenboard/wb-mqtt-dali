@@ -14,9 +14,13 @@ from dali.gear.colour import (
     QueryColourStatus,
     QueryColourValue,
     QueryColourValueDTR,
+    StoreColourTemperatureTcLimit,
+    StoreColourTemperatureTcLimitDTR2,
 )
 from dali.gear.general import (
     DTR0,
+    DTR1,
+    DTR2,
     QueryActualLevel,
     QueryContentDTR0,
     QueryPowerOnLevel,
@@ -32,6 +36,7 @@ from .common_dali_device import ControlPollResult, MqttControlBase
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .dali_type8_common import ColourComponent, Type8Limits
+from .dali_type8_tc import MAX_TC_MIREK, MIN_TC_MIREK
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
 from .wbdali_utils import (
@@ -261,6 +266,9 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         self.value = new_state
         return {self.property_name: new_state.to_json()}
 
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params
+
     def get_schema(self, group_and_broadcast: bool) -> dict:
         schema = {
             "properties": {
@@ -399,6 +407,9 @@ class ScenesSettings(SettingsParamBase):
         for i, res in enumerate(results):
             self._scene_values[i].update(res)
         return {self.property_name: self._scene_values}
+
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         item_schema = self._scenes[0].get_schema(group_and_broadcast)
@@ -550,12 +561,184 @@ class SystemFailureColourState(ColourState):
         )
 
 
+class TcLimitsSettings(SettingsParamBase):
+    requires_mqtt_controls_refresh = True
+
+    def __init__(self, limits: Type8Limits) -> None:
+        super().__init__(SettingsParamName("Colour Temperature Limits", "Лимиты цветовой температуры"))
+        self.property_name = "tc_limits"
+        self._limits = limits
+
+    def _current_values(self) -> dict:
+        return {
+            "tc_coolest": self._limits.tc_min_mirek,
+            "tc_warmest": self._limits.tc_max_mirek,
+            "tc_physical_coolest": self._limits.tc_phys_min_mirek,
+            "tc_physical_warmest": self._limits.tc_phys_max_mirek,
+        }
+
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        result = await dali_type8_tc.read_colour_temperature_limits_mirek(driver, short_address, logger)
+        self._limits.update_from(result)
+        return {self.property_name: self._current_values()}
+
+    async def write(  # pylint: disable=too-many-branches, too-many-locals
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
+        if self.property_name not in value:
+            return {}
+        new_vals = value[self.property_name]
+        current = self._current_values()
+        if new_vals == current:
+            return {}
+
+        phys_cool = new_vals.get("tc_physical_coolest", current["tc_physical_coolest"])
+        cool = new_vals.get("tc_coolest", current["tc_coolest"])
+        warm = new_vals.get("tc_warmest", current["tc_warmest"])
+        phys_warm = new_vals.get("tc_physical_warmest", current["tc_physical_warmest"])
+
+        if phys_cool > cool or cool > warm or warm > phys_warm:
+            raise ValueError(
+                f"Tc limits order violated: physical_coolest({phys_cool}) <= coolest({cool})"
+                f" <= warmest({warm}) <= physical_warmest({phys_warm})"
+            )
+
+        # Send physical limits first to avoid cascading shifts of user limits
+        for field_name, mirek_val, selector in [
+            ("tc_physical_coolest", phys_cool, StoreColourTemperatureTcLimitDTR2.TcPhysicalCoolest),
+            ("tc_physical_warmest", phys_warm, StoreColourTemperatureTcLimitDTR2.TcPhysicalWarmest),
+            ("tc_coolest", cool, StoreColourTemperatureTcLimitDTR2.TcCoolest),
+            ("tc_warmest", warm, StoreColourTemperatureTcLimitDTR2.TcWarmest),
+        ]:
+            if new_vals.get(field_name, current[field_name]) != current[field_name]:
+                cmds = [
+                    DTR0(mirek_val & 0xFF),
+                    DTR1((mirek_val >> 8) & 0xFF),
+                    DTR2(selector),
+                    StoreColourTemperatureTcLimit(short_address),
+                ]
+                await send_commands_with_retry(driver, cmds, logger)
+
+        if is_broadcast_or_group_address(short_address):
+            return {}
+
+        # Re-read all 4 limits (ECG may cascade)
+        result = await dali_type8_tc.read_colour_temperature_limits_mirek(driver, short_address, logger)
+        self._limits.update_from(result)
+        return {self.property_name: self._current_values()}
+
+    def has_changes(self, new_params: dict) -> bool:
+        if self.property_name not in new_params:
+            return False
+        return new_params[self.property_name] != self._current_values()
+
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        return {
+            "properties": {
+                self.property_name: {
+                    "type": "object",
+                    "title": self.name.en,
+                    "format": "card",
+                    "propertyOrder": 850,
+                    "properties": {
+                        "tc_coolest": {
+                            "type": "integer",
+                            "title": "Tc Coolest",
+                            "format": "dali-tc",
+                            "propertyOrder": 1,
+                            "options": {
+                                "grid_columns": 2,
+                                "wb": {
+                                    "dali_tc": {
+                                        "minimum": self._limits.tc_phys_min_mirek,
+                                        "maximum": self._limits.tc_phys_max_mirek,
+                                    },
+                                },
+                            },
+                        },
+                        "tc_warmest": {
+                            "type": "integer",
+                            "title": "Tc Warmest",
+                            "format": "dali-tc",
+                            "propertyOrder": 2,
+                            "options": {
+                                "grid_columns": 2,
+                                "wb": {
+                                    "dali_tc": {
+                                        "minimum": self._limits.tc_phys_min_mirek,
+                                        "maximum": self._limits.tc_phys_max_mirek,
+                                    },
+                                },
+                            },
+                        },
+                        "tc_physical_coolest": {
+                            "type": "integer",
+                            "title": "Tc Physical Coolest",
+                            "format": "dali-tc",
+                            "propertyOrder": 3,
+                            "options": {
+                                "grid_columns": 2,
+                                "wb": {
+                                    "dali_tc": {
+                                        "minimum": MIN_TC_MIREK,
+                                        "maximum": MAX_TC_MIREK,
+                                    },
+                                },
+                            },
+                        },
+                        "tc_physical_warmest": {
+                            "type": "integer",
+                            "title": "Tc Physical Warmest",
+                            "format": "dali-tc",
+                            "propertyOrder": 4,
+                            "options": {
+                                "grid_columns": 2,
+                                "wb": {
+                                    "dali_tc": {
+                                        "minimum": MIN_TC_MIREK,
+                                        "maximum": MAX_TC_MIREK,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "required": [
+                        "tc_coolest",
+                        "tc_warmest",
+                        "tc_physical_coolest",
+                        "tc_physical_warmest",
+                    ],
+                },
+            },
+            "translations": {
+                "ru": {
+                    self.name.en: self.name.ru,
+                    "Tc Coolest": "Минимальная цветовая температура",
+                    "Tc Warmest": "Максимальная цветовая температура",
+                    "Tc Physical Coolest": "Физическая минимальная цветовая температура",
+                    "Tc Physical Warmest": "Физическая максимальная цветовая температура",
+                },
+            },
+        }
+
+
 class Type8Parameters(TypeParameters):
     def __init__(self) -> None:
         super().__init__()
 
         self._current_colour_type: Optional[ColourType] = None
-        self._limits = Type8Limits(dali_type8_tc.MIN_TC_MIREK, dali_type8_tc.MAX_TC_MIREK)
+        self._limits = Type8Limits(
+            dali_type8_tc.MIN_TC_MIREK,
+            dali_type8_tc.MAX_TC_MIREK,
+            dali_type8_tc.MIN_TC_MIREK,
+            dali_type8_tc.MAX_TC_MIREK,
+        )
         self._colour_type_lock = asyncio.Lock()
 
     @property
@@ -580,19 +763,20 @@ class Type8Parameters(TypeParameters):
                     logger,
                 )
                 if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-                    self._limits.tc_min_mirek, self._limits.tc_max_mirek = (
-                        await dali_type8_tc.read_colour_temperature_limits_mirek(
-                            driver,
-                            short_address,
-                            logger,
-                        )
+                    result = await dali_type8_tc.read_colour_temperature_limits_mirek(
+                        driver,
+                        short_address,
+                        logger,
                     )
-        parameters = [
+                    self._limits.update_from(result)
+        parameters: list[SettingsParamBase] = [
             CurrentColourState(self.default_colour_type, self._limits),
             PowerOnColourState(self.default_colour_type, self._limits),
             SystemFailureColourState(self.default_colour_type, self._limits),
             ScenesSettings(self.default_colour_type, self._limits),
         ]
+        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+            parameters.append(TcLimitsSettings(self._limits))
         self._parameters = parameters
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
@@ -638,11 +822,14 @@ class Type8Parameters(TypeParameters):
         return []
 
     def get_group_parameters(self) -> list[SettingsParamBase]:
-        return [
+        params: list[SettingsParamBase] = [
             PowerOnColourState(self.default_colour_type, self._limits),
             SystemFailureColourState(self.default_colour_type, self._limits),
             ColourGroupScenesSettings(self.default_colour_type, self._limits),
         ]
+        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+            params.append(TcLimitsSettings(self._limits))
+        return params
 
     async def _read_current_colour_type(
         self,

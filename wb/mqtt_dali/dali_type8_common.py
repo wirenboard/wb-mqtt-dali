@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 MASK_2BYTES = 65535
 
+MAX_TC_MIREK = MASK_2BYTES - 1
+MIN_TC_MIREK = 1
+
 
 class ColourComponent(enum.Enum):
     RED = "red"
@@ -28,3 +31,11 @@ class ColourComponent(enum.Enum):
 class Type8Limits:
     tc_min_mirek: int
     tc_max_mirek: int
+    tc_phys_min_mirek: int
+    tc_phys_max_mirek: int
+
+    def update_from(self, other: "Type8Limits") -> None:
+        self.tc_min_mirek = other.tc_min_mirek
+        self.tc_max_mirek = other.tc_max_mirek
+        self.tc_phys_min_mirek = other.tc_phys_min_mirek
+        self.tc_phys_max_mirek = other.tc_phys_max_mirek

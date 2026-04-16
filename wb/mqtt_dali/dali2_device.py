@@ -501,9 +501,26 @@ class Dali2Device(DaliDeviceBase):
     async def identify(self, driver: WBDALIDriver) -> None:
         await send_with_retry(driver, IdentifyDevice(DeviceShort(self.address.short)), self.logger)
 
+    def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        mqtt_controls: list[MqttControlBase] = []
+        for instance in self.instances.values():
+            if instance.instance_type == occupancy.instance_type:
+                mqtt_controls.extend(get_occupancy_controls(instance.instance_number.value))
+            elif instance.instance_type == light.instance_type:
+                mqtt_controls.extend(get_light_controls(instance.instance_number.value))
+            elif instance.instance_type == pushbutton.instance_type:
+                mqtt_controls.extend(get_button_controls(instance.instance_number.value))
+            elif instance.instance_type == absolute_input_device.instance_type:
+                mqtt_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
+            elif instance.instance_type == general_purpose_sensor.instance_type:
+                mqtt_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
+            elif instance.instance_type == feedback.instance_type:
+                mqtt_controls.extend(get_feedback_controls(instance.instance_number.value))
+        return mqtt_controls
+
     async def _initialize_impl(
         self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
+    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
         addr = DeviceShort(self.address.short)
         await self._groups_parameter.read(driver, addr, self.logger)
 
@@ -529,19 +546,4 @@ class Dali2Device(DaliDeviceBase):
         ]
         parameter_handlers.extend(self.instances.values())
 
-        mqtt_controls: list[MqttControlBase] = []
-        for instance in self.instances.values():
-            if instance.instance_type == occupancy.instance_type:
-                mqtt_controls.extend(get_occupancy_controls(instance.instance_number.value))
-            elif instance.instance_type == light.instance_type:
-                mqtt_controls.extend(get_light_controls(instance.instance_number.value))
-            elif instance.instance_type == pushbutton.instance_type:
-                mqtt_controls.extend(get_button_controls(instance.instance_number.value))
-            elif instance.instance_type == absolute_input_device.instance_type:
-                mqtt_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
-            elif instance.instance_type == general_purpose_sensor.instance_type:
-                mqtt_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
-            elif instance.instance_type == feedback.instance_type:
-                mqtt_controls.extend(get_feedback_controls(instance.instance_number.value))
-
-        return (parameter_handlers, mqtt_controls, [])
+        return (parameter_handlers, [])

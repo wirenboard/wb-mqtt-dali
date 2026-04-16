@@ -1,3 +1,4 @@
+import math
 from typing import Callable, Optional, Union
 
 from dali.address import Address, GearBroadcast, GearGroup, GearShort
@@ -98,7 +99,7 @@ class WantedLevelControl(MqttControlBase):
 
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         level_in_percent = float(value_to_set)
-        if level_in_percent < 0 or level_in_percent > 100:
+        if not math.isfinite(level_in_percent) or level_in_percent < 0 or level_in_percent > 100:
             raise ValueError("Level must be between 0 and 100")
         level = self._dimming_curve_state.get_raw_value(level_in_percent)
         return [DAPC(short_address, level)]

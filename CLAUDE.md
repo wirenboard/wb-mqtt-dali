@@ -61,6 +61,7 @@ python setup.py build   # Build package
 - Do not rename existing identifiers — local variables, parameters, functions, methods, classes, or module-level constants — unless the rename is functionally required (e.g. the old name became misleading after a behavior change, or there is a real name clash). Shortening, "consistency" cleanups, alignment with other names in the file, and subjective "better naming" are **not** functional requirements. Expanding a function's signature does not by itself justify renaming it.
 - Do not introduce temporary local variables for single or double use; introduce them only if used 3+ times or if they materially improve readability.
 - Do not disable or skip tests, and do not add `# pylint: disable` / `# noqa` / `# type: ignore` without a concrete reason. Fix the underlying issue instead.
+- Never force-push (`git push --force` / `--force-with-lease`) to update a PR. Add new commits instead — reviewers need to see incremental changes.
 
 ## Task Workflow
 

@@ -485,7 +485,7 @@ class Dali2Device(DaliDeviceBase):
         name: Optional[str] = None,
     ) -> None:
         super().__init__(
-            address, bus_id, "DALI 2.0", "dali2_", Dali2CommandsCompatibilityLayer(), gtin_db, mqtt_id, name
+            address, bus_id, "DALI2", "dali2_", Dali2CommandsCompatibilityLayer(), gtin_db, mqtt_id, name
         )
         self.instances: dict[int, InstanceParameters] = {}
         self._gtin_db = gtin_db

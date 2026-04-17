@@ -343,7 +343,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
     @property
     def default_name(self) -> str:
-        return f"{self._default_name_prefix} {self.address.short}:{self.address.random:#x}"
+        return f"{self._default_name_prefix} {self.address.short}"
 
     @property
     def default_mqtt_id(self) -> str:

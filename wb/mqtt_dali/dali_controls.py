@@ -1,3 +1,4 @@
+import math
 from typing import Callable, Optional, Union
 
 from dali.address import Address, GearBroadcast, GearGroup, GearShort
@@ -80,6 +81,37 @@ class ActualLevelControl(MqttControlBase):
         return True
 
 
+class WantedLevelControl(MqttControlBase):
+    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+        super().__init__(
+            ControlInfo(
+                "wanted_level",
+                ControlMeta(
+                    "range",
+                    title=TranslatedTitle("Wanted Level", "Желаемая яркость"),
+                    units="%",
+                    minimum=0,
+                    maximum=100,
+                ),
+                "0",
+            )
+        )
+        self._dimming_curve_state = dimming_curve_state
+
+    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
+        try:
+            level_in_percent = float(value_to_set)
+        except ValueError as exc:
+            raise ValueError("Level must be a number between 0 and 100") from exc
+        if not math.isfinite(level_in_percent) or level_in_percent < 0 or level_in_percent > 100:
+            raise ValueError("Level must be a number between 0 and 100")
+        level = self._dimming_curve_state.get_raw_value(level_in_percent)
+        return [DAPC(short_address, level)]
+
+    def is_writable(self) -> bool:
+        return True
+
+
 def make_controls() -> list[MqttControlBase]:
     return [
         MqttControl(
@@ -87,7 +119,7 @@ def make_controls() -> list[MqttControlBase]:
                 "dapc",
                 ControlMeta(
                     "range",
-                    TranslatedTitle("Direct Arc Power Control", "Задать яркость"),
+                    TranslatedTitle("Direct Arc Power Control", "Задать мощность"),
                     minimum=0,
                     maximum=254,
                 ),

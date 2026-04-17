@@ -31,7 +31,7 @@ from .dali_common_parameters import (
     SystemFailureLevelParam,
 )
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_controls import CONTROLS, ActualLevelControl
+from .dali_controls import CONTROLS, ActualLevelControl, WantedLevelControl
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import TypeParameters
 from .dali_type1_parameters import Type1Parameters
@@ -189,7 +189,11 @@ class DaliDevice(DaliDeviceBase):
         return None
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
-        return [ActualLevelControl(self._dimming_curve_state), *CONTROLS]
+        return [
+            ActualLevelControl(self._dimming_curve_state),
+            WantedLevelControl(self._dimming_curve_state),
+            *CONTROLS,
+        ]
 
     async def _initialize_impl(  # pylint: disable=too-many-branches
         self, driver: WBDALIDriver
@@ -253,7 +257,10 @@ class DaliDevice(DaliDeviceBase):
             parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
 
         # MQTT controls
-        mqtt_controls: list[MqttControlBase] = [ActualLevelControl(self._dimming_curve_state)]
+        mqtt_controls: list[MqttControlBase] = [
+            ActualLevelControl(self._dimming_curve_state),
+            WantedLevelControl(self._dimming_curve_state),
+        ]
         mqtt_controls.extend(CONTROLS)
         for type_handler in self._type_handlers:
             mqtt_controls.extend(type_handler.get_mqtt_controls())

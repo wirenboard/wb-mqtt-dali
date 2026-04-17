@@ -146,14 +146,14 @@ async def check_presence_service(gateway: str, args, dali2: bool, old_gateway: b
         await driver.initialize()
         if dali2:
             if await check_presence(driver, True):
-                logging.info("DALI 2.0 devices are present")
+                logging.info("DALI 2 devices are present")
             else:
-                logging.info("DALI 2.0 devices are NOT present")
+                logging.info("DALI 2 devices are NOT present")
         else:
             if await check_presence(driver, False):
-                logging.info("DALI 1.0 devices are present")
+                logging.info("DALI devices are present")
             else:
-                logging.info("DALI 1.0 devices are NOT present")
+                logging.info("DALI devices are NOT present")
         await driver.deinitialize()
         dispatcher_task.cancel()
         await dispatcher_task
@@ -333,42 +333,42 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         "--check-presence",
         dest="check_presence_gateway",
         type=str,
-        help="Enable DALI 1.0 device presence checking on specified gateway",
+        help="Enable DALI device presence checking on specified gateway",
     )
 
     parser.add_argument(
         "--check-presence2",
         dest="check_presence2_gateway",
         type=str,
-        help="Enable DALI 2.0 device presence checking on specified gateway",
+        help="Enable DALI 2 device presence checking on specified gateway",
     )
 
     parser.add_argument(
         "--binary-search",
         dest="binary_search_gateway",
         type=str,
-        help="Binary search of DALI 1.0 devices on specified gateway",
+        help="Binary search of DALI devices on specified gateway",
     )
 
     parser.add_argument(
         "--binary-search2",
         dest="binary_search2_gateway",
         type=str,
-        help="Binary search of DALI 2.0 devices on specified gateway",
+        help="Binary search of DALI 2 devices on specified gateway",
     )
 
     parser.add_argument(
         "--search-short",
         dest="search_short_gateway",
         type=str,
-        help="Short address search of DALI 1.0 devices on specified gateway",
+        help="Short address search of DALI devices on specified gateway",
     )
 
     parser.add_argument(
         "--search-short2",
         dest="search_short2_gateway",
         type=str,
-        help="Short address search of DALI 2.0 devices on specified gateway",
+        help="Short address search of DALI 2 devices on specified gateway",
     )
 
     parser.add_argument(
@@ -418,7 +418,7 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         "--group",
         dest="group",
         type=int,
-        help="DALI group (0-15) or DALI 2.0 group (0-31) for --send-command",
+        help="DALI group (0-15) or DALI 2 group (0-31) for --send-command",
     )
 
     parser.add_argument(

@@ -95,7 +95,7 @@ MQTT Broker ←→ MQTTDispatcher
 
 - **`mqtt_rpc_server.py`** – Handles JSON-RPC commands over MQTT (e.g., commissioning, device control).
 
-- **`common_dali_device.py`** / **`dali_device.py`** / **`dali2_device.py`** – Device models. `CommonDaliDevice` is the base; `DaliDevice` handles DALI 1.0; `Dali2Device` adds DALI 2.0 extended features.
+- **`common_dali_device.py`** / **`dali_device.py`** / **`dali2_device.py`** – Device models. `CommonDaliDevice` is the base; `DaliDevice` handles DALI; `Dali2Device` adds DALI 2 extended features.
 
 - **`settings.py`** – Configuration parameter management (parsed from `/etc/wb-mqtt-dali.conf`, validated against `wb-mqtt-dali.schema.json`).
 
@@ -105,7 +105,7 @@ Parameter modules follow the naming pattern `dali_type{N}_parameters.py` (50+ ty
 
 ### DALI Compat Layers
 
-`dali_compat.py` and `dali2_compat.py` wrap the upstream `python-dali` library (Wiren Board fork) to normalize differences between DALI 1.0 and 2.0 command APIs.
+`dali_compat.py` and `dali2_compat.py` wrap the upstream `python-dali` library (Wiren Board fork) to normalize differences between DALI and DALI 2 command APIs.
 
 ## Code Style
 

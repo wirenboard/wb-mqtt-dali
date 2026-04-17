@@ -106,12 +106,13 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
             return {}
 
         value_to_set = value[self.property_name]
-        if self.value == value_to_set:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and self.value == value_to_set:
             return {}
 
         command_factory = self._enable_factory if bool(value_to_set) else self._disable_factory
         await send_with_retry(driver, command_factory(short_address), logger)
-        if is_broadcast_or_group_address(short_address):
+        if not is_for_single_device:
             return {}
         return await self.read(driver, short_address, logger)
 
@@ -177,14 +178,15 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         if self.property_name not in value:
             return {}
         value_to_set = value[self.property_name]
-        if self.value == value_to_set:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and self.value == value_to_set:
             return {}
         raw = (int(value_to_set) + self.multiplier // 2) // self.multiplier
         commands = self.get_write_commands(short_address, raw)
-        if not is_broadcast_or_group_address(short_address):
+        if is_for_single_device:
             commands.append(self.get_read_command(short_address))
         responses = await query_responses(driver, commands, logger)
-        if is_broadcast_or_group_address(short_address):
+        if not is_for_single_device:
             return {}
         res = responses[-1]
         self.value = res.raw_value.as_integer * self.multiplier

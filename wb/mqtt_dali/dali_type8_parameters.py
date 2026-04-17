@@ -595,7 +595,8 @@ class TcLimitsSettings(SettingsParamBase):
             return {}
         new_vals = value[self.property_name]
         current = self._current_values()
-        if new_vals == current:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and new_vals == current:
             return {}
 
         phys_cool = new_vals.get("tc_physical_coolest", current["tc_physical_coolest"])
@@ -616,16 +617,17 @@ class TcLimitsSettings(SettingsParamBase):
             ("tc_coolest", cool, StoreColourTemperatureTcLimitDTR2.TcCoolest),
             ("tc_warmest", warm, StoreColourTemperatureTcLimitDTR2.TcWarmest),
         ]:
-            if new_vals.get(field_name, current[field_name]) != current[field_name]:
-                cmds = [
-                    DTR0(mirek_val & 0xFF),
-                    DTR1((mirek_val >> 8) & 0xFF),
-                    DTR2(selector),
-                    StoreColourTemperatureTcLimit(short_address),
-                ]
-                await send_commands_with_retry(driver, cmds, logger)
+            if is_for_single_device and new_vals.get(field_name, current[field_name]) == current[field_name]:
+                continue
+            cmds = [
+                DTR0(mirek_val & 0xFF),
+                DTR1((mirek_val >> 8) & 0xFF),
+                DTR2(selector),
+                StoreColourTemperatureTcLimit(short_address),
+            ]
+            await send_commands_with_retry(driver, cmds, logger)
 
-        if is_broadcast_or_group_address(short_address):
+        if not is_for_single_device:
             return {}
 
         # Re-read all 4 limits (ECG may cascade)

@@ -263,17 +263,22 @@ class GroupsParam(SettingsParamBase):
         groups_to_set = value.get("groups")
         if groups_to_set is None:
             return {}
-        if self._groups == groups_to_set:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and self._groups == groups_to_set:
             return {}
 
         commands = []
         for i in range(GROUPS_TOTAL):
-            if groups_to_set[i] != self._groups[i]:
-                if groups_to_set[i]:
-                    commands.append(AddToGroup(short_address, i))
-                else:
-                    commands.append(RemoveFromGroup(short_address, i))
+            if is_for_single_device and groups_to_set[i] == self._groups[i]:
+                continue
+            if groups_to_set[i]:
+                commands.append(AddToGroup(short_address, i))
+            else:
+                commands.append(RemoveFromGroup(short_address, i))
         if not commands:
+            return {}
+        if not is_for_single_device:
+            await send_commands_with_retry(driver, commands, logger)
             return {}
         commands.append(QueryGroupsZeroToSeven(short_address))
         commands.append(QueryGroupsEightToFifteen(short_address))
@@ -327,6 +332,9 @@ class ScenesParam(SettingsParamBase):
             else:
                 values_to_set[i] = scene.get("level", MASK)
 
+        if is_broadcast_or_group_address(short_address):
+            return await self._write_all_scenes_broadcast(driver, short_address, values_to_set, logger)
+
         commands = []
         modified_scene_indexes = []
         for i in range(SCENES_TOTAL):
@@ -342,6 +350,19 @@ class ScenesParam(SettingsParamBase):
             response = responses[idx * 3 + 2]
             self._scenes[scene_index] = response.raw_value.as_integer
         return self._scenes_to_json()
+
+    async def _write_all_scenes_broadcast(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        values_to_set: list,
+        logger: Optional[logging.Logger],
+    ) -> dict:
+        commands = []
+        for i in range(SCENES_TOTAL):
+            commands.extend([DTR0(values_to_set[i]), SetScene(short_address, i)])
+        await send_commands_with_retry(driver, commands, logger)
+        return {}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         return {

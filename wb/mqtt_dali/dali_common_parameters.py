@@ -74,7 +74,7 @@ class PowerOnLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Power on level", "Яркость при включении питания"), "power_on_level"
+            SettingsParamName("Power on level", "Яркость после включения питания"), "power_on_level"
         )
         self.default = 254
         self.format = "dali-level"
@@ -88,7 +88,7 @@ class SystemFailureLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("System failure level", "Яркость при сбое"), "system_failure_level"
+            SettingsParamName("System failure level", "Яркость после сбоя"), "system_failure_level"
         )
         self.default = 254
         self.format = "dali-level"

@@ -23,7 +23,7 @@
                 },
                 "dali2": {
                     "type": "boolean",
-                    "title": "DALI 2.0 Device",
+                    "title": "DALI 2 Device",
                     "default": false
                 }
             },

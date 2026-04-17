@@ -558,10 +558,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         await asyncio.sleep(1)
         await send_with_retry(self._dev, StartQuiescentMode(DeviceBroadcast()), self.logger)
         try:
-            self.logger.debug("Commissioning for DALI 1.0 devices")
+            self.logger.debug("Commissioning for DALI devices")
             obj = Commissioning(self._dev, [d.address for d in self.dali_devices], dali2=False)
             res_dali = await obj.smart_extend()
-            self.logger.debug("Commissioning for DALI 2.0 devices")
+            self.logger.debug("Commissioning for DALI 2 devices")
             obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], dali2=True)
             res_dali2 = await obj.smart_extend()
         finally:

@@ -81,8 +81,8 @@ def test_default_name_when_no_custom():
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
     )
-    assert d.default_name == "Lamp 3:0xab"
-    assert d.name == "Lamp 3:0xab"
+    assert d.default_name == "Lamp 3"
+    assert d.name == "Lamp 3"
     assert d.has_custom_name is False
 
 
@@ -105,7 +105,7 @@ def test_custom_name_at_init_and_flag():
 @pytest.mark.asyncio
 def test_name_equal_to_default_at_init_is_not_custom():
     addr = DaliDeviceAddress(short=7, random=0x10)
-    default_name = "Prefix 7:0x10"
+    default_name = "Prefix 7"
     d = DaliDeviceBase(
         address=addr,
         bus_id="b",
@@ -177,7 +177,7 @@ def test_name_none_at_init_uses_default():
         gtin_db=object(),
         name=None,
     )
-    assert d.name == "Sensor 9:0xdead"
+    assert d.name == "Sensor 9"
     assert d.has_custom_name is False
     # Prevent file system access in __init__ by providing a non-empty common schema
     DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}

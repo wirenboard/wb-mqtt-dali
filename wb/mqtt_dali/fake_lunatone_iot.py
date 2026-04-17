@@ -38,7 +38,8 @@ from websockets.typing import Data
 
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
-from .wbdali_utils import WBDALIDriver, is_transmission_error_response, send_with_retry
+from .wbdali import WBDALIDriver
+from .wbdali_utils import is_transmission_error_response, send_with_retry
 
 
 class LunatoneIotProtocolError(RuntimeError):

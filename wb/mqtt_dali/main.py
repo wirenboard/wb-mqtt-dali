@@ -24,8 +24,6 @@ from .send_command import (
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
 from .wbdali_utils import send_commands_with_retry, send_with_retry
-from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
-from .wbmdali import WBDALIDriver as WBDALIDriverOld
 from .wbmqtt import make_mqtt_client
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
@@ -125,24 +123,15 @@ async def default_service(args):
     return EXIT_SUCCESS
 
 
-async def check_presence_service(gateway: str, args, dali2: bool, old_gateway: bool, bus: int = 1):
+async def check_presence_service(gateway: str, args, dali2: bool, bus: int = 1):
     client = make_mqtt_client(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-        if old_gateway:
-            driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(gateway, bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
-        else:
-            driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(gateway, bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
+        driver = WBDALIDriverNew(
+            WBDALIDriverNewConfig(gateway, bus), mqtt_dispatcher=mqtt_dispatcher, logger=logging.getLogger()
+        )
         await driver.initialize()
         if dali2:
             if await check_presence(driver, True):
@@ -161,23 +150,16 @@ async def check_presence_service(gateway: str, args, dali2: bool, old_gateway: b
     return EXIT_SUCCESS
 
 
-async def binary_search_service(gateway: str, args, dali2: bool, old_gateway: bool, bus: int = 1):
+async def binary_search_service(gateway: str, args, dali2: bool, bus: int = 1):
     client = make_mqtt_client(args.broker_url)
     mqtt_dispatcher = MQTTDispatcher(client)
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-        if old_gateway:
-            driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(gateway, bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
-        else:
-            driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(gateway, bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
+        driver = WBDALIDriverNew(
+            WBDALIDriverNewConfig(gateway, bus),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
         await driver.initialize()
         commissioning = Commissioning(driver, [], dali2)
         await commissioning.binary_search()
@@ -188,23 +170,16 @@ async def binary_search_service(gateway: str, args, dali2: bool, old_gateway: bo
     return EXIT_SUCCESS
 
 
-async def short_search_service(gateway: str, args, dali2: bool, old_gateway: bool, bus: int = 1):
+async def short_search_service(gateway: str, args, dali2: bool, bus: int = 1):
     client = make_mqtt_client(args.broker_url)
     mqtt_dispatcher = MQTTDispatcher(client)
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-        if old_gateway:
-            driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(gateway, bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
-        else:
-            driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(gateway, bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
+        driver = WBDALIDriverNew(
+            WBDALIDriverNewConfig(gateway, bus),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
         await driver.initialize()
         await search_short(driver, dali2)
         await driver.deinitialize()
@@ -215,7 +190,7 @@ async def short_search_service(gateway: str, args, dali2: bool, old_gateway: boo
 
 
 async def send_command_service(
-    gateway: str, args, old_gateway: bool
+    gateway: str, args
 ):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     registry = build_command_registry()
 
@@ -234,18 +209,11 @@ async def send_command_service(
     mqtt_dispatcher = MQTTDispatcher(client)
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-        if old_gateway:
-            driver = WBDALIDriverOld(
-                WBDALIDriverOldConfig(gateway, args.bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
-        else:
-            driver = WBDALIDriverNew(
-                WBDALIDriverNewConfig(gateway, args.bus),
-                mqtt_dispatcher=mqtt_dispatcher,
-                logger=logging.getLogger(),
-            )
+        driver = WBDALIDriverNew(
+            WBDALIDriverNewConfig(gateway, args.bus),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+        )
         await driver.initialize()
         try:
             cancel_event = asyncio.Event()
@@ -372,13 +340,6 @@ async def main(argv):  # pylint: disable=too-many-return-statements
     )
 
     parser.add_argument(
-        "--old-gateway",
-        dest="old_gateway",
-        action="store_true",
-        help="Use the old WB-MDALI gateway",
-    )
-
-    parser.add_argument(
         "--bus",
         dest="bus",
         type=int,
@@ -451,29 +412,17 @@ async def main(argv):  # pylint: disable=too-many-return-statements
     logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     if args.check_presence_gateway:
-        return await check_presence_service(
-            args.check_presence_gateway, args, dali2=False, old_gateway=args.old_gateway, bus=args.bus
-        )
+        return await check_presence_service(args.check_presence_gateway, args, dali2=False, bus=args.bus)
     if args.check_presence2_gateway:
-        return await check_presence_service(
-            args.check_presence2_gateway, args, dali2=True, old_gateway=args.old_gateway, bus=args.bus
-        )
+        return await check_presence_service(args.check_presence2_gateway, args, dali2=True, bus=args.bus)
     if args.binary_search_gateway:
-        return await binary_search_service(
-            args.binary_search_gateway, args, dali2=False, old_gateway=args.old_gateway, bus=args.bus
-        )
+        return await binary_search_service(args.binary_search_gateway, args, dali2=False, bus=args.bus)
     if args.binary_search2_gateway:
-        return await binary_search_service(
-            args.binary_search2_gateway, args, dali2=True, old_gateway=args.old_gateway, bus=args.bus
-        )
+        return await binary_search_service(args.binary_search2_gateway, args, dali2=True, bus=args.bus)
     if args.search_short_gateway:
-        return await short_search_service(
-            args.search_short_gateway, args, dali2=False, old_gateway=args.old_gateway, bus=args.bus
-        )
+        return await short_search_service(args.search_short_gateway, args, dali2=False, bus=args.bus)
     if args.search_short2_gateway:
-        return await short_search_service(
-            args.search_short2_gateway, args, dali2=True, old_gateway=args.old_gateway, bus=args.bus
-        )
+        return await short_search_service(args.search_short2_gateway, args, dali2=True, bus=args.bus)
     if args.list_commands:
         registry = build_command_registry()
         print(list_commands(registry))
@@ -484,7 +433,7 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         if args.repeat < 0:
             parser.error("--repeat must be non-negative (0 = infinite)")
         try:
-            return await send_command_service(args.send_command_gateway, args, old_gateway=args.old_gateway)
+            return await send_command_service(args.send_command_gateway, args)
         except ValueError as exc:
             parser.error(str(exc))
     return await default_service(args)

@@ -19,8 +19,8 @@ from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schemas
+from .wbdali import WBDALIDriver
 from .wbdali_utils import (
-    WBDALIDriver,
     check_query_response,
     is_transmission_error_response,
     query_response,
@@ -413,7 +413,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
             )
 
         jsonschema.validate(
-            instance=new_values, schema=self.schema, format_checker=jsonschema.draft4_format_checker
+            instance=new_values,
+            schema=self.schema,
+            format_checker=jsonschema.draft4_format_checker,
         )
         updated_parameters = {}
         for param_handler in self._parameter_handlers:

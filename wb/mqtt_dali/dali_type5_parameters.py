@@ -12,7 +12,8 @@ from dali.gear.converter import (
 
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, TypeParameters
-from .wbdali_utils import WBDALIDriver, query_response
+from .wbdali import WBDALIDriver
+from .wbdali_utils import query_response
 
 
 class Type5DimmingCurveParam(DimmingCurveParam):

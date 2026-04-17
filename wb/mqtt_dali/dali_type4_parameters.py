@@ -8,7 +8,7 @@ from dali.gear.incandescent import QueryDimmingCurve, SelectDimmingCurve
 
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, TypeParameters
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 
 class Type4DimmingCurveParam(DimmingCurveParam):

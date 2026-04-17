@@ -9,7 +9,7 @@ from dali.address import GearShort
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, TypeParameters
 from .gear.dimming_curve import QueryDimmingCurve, SelectDimmingCurve
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 
 class Type17DimmingCurveParam(DimmingCurveParam):

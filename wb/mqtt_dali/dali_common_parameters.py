@@ -25,9 +25,9 @@ from dali.gear.general import (
 
 from .dali_parameters import NumberGearParam
 from .settings import SettingsParamBase, SettingsParamName
+from .wbdali import WBDALIDriver
 from .wbdali_utils import (
     MASK,
-    WBDALIDriver,
     is_broadcast_or_group_address,
     query_response,
     query_responses,

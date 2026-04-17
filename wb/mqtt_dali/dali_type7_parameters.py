@@ -25,7 +25,8 @@ from .gear.switching_function import (
     SwitchingFunctionSwitchStatusResponse,
 )
 from .settings import SettingsParamName
-from .wbdali_utils import WBDALIDriver, query_response
+from .wbdali import WBDALIDriver
+from .wbdali_utils import query_response
 
 
 class UpSwitchOnThresholdParam(NumberGearParam):

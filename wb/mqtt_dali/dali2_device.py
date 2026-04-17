@@ -67,8 +67,8 @@ from .settings import (
     SettingsParamName,
 )
 from .utils import add_enum, add_translations
+from .wbdali import WBDALIDriver
 from .wbdali_utils import (
-    WBDALIDriver,
     query_response,
     query_responses,
     query_responses_retry_only_failed,

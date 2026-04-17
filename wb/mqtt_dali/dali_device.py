@@ -51,8 +51,8 @@ from .dali_type50_parameters import Type50Parameters
 from .dali_type52_parameters import Type52Parameters
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
+from .wbdali import WBDALIDriver
 from .wbdali_utils import (
-    WBDALIDriver,
     check_query_response,
     query_response,
     send_commands_with_retry,

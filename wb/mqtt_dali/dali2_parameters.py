@@ -6,7 +6,7 @@ from dali.command import Command
 from dali.device.general import DTR0
 
 from .settings import NumberSettingsParam, SettingsParamName
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 
 class InstanceParam(NumberSettingsParam):

@@ -14,7 +14,7 @@ from dali.gear.led import (
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
 from .settings import SettingsParamName
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 
 class Type6DimmingCurveParam(DimmingCurveParam):

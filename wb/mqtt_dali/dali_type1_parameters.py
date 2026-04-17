@@ -14,7 +14,8 @@ from dali.gear.emergency import (
 
 from .dali_parameters import NumberGearParam, TypeParameters
 from .settings import SettingsParamName
-from .wbdali_utils import WBDALIDriver, query_int, query_response
+from .wbdali import WBDALIDriver
+from .wbdali_utils import query_int, query_response
 
 
 class EmergencyLevelParam(NumberGearParam):

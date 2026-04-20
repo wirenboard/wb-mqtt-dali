@@ -220,7 +220,7 @@
       "sequencer (DT9)": "последовательность действий (DT9)",
       "load referencing (DT15)": "измерение нагрузки (DT15)",
       "thermal gear protection (DT16)": "температурная защита (DT16)",
-      "dimming curve selection (DT17)": "выбор кривой затухания (DT17)",
+      "dimming curve selection (DT17)": "выбор кривой диммирования (DT17)",
       "centrally supplied emergency operation (DT19)": "централизованное аварийное питание (DT19)",
       "demand response (DT20)": "управление нагрузкой (DT20)",
       "thermal lamp protection (DT21)": "температурная защита лампы (DT21)",

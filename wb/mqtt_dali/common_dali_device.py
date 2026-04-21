@@ -188,7 +188,7 @@ def _is_empty_memory_int(value: int) -> bool:
     """Return True iff ``value`` is zero or consists only of a run of 0xFF bytes from the LSB upward.
 
     In other words, the byte-wise little-endian representation of ``value`` must
-    be an (possibly empty) contiguous sequence of 0xFF bytes with no other bytes
+    be a (possibly empty) contiguous sequence of 0xFF bytes with no other bytes
     present. So ``0``, ``0xFF``, ``0xFFFF``, ``0xFFFFFFFFFFFF`` return True,
     while ``0xFF00FF`` or ``0x01FF`` return False.
 
@@ -224,7 +224,7 @@ def _read_gtin_raw_sequence(
     of resuming from the first unread offset — acceptable because the GTIN
     read is only 6 bytes and rarely fails more than once.
     """
-    yield compat.DTR1(bank_address)
+    yield from request_with_retry_sequence(compat.DTR1(bank_address))
 
     last_error = "unknown error"
     for _ in range(3):
@@ -235,13 +235,7 @@ def _read_gtin_raw_sequence(
         failed = False
         for response in responses:
             try:
-                if response.raw_value is None:
-                    raw_bytes.append(None)
-                    continue
-                if response.raw_value.error:
-                    last_error = "framing error"
-                    failed = True
-                    break
+                check_query_response(response)
                 raw_bytes.append(response.raw_value.as_integer)
             except RuntimeError as e:
                 last_error = str(e)

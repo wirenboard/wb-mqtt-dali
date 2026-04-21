@@ -33,6 +33,7 @@ from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
 from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
 MASK = 0xFF
+MASK_2BYTES = 65535
 
 WBDALIDriver = Union[WBDALIDriverNew, WBDALIDriverOld]
 WBDALIConfig = Union[WBDALIDriverNewConfig, WBDALIDriverOldConfig]

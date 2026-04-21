@@ -9,7 +9,7 @@ from dali.gear.colour import Activate, SetTemporaryRGBDimLevel, SetTemporaryWAFD
 from dali.gear.general import DTR0, DTR1, DTR2
 
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
-from .dali_type8_common import ColourComponent, Type8Limits
+from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import MASK
 from .wbmqtt import TranslatedTitle
@@ -78,7 +78,7 @@ class RgbwafColourValues:
                 raise ValueError(f"Invalid RGB value: {rgb_value}") from e
         self.white = value.get("white", self.white)
 
-    def get_schema(self, _limits: Type8Limits) -> dict:
+    def get_schema(self, _limits) -> dict:
         return {
             "properties": {
                 "rgb": {

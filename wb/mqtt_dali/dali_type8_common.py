@@ -1,9 +1,6 @@
 # Type 8
 
 import enum
-from dataclasses import dataclass
-
-MASK_2BYTES = 65535
 
 
 class ColourComponent(enum.Enum):
@@ -22,9 +19,3 @@ class ColourComponent(enum.Enum):
     PRIMARY_N5 = "primary_n5"
     X_COORDINATE = "x_coordinate"
     Y_COORDINATE = "y_coordinate"
-
-
-@dataclass
-class Type8Limits:
-    tc_min_mirek: int
-    tc_max_mirek: int

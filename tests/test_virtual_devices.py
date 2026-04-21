@@ -23,8 +23,8 @@ from wb.mqtt_dali.application_controller import (
     build_virtual_device_controls,
 )
 from wb.mqtt_dali.dali_device import DaliDevice
-from wb.mqtt_dali.dali_type8_common import Type8Limits
 from wb.mqtt_dali.dali_type8_parameters import ColourType
+from wb.mqtt_dali.dali_type8_tc import MAX_TC_MIREK, MIN_TC_MIREK, Type8TcLimits
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -156,7 +156,9 @@ class TestAggregateCapabilities:
         assert not caps.has_dt8_tc
 
     def test_tc_detected(self):
-        limits = Type8Limits(tc_min_mirek=153, tc_max_mirek=370)
+        limits = Type8TcLimits(
+            tc_min_mirek=153, tc_max_mirek=370, tc_phys_min_mirek=MIN_TC_MIREK, tc_phys_max_mirek=MAX_TC_MIREK
+        )
         d = _make_device(colour_type=ColourType.COLOUR_TEMPERATURE, tc_limits=limits)
         caps = self._agg([d])
         assert caps.has_dt8_tc
@@ -166,11 +168,21 @@ class TestAggregateCapabilities:
         """tc_min_mirek = min across devices; tc_max_mirek = max across devices."""
         d1 = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=100, tc_max_mirek=300),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=100,
+                tc_max_mirek=300,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         d2 = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=150, tc_max_mirek=500),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=150,
+                tc_max_mirek=500,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         caps = self._agg([d1, d2])
         assert caps.tc_min_mirek == 100  # min of 100, 150
@@ -188,7 +200,12 @@ class TestAggregateCapabilities:
         d_rgb = _make_device(colour_type=ColourType.RGBWAF)
         d_tc = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         caps = self._agg([d_rgb, d_tc])
         assert caps.has_dt8_rgbwaf
@@ -213,7 +230,9 @@ class TestDaliDeviceDt8TcLimits:
         dev = DaliDevice.__new__(DaliDevice)
         handler = MagicMock()
         handler.default_colour_type = colour_type
-        handler.tc_limits = limits or Type8Limits(tc_min_mirek=0, tc_max_mirek=0)
+        handler.tc_limits = limits or Type8TcLimits(
+            tc_min_mirek=0, tc_max_mirek=0, tc_phys_min_mirek=MIN_TC_MIREK, tc_phys_max_mirek=MAX_TC_MIREK
+        )
         dev._type8_handler = handler
         return dev
 
@@ -227,7 +246,9 @@ class TestDaliDeviceDt8TcLimits:
         assert dev.dt8_tc_limits is None
 
     def test_returns_limits_when_tc_type(self):
-        limits = Type8Limits(tc_min_mirek=153, tc_max_mirek=370)
+        limits = Type8TcLimits(
+            tc_min_mirek=153, tc_max_mirek=370, tc_phys_min_mirek=MIN_TC_MIREK, tc_phys_max_mirek=MAX_TC_MIREK
+        )
         dev = self._make_dali_device_with_handler(ColourType.COLOUR_TEMPERATURE, limits)
         result = dev.dt8_tc_limits
         assert result is limits
@@ -254,7 +275,12 @@ class TestRefreshBroadcastDevice:
         """Adding a TC device triggers a broadcast device rebuild."""
         tc_device = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         ctrl = _make_controller(dali_devices=[tc_device])
 
@@ -268,7 +294,12 @@ class TestRefreshBroadcastDevice:
         """Rebuilt broadcast device exposes the TC colour control."""
         tc_device = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         ctrl = _make_controller(dali_devices=[tc_device])
 
@@ -282,7 +313,12 @@ class TestRefreshBroadcastDevice:
         """After rebuild, the new broadcast device is in _devices_by_mqtt_id."""
         tc_device = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         ctrl = _make_controller(dali_devices=[tc_device])
 
@@ -295,7 +331,12 @@ class TestRefreshBroadcastDevice:
         """The broadcast device keeps the same mqtt_id after a rebuild."""
         tc_device = _make_device(
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         ctrl = _make_controller(dali_devices=[tc_device])
         old_id = ctrl._broadcast_device.mqtt_id
@@ -372,7 +413,12 @@ class TestRefreshAggregatedVirtualDevices:
         tc_dev = _make_device(
             groups=[1],
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         ctrl.dali_devices.append(tc_dev)
 
@@ -388,7 +434,12 @@ class TestRefreshAggregatedVirtualDevices:
         tc_dev = _make_device(
             groups=[3],
             colour_type=ColourType.COLOUR_TEMPERATURE,
-            tc_limits=Type8Limits(tc_min_mirek=153, tc_max_mirek=370),
+            tc_limits=Type8TcLimits(
+                tc_min_mirek=153,
+                tc_max_mirek=370,
+                tc_phys_min_mirek=MIN_TC_MIREK,
+                tc_phys_max_mirek=MAX_TC_MIREK,
+            ),
         )
         ctrl = _make_controller(dali_devices=[tc_dev])
 

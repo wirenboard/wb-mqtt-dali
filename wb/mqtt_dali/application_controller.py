@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Any, Iterable, Optional, Union
+from typing import Any, Iterable, Optional, Type, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import (
@@ -22,9 +22,11 @@ from dali.gear.general import EnableDeviceType
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult
-from .common_dali_device import MqttControlBase
+from .common_dali_device import DaliDeviceAddress, MqttControlBase, read_product_name
+from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
+from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_controls import make_controls
 from .dali_device import DaliDevice
 from .dali_type8_parameters import ColourType
@@ -573,12 +575,70 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         await self._update_dali_devices(res_dali)
         await self._update_dali2_devices(res_dali2)
 
+    async def _resolve_initial_names(
+        self,
+        addresses: list[DaliDeviceAddress],
+        compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    ) -> list[Optional[str]]:
+        """Read product names for the given DALI addresses and build initial device names.
+
+        Returns a list with the same length as `addresses`; each entry is either
+        a string `"{product_name} {short}"` or None (on any read/lookup failure).
+        """
+        if not addresses:
+            return []
+        product_names = await asyncio.gather(
+            *[
+                read_product_name(
+                    self._dev,
+                    compat.getAddress(addr.short),
+                    compat,
+                    self._gtin_db,
+                    self.logger,
+                )
+                for addr in addresses
+            ],
+            return_exceptions=True,
+        )
+        res: list[Optional[str]] = []
+        for addr, product_name in zip(addresses, product_names):
+            if isinstance(product_name, BaseException):
+                self.logger.warning(
+                    "Failed to resolve product name for short %d: %s",
+                    addr.short,
+                    product_name,
+                )
+                res.append(None)
+            elif product_name is None:
+                res.append(None)
+            else:
+                res.append(f"{product_name} {addr.short}")
+        return res
+
+    async def _build_commissioned_devices(
+        self,
+        commissioning_result: CommissioningResult,
+        compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+        device_cls: Union[Type[DaliDevice], Type[Dali2Device]],
+    ) -> list:
+        """Construct DaliDevice/Dali2Device instances for changed and new addresses,
+        resolving initial names from GTIN where possible.
+        """
+        changed_addresses = [d.new for d in commissioning_result.changed]
+        all_addresses = changed_addresses + commissioning_result.new
+        all_names = await self._resolve_initial_names(all_addresses, compat)
+
+        return [
+            device_cls(addr, self.uid, self._gtin_db, name=name)
+            for addr, name in zip(all_addresses, all_names)
+        ]
+
     async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [DaliDevice(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
-        new_devices = [DaliDevice(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
-        created_devices = changed_devices + new_devices
+        created_devices = await self._build_commissioned_devices(
+            commissioning_result, DaliCommandsCompatibilityLayer(), DaliDevice
+        )
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
             d.short for d in commissioning_result.missing
@@ -603,10 +663,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
-        changed_devices = [Dali2Device(d.new, self.uid, self._gtin_db) for d in commissioning_result.changed]
-        new_devices = [Dali2Device(addr, self.uid, self._gtin_db) for addr in commissioning_result.new]
 
-        created_devices = changed_devices + new_devices
+        created_devices = await self._build_commissioned_devices(
+            commissioning_result, Dali2CommandsCompatibilityLayer(), Dali2Device
+        )
         new_dali2_devices = unchanged_devices + created_devices
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {

@@ -21,6 +21,7 @@ class DaliCommandsCompatibilityLayer:  # pylint: disable=too-many-instance-attri
         self.QueryVersionNumber = control_gear.QueryVersionNumber
         self.ReadMemoryLocation = control_gear.ReadMemoryLocation
         self.DTR0 = control_gear.DTR0
+        self.DTR1 = control_gear.DTR1
 
     def Initialise(self, short_address: Optional[int]) -> Command:
         """

@@ -14,7 +14,7 @@ from dali.gear.led import (
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
 from .settings import SettingsParamName
-from .utils import add_enum
+from .utils import add_enum, add_translations
 from .wbdali_utils import WBDALIDriver
 
 
@@ -29,7 +29,7 @@ class FastFadeTimeParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Fast fade time, ms", "Время быстрого изменения, ms"), "type_6_fast_fade_time"
+            SettingsParamName("Fast fade time, ms", "Время быстрого изменения, мс"), "type_6_fast_fade_time"
         )
         self.minimum = 0
         self.maximum = 27
@@ -40,7 +40,7 @@ class FastFadeTimeParam(NumberGearParam):
         add_enum(
             schema["properties"][self.property_name],
             [
-                (0, "0"),
+                (0, "0 "),
                 (1, "100 (1)"),
                 (2, "100 (2)"),
                 (3, "100 (3)"),
@@ -69,6 +69,26 @@ class FastFadeTimeParam(NumberGearParam):
                 (26, "700 (26)"),
                 (27, "700 (27)"),
             ],
+        )
+        schema["properties"][self.property_name]["description"] = "fast_fade_time_desc"
+        add_translations(
+            schema,
+            "en",
+            {
+                "fast_fade_time_desc": "The fast fade time is stored in the device in arbitrary units. "
+                "Several values may correspond to the same time. "
+                "The value in parentheses is the value in arbitrary units that "
+                "will be written to the device.",
+            },
+        )
+        add_translations(
+            schema,
+            "ru",
+            {
+                "fast_fade_time_desc": "Время быстрого изменения хранится в устройстве в условных единицах. "
+                "Несколько значений могут соответствовать одному времени. "
+                "В скобках указано значение в условных единицах, которое будет записано в устройство.",
+            },
         )
         return schema
 

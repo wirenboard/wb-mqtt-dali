@@ -153,7 +153,7 @@ def get_wanted_mqtt_controls(
     min_k = tc_kelvin_mirek(tc_max_mirek)
     max_k = tc_kelvin_mirek(tc_min_mirek)
     default_k = 4000
-    if not (min_k < default_k < max_k):
+    if not min_k < default_k < max_k:
         default_k = min_k
 
     return [

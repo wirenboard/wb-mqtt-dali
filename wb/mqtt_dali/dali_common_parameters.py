@@ -53,7 +53,7 @@ class MaxLevelParam(NumberGearParam):
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 16
+        self.property_order = 17
 
 
 class MinLevelParam(NumberGearParam):
@@ -65,7 +65,7 @@ class MinLevelParam(NumberGearParam):
         self.maximum = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 17
+        self.property_order = 18
 
 
 class PowerOnLevelParam(NumberGearParam):
@@ -79,7 +79,7 @@ class PowerOnLevelParam(NumberGearParam):
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 21
+        self.property_order = 22
 
 
 class SystemFailureLevelParam(NumberGearParam):
@@ -163,7 +163,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "fade_time": {
                     "type": "number",
                     "title": "Fade Time, s",
-                    "propertyOrder": 19,
+                    "propertyOrder": 20,
                     "enum": list(range(16)),
                     "default": 0,
                     "options": {
@@ -194,7 +194,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "fade_rate": {
                     "type": "number",
                     "title": "Fade Rate, steps/s",
-                    "propertyOrder": 20,
+                    "propertyOrder": 21,
                     "enum": list(range(1, 16)),
                     "default": 1,
                     "options": {

@@ -179,7 +179,7 @@
     "groups": {
       "type": "array",
       "title": "Groups",
-      "propertyOrder": 18,
+      "propertyOrder": 19,
       "minItems": 16,
       "maxItems": 16,
       "items": {

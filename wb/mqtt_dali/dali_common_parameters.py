@@ -99,7 +99,7 @@ class SystemFailureLevelParam(NumberGearParam):
 class FadeTimeFadeRateParam(SettingsParamBase):
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость затухания"))
+        super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость изменения"))
         self._fade_time = None
         self._fade_rate = None
 
@@ -224,9 +224,9 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             },
             "translations": {
                 "ru": {
-                    "Fade Time, s": "Время затухания, с",
-                    "Fade Rate, steps/s": "Скорость затухания, шаг/с",
-                    "no fade": "без затухания",
+                    "Fade Time, s": "Время изменения, с",
+                    "Fade Rate, steps/s": "Скорость изменения, шаг/с",
+                    "no fade": "мгновенно",
                 },
             },
         }

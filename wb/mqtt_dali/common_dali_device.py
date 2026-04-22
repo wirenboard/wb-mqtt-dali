@@ -216,8 +216,7 @@ def _read_gtin_raw_sequence(
 
     Selects the target memory bank via DTR1, positions DTR0 at the GTIN start
     offset (0x03) and issues all six ``ReadMemoryLocation`` commands as a single
-    batch so the driver pipelines them. Returns the list of 6 raw byte values;
-    entries may be ``None`` if a location did not respond.
+    batch so the driver pipelines them. Returns the list of 6 raw byte values.
 
     Uses the same 3-attempt retry budget as ``read_memory_bank``, but retries
     simpler: on failure the whole batch is re-issued (DTR0 + 6 reads) instead

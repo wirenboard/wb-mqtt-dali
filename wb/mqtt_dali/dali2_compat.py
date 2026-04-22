@@ -20,6 +20,7 @@ class Dali2CommandsCompatibilityLayer:  # pylint: disable=too-many-instance-attr
         self.QueryVersionNumber = control_device.QueryVersionNumber
         self.ReadMemoryLocation = control_device.ReadMemoryLocation
         self.DTR0 = control_device.DTR0
+        self.DTR1 = control_device.DTR1
 
     def Initialise(self, short_address: Optional[int]) -> Command:
         """

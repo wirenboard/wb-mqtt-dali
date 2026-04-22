@@ -50,8 +50,6 @@ from .wbdali_utils import (
     send_commands_with_retry,
     send_with_retry,
 )
-from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
-from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
 
 class ApplicationControllerState(Enum):
@@ -76,8 +74,6 @@ class ApplicationControllerConfig:  # pylint: disable=too-many-instance-attribut
     dali2_devices: list[Dali2Device]
     polling_interval: float
     websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
-    # Whether to use the old WB-MDALI gateway (True) or the new WB-DALI gateway (False)
-    old_gateway: bool = False
     enable_bus_monitor: bool = False
 
 
@@ -170,7 +166,7 @@ class AggregatedVirtualDevice:
 
     async def execute_control(
         self,
-        driver: Union[WBDALIDriver, WBDALIDriverOld],
+        driver: WBDALIDriver,
         control_id: str,
         value: str,
     ) -> None:
@@ -191,7 +187,7 @@ ControllableDevice = Union[DaliDevice, Dali2Device, AggregatedVirtualDevice]
 
 async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
     device: Union[DaliDevice, Dali2Device],
-    driver,
+    driver: WBDALIDriver,
     publisher: DevicePublisher,
     scheduler: DeviceInitScheduler,
     control_handler: MessageCallback,
@@ -252,7 +248,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self.dali2_devices = config.dali2_devices
         self.websocket_config = config.websocket_config
         self.logger = logging.getLogger(self.uid)
-        self.old_gateway = config.old_gateway
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
@@ -271,22 +266,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         # Store the type to correctly decode the following command frame
         self._last_bus_traffic_device_type: int = 0
 
-        if config.old_gateway:
-            cfg = WBDALIDriverOldConfig(
-                device_name=config.gateway_mqtt_device_id,
-            )
-            self._dev = WBDALIDriverOld(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
-        else:
-            cfg = WBDALIConfig(
-                device_name=config.gateway_mqtt_device_id,
-                bus=config.bus,
-            )
-            self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+        cfg = WBDALIConfig(
+            device_name=config.gateway_mqtt_device_id,
+            bus=config.bus,
+        )
+        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()
 
-        self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
+        self._bus_monitor_topic = f"/wb-mdali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 

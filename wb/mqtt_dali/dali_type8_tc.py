@@ -20,7 +20,8 @@ from dali.gear.general import DTR0, DTR1, QueryActualLevel, QueryContentDTR0
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
 from .device_publisher import ControlInfo, ControlMeta
-from .wbdali_utils import WBDALIDriver, send_commands_with_retry
+from .wbdali import WBDALIDriver
+from .wbdali_utils import send_commands_with_retry
 from .wbmqtt import TranslatedTitle
 
 MAX_COLOUR_VALUE_2BYTES = MASK_2BYTES - 1

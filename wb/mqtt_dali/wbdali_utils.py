@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Iterable, Optional, Sequence, Union
+from typing import Iterable, Optional, Sequence
 
 from dali.address import (
     Address,
@@ -26,16 +26,11 @@ from dali.device.general import (
 from dali.device.helpers import DeviceInstanceTypeMapper, check_bad_rsp
 
 from .bus_traffic import BusTrafficSource
-from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
-from .wbdali import WBDALIDriver as WBDALIDriverNew
+from .wbdali import WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
-from .wbmdali import WBDALIConfig as WBDALIDriverOldConfig
-from .wbmdali import WBDALIDriver as WBDALIDriverOld
 
 MASK = 0xFF
 
-WBDALIDriver = Union[WBDALIDriverNew, WBDALIDriverOld]
-WBDALIConfig = Union[WBDALIDriverNewConfig, WBDALIDriverOldConfig]
 
 MAX_COMMAND_RETRIES = 3
 

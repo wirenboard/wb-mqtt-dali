@@ -56,7 +56,7 @@ from dali.memory.maintenance import (
 from .common_dali_device import read_memory_bank
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 
 def _get(data: dict, cls):

@@ -12,7 +12,7 @@ from .common_dali_device import read_memory_bank
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 # Each entry: (oem memory value class, json key, English title, Russian title, json schema type)
 _FIELD_SPECS = [

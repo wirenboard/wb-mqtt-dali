@@ -7,8 +7,8 @@ from dali.address import Address
 from dali.command import Command
 
 from .utils import merge_json_schema_properties, merge_translations
+from .wbdali import WBDALIDriver
 from .wbdali_utils import (
-    WBDALIDriver,
     is_broadcast_or_group_address,
     query_int,
     query_response,

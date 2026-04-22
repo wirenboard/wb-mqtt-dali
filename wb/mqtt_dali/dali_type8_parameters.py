@@ -34,9 +34,9 @@ from .dali_parameters import TypeParameters
 from .dali_type8_common import ColourComponent, Type8Limits
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
+from .wbdali import WBDALIDriver
 from .wbdali_utils import (
     MASK,
-    WBDALIDriver,
     check_query_response,
     is_broadcast_or_group_address,
     is_transmission_error_response,

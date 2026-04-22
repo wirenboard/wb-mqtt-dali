@@ -9,7 +9,7 @@ from .common_dali_device import MqttControlBase
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
 from .utils import add_enum, add_translations
-from .wbdali_utils import WBDALIDriver
+from .wbdali import WBDALIDriver
 
 
 class NumberGearParam(NumberSettingsParam):

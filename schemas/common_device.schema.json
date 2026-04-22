@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+
+  "properties": {
+    "name": {
+      "type": "string",
+      "title": "Device name",
+      "minLength": 1,
+      "propertyOrder": 0,
+      "options": {
+        "grid_columns": 6
+      }
+    },
+    "mqtt_id": {
+      "type": "string",
+      "title": "MQTT id of the device",
+      "description": "Used as part of the topic",
+      "pattern": "^[^$#+\\/\"']+$",
+      "propertyOrder": 1,
+      "minLength": 1,
+      "options": {
+        "patternmessage": "Invalid device ID",
+        "grid_columns": 6
+      }
+    },
+    "types": {
+      "type": "array",
+      "title": "Control Gear Type",
+      "propertyOrder": 2,
+      "items": {
+        "type": "number",
+        "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 19, 20, 21, 23, 49, 50, 51, 52],
+        "options": {
+          "enum_titles": [
+            "fluorescent lamp (DT0)",
+            "self contained emergency lighting (DT1)",
+            "discharge lamps (DT2)",
+            "low voltage halogen lamps (DT3)",
+            "supply voltage controller for incandescent lamps (DT4)",
+            "conversion from digital signal into DC voltage (DT5)",
+            "LED modules (DT6)",
+            "switching function (DT7)",
+            "colour control (DT8)",
+            "sequencer (DT9)",
+            "load referencing (DT15)",
+            "thermal gear protection (DT16)",
+            "dimming curve selection (DT17)",
+            "centrally supplied emergency operation (DT19)",
+            "demand response (DT20)",
+            "thermal lamp protection (DT21)",
+            "non replaceable lamp source (DT23)",
+            "integrated power supply (DT49)",
+            "memory bank 1 extension (DT50)",
+            "energy reporting device (DT51)",
+            "diagnostics and maintenance (DT52)"
+          ]
+        }
+      },
+      "options": {
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "brand_name": {
+      "type": "string",
+      "title": "Brand Name",
+      "propertyOrder": 3,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "product_name": {
+      "type": "string",
+      "title": "Product Name",
+      "propertyOrder": 4,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "gtin": {
+      "type": "number",
+      "title": "Global Trade Item Number",
+      "propertyOrder": 5,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "identification_number": {
+      "type": "number",
+      "title": "Identification Number",
+      "propertyOrder": 6,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "firmware_version": {
+      "type": "string",
+      "title": "Firmware Version",
+      "propertyOrder": 7,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "hardware_version": {
+      "type": "string",
+      "title": "Hardware Version",
+      "propertyOrder": 8,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "oem_gtin": {
+      "type": "number",
+      "title": "OEM Global Trade Item Number",
+      "propertyOrder": 12,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "oem_identification_number": {
+      "type": "number",
+      "title": "OEM Identification Number",
+      "propertyOrder": 13,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "short_address": {
+      "type": "number",
+      "title": "Short Address",
+      "propertyOrder": 14,
+      "minimum": 0,
+      "maximum": 63,
+      "default": 0,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "new_row": true
+        }
+      }
+    },
+    "random_address": {
+      "type": "string",
+      "title": "Random Address",
+      "propertyOrder": 15,
+      "options": {
+        "grid_columns": 6,
+        "wb": {
+          "read_only": true
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "title": "Groups",
+      "propertyOrder": 19,
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {
+        "type": "boolean",
+        "format": "button"
+      }
+    }
+  },
+
+  "required": ["short_address", "mqtt_id", "name"],
+
+  "translations": {
+    "ru": {
+      "Global Trade Item Number": "Глобальный номер торговой единицы (GTIN)",
+      "Identification Number": "Идентификационный номер",
+      "Firmware Version": "Версия прошивки",
+      "Hardware Version": "Версия аппаратного обеспечения",
+      "OEM Global Trade Item Number": "Глобальный номер торговой единицы OEM (GTIN)",
+      "OEM Identification Number": "Идентификационный номер OEM",
+      "Groups": "Группы",
+      "Control Gear Type": "Тип оборудования",
+      "Short Address": "Короткий адрес",
+      "Random Address": "Случайный адрес",
+      "Device name": "Название устройства",
+      "MQTT id of the device": "Идентификатор устройства в MQTT",
+      "Used as part of the topic": "Используется как часть топика в MQTT",
+      "Brand Name": "Производитель",
+      "Product Name": "Модель",
+      "fluorescent lamp (DT0)": "люминесцентная лампа (DT0)",
+      "self contained emergency lighting (DT1)": "автономное аварийное освещение (DT1)",
+      "discharge lamps (DT2)": "разрядные лампы (DT2)",
+      "low voltage halogen lamps (DT3)": "галогенные лампы низкого напряжения (DT3)",
+      "supply voltage controller for incandescent lamps (DT4)": "регулятор напряжения для ламп накаливания (DT4)",
+      "conversion from digital signal into DC voltage (DT5)": "преобразование цифрового сигнала в постоянное напряжение (DT5)",
+      "LED modules (DT6)": "светодиодные модули (DT6)",
+      "switching function (DT7)": "функция переключения (DT7)",
+      "colour control (DT8)": "управление цветом (DT8)",
+      "sequencer (DT9)": "последовательность действий (DT9)",
+      "load referencing (DT15)": "измерение нагрузки (DT15)",
+      "thermal gear protection (DT16)": "температурная защита (DT16)",
+      "dimming curve selection (DT17)": "выбор кривой диммирования (DT17)",
+      "centrally supplied emergency operation (DT19)": "централизованное аварийное питание (DT19)",
+      "demand response (DT20)": "управление нагрузкой (DT20)",
+      "thermal lamp protection (DT21)": "температурная защита лампы (DT21)",
+      "non replaceable lamp source (DT23)": "незаменяемый источник света (DT23)",
+      "integrated power supply (DT49)": "интегрированный блок питания (DT49)",
+      "memory bank 1 extension (DT50)": "расширение банка памяти 1 (DT50)",
+      "energy reporting device (DT51)": "измеритель энергопотребления (DT51)",
+      "diagnostics and maintenance (DT52)": "диагностика и обслуживание (DT52)"
+    }
+  }
+}

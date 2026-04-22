@@ -1,0 +1,101 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "type": "object",
+    "title": "DALI gateway configuration",
+    "configFile": {
+        "path": "/etc/wb-mqtt-dali.conf",
+        "service": "wb-mqtt-dali",
+        "editor": "dali"
+    },
+    "definitions": {
+        "device": {
+            "type": "object",
+            "properties": {
+                "short": {
+                    "type": "integer",
+                    "title": "Short Address",
+                    "minimum": 0,
+                    "maximum": 63
+                },
+                "random": {
+                    "type": "integer",
+                    "title": "Random Address"
+                },
+                "dali2": {
+                    "type": "boolean",
+                    "title": "DALI 2 Device",
+                    "default": false
+                }
+            },
+            "required": ["short", "random"]
+        },
+        "bus": {
+            "type": "object",
+            "properties": {
+                "devices": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/device"
+                    }
+                },
+                "websocket_enabled": {
+                    "type": "boolean",
+                    "title": "Enable WebSocket Server",
+                    "default": false
+                },
+                "websocket_port": {
+                    "type": "integer",
+                    "title": "WebSocket Port",
+                    "minimum": 1,
+                    "maximum": 65535,
+                    "default": 8080
+                },
+                "polling_interval": {
+                    "type": "number",
+                    "title": "Polling Interval",
+                    "default": 5
+                },
+                "bus_monitor_enabled": {
+                    "type": "boolean",
+                    "default": false
+                }
+            },
+            "required": ["devices"]
+        },
+        "gateway": {
+            "type": "object",
+            "properties": {
+                "device_id": {
+                    "type": "string"
+                },
+                "buses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/bus"
+                    },
+                    "maxItems": 3
+                }
+            },
+            "required": ["device_id", "buses"]
+        }
+    },
+    "properties": {
+        "debug": {
+            "type": "boolean"
+        },
+        "gateways": {
+            "type": "array",
+            "items": {
+                "$ref": "#/definitions/gateway"
+            }
+        }
+    },
+    "translations": {
+        "ru": {
+            "DALI gateway configuration": "Настройки шлюза DALI",
+            "Enable WebSocket Server": "Включить WebSocket сервер",
+            "WebSocket Port": "WebSocket порт",
+            "Polling Interval": "Интервал опроса"
+        }
+    }
+}

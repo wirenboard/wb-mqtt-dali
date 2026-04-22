@@ -1,0 +1,766 @@
+asyncapi: '3.0.0'
+info:
+  title: wb-mqtt-dali MQTT-RPC API
+  version: '1.0.0'
+defaultContentType: application/json
+channels:
+  wbdaliEditorGetList:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetList/{clientId}'
+    messages:
+      wbdaliEditorGetList:
+        $ref: '#/components/messages/wbdaliEditorGetList'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetListReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetList/{clientId}/reply'
+    messages:
+      wbdaliEditorGetListReply:
+        $ref: '#/components/messages/wbdaliEditorGetListReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetGateway:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetGateway/{clientId}'
+    messages:
+      wbdaliEditorGetGateway:
+        $ref: '#/components/messages/wbdaliEditorGetGateway'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetGatewayReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetGateway/{clientId}/reply'
+    messages:
+      wbdaliEditorGetGatewayReply:
+        $ref: '#/components/messages/wbdaliEditorGetGatewayReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetGateway:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetGateway/{clientId}'
+    messages:
+      wbdaliEditorSetGateway:
+        $ref: '#/components/messages/wbdaliEditorSetGateway'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetGatewayReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetGateway/{clientId}/reply'
+    messages:
+      wbdaliEditorSetGatewayReply:
+        $ref: '#/components/messages/wbdaliEditorSetGatewayReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetBus:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetBus/{clientId}'
+    messages:
+      wbdaliEditorGetBus:
+        $ref: '#/components/messages/wbdaliEditorGetBus'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetBusReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetBus/{clientId}/reply'
+    messages:
+      wbdaliEditorGetBusReply:
+        $ref: '#/components/messages/wbdaliEditorGetBusReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetBus:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetBus/{clientId}'
+    messages:
+      wbdaliEditorSetBus:
+        $ref: '#/components/messages/wbdaliEditorSetBus'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetBusReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetBus/{clientId}/reply'
+    messages:
+      wbdaliEditorSetBusReply:
+        $ref: '#/components/messages/wbdaliEditorSetBusReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetDevice:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetDevice/{clientId}'
+    messages:
+      wbdaliEditorGetDevice:
+        $ref: '#/components/messages/wbdaliEditorGetDevice'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetDeviceReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetDevice/{clientId}/reply'
+    messages:
+      wbdaliEditorGetDeviceReply:
+        $ref: '#/components/messages/wbdaliEditorGetDeviceReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetDevice:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetDevice/{clientId}'
+    messages:
+      wbdaliEditorSetDevice:
+        $ref: '#/components/messages/wbdaliEditorSetDevice'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetDeviceReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetDevice/{clientId}/reply'
+    messages:
+      wbdaliEditorSetDeviceReply:
+        $ref: '#/components/messages/wbdaliEditorSetDeviceReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetGroup:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetGroup/{clientId}'
+    messages:
+      wbdaliEditorGetGroup:
+        $ref: '#/components/messages/wbdaliEditorGetGroup'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorGetGroupReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/GetGroup/{clientId}/reply'
+    messages:
+      wbdaliEditorGetGroupReply:
+        $ref: '#/components/messages/wbdaliEditorGetGroupReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetGroup:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetGroup/{clientId}'
+    messages:
+      wbdaliEditorSetGroup:
+        $ref: '#/components/messages/wbdaliEditorSetGroup'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorSetGroupReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/SetGroup/{clientId}/reply'
+    messages:
+      wbdaliEditorSetGroupReply:
+        $ref: '#/components/messages/wbdaliEditorSetGroupReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorScanBus:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ScanBus/{clientId}'
+    messages:
+      wbdaliEditorScanBus:
+        $ref: '#/components/messages/wbdaliEditorScanBus'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorScanBusReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ScanBus/{clientId}/reply'
+    messages:
+      wbdaliEditorScanBusReply:
+        $ref: '#/components/messages/wbdaliEditorScanBusReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorIdentifyDevice:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/IdentifyDevice/{clientId}'
+    messages:
+      wbdaliEditorIdentifyDevice:
+        $ref: '#/components/messages/wbdaliEditorIdentifyDevice'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorIdentifyDeviceReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/IdentifyDevice/{clientId}/reply'
+    messages:
+      wbdaliEditorIdentifyDeviceReply:
+        $ref: '#/components/messages/wbdaliEditorIdentifyDeviceReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+operations:
+  wbdaliEditorGetList:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorGetList'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorGetList/messages/wbdaliEditorGetList'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorGetListReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorGetListReply/messages/wbdaliEditorGetListReply'
+  wbdaliEditorGetGateway:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorGetGateway'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorGetGateway/messages/wbdaliEditorGetGateway'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorGetGatewayReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorGetGatewayReply/messages/wbdaliEditorGetGatewayReply'
+  wbdaliEditorSetGateway:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorSetGateway'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorSetGateway/messages/wbdaliEditorSetGateway'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorSetGatewayReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorSetGatewayReply/messages/wbdaliEditorSetGatewayReply'
+  wbdaliEditorGetBus:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorGetBus'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorGetBus/messages/wbdaliEditorGetBus'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorGetBusReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorGetBusReply/messages/wbdaliEditorGetBusReply'
+  wbdaliEditorSetBus:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorSetBus'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorSetBus/messages/wbdaliEditorSetBus'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorSetBusReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorSetBusReply/messages/wbdaliEditorSetBusReply'
+  wbdaliEditorGetDevice:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorGetDevice'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorGetDevice/messages/wbdaliEditorGetDevice'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorGetDeviceReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorGetDeviceReply/messages/wbdaliEditorGetDeviceReply'
+  wbdaliEditorSetDevice:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorSetDevice'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorSetDevice/messages/wbdaliEditorSetDevice'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorSetDeviceReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorSetDeviceReply/messages/wbdaliEditorSetDeviceReply'
+  wbdaliEditorGetGroup:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorGetGroup'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorGetGroup/messages/wbdaliEditorGetGroup'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorGetGroupReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorGetGroupReply/messages/wbdaliEditorGetGroupReply'
+  wbdaliEditorSetGroup:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorSetGroup'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorSetGroup/messages/wbdaliEditorSetGroup'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorSetGroupReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorSetGroupReply/messages/wbdaliEditorSetGroupReply'
+  wbdaliEditorScanBus:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorScanBus'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorScanBus/messages/wbdaliEditorScanBus'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorScanBusReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorScanBusReply/messages/wbdaliEditorScanBusReply'
+  wbdaliEditorIdentifyDevice:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorIdentifyDevice'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorIdentifyDevice/messages/wbdaliEditorIdentifyDevice'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorIdentifyDeviceReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorIdentifyDeviceReply/messages/wbdaliEditorIdentifyDeviceReply'
+components:
+  messages:
+    wbdaliEditorGetList:
+      name: editorGetList
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetListPayload'
+    wbdaliEditorGetListReply:
+      name: editorGetListReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetListReplyPayload'
+    wbdaliEditorGetGateway:
+      name: editorGetGateway
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetGatewayPayload'
+    wbdaliEditorGetGatewayReply:
+      name: editorGetGatewayReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetGatewayReplyPayload'
+    wbdaliEditorSetGateway:
+      name: editorSetGateway
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetGatewayPayload'
+    wbdaliEditorSetGatewayReply:
+      name: editorSetGatewayReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetGatewayReplyPayload'
+    wbdaliEditorGetBus:
+      name: editorGetBus
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetBusPayload'
+    wbdaliEditorGetBusReply:
+      name: editorGetBusReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetBusReplyPayload'
+    wbdaliEditorSetBus:
+      name: editorSetBus
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetBusPayload'
+    wbdaliEditorSetBusReply:
+      name: editorSetBusReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetBusReplyPayload'
+    wbdaliEditorGetDevice:
+      name: editorGetDevice
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetDevicePayload'
+    wbdaliEditorGetDeviceReply:
+      name: editorGetDeviceReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetDeviceReplyPayload'
+    wbdaliEditorSetDevice:
+      name: editorSetDevice
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetDevicePayload'
+    wbdaliEditorSetDeviceReply:
+      name: editorSetDeviceReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetDeviceReplyPayload'
+    wbdaliEditorGetGroup:
+      name: editorGetGroup
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetGroupPayload'
+    wbdaliEditorGetGroupReply:
+      name: editorGetGroupReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorGetGroupReplyPayload'
+    wbdaliEditorSetGroup:
+      name: editorSetGroup
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetGroupPayload'
+    wbdaliEditorSetGroupReply:
+      name: editorSetGroupReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorSetGroupReplyPayload'
+    wbdaliEditorScanBus:
+      name: editorScanBus
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorScanBusPayload'
+    wbdaliEditorScanBusReply:
+      name: editorScanBusReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorScanBusReplyPayload'
+    wbdaliEditorIdentifyDevice:
+      name: editorIdentifyDevice
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorIdentifyDevicePayload'
+    wbdaliEditorIdentifyDeviceReply:
+      name: editorIdentifyDeviceReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorIdentifyDeviceReplyPayload'
+  schemas:
+    deviceItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        groups:
+          type: array
+          items:
+            type: number
+    busItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/deviceItem'
+    gatewayItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        buses:
+          $ref: '#/components/schemas/busItem'
+    wbdaliEditorGetListPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+      required:
+        - id
+        - params
+    wbdaliEditorGetListReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+          properties:
+            gateways:
+              type: array
+              items:
+                $ref: '#/components/schemas/gatewayItem'
+      required:
+        - id
+        - result
+    wbdaliEditorGetGatewayPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            gatewayId:
+              type: string
+          required:
+            - gatewayId
+      required:
+        - id
+        - params
+    wbdaliEditorGetGatewayReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+          properties:
+            config:
+              type: object
+            schema:
+              type: object
+          required:
+            - config
+            - schema
+      required:
+        - id
+        - result
+    wbdaliEditorSetGatewayPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            gatewayId:
+              type: string
+            config:
+              type: object
+          required:
+            - gatewayId
+            - config
+      required:
+        - id
+        - params
+    wbdaliEditorSetGatewayReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: boolean
+      required:
+        - id
+        - result
+    wbdaliEditorGetBusPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            busId:
+              type: string
+          required:
+            - busId
+      required:
+        - id
+        - params
+    wbdaliEditorGetBusReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+          properties:
+            schema:
+              type: object
+            busMonitor:
+              type: string
+          required:
+            - schema
+      required:
+        - id
+        - result
+    wbdaliEditorSetBusPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            busId:
+              type: string
+            config:
+              type: object
+          required:
+            - busId
+            - config
+      required:
+        - id
+        - params
+    wbdaliEditorSetBusReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: boolean
+      required:
+        - id
+        - result
+    wbdaliEditorGetDevicePayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            deviceId:
+              type: string
+          required:
+            - deviceId
+      required:
+        - id
+        - params
+    wbdaliEditorGetDeviceReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+          properties:
+            schema:
+              type: object
+            config:
+              type: object
+          required:
+            - schema
+            - config
+      required:
+        - id
+        - result
+    wbdaliEditorSetDevicePayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            deviceId:
+              type: string
+            config:
+              type: object
+          required:
+            - deviceId
+            - config
+      required:
+        - id
+        - params
+    wbdaliEditorSetDeviceReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: boolean
+      required:
+        - id
+        - result
+    wbdaliEditorGetGroupPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            groupId:
+              type: string
+          required: 
+            - groupId
+      required:
+        - id
+        - params
+    wbdaliEditorGetGroupReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+      required:
+        - id
+        - result
+    wbdaliEditorSetGroupPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            groupId:
+              type: string
+            config:
+              type: object
+          required:
+            - groupId
+            - config
+      required:
+        - id
+        - params
+    wbdaliEditorSetGroupReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+      required:
+        - id
+        - result
+    wbdaliEditorScanBusPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            busId:
+              type: string
+          required:
+            - busId
+      required:
+        - id
+        - params
+    wbdaliEditorScanBusReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          $ref: '#/components/schemas/busItem'
+      required:
+        - id
+        - result
+    wbdaliEditorIdentifyDevicePayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            deviceId:
+              type: string
+          required:
+            - deviceId
+      required:
+        - id
+        - params
+    wbdaliEditorIdentifyDeviceReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+      required:
+        - id
+        - result
+  parameters:
+    clientId:
+      description: UUID
+  operationTraits:
+    mqtt:
+      bindings:
+        mqtt:
+          qos: 1

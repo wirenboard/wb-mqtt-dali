@@ -1,0 +1,15 @@
+[Unit]
+Description=Wiren Board MQTT DALI Bridge
+After=mosquitto.service wb-mqtt-serial.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/wb-mqtt-dali
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=2 6
+SuccessExitStatus=7
+
+[Install]
+WantedBy=multi-user.target

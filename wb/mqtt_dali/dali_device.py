@@ -32,7 +32,7 @@ from .dali_common_parameters import (
 )
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_controls import CONTROLS, ActualLevelControl, WantedLevelControl
-from .dali_dimming_curve import DimmingCurveState
+from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .dali_parameters import DimmingCurveParam, TypeParameters
 from .dali_type1_parameters import Type1Parameters
 from .dali_type4_parameters import Type4Parameters
@@ -178,6 +178,10 @@ class DaliDevice(DaliDeviceBase):
     @property
     def dt8_colour_type(self) -> Optional[ColourType]:
         return self._type8_handler.default_colour_type if self._type8_handler is not None else None
+
+    @property
+    def dimming_curve_type(self) -> DimmingCurveType:
+        return self._dimming_curve_state.curve_type
 
     @property
     def dt8_tc_limits(self) -> Optional[Type8TcLimits]:

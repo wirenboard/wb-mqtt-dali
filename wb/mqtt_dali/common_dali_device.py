@@ -189,6 +189,163 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
     return result
 
 
+def _is_empty_memory_int(value: int) -> bool:
+    """Return True iff ``value`` is zero or consists only of a run of 0xFF bytes from the LSB upward.
+
+    In other words, the byte-wise little-endian representation of ``value`` must
+    be a (possibly empty) contiguous sequence of 0xFF bytes with no other bytes
+    present. So ``0``, ``0xFF``, ``0xFFFF``, ``0xFFFFFFFFFFFF`` return True,
+    while ``0xFF00FF`` or ``0x01FF`` return False.
+
+    Used to detect unprogrammed numeric values stored in DALI memory banks
+    (typical on fresh devices where reserved bytes are left as 0xFF).
+    """
+    value_to_check = value
+    while value_to_check > 0:
+        if value_to_check & 0xFF != 0xFF:
+            return False
+        value_to_check >>= 8
+    return True
+
+
+_GTIN_START_ADDRESS = 0x03
+_GTIN_LENGTH = 6
+
+
+def _read_gtin_raw_sequence(
+    bank_address: int,
+    short_address: Address,
+    compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+):
+    """Yield the minimal command sequence required to fetch the 6 GTIN bytes.
+
+    Selects the target memory bank via DTR1, positions DTR0 at the GTIN start
+    offset (0x03) and issues all six ``ReadMemoryLocation`` commands as a single
+    batch so the driver pipelines them. Returns the list of 6 raw byte values.
+
+    Uses the same 3-attempt retry budget as ``read_memory_bank``, but retries
+    simpler: on failure the whole batch is re-issued (DTR0 + 6 reads) instead
+    of resuming from the first unread offset — acceptable because the GTIN
+    read is only 6 bytes and rarely fails more than once.
+    """
+    yield from request_with_retry_sequence(compat.DTR1(bank_address))
+
+    last_error = "unknown error"
+    for _ in range(3):
+        yield from request_with_retry_sequence(compat.DTR0(_GTIN_START_ADDRESS))
+        responses = yield [compat.ReadMemoryLocation(short_address) for _ in range(_GTIN_LENGTH)]
+
+        raw_bytes = []
+        failed = False
+        for response in responses:
+            try:
+                check_query_response(response)
+                raw_bytes.append(response.raw_value.as_integer)
+            except RuntimeError as e:
+                last_error = str(e)
+                failed = True
+                break
+
+        if not failed:
+            return raw_bytes
+
+    raise RuntimeError(
+        f"Failed to read GTIN from memory bank {bank_address} for {short_address} "
+        f"after 3 attempts; last error: {last_error}"
+    )
+
+
+async def _read_gtin_from_bank(
+    driver: WBDALIDriver,
+    bank_address: int,
+    gtin_value_cls,
+    short_address: Address,
+    compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+) -> Optional[int]:
+    """Read the 6 GTIN bytes from a single memory bank and decode them.
+
+    Returns the decoded GTIN integer, or ``None`` if the bank is not programmed
+    (all bytes 0xFF). Raises ``MemoryLocationNotImplemented`` if the bank /
+    location is absent on the device.
+    """
+    raw_bytes = await driver.run_sequence(_read_gtin_raw_sequence(bank_address, short_address, compat))
+    padded = [None] * _GTIN_START_ADDRESS + raw_bytes
+    decoded = gtin_value_cls.from_list(padded)
+    if _is_empty_memory_int(decoded):
+        return None
+    return decoded
+
+
+async def read_gtin_fast(
+    driver: WBDALIDriver,
+    short_address: Address,
+    compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+) -> Optional[int]:
+    """Read the GTIN from bank 0, falling back to bank 1 only when necessary.
+
+    This is the low-traffic variant used during commissioning: it skips the
+    ``LastAddress`` probe and ``QueryVersionNumber`` since GTIN sits at the
+    fixed offset 0x03..0x08 in both legacy and current bank 0 layouts per
+    IEC 62386-102. Bank 1 is read only if bank 0 is absent or unprogrammed.
+
+    Returns the GTIN integer or ``None`` if no programmed GTIN is available.
+    ``MemoryLocationNotImplemented`` from the driver is treated as "bank
+    absent"; all other driver errors propagate to the caller.
+    """
+    try:
+        gtin = await _read_gtin_from_bank(driver, info.BANK_0.address, info.GTIN, short_address, compat)
+        if gtin is not None:
+            return gtin
+    except MemoryLocationNotImplemented:
+        pass
+
+    try:
+        return await _read_gtin_from_bank(
+            driver, oem.BANK_1.address, oem.ManufacturerGTIN, short_address, compat
+        )
+    except MemoryLocationNotImplemented:
+        return None
+
+
+async def read_product_name(
+    driver: WBDALIDriver,
+    short_address: Address,
+    compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+    gtin_db: DaliDatabase,
+    logger: Optional[logging.Logger] = None,
+) -> Optional[str]:
+    """Read the GTIN from memory banks and look up the product name.
+
+    Returns the product_name string if the GTIN is found in the database, or
+    None on any failure (missing banks, unreadable bus, unknown GTIN).
+    Does not raise.
+    """
+    try:
+        gtin = await read_gtin_fast(driver, short_address, compat)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        if logger is not None:
+            logger.warning(
+                "Failed to read memory banks for %s while looking up product name: %s",
+                short_address,
+                e,
+            )
+        return None
+    if gtin is None:
+        if logger is not None:
+            logger.debug("No GTIN reported by device at %s; using default name", short_address)
+        return None
+    product_info = gtin_db.get_info_by_gtin(gtin)
+    if product_info is None:
+        if logger is not None:
+            logger.debug(
+                "GTIN %s of device at %s not found in product database; using default name",
+                gtin,
+                short_address,
+            )
+        return None
+    return product_info.get("product_name")
+
+
 class GeneralMemoryParams(SettingsParamBase):
     memory_fields_to_json_params = {
         info.GTIN: "gtin",
@@ -254,16 +411,8 @@ class GeneralMemoryParams(SettingsParamBase):
         for field, param in self.memory_fields_to_json_params.items():
             value = values.get(field)
             if value is not None:
-                if isinstance(value, int):
-                    value_to_check = value
-                    is_empty = True
-                    while value_to_check > 0:
-                        if value_to_check & 0xFF != 0xFF:
-                            is_empty = False
-                            break
-                        value_to_check >>= 8
-                    if is_empty:
-                        continue
+                if isinstance(value, int) and _is_empty_memory_int(value):
+                    continue
                 dst[param] = value
 
 

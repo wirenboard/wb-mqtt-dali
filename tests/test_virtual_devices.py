@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from dali.address import GearBroadcast, GearGroup
 from dali.gear.colour import tc_kelvin_mirek
+from dali.gear.general import DAPC
 
 from wb.mqtt_dali.application_controller import (
     AggregatedCapabilities,
@@ -23,6 +24,7 @@ from wb.mqtt_dali.application_controller import (
     build_virtual_device_controls,
 )
 from wb.mqtt_dali.dali_device import DaliDevice
+from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.dali_type8_parameters import ColourType
 from wb.mqtt_dali.dali_type8_tc import MAX_TC_MIREK, MIN_TC_MIREK, Type8TcLimits
 
@@ -37,6 +39,7 @@ def _make_device(
     groups=None,
     colour_type=None,
     tc_limits=None,
+    dimming_curve_type=DimmingCurveType.LOGARITHMIC,
 ):
     """Return a minimal mock DaliDevice-like object."""
     d = MagicMock()
@@ -44,6 +47,7 @@ def _make_device(
     d.groups = set(groups or [])
     d.dt8_colour_type = colour_type
     d.dt8_tc_limits = tc_limits
+    d.dimming_curve_type = dimming_curve_type
     return d
 
 
@@ -129,6 +133,40 @@ class TestBuildVirtualDeviceControls:
         assert meta.minimum == tc_kelvin_mirek(400)
         # maximum Kelvin = kelvin of min mirek (warmest colour temperature)
         assert meta.maximum == tc_kelvin_mirek(200)
+
+    def test_wanted_level_control_present(self):
+        """wanted_level is present with default (empty) capabilities."""
+        caps = AggregatedCapabilities()
+        controls = build_virtual_device_controls(caps)
+        assert "wanted_level" in controls
+
+    def test_wanted_level_uses_linear_curve(self):
+        """With LINEAR dimming curve, 50% yields DAPC raw close to 127."""
+        caps = AggregatedCapabilities(dimming_curve_type=DimmingCurveType.LINEAR)
+        controls = build_virtual_device_controls(caps)
+        wanted_level = controls["wanted_level"]
+        commands = wanted_level.get_setup_commands(GearBroadcast(), "50")
+        assert len(commands) == 1
+        assert isinstance(commands[0], DAPC)
+        assert abs(commands[0].power - 127) <= 1
+
+    def test_wanted_level_uses_log_curve_by_default(self):
+        """With the default LOGARITHMIC curve, 50% yields DAPC raw around 229.
+
+        The IEC 62386-102 logarithmic curve maps 50% light output to raw
+        ~229 (inverse of 10^((level-1)/253*3 - 1) at level=50). This is
+        markedly different from the linear 50% → raw 127, confirming the
+        aggregated curve is applied to percent→DAPC conversion.
+        """
+        caps = AggregatedCapabilities()
+        controls = build_virtual_device_controls(caps)
+        wanted_level = controls["wanted_level"]
+        commands = wanted_level.get_setup_commands(GearBroadcast(), "50")
+        assert len(commands) == 1
+        assert isinstance(commands[0], DAPC)
+        assert abs(commands[0].power - 229) <= 1
+        # And definitely not the linear value
+        assert commands[0].power != 127
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +254,49 @@ class TestAggregateCapabilities:
         caps = self._agg([d])
         assert not caps.has_dt8_rgbwaf
         assert not caps.has_dt8_tc
+
+
+# ---------------------------------------------------------------------------
+# aggregate_capabilities – dimming curve aggregation
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateCapabilitiesCurve:
+    def test_all_logarithmic_aggregates_to_logarithmic(self):
+        devices = [
+            _make_device(dimming_curve_type=DimmingCurveType.LOGARITHMIC),
+            _make_device(dimming_curve_type=DimmingCurveType.LOGARITHMIC),
+        ]
+        caps = aggregate_capabilities(devices)
+        assert caps.dimming_curve_type == DimmingCurveType.LOGARITHMIC
+
+    def test_all_linear_aggregates_to_linear(self):
+        devices = [
+            _make_device(dimming_curve_type=DimmingCurveType.LINEAR),
+            _make_device(dimming_curve_type=DimmingCurveType.LINEAR),
+        ]
+        caps = aggregate_capabilities(devices)
+        assert caps.dimming_curve_type == DimmingCurveType.LINEAR
+
+    def test_mixed_curves_fall_back_to_logarithmic(self):
+        devices = [
+            _make_device(dimming_curve_type=DimmingCurveType.LINEAR),
+            _make_device(dimming_curve_type=DimmingCurveType.LOGARITHMIC),
+        ]
+        caps = aggregate_capabilities(devices)
+        assert caps.dimming_curve_type == DimmingCurveType.LOGARITHMIC
+
+    def test_empty_list_falls_back_to_logarithmic(self):
+        caps = aggregate_capabilities([])
+        assert caps.dimming_curve_type == DimmingCurveType.LOGARITHMIC
+
+    def test_uninitialised_devices_ignored_for_curve(self):
+        """Uninitialised LINEAR device is ignored; result is default LOGARITHMIC."""
+        devices = [
+            _make_device(is_initialized=False, dimming_curve_type=DimmingCurveType.LINEAR),
+        ]
+        caps = aggregate_capabilities(devices)
+        assert caps.dimming_curve_type == DimmingCurveType.LOGARITHMIC
 
 
 # ---------------------------------------------------------------------------
@@ -448,3 +529,21 @@ class TestRefreshAggregatedVirtualDevices:
         group_device = ctrl._group_devices_by_number[3]
         control_ids = {c.id for c in group_device.get_mqtt_controls()}
         assert "set_colour_temperature" in control_ids
+
+    @pytest.mark.asyncio
+    async def test_curve_type_change_triggers_rebuild(self):
+        """Group device is rebuilt when a member's dimming curve type changes."""
+        dev = _make_device(groups=[1], dimming_curve_type=DimmingCurveType.LOGARITHMIC)
+        ctrl = _make_controller(dali_devices=[dev])
+        await ctrl._refresh_group_virtual_devices()
+        ctrl._device_publisher.reset_mock()
+
+        # Flip the device's dimming curve type
+        dev.dimming_curve_type = DimmingCurveType.LINEAR
+
+        await ctrl._refresh_group_virtual_devices()
+
+        ctrl._device_publisher.remove_device.assert_awaited_once()
+        ctrl._device_publisher.add_device.assert_awaited_once()
+        rebuilt = ctrl._group_devices_by_number[1]
+        assert rebuilt.capabilities.dimming_curve_type == DimmingCurveType.LINEAR

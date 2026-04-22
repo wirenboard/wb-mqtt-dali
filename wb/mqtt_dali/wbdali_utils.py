@@ -30,6 +30,7 @@ from .wbdali import WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
 
 MASK = 0xFF
+MASK_2BYTES = 65535
 
 
 MAX_COMMAND_RETRIES = 3

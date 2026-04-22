@@ -24,6 +24,8 @@ class SettingsParamName:
 
 
 class SettingsParamBase:
+    requires_mqtt_controls_refresh: bool = False
+
     def __init__(self, name: SettingsParamName) -> None:
         self.name = name
         self.description: Optional[str] = None
@@ -55,6 +57,10 @@ class SettingsParamBase:
         """
         del driver, short_address, value, logger
         return {}
+
+    def has_changes(self, new_params: dict) -> bool:
+        del new_params
+        return False
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         del group_and_broadcast
@@ -101,14 +107,18 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
             return {}
 
         value_to_set = value[self.property_name]
-        if self.value == value_to_set:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and self.value == value_to_set:
             return {}
 
         command_factory = self._enable_factory if bool(value_to_set) else self._disable_factory
         await send_with_retry(driver, command_factory(short_address), logger)
-        if is_broadcast_or_group_address(short_address):
+        if not is_for_single_device:
             return {}
         return await self.read(driver, short_address, logger)
+
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params and self.value != new_params[self.property_name]
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         del group_and_broadcast
@@ -169,18 +179,22 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         if self.property_name not in value:
             return {}
         value_to_set = value[self.property_name]
-        if self.value == value_to_set:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and self.value == value_to_set:
             return {}
         raw = (int(value_to_set) + self.multiplier // 2) // self.multiplier
         commands = self.get_write_commands(short_address, raw)
-        if not is_broadcast_or_group_address(short_address):
+        if is_for_single_device:
             commands.append(self.get_read_command(short_address))
         responses = await query_responses(driver, commands, logger)
-        if is_broadcast_or_group_address(short_address):
+        if not is_for_single_device:
             return {}
         res = responses[-1]
         self.value = res.raw_value.as_integer * self.multiplier
         return {self.property_name: self.value}
+
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params and self.value != new_params[self.property_name]
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         if group_and_broadcast and self._is_read_only:
@@ -269,6 +283,11 @@ class SettingsParamGroup(SettingsParamBase):
         if is_broadcast_or_group_address(short_address):
             return {}
         return {self._property_name: res}
+
+    def has_changes(self, new_params: dict) -> bool:
+        if self._property_name not in new_params:
+            return False
+        return any(p.has_changes(new_params[self._property_name]) for p in self._parameters)
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         res = {

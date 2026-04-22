@@ -69,9 +69,11 @@ from .settings import (
 from .utils import add_enum, add_translations
 from .wbdali import WBDALIDriver
 from .wbdali_utils import (
+    is_broadcast_or_group_address,
     query_response,
     query_responses,
     query_responses_retry_only_failed,
+    send_commands_with_retry,
     send_with_retry,
 )
 
@@ -363,18 +365,25 @@ class DeviceGroupsParam(SettingsParamBase):
         desired_groups = [bool(item) for item in groups_to_set]
         if len(desired_groups) != self.TOTAL_GROUPS:
             raise ValueError(f"{self.property_name} must contain {self.TOTAL_GROUPS} items")
-        if desired_groups == self._groups:
+        is_for_single_device = not is_broadcast_or_group_address(short_address)
+        if is_for_single_device and desired_groups == self._groups:
             return {}
 
-        current_lower = self._mask_for_slice(self._groups[: self.HALF_RANGE])
-        current_upper = self._mask_for_slice(self._groups[self.HALF_RANGE :])
         desired_lower = self._mask_for_slice(desired_groups[: self.HALF_RANGE])
         desired_upper = self._mask_for_slice(desired_groups[self.HALF_RANGE :])
 
-        remove_lower = current_lower & ~desired_lower
-        remove_upper = current_upper & ~desired_upper
-        add_lower = desired_lower & ~current_lower
-        add_upper = desired_upper & ~current_upper
+        if is_for_single_device:
+            current_lower = self._mask_for_slice(self._groups[: self.HALF_RANGE])
+            current_upper = self._mask_for_slice(self._groups[self.HALF_RANGE :])
+            remove_lower = current_lower & ~desired_lower
+            remove_upper = current_upper & ~desired_upper
+            add_lower = desired_lower & ~current_lower
+            add_upper = desired_upper & ~current_upper
+        else:
+            remove_lower = ~desired_lower & 0xFFFF
+            remove_upper = ~desired_upper & 0xFFFF
+            add_lower = desired_lower
+            add_upper = desired_upper
 
         commands: list[Command] = []
         if remove_lower:
@@ -400,6 +409,10 @@ class DeviceGroupsParam(SettingsParamBase):
                 )
             )
         if not commands:
+            return {}
+
+        if not is_for_single_device:
+            await send_commands_with_retry(driver, commands, logger)
             return {}
 
         query_commands = self._build_query_commands(short_address)
@@ -501,9 +514,26 @@ class Dali2Device(DaliDeviceBase):
     async def identify(self, driver: WBDALIDriver) -> None:
         await send_with_retry(driver, IdentifyDevice(DeviceShort(self.address.short)), self.logger)
 
+    def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        mqtt_controls: list[MqttControlBase] = []
+        for instance in self.instances.values():
+            if instance.instance_type == occupancy.instance_type:
+                mqtt_controls.extend(get_occupancy_controls(instance.instance_number.value))
+            elif instance.instance_type == light.instance_type:
+                mqtt_controls.extend(get_light_controls(instance.instance_number.value))
+            elif instance.instance_type == pushbutton.instance_type:
+                mqtt_controls.extend(get_button_controls(instance.instance_number.value))
+            elif instance.instance_type == absolute_input_device.instance_type:
+                mqtt_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
+            elif instance.instance_type == general_purpose_sensor.instance_type:
+                mqtt_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
+            elif instance.instance_type == feedback.instance_type:
+                mqtt_controls.extend(get_feedback_controls(instance.instance_number.value))
+        return mqtt_controls
+
     async def _initialize_impl(
         self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
+    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
         addr = DeviceShort(self.address.short)
         await self._groups_parameter.read(driver, addr, self.logger)
 
@@ -529,19 +559,4 @@ class Dali2Device(DaliDeviceBase):
         ]
         parameter_handlers.extend(self.instances.values())
 
-        mqtt_controls: list[MqttControlBase] = []
-        for instance in self.instances.values():
-            if instance.instance_type == occupancy.instance_type:
-                mqtt_controls.extend(get_occupancy_controls(instance.instance_number.value))
-            elif instance.instance_type == light.instance_type:
-                mqtt_controls.extend(get_light_controls(instance.instance_number.value))
-            elif instance.instance_type == pushbutton.instance_type:
-                mqtt_controls.extend(get_button_controls(instance.instance_number.value))
-            elif instance.instance_type == absolute_input_device.instance_type:
-                mqtt_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
-            elif instance.instance_type == general_purpose_sensor.instance_type:
-                mqtt_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
-            elif instance.instance_type == feedback.instance_type:
-                mqtt_controls.extend(get_feedback_controls(instance.instance_number.value))
-
-        return (parameter_handlers, mqtt_controls, [])
+        return (parameter_handlers, [])

@@ -9,8 +9,9 @@ from dali.gear.colour import Activate, SetTemporaryPrimaryNDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
-from .dali_type8_common import MASK_2BYTES, ColourComponent, Type8Limits
+from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
+from .wbdali_utils import MASK_2BYTES
 from .wbmqtt import TranslatedTitle
 
 COLOUR_NAMES = {
@@ -68,7 +69,7 @@ class PrimaryNColourValues:
             if colour.value in value:
                 setattr(self, colour.value, value[colour.value])
 
-    def get_schema(self, _limits: Type8Limits) -> dict:
+    def get_schema(self, _limits) -> dict:
         properties = {}
         required = []
         translations = {}

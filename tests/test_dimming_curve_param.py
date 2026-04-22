@@ -264,7 +264,7 @@ def _find_dimming_curve_param(handlers) -> Optional[DimmingCurveParam]:
 @pytest.mark.asyncio
 async def test_dt6_keeps_editable_dimming_curve():
     device = _make_dali_device()
-    parameter_handlers, _, group_parameter_handlers = await _initialize(
+    parameter_handlers, group_parameter_handlers = await _initialize(
         device, types=[DaliDeviceType.LED_MODULES.value]
     )
     param = _find_dimming_curve_param(parameter_handlers)
@@ -285,7 +285,7 @@ async def test_dt6_keeps_editable_dimming_curve():
 @pytest.mark.asyncio
 async def test_dt17_keeps_editable_dimming_curve():
     device = _make_dali_device()
-    parameter_handlers, _, _ = await _initialize(device, types=[DaliDeviceType.DIMMING_CURVE_SELECTION.value])
+    parameter_handlers, _ = await _initialize(device, types=[DaliDeviceType.DIMMING_CURVE_SELECTION.value])
     param = _find_dimming_curve_param(parameter_handlers)
     assert isinstance(param, Type17DimmingCurveParam)
     assert param._is_read_only is False
@@ -304,7 +304,7 @@ async def test_dt17_keeps_editable_dimming_curve():
 @pytest.mark.asyncio
 async def test_unsupported_types_get_read_only_fallback(device_type):
     device = _make_dali_device()
-    parameter_handlers, _, group_parameter_handlers = await _initialize(device, types=[device_type])
+    parameter_handlers, group_parameter_handlers = await _initialize(device, types=[device_type])
     param = _find_dimming_curve_param(parameter_handlers)
     assert isinstance(param, DimmingCurveParam)
     assert param._is_read_only is True
@@ -331,7 +331,7 @@ async def test_unsupported_types_get_read_only_fallback(device_type):
 @pytest.mark.asyncio
 async def test_dt5_without_nonlog_support_gets_fallback():
     device = _make_dali_device()
-    parameter_handlers, _, group_parameter_handlers = await _initialize(
+    parameter_handlers, group_parameter_handlers = await _initialize(
         device,
         types=[DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE.value],
         type5_supports_nonlog=False,
@@ -352,7 +352,7 @@ async def test_dt5_without_nonlog_support_gets_fallback():
 @pytest.mark.asyncio
 async def test_dt5_with_nonlog_support_keeps_editable_param():
     device = _make_dali_device()
-    parameter_handlers, _, _ = await _initialize(
+    parameter_handlers, _ = await _initialize(
         device,
         types=[DaliDeviceType.CONVERSION_FROM_DIGITAL_SIGNAL_INTO_DC_VOLTAGE.value],
         type5_supports_nonlog=True,

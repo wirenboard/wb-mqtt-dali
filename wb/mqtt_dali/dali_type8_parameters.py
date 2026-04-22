@@ -31,7 +31,8 @@ from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8
 from .common_dali_device import ControlPollResult, MqttControlBase
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
-from .dali_type8_common import ColourComponent, Type8Limits
+from .dali_type8_common import ColourComponent
+from .dali_type8_tc import TcLimitsSettings, Type8TcLimits
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
 from .wbdali import WBDALIDriver
@@ -218,7 +219,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         colour_tags: dict[ColourComponent, QueryColourValueDTR],
         property_order: int,
         default_colour_type: ColourType,
-        limits: Type8Limits,
+        limits: Type8TcLimits,
         read_after_save: bool = True,
     ) -> None:
         super().__init__(name)
@@ -260,6 +261,9 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
             return await self._read_impl(driver, short_address)
         self.value = new_state
         return {self.property_name: new_state.to_json()}
+
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         schema = {
@@ -319,7 +323,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
 
 
 class SceneSettings(ColourState):
-    def __init__(self, scene_number: int, default_colour_type: ColourType, limits: Type8Limits) -> None:
+    def __init__(self, scene_number: int, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
             SettingsParamName(f"Scene {scene_number}", f"Сцена {scene_number}"),
             f"scene_{scene_number}",
@@ -364,7 +368,7 @@ class SceneSettings(ColourState):
 
 
 class ScenesSettings(SettingsParamBase):
-    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+    def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(SettingsParamName("Scenes", "Сцены"))
 
         self.property_name = f"scenes_{default_colour_type.value}"
@@ -399,6 +403,9 @@ class ScenesSettings(SettingsParamBase):
         for i, res in enumerate(results):
             self._scene_values[i].update(res)
         return {self.property_name: self._scene_values}
+
+    def has_changes(self, new_params: dict) -> bool:
+        return self.property_name in new_params
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         item_schema = self._scenes[0].get_schema(group_and_broadcast)
@@ -443,7 +450,7 @@ class ScenesSettings(SettingsParamBase):
 
 
 class ColourGroupScenesSettings(ColourState):
-    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+    def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
             SettingsParamName("Scenes", "Сцены"),
             f"scene_{default_colour_type.value}",
@@ -508,7 +515,7 @@ class ColourGroupScenesSettings(ColourState):
 
 
 class CurrentColourState(ColourState):
-    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+    def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
             SettingsParamName("Current colour", "Текущий цвет"),
             f"current_colour_{default_colour_type.value}",
@@ -523,7 +530,7 @@ class CurrentColourState(ColourState):
 
 
 class PowerOnColourState(ColourState):
-    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+    def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
             SettingsParamName("Power On Colour", "Состояние после включения питания"),
             f"power_on_colour_{default_colour_type.value}",
@@ -537,7 +544,7 @@ class PowerOnColourState(ColourState):
 
 
 class SystemFailureColourState(ColourState):
-    def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
+    def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
             SettingsParamName("System Failure Colour", "Состояние после сбоя"),
             f"system_failure_colour_{default_colour_type.value}",
@@ -555,7 +562,7 @@ class Type8Parameters(TypeParameters):
         super().__init__()
 
         self._current_colour_type: Optional[ColourType] = None
-        self._limits = Type8Limits(dali_type8_tc.MIN_TC_MIREK, dali_type8_tc.MAX_TC_MIREK)
+        self._limits = Type8TcLimits()
         self._colour_type_lock = asyncio.Lock()
 
     @property
@@ -563,7 +570,7 @@ class Type8Parameters(TypeParameters):
         return self._current_colour_type if self._current_colour_type is not None else ColourType.RGBWAF
 
     @property
-    def tc_limits(self) -> Type8Limits:
+    def tc_limits(self) -> Type8TcLimits:
         return self._limits
 
     async def read_mandatory_info(
@@ -580,19 +587,20 @@ class Type8Parameters(TypeParameters):
                     logger,
                 )
                 if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-                    self._limits.tc_min_mirek, self._limits.tc_max_mirek = (
-                        await dali_type8_tc.read_colour_temperature_limits_mirek(
-                            driver,
-                            short_address,
-                            logger,
-                        )
+                    result = await dali_type8_tc.read_colour_temperature_limits_mirek(
+                        driver,
+                        short_address,
+                        logger,
                     )
-        parameters = [
+                    self._limits.update_from(result)
+        parameters: list[SettingsParamBase] = [
             CurrentColourState(self.default_colour_type, self._limits),
             PowerOnColourState(self.default_colour_type, self._limits),
             SystemFailureColourState(self.default_colour_type, self._limits),
             ScenesSettings(self.default_colour_type, self._limits),
         ]
+        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+            parameters.append(TcLimitsSettings(self._limits))
         self._parameters = parameters
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
@@ -638,11 +646,14 @@ class Type8Parameters(TypeParameters):
         return []
 
     def get_group_parameters(self) -> list[SettingsParamBase]:
-        return [
+        params: list[SettingsParamBase] = [
             PowerOnColourState(self.default_colour_type, self._limits),
             SystemFailureColourState(self.default_colour_type, self._limits),
             ColourGroupScenesSettings(self.default_colour_type, self._limits),
         ]
+        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+            params.append(TcLimitsSettings(self._limits))
+        return params
 
     async def _read_current_colour_type(
         self,

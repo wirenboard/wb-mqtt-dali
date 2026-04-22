@@ -38,6 +38,11 @@ def request_with_retry_sequence(cmd):
     raise RuntimeError(f"No response to {cmd} after 3 attempts; last error: {last_error}")
 
 
+@dataclass
+class ApplyResult:
+    needs_mqtt_controls_refresh: bool = False
+
+
 class MqttControlBase:
     def __init__(self, control_info: ControlInfo) -> None:
         # the property value is used as default value for the control
@@ -502,18 +507,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         async with self._initialize_lock:
             if self.is_initialized:
                 return
-            [parameter_handlers, mqtt_controls, group_parameter_handlers] = await self._initialize_impl(
-                driver
-            )
+            [parameter_handlers, group_parameter_handlers] = await self._initialize_impl(driver)
             parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
             self._parameter_handlers = parameter_handlers
             self._group_parameter_handlers = group_parameter_handlers
-            self._controls.clear()
-            self._polling_controls.clear()
-            for control in mqtt_controls:
-                if control.is_readable():
-                    self._polling_controls.append(control)
-                self._controls[control.control_info.id] = control
+            self.rebuild_mqtt_controls()
             self.is_initialized = True
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
@@ -550,7 +548,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self.params = params
         self.schema = schema
 
-    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
+    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> ApplyResult:
         if not self.is_initialized:
             raise RuntimeError(
                 f"Device {self.name} is not initialized. Call initialize() before applying parameters."
@@ -567,20 +565,37 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
             format_checker=jsonschema.draft4_format_checker,
         )
         updated_parameters = {}
+        needs_refresh = False
         for param_handler in self._parameter_handlers:
             try:
-                updated_parameters.update(
-                    await param_handler.write(
-                        driver,
-                        self._compat.getAddress(self.address.short),
-                        new_values,
-                        self.logger,
-                    )
+                result = await param_handler.write(
+                    driver,
+                    self._compat.getAddress(self.address.short),
+                    new_values,
+                    self.logger,
                 )
+                updated_parameters.update(result)
+                if result and param_handler.requires_mqtt_controls_refresh:
+                    needs_refresh = True
             except Exception as e:
                 raise RuntimeError(f'Error writing "{param_handler.name.en}": {e}') from e
         self.params.update(updated_parameters)
+        if needs_refresh:
+            self.rebuild_mqtt_controls()
         await self._apply_common_parameters(driver, new_values)
+        return ApplyResult(needs_mqtt_controls_refresh=needs_refresh)
+
+    def rebuild_mqtt_controls(self) -> None:
+        mqtt_controls = self._build_mqtt_controls()
+        self._controls.clear()
+        self._polling_controls.clear()
+        for control in mqtt_controls:
+            if control.is_readable():
+                self._polling_controls.append(control)
+            self._controls[control.control_info.id] = control
+
+    def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        return []
 
     def get_mqtt_controls(self) -> list[ControlInfo]:
         if not self.is_initialized:
@@ -644,6 +659,28 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
             )
         return res
 
+    async def sync_controls_after_broadcast(self, driver: WBDALIDriver, new_params: dict) -> bool:
+        controls_updated = False
+        any_changed = False
+        address = self._compat.getAddress(self.address.short)
+        for handler in self._parameter_handlers:
+            if not handler.has_changes(new_params):
+                continue
+            any_changed = True
+            if not handler.requires_mqtt_controls_refresh:
+                continue
+            try:
+                await handler.read(driver, address, self.logger)
+                controls_updated = True
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self.logger.warning('Failed to sync "%s": %s', handler.name.en, exc)
+        if controls_updated:
+            self.rebuild_mqtt_controls()
+        if any_changed:
+            self.params = {}
+            self.schema = {}
+        return controls_updated
+
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
 
@@ -673,5 +710,5 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
     # Must be implemented by subclasses
     async def _initialize_impl(
         self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[MqttControlBase], list[SettingsParamBase]]:
+    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
         raise NotImplementedError()

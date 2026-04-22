@@ -119,7 +119,7 @@ def make_controls() -> list[MqttControlBase]:
                 "dapc",
                 ControlMeta(
                     "range",
-                    TranslatedTitle("Direct Arc Power Control", "Задать мощность"),
+                    TranslatedTitle("Direct Arc Power Control", "DAPC"),
                     minimum=0,
                     maximum=254,
                 ),

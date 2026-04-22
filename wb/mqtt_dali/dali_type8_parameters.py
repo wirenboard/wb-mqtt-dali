@@ -525,7 +525,7 @@ class CurrentColourState(ColourState):
 class PowerOnColourState(ColourState):
     def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(
-            SettingsParamName("Power On Colour", "Цвет после включения питания"),
+            SettingsParamName("Power On Colour", "Состояние после включения питания"),
             f"power_on_colour_{default_colour_type.value}",
             QueryPowerOnLevel,
             SetPowerOnLevel,
@@ -539,7 +539,7 @@ class PowerOnColourState(ColourState):
 class SystemFailureColourState(ColourState):
     def __init__(self, default_colour_type: ColourType, limits: Type8Limits) -> None:
         super().__init__(
-            SettingsParamName("System Failure Colour", "Цвет при сбое"),
+            SettingsParamName("System Failure Colour", "Состояние после сбоя"),
             f"system_failure_colour_{default_colour_type.value}",
             QuerySystemFailureLevel,
             SetSystemFailureLevel,

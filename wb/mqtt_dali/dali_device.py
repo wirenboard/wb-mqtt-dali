@@ -33,7 +33,7 @@ from .dali_common_parameters import (
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_controls import CONTROLS, ActualLevelControl, WantedLevelControl
 from .dali_dimming_curve import DimmingCurveState
-from .dali_parameters import TypeParameters
+from .dali_parameters import DimmingCurveParam, TypeParameters
 from .dali_type1_parameters import Type1Parameters
 from .dali_type4_parameters import Type4Parameters
 from .dali_type5_parameters import Type5Parameters
@@ -250,6 +250,17 @@ class DaliDevice(DaliDeviceBase):
             MinLevelParam(),
             FadeTimeFadeRateParam(),
         ]
+
+        # If none of the type handlers contributed a dimming curve parameter, fall back
+        # to a read-only one fixed at the standard (logarithmic) curve so the UI always
+        # exposes the field for single devices.
+        if not any(
+            isinstance(param, DimmingCurveParam)
+            for handler in self._type_handlers
+            for param in handler._parameters  # pylint: disable=protected-access
+        ):
+            fallback = DimmingCurveParam(self._dimming_curve_state)
+            parameter_handlers.append(fallback)
         # Colour control has own scenes, power on level and system failure level parameters
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
             parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])

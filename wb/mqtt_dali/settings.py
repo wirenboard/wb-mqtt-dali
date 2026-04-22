@@ -26,6 +26,7 @@ class SettingsParamName:
 class SettingsParamBase:
     def __init__(self, name: SettingsParamName) -> None:
         self.name = name
+        self.description: Optional[str] = None
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
@@ -212,6 +213,8 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
             schema["properties"][self.property_name]["default"] = self.default
         if self.property_order is not None:
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
+        if self.description is not None:
+            schema["properties"][self.property_name]["description"] = self.description
         return schema
 
     def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:

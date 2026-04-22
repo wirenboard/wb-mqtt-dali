@@ -53,7 +53,7 @@ class MaxLevelParam(NumberGearParam):
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 16
+        self.property_order = 17
 
 
 class MinLevelParam(NumberGearParam):
@@ -65,7 +65,7 @@ class MinLevelParam(NumberGearParam):
         self.maximum = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 17
+        self.property_order = 18
 
 
 class PowerOnLevelParam(NumberGearParam):
@@ -74,12 +74,12 @@ class PowerOnLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("Power on level", "Яркость при включении питания"), "power_on_level"
+            SettingsParamName("Power on level", "Яркость после включения питания"), "power_on_level"
         )
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 21
+        self.property_order = 22
 
 
 class SystemFailureLevelParam(NumberGearParam):
@@ -88,7 +88,7 @@ class SystemFailureLevelParam(NumberGearParam):
 
     def __init__(self) -> None:
         super().__init__(
-            SettingsParamName("System failure level", "Яркость при сбое"), "system_failure_level"
+            SettingsParamName("System failure level", "Яркость после сбоя"), "system_failure_level"
         )
         self.default = 254
         self.format = "dali-level"
@@ -99,7 +99,7 @@ class SystemFailureLevelParam(NumberGearParam):
 class FadeTimeFadeRateParam(SettingsParamBase):
 
     def __init__(self) -> None:
-        super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость затухания"))
+        super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость изменения"))
         self._fade_time = None
         self._fade_rate = None
 
@@ -163,7 +163,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "fade_time": {
                     "type": "number",
                     "title": "Fade Time, s",
-                    "propertyOrder": 19,
+                    "propertyOrder": 20,
                     "enum": list(range(16)),
                     "default": 0,
                     "options": {
@@ -194,7 +194,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "fade_rate": {
                     "type": "number",
                     "title": "Fade Rate, steps/s",
-                    "propertyOrder": 20,
+                    "propertyOrder": 21,
                     "enum": list(range(1, 16)),
                     "default": 1,
                     "options": {
@@ -224,9 +224,9 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             },
             "translations": {
                 "ru": {
-                    "Fade Time, s": "Время затухания, с",
-                    "Fade Rate, steps/s": "Скорость затухания, шаг/с",
-                    "no fade": "без затухания",
+                    "Fade Time, s": "Время изменения, с",
+                    "Fade Rate, steps/s": "Скорость изменения, шаг/с",
+                    "no fade": "мгновенно",
                 },
             },
         }

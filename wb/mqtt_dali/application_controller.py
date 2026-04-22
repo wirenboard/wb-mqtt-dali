@@ -25,8 +25,9 @@ from .commissioning import Commissioning, CommissioningResult
 from .common_dali_device import MqttControlBase
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
-from .dali_controls import make_controls
+from .dali_controls import WantedLevelControl, make_controls
 from .dali_device import DaliDevice
+from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .dali_type8_parameters import ColourType
 from .dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
@@ -107,12 +108,15 @@ class AggregatedCapabilities:
     has_dt8_tc: bool = False
     tc_min_mirek: int = 0
     tc_max_mirek: int = 0
+    dimming_curve_type: DimmingCurveType = DimmingCurveType.LOGARITHMIC
 
 
 def build_virtual_device_controls(
     capabilities: AggregatedCapabilities,
 ) -> dict[str, MqttControlBase]:
-    controls: list[MqttControlBase] = list(make_controls())
+    dimming_state = DimmingCurveState()
+    dimming_state.curve_type = capabilities.dimming_curve_type
+    controls: list[MqttControlBase] = [WantedLevelControl(dimming_state), *make_controls()]
     if capabilities.has_dt8_rgbwaf:
         controls.extend(rgbwaf_mqtt_controls(only_setup_controls=True))
     if capabilities.has_dt8_tc:
@@ -125,6 +129,7 @@ def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilit
     has_tc = False
     tc_min_values: list[int] = []
     tc_max_values: list[int] = []
+    curve_types: set[DimmingCurveType] = set()
     for device in devices:
         if not device.is_initialized:
             continue
@@ -137,11 +142,14 @@ def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilit
             if limits is not None:
                 tc_min_values.append(limits.tc_min_mirek)
                 tc_max_values.append(limits.tc_max_mirek)
+        curve_types.add(device.dimming_curve_type)
+    dimming_curve_type = next(iter(curve_types)) if len(curve_types) == 1 else DimmingCurveType.LOGARITHMIC
     return AggregatedCapabilities(
         has_dt8_rgbwaf=has_rgbwaf,
         has_dt8_tc=has_tc,
         tc_min_mirek=min(tc_min_values) if tc_min_values else 0,
         tc_max_mirek=max(tc_max_values) if tc_max_values else 0,
+        dimming_curve_type=dimming_curve_type,
     )
 
 

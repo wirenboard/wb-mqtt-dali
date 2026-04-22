@@ -172,35 +172,38 @@ async def test_read_gtin_fast_silently_handles_bank_0_memory_not_implemented():
     assert result == 12345
 
 
-# -------- 5b. Bank 0 responds with no data (all None) → fall through to bank 1 --------
+# -------- 5b. Bank 0 silent → catastrophic bus error, propagate RuntimeError --------
 @pytest.mark.asyncio
-async def test_read_gtin_fast_falls_back_when_bank_0_has_no_responses():
+async def test_read_gtin_fast_raises_when_bank_0_has_no_responses():
+    # A bank that does not respond at all (distinct from MemoryLocationNotImplemented)
+    # is treated as a catastrophic bus error — no fallback to bank 1.
     driver = _SequenceDriver({0: None, 1: _bytes_for_gtin(5555)})
 
-    result = await read_gtin_fast(driver, GearShort(6), DaliCommandsCompatibilityLayer())
+    with pytest.raises(RuntimeError):
+        await read_gtin_fast(driver, GearShort(6), DaliCommandsCompatibilityLayer())
 
-    assert result == 5555
+    # Bank 1 must NOT have been attempted after the bank 0 failure.
+    dtr1_banks = [c.frame.as_integer & 0xFF for c in driver.commands if isinstance(c, DTR1)]
+    assert 1 not in dtr1_banks
 
 
-# -------- 5c. Bank 0 returns partial data (last 2 bytes None) → fall back to bank 1 --------
+# -------- 5c. Bank 0 partial response → catastrophic bus error, propagate RuntimeError --------
 @pytest.mark.asyncio
-async def test_read_gtin_fast_falls_back_when_bank_0_has_partial_response():
-    # 4 valid bytes + 2 missing → ``from_list`` cannot decode → MemoryLocationNotImplemented
-    # inside ``_read_gtin_from_bank`` → ``read_gtin_fast`` falls through to bank 1.
-    bank_1_gtin = 6543210
+async def test_read_gtin_fast_raises_when_bank_0_has_partial_response():
+    # Partial response (some bytes missing) also indicates a bus-level failure,
+    # not an "absent bank" — must not silently fall back to bank 1.
     driver = _SequenceDriver(
         {
             0: [0x12, 0x34, 0x56, 0x78, None, None],
-            1: _bytes_for_gtin(bank_1_gtin),
+            1: _bytes_for_gtin(6543210),
         }
     )
 
-    result = await read_gtin_fast(driver, GearShort(8), DaliCommandsCompatibilityLayer())
+    with pytest.raises(RuntimeError):
+        await read_gtin_fast(driver, GearShort(8), DaliCommandsCompatibilityLayer())
 
-    assert result == bank_1_gtin
-    # Both banks were selected (bank 1 fallback actually executed).
     dtr1_banks = [c.frame.as_integer & 0xFF for c in driver.commands if isinstance(c, DTR1)]
-    assert dtr1_banks == [0, 1]
+    assert 1 not in dtr1_banks
 
 
 # -------- 6. Integration: read_product_name now uses read_gtin_fast --------

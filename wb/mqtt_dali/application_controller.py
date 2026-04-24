@@ -285,7 +285,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._websocket_task: Optional[asyncio.Task] = None
         self._websocket_lock = asyncio.Lock()
 
-        self._bus_monitor_topic = f"/wb-mdali/{self.uid}/bus_monitor"
+        self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
@@ -545,7 +545,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             try:
                 if await device.sync_controls_after_broadcast(self._dev, new_params):
                     await self._device_publisher.remove_device(device.mqtt_id)
-                    await publish_device(device, self._device_publisher, self._handle_on_topic)
+                    await publish_device(device, self._device_publisher, self._run_on_topic_handler)
                     self._devices_by_mqtt_id[device.mqtt_id] = device
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self.logger.warning("Failed to sync device %s: %s", device.name, exc)
@@ -569,7 +569,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             try:
                 if await device.sync_controls_after_broadcast(self._dev, new_params):
                     await self._device_publisher.remove_device(device.mqtt_id)
-                    await publish_device(device, self._device_publisher, self._handle_on_topic)
+                    await publish_device(device, self._device_publisher, self._run_on_topic_handler)
                     self._devices_by_mqtt_id[device.mqtt_id] = device
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self.logger.warning("Failed to sync device %s: %s", device.name, exc)

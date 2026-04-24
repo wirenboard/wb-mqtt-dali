@@ -40,15 +40,15 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
         "--gateway1",
         dest="gateway1",
         type=str,
-        default="wb-mdali_1",
-        help="Gateway 1 MQTT device (default: wb-mdali_1)",
+        default="wb-dali_1",
+        help="Gateway 1 MQTT device (default: wb-dali_1)",
     )
     parser.add_argument(
         "--gateway2",
         dest="gateway2",
         type=str,
-        default="wb-mdali_2",
-        help="Gateway 2 MQTT device (default: wb-mdali_2)",
+        default="wb-dali_2",
+        help="Gateway 2 MQTT device (default: wb-dali_2)",
     )
     parser.add_argument(
         "--device_short_address",

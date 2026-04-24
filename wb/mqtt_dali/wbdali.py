@@ -44,7 +44,7 @@ FRAME_COUNTER_MODULO = 1 << 16
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
 
-    device_name: str = "wb-mdali_1"
+    device_name: str = "wb-dali_1"
 
     # DALI bus number, starting from 1 as printed on the gateway label
     bus: int = 1

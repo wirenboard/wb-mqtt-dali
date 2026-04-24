@@ -98,7 +98,7 @@ MQTT Broker ←→ MQTTDispatcher
 
 - **`commissioning.py`** – DALI device discovery using binary search (`BinarySearchAddressFinder`). Produces `CommissioningResult` tracking new/missing/changed devices.
 
-- **`wbdali.py`** – Driver abstraction for WB-MDALI hardware. Provide command queuing and bus I/O.
+- **`wbdali.py`** – Driver abstraction for WB-DALI hardware. Provide command queuing and bus I/O.
 
 - **`device_publisher.py`** – Publishes device state to MQTT topics. Runs the polling loop.
 

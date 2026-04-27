@@ -457,7 +457,7 @@ class ColourGroupScenesSettings(ColourState):
             QuerySceneLevel,
             SetScene,
             REPORT_COLOUR_TAGS,
-            PropertyStartOrder.GROUPS.value,
+            PropertyStartOrder.SCENES.value,
             default_colour_type,
             limits,
         )

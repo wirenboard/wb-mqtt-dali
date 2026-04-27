@@ -6,7 +6,7 @@ from typing import Optional
 from dali.address import GearShort
 from dali.command import Response
 
-from .common_dali_device import MqttControl, MqttControlBase
+from .common_dali_device import MqttControl, MqttControlBase, PropertyStartOrder
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo, ControlMeta, TranslatedTitle
 from .gear.switching_function import (
@@ -41,6 +41,7 @@ class UpSwitchOnThresholdParam(NumberGearParam):
         self.minimum = 1
         self.grid_columns = 6
         self.format = "dali-level"
+        self.property_order = PropertyStartOrder.SPECIFIC.value
 
 
 class UpSwitchOffThresholdParam(NumberGearParam):
@@ -55,6 +56,7 @@ class UpSwitchOffThresholdParam(NumberGearParam):
         self.minimum = 1
         self.grid_columns = 6
         self.format = "dali-level"
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 1
 
 
 class DownSwitchOnThresholdParam(NumberGearParam):
@@ -68,6 +70,7 @@ class DownSwitchOnThresholdParam(NumberGearParam):
         )
         self.grid_columns = 6
         self.format = "dali-level"
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 2
 
 
 class DownSwitchOffThresholdParam(NumberGearParam):
@@ -81,6 +84,7 @@ class DownSwitchOffThresholdParam(NumberGearParam):
         )
         self.grid_columns = 6
         self.format = "dali-level"
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 3
 
 
 class ErrorHoldOffTimeParam(NumberGearParam):
@@ -92,6 +96,7 @@ class ErrorHoldOffTimeParam(NumberGearParam):
             SettingsParamName("Error holdoff time, s", "Время задержки ошибки, с"),
             "type_7_error_holdoff_time",
         )
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 4
 
 
 class Type7Parameters(TypeParameters):

@@ -4,6 +4,7 @@ import logging
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -26,6 +27,19 @@ from .wbdali_utils import (
     query_response,
     send_commands_with_retry,
 )
+from .wbmqtt import TranslatedTitle
+
+
+class PropertyStartOrder(Enum):
+    DT50 = 20  # Luminaire info
+    COMMON = 100
+    POWER_ON_LEVEL = 105
+    SYSTEM_FAILURE_LEVEL = 106
+    TC_LIMITS = 200
+    DT52 = 500  # Diagnostics and maintenance
+    SPECIFIC = 600
+    GROUPS = 700
+    SCENES = 800
 
 
 def request_with_retry_sequence(cmd):
@@ -106,7 +120,7 @@ class ControlPollResult:
     control_id: str
     value: Optional[str] = None
     error: Optional[str] = None
-    title: Optional[str] = None
+    title: Optional[Union[str, TranslatedTitle]] = None
 
 
 @dataclass
@@ -640,12 +654,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                 continue
 
             if descriptor.control_info.meta.control_type == "alarm":
-                alarm_title = descriptor.format_response(response)
-                alarm_active = "1" if getattr(response, "error", False) else "0"
+                alarm_title = descriptor.format_title(response)
+                alarm_value = descriptor.format_response(response)
                 res.append(
                     ControlPollResult(
                         control_id=descriptor.control_info.id,
-                        value=alarm_active,
+                        value=alarm_value,
                         title=alarm_title,
                     )
                 )
@@ -688,6 +702,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return self._group_parameter_handlers
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
+        """
+        Return a list of MQTT controls that are common to all DALI devices.
+        This is used then initializing fails, but we still want to expose some basic controls in MQTT.
+        The controls are overridden with more specific ones when the device is successfully initialized.
+        """
         return []
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:

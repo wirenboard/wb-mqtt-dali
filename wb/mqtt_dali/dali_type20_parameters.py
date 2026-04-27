@@ -1,6 +1,6 @@
 # Type 20 Demand response
 
-from .common_dali_device import MqttControl, MqttControlBase
+from .common_dali_device import MqttControl, MqttControlBase, PropertyStartOrder
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo
 from .gear.demand_response import (
@@ -27,6 +27,7 @@ class LoadSheddingConditionParam(NumberGearParam):
             SettingsParamName("Load shedding condition", "Условие снижения нагрузки"),
             "type_20_load_shedding_condition",
         )
+        self.property_order = PropertyStartOrder.SPECIFIC.value
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         schema = super().get_schema(group_and_broadcast)
@@ -62,6 +63,8 @@ class ReductionFactor1Param(NumberGearParam):
             "type_20_reduction_factor_1",
         )
         self.maximum = 100
+        self.grid_columns = 4
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 1
 
 
 class ReductionFactor2Param(NumberGearParam):
@@ -74,6 +77,8 @@ class ReductionFactor2Param(NumberGearParam):
             "type_20_reduction_factor_2",
         )
         self.maximum = 100
+        self.grid_columns = 4
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 2
 
 
 class ReductionFactor3Param(NumberGearParam):
@@ -86,6 +91,8 @@ class ReductionFactor3Param(NumberGearParam):
             "type_20_reduction_factor_3",
         )
         self.maximum = 100
+        self.grid_columns = 4
+        self.property_order = PropertyStartOrder.SPECIFIC.value + 3
 
 
 class Type20Parameters(TypeParameters):

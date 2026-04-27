@@ -29,25 +29,6 @@ from .wbmqtt import ControlMeta, TranslatedTitle
 AddressFactory = Callable[[int], Union[GearBroadcast, GearGroup, GearShort]]
 
 
-def _build_error_status_query(short_address: Address) -> QueryStatus:
-    return QueryStatus(short_address)
-
-
-def _format_error_status(response: Response) -> str:
-    if not getattr(response, "error", False):
-        return "OK"
-
-    details: list[str] = []
-    if getattr(response, "ballast_status", False):
-        details.append("ballast not ok")
-    if getattr(response, "lamp_failure", False):
-        details.append("lamp failure")
-    if getattr(response, "missing_short_address", False):
-        details.append("missing short address")
-
-    return ", ".join(details)
-
-
 def handle_dapc(short_address: Address, value: str) -> list[Command]:
     try:
         power = int(value, 0)
@@ -118,8 +99,8 @@ def make_controls() -> list[MqttControlBase]:
             ControlInfo(
                 "dapc",
                 ControlMeta(
-                    "range",
-                    TranslatedTitle("Direct Arc Power Control", "DAPC"),
+                    "value",
+                    TranslatedTitle("Direct Arc Power Control", "Прямое управление"),
                     minimum=0,
                     maximum=254,
                 ),
@@ -199,15 +180,39 @@ def make_controls() -> list[MqttControlBase]:
     ]
 
 
-CONTROLS: list[MqttControlBase] = [
-    MqttControl(
-        ControlInfo(
-            "error_status",
-            ControlMeta("alarm", TranslatedTitle("Error Status", "Статус ошибки"), read_only=True),
-            "0",
-        ),
-        query_builder=_build_error_status_query,
-        value_formatter=_format_error_status,
-    ),
-    *make_controls(),
-]
+class ErrorStatusControl(MqttControlBase):
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                "error_status",
+                ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True),
+                "0",
+            )
+        )
+
+    def get_query(self, short_address: Address) -> Optional[Command]:
+        return QueryStatus(short_address)
+
+    def is_readable(self) -> bool:
+        return True
+
+    def format_response(self, response: Response) -> str:
+        return "1" if getattr(response, "error", False) else "0"
+
+    def format_title(self, response: Response) -> TranslatedTitle:
+        if not getattr(response, "error", False):
+            return TranslatedTitle("Ok", "Норма")
+
+        details: list[str] = []
+        details_ru: list[str] = []
+        if getattr(response, "ballast_status", False):
+            details.append("Ballast not ok")
+            details_ru.append("Ошибка балласта")
+        if getattr(response, "lamp_failure", False):
+            details.append("Lamp failure")
+            details_ru.append("Неисправность лампы")
+        if getattr(response, "missing_short_address", False):
+            details.append("Missing short address")
+            details_ru.append("Отсутствует короткий адрес")
+
+        return TranslatedTitle(", ".join(details), ", ".join(details_ru))

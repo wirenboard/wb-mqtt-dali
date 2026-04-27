@@ -40,7 +40,7 @@ from dali.device.general import (
     SetPrimaryInstanceGroup,
 )
 
-from .common_dali_device import DaliDeviceBase, MqttControlBase
+from .common_dali_device import DaliDeviceBase, MqttControlBase, PropertyStartOrder
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import (
     get_absolute_input_device_controls,
@@ -428,6 +428,7 @@ class DeviceGroupsParam(SettingsParamBase):
                 self.property_name: {
                     "type": "array",
                     "title": self.name.en,
+                    "propertyOrder": PropertyStartOrder.GROUPS.value,
                     "items": {"type": "boolean", "format": "button"},
                     "minItems": self.TOTAL_GROUPS,
                     "maxItems": self.TOTAL_GROUPS,

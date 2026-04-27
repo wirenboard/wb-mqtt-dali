@@ -28,7 +28,7 @@ from dali.gear.general import (
 )
 
 from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8_xy
-from .common_dali_device import ControlPollResult, MqttControlBase
+from .common_dali_device import ControlPollResult, MqttControlBase, PropertyStartOrder
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .dali_type8_common import ColourComponent
@@ -330,7 +330,7 @@ class SceneSettings(ColourState):
             lambda address: QuerySceneLevel(address, scene_number),
             lambda address: SetScene(address, scene_number),
             REPORT_COLOUR_TAGS,
-            900,
+            PropertyStartOrder.SCENES.value,
             default_colour_type,
             limits,
         )
@@ -434,7 +434,7 @@ class ScenesSettings(SettingsParamBase):
                     "minItems": SCENES_TOTAL,
                     "maxItems": SCENES_TOTAL,
                     "items": item_schema["properties"][self._scenes[0].property_name],
-                    "propertyOrder": 900,
+                    "propertyOrder": PropertyStartOrder.SCENES.value,
                 },
             },
             "translations": {
@@ -457,7 +457,7 @@ class ColourGroupScenesSettings(ColourState):
             QuerySceneLevel,
             SetScene,
             REPORT_COLOUR_TAGS,
-            900,
+            PropertyStartOrder.GROUPS.value,
             default_colour_type,
             limits,
         )
@@ -522,7 +522,7 @@ class CurrentColourState(ColourState):
             QueryActualLevel,
             Activate,
             ACTUAL_LEVEL_COLOUR_TAGS,
-            800,
+            PropertyStartOrder.SYSTEM_FAILURE_LEVEL.value + 1,
             default_colour_type,
             limits,
             read_after_save=False,
@@ -537,7 +537,7 @@ class PowerOnColourState(ColourState):
             QueryPowerOnLevel,
             SetPowerOnLevel,
             REPORT_COLOUR_TAGS,
-            21,
+            PropertyStartOrder.POWER_ON_LEVEL.value,
             default_colour_type,
             limits,
         )
@@ -551,7 +551,7 @@ class SystemFailureColourState(ColourState):
             QuerySystemFailureLevel,
             SetSystemFailureLevel,
             REPORT_COLOUR_TAGS,
-            31,
+            PropertyStartOrder.SYSTEM_FAILURE_LEVEL.value,
             default_colour_type,
             limits,
         )

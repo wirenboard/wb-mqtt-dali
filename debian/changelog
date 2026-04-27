@@ -1,3 +1,12 @@
+wb-mqtt-dali (1.5.0) stable; urgency=medium
+
+  * Modify scan workflow. 
+    ScanBus RPC now starts the process and returns immediately. 
+    The result publishes continuously to a commissioning progress MQTT-topic.
+  * Add StopScanBus RPC to stop the scan process. 
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 27 Apr 2026 14:47:39 +0500
+
 wb-mqtt-dali (1.4.0) stable; urgency=medium
 
   * Rename WB-MDALI to WB-DALI

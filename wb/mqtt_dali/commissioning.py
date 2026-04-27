@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Callable, Optional, Union
 
 from dali.address import DeviceBroadcast, DeviceShort, GearShort
@@ -26,6 +27,48 @@ from .wbdali_utils import (
 log = logging.getLogger("commissioning")
 
 MAX_SHORT_ADDRESS = 63
+
+
+class CommissioningStage(str, Enum):
+    QUERY_SHORT_ADDRESSES = "query_short_addresses"
+    BINARY_SEARCH = "binary_search"
+
+
+def _binary_search_local_progress(found: int, softening: int = 8) -> int:
+    """Asymptotic local progress (0..99) inside the binary-search stage.
+
+    ``found=0 -> 0``; ``found=softening -> 50``; ``found -> infinity -> 100``.
+    The result is strictly less than 100 for any non-negative ``found``,
+    so no explicit clamp is needed.
+    """
+    if found <= 0:
+        return 0
+    return 100 * found // (found + softening)
+
+
+ProgressCallback = Callable[[CommissioningStage, int, bool], None]
+
+
+class ProgressReporter:
+    def __init__(self, callback: Optional[ProgressCallback]) -> None:
+        self._cb = callback
+        self._last_stage: Optional[CommissioningStage] = None
+        self._last_percent: int = 0
+
+    def __call__(self, stage: CommissioningStage, local_progress: int = 0) -> None:
+        percent = 0
+        if stage == CommissioningStage.BINARY_SEARCH:
+            percent = 50
+        percent += 50 * local_progress // 100
+        self._last_stage = stage
+        self._last_percent = percent
+        if self._cb is not None:
+            self._cb(stage, percent, False)
+
+    def notify_device(self) -> None:
+        if self._cb is None or self._last_stage is None:
+            return
+        self._cb(self._last_stage, self._last_percent, True)
 
 
 @dataclass
@@ -98,7 +141,11 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
 
 class Commissioning:  # pylint: disable=too-many-instance-attributes
     def __init__(
-        self, driver: WBDALIDriver, old_devices: list[DaliDeviceAddress], dali2: bool = False
+        self,
+        driver: WBDALIDriver,
+        old_devices: list[DaliDeviceAddress],
+        dali2: bool = False,
+        progress_cb: Optional[ProgressCallback] = None,
     ) -> None:
         self.driver: WBDALIDriver = driver
         self.last_search_addr = SearchAddress()
@@ -115,10 +162,12 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             self._cmds = Dali2CommandsCompatibilityLayer()
         else:
             self._cmds = DaliCommandsCompatibilityLayer()
+        self._reporter: ProgressReporter = ProgressReporter(progress_cb)
 
     def _add_device(self, short_addr: int, rand_addr: int) -> None:
         log.debug("Adding device: short %d, random 0x%06x", short_addr, rand_addr)
         self.found_devices[short_addr] = rand_addr
+        self._reporter.notify_device()
 
     def _set_search_addr(self, addr: int):
         log.debug("Setting search address 0x%06x", addr)
@@ -347,8 +396,10 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         #   на VERIFY SHORT ADDRESS тоже не отвечает
         #   randomAddress у неё всегда 0x14d1d4, на Randomise не реагирует
 
+        self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 0)
         short_addr_present = await self._get_present_short_addresses()
 
+        self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 25)
         rand_addresses = await asyncio.gather(
             *[get_random_address(x, self._cmds, self.driver) for x in short_addr_present]
         )
@@ -363,6 +414,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 known_rand_addrs.append((short, addr))
                 rand_addr_frequency[addr] = rand_addr_frequency.get(addr, 0) + 1
 
+        self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 50)
         log.info("Checking if multiple devices share the same random address")
         short_sent_randomise: list[int] = []
         for short, rand in known_rand_addrs.copy():
@@ -433,6 +485,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 known_rand_addrs.append((short, rand))
                 _found_rand_addrs.add(rand)
 
+        self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 75)
         log.info("Querying and withdrawing known random addresses")
         cmds = []
         query_cmd_indicies = []
@@ -454,6 +507,8 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             "with random address conflict or unset random address",
             len(random_address_conflicts),
         )
+        self._reporter(CommissioningStage.BINARY_SEARCH, 0)
+        bs_found = 0
         binary_search_counter = 0
         while True:
             binary_search_counter += 1
@@ -490,6 +545,11 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         pass
                 await send_with_retry(self.driver, self._cmds.Withdraw(), log)
                 random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
+                bs_found += 1
+                self._reporter(
+                    CommissioningStage.BINARY_SEARCH,
+                    _binary_search_local_progress(bs_found),
+                )
                 low = found_rand_addr
 
             if len(random_address_conflicts) == 0:  # it's O(1)!

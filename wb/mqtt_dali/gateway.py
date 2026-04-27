@@ -10,6 +10,8 @@ from typing import Optional, Tuple, Union
 from .application_controller import (
     ApplicationController,
     ApplicationControllerConfig,
+    CommissioningState,
+    CommissioningStatus,
     WebSocketConfig,
 )
 from .common_dali_device import DaliDeviceAddress
@@ -22,6 +24,11 @@ from .mqtt_rpc_server import MQTTRPCServer
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_POLLING_INTERVAL = 5.0
+
+
+def commissioning_topic(bus_uid: str) -> str:
+    """Retained MQTT topic that carries commissioning state for a bus."""
+    return f"/wb-dali/{bus_uid}/commissioning"
 
 
 def check_short_address_conflict(
@@ -134,6 +141,7 @@ def bus_to_json(bus: ApplicationController) -> dict:
                 bus.dali_devices + bus.dali2_devices,
             )
         ),
+        "commissioning": bus.commissioning_state.to_dict(),
     }
 
 
@@ -197,6 +205,7 @@ class Gateway:
         for r in res:
             if isinstance(r, Exception):
                 raise r
+        await self._publish_idle_commissioning_state_for_all_buses()
         await self.rpc_server.start()
         await self.rpc_server.add_endpoint(
             "Editor",
@@ -207,6 +216,11 @@ class Gateway:
             "Editor",
             "ScanBus",
             self.rescan_bus_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "StopScanBus",
+            self.stop_scan_bus_rpc_handler,
         )
         await self.rpc_server.add_endpoint(
             "Editor",
@@ -251,6 +265,7 @@ class Gateway:
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
+        await self._clear_commissioning_state_for_all_buses()
         res = await asyncio.gather(
             *[gw.stop() for gw in self.wb_dali_gateways],
             return_exceptions=True,
@@ -258,6 +273,31 @@ class Gateway:
         for r in res:
             if isinstance(r, Exception):
                 raise r
+
+    def _iter_buses(self):
+        for gw in self.wb_dali_gateways:
+            yield from gw.buses
+
+    async def _publish_idle_commissioning_state_for_all_buses(self) -> None:
+        # The default-constructed state is the source of truth for the
+        # idle payload shape; do not assemble the dict by hand here.
+        idle_payload = json.dumps(CommissioningState().to_dict())
+        for bus in self._iter_buses():
+            try:
+                await self._mqtt_dispatcher.client.publish(
+                    commissioning_topic(bus.uid), idle_payload, qos=1, retain=True
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logging.debug("Failed to publish idle commissioning state for bus %s: %s", bus.uid, exc)
+
+    async def _clear_commissioning_state_for_all_buses(self) -> None:
+        for bus in self._iter_buses():
+            try:
+                await self._mqtt_dispatcher.client.publish(
+                    commissioning_topic(bus.uid), payload=None, qos=1, retain=True
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logging.debug("Failed to clear commissioning state for bus %s: %s", bus.uid, exc)
 
     async def get_list_rpc_handler(self, _params: dict):
         await self._update_gateways()
@@ -309,13 +349,48 @@ class Gateway:
 
     async def rescan_bus_rpc_handler(self, params: dict):
         bus_id = params.get("busId")
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                if bus.uid == bus_id:
-                    await bus.rescan_bus()
-                    await self._save_configuration()
-                    return bus_to_json(bus)
+        for bus in self._iter_buses():
+            if bus.uid == bus_id:
+                result = await bus.start_commissioning(
+                    on_state_changed=self._make_commissioning_state_cb(bus.uid)
+                )
+                return {
+                    "status": result.value,
+                    "progressTopic": commissioning_topic(bus.uid),
+                }
         raise ValueError("Bus not found")
+
+    async def stop_scan_bus_rpc_handler(self, params: dict):
+        bus_id = params.get("busId")
+        for bus in self._iter_buses():
+            if bus.uid == bus_id:
+                cancelled = await bus.cancel_commissioning()
+                return {"status": "stopped" if cancelled else "not_running"}
+        raise ValueError("Bus not found")
+
+    def _make_commissioning_state_cb(self, bus_uid: str):
+        topic = commissioning_topic(bus_uid)
+
+        def _cb(state: CommissioningState):
+            async def _publish_and_save() -> None:
+                payload = json.dumps(state.to_dict())
+                try:
+                    await self._mqtt_dispatcher.client.publish(topic, payload, qos=1, retain=True)
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    logging.error("Failed to publish commissioning state for bus %s: %s", bus_uid, exc)
+                if state.status == CommissioningStatus.COMPLETED:
+                    try:
+                        await self._save_configuration()
+                    except Exception as exc:  # pylint: disable=broad-exception-caught
+                        logging.error(
+                            "Failed to save configuration after commissioning on bus %s: %s",
+                            bus_uid,
+                            exc,
+                        )
+
+            return _publish_and_save()
+
+        return _cb
 
     async def get_bus_rpc_handler(self, params: dict):
         bus_id = params.get("busId")

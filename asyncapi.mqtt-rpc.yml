@@ -164,6 +164,30 @@ channels:
     parameters:
       clientId:
         $ref: '#/components/parameters/clientId'
+  wbdaliEditorStopScanBus:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/StopScanBus/{clientId}'
+    messages:
+      wbdaliEditorStopScanBus:
+        $ref: '#/components/messages/wbdaliEditorStopScanBus'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorStopScanBusReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/StopScanBus/{clientId}/reply'
+    messages:
+      wbdaliEditorStopScanBusReply:
+        $ref: '#/components/messages/wbdaliEditorStopScanBusReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliCommissioningProgress:
+    address: '/wb-dali/{busUid}/commissioning'
+    messages:
+      wbdaliCommissioningProgress:
+        $ref: '#/components/messages/wbdaliCommissioningProgress'
+    parameters:
+      busUid:
+        description: Bus UID, e.g. wb-mdali_1_bus_1
   wbdaliEditorIdentifyDevice:
     address: '/rpc/v1/wb-mqtt-dali/Editor/IdentifyDevice/{clientId}'
     messages:
@@ -311,6 +335,27 @@ operations:
         $ref: '#/channels/wbdaliEditorScanBusReply'
       messages:
         - $ref: '#/channels/wbdaliEditorScanBusReply/messages/wbdaliEditorScanBusReply'
+  wbdaliEditorStopScanBus:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorStopScanBus'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorStopScanBus/messages/wbdaliEditorStopScanBus'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorStopScanBusReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorStopScanBusReply/messages/wbdaliEditorStopScanBusReply'
+  wbdaliCommissioningProgress:
+    action: receive
+    channel:
+      $ref: '#/channels/wbdaliCommissioningProgress'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliCommissioningProgress/messages/wbdaliCommissioningProgress'
   wbdaliEditorIdentifyDevice:
     action: send
     channel:
@@ -406,6 +451,18 @@ components:
       name: editorScanBusReply
       payload:
         $ref: '#/components/schemas/wbdaliEditorScanBusReplyPayload'
+    wbdaliEditorStopScanBus:
+      name: editorStopScanBus
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorStopScanBusPayload'
+    wbdaliEditorStopScanBusReply:
+      name: editorStopScanBusReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorStopScanBusReplyPayload'
+    wbdaliCommissioningProgress:
+      name: commissioningProgress
+      payload:
+        $ref: '#/components/schemas/commissioningState'
     wbdaliEditorIdentifyDevice:
       name: editorIdentifyDevice
       payload:
@@ -437,6 +494,63 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/deviceItem'
+        commissioning:
+          $ref: '#/components/schemas/commissioningState'
+    commissioningDeviceSummary:
+      type: object
+      properties:
+        short:
+          type: integer
+          minimum: 0
+          maximum: 63
+        random:
+          type: integer
+        dali2:
+          type: boolean
+      required:
+        - short
+        - random
+        - dali2
+    commissioningState:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - idle
+            - running
+            - completed
+            - failed
+            - cancelled
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        stage:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        devices:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/commissioningDeviceSummary'
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            ISO-8601 UTC timestamp of the transition to a terminal status
+            (completed/failed/cancelled); null while idle or running.
+      required:
+        - status
+        - progress
+        - stage
+        - error
+        - devices
+        - finished_at
     gatewayItem:
       type: object
       properties:
@@ -727,7 +841,51 @@ components:
         id:
           type: number
         result:
-          $ref: '#/components/schemas/busItem'
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - started
+                - already_running
+            progressTopic:
+              type: string
+          required:
+            - status
+            - progressTopic
+      required:
+        - id
+        - result
+    wbdaliEditorStopScanBusPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            busId:
+              type: string
+          required:
+            - busId
+      required:
+        - id
+        - params
+    wbdaliEditorStopScanBusReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - stopped
+                - not_running
+          required:
+            - status
       required:
         - id
         - result

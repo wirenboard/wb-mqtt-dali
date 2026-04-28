@@ -684,6 +684,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
 
+    @property
+    def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
+        return self._compat
+
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
 

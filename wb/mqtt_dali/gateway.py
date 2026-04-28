@@ -3,18 +3,14 @@ import json
 import logging
 import os
 import tempfile
-from dataclasses import dataclass, field
 from itertools import chain
 from typing import Optional, Tuple, Union
 
-from .application_controller import (
-    ApplicationController,
-    ApplicationControllerConfig,
-    WebSocketConfig,
-)
+from .application_controller import ApplicationController, ApplicationControllerConfig
 from .common_dali_device import DaliDeviceAddress
 from .dali2_device import Dali2Device
 from .dali_device import DaliDevice
+from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
@@ -22,6 +18,9 @@ from .mqtt_rpc_server import MQTTRPCServer
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_POLLING_INTERVAL = 5.0
+DEFAULT_WEBSOCKET_PORT = 8080
+MIN_WEBSOCKET_PORT = 1
+MAX_WEBSOCKET_PORT = 65535
 
 
 def check_short_address_conflict(
@@ -34,12 +33,25 @@ def check_short_address_conflict(
         raise ValueError(f"Short address {new_short} is already used by another device on this bus")
 
 
-@dataclass
 class WbDaliGateway:
-    uid: str
-    buses: list[ApplicationController] = field(default_factory=list)
+
+    def __init__(
+        self,
+        uid: str,
+        buses: list[ApplicationController],
+        websocket_enabled: bool = False,
+        websocket_port: int = DEFAULT_WEBSOCKET_PORT,
+    ) -> None:
+        self.uid = uid
+        self.buses = buses
+        self.websocket_enabled = websocket_enabled
+        self.websocket_port = websocket_port
+
+        self._websocket_task: Optional[asyncio.Task] = None
+        self._websocket_lock = asyncio.Lock()
 
     async def stop(self) -> None:
+        await self._stop_websocket()
         res = await asyncio.gather(
             *[bus.stop() for bus in self.buses],
             return_exceptions=True,
@@ -56,6 +68,57 @@ class WbDaliGateway:
         for r in res:
             if isinstance(r, Exception):
                 raise r
+        async with self._websocket_lock:
+            if self.websocket_enabled:
+                self._start_websocket_task()
+
+    async def apply_websocket_config(self, enabled: bool, port: int) -> None:
+        async with self._websocket_lock:
+            old_enabled = self.websocket_enabled
+            old_port = self.websocket_port
+
+            if enabled == old_enabled and port == old_port:
+                return
+
+            if not enabled:
+                await self._stop_websocket_locked()
+                self.websocket_enabled = False
+                self.websocket_port = port
+                if old_enabled:
+                    for bus in self.buses:
+                        bus.release_quiescent_mode()
+                return
+
+            if old_enabled and old_port != port:
+                await self._stop_websocket_locked()
+
+            self.websocket_enabled = True
+            self.websocket_port = port
+
+            if self._websocket_task is None:
+                self._start_websocket_task()
+
+    async def _stop_websocket(self) -> None:
+        async with self._websocket_lock:
+            await self._stop_websocket_locked()
+
+    async def _stop_websocket_locked(self) -> None:
+        if self._websocket_task is not None:
+            self._websocket_task.cancel()
+            try:
+                await self._websocket_task
+            except asyncio.CancelledError:
+                # Task cancellation is expected when stopping the websocket; ignore this error.
+                pass
+            self._websocket_task = None
+
+    def _start_websocket_task(self) -> None:
+        drivers = [bus.driver for bus in self.buses]
+        logger = logging.getLogger(self.uid)
+        self._websocket_task = asyncio.create_task(
+            run_websocket(drivers, self.uid, "0.0.0.0", self.websocket_port, logger),
+            name=f"websocket-{self.uid}",
+        )
 
 
 def check_mqtt_id_conflict(
@@ -101,10 +164,6 @@ def bus_from_json(
             )
             dali_devices.append(device)
 
-    websocket_conf = WebSocketConfig(
-        enabled=data.get("websocket_enabled", False),
-        port=data.get("websocket_port", 8080),
-    )
     polling_interval = data.get("polling_interval", DEFAULT_POLLING_INTERVAL)
     ap_conf = ApplicationControllerConfig(
         gateway_mqtt_device_id,
@@ -112,7 +171,6 @@ def bus_from_json(
         dali_devices,
         dali2_devices,
         polling_interval,
-        websocket_conf,
         data.get("bus_monitor_enabled", False),
     )
 
@@ -159,6 +217,8 @@ class Gateway:
                             enumerate(gw_conf.get("buses", []), 1),
                         )
                     ),
+                    websocket_enabled=bool(gw_conf.get("websocket_enabled", False)),
+                    websocket_port=int(gw_conf.get("websocket_port", DEFAULT_WEBSOCKET_PORT)),
                 ),
                 config.get("gateways", []),
             )
@@ -232,6 +292,11 @@ class Gateway:
             "Editor",
             "GetGateway",
             self.get_gateway_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "SetGateway",
+            self.set_gateway_rpc_handler,
         )
         await self.rpc_server.add_endpoint(
             "Editor",
@@ -332,8 +397,6 @@ class Gateway:
                         }
                     result = {
                         "config": {
-                            "websocket_enabled": bus.websocket_config.enabled,
-                            "websocket_port": bus.websocket_config.port,
                             "polling_interval": bus.polling_interval,
                             "bus_monitor_enabled": bus.bus_monitor_enabled,
                         },
@@ -344,36 +407,20 @@ class Gateway:
 
     async def set_bus_rpc_handler(self, params: dict):
         bus_id = params.get("busId")
-        new_config = params.get("config", {})
+        new_config = dict(params.get("config", {}))
         for gw in self.wb_dali_gateways:
             for bus in gw.buses:
                 if bus.uid == bus_id:
-                    new_websocket_config = WebSocketConfig(
-                        enabled=new_config.get("websocket_enabled", bus.websocket_config.enabled),
-                        port=new_config.get("websocket_port", bus.websocket_config.port),
-                    )
-                    if new_websocket_config.enabled and self._is_websocket_port_in_use(
-                        new_websocket_config.port, bus.uid
-                    ):
-                        raise ValueError(f"WebSocket port {new_websocket_config.port} is already in use")
-                    await bus.setup_websocket(new_websocket_config)
                     bus.set_polling_interval(new_config.get("polling_interval", bus.polling_interval))
                     bus.set_bus_monitor_enabled(
                         new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled)
                     )
-                    for key in [
-                        "websocket_enabled",
-                        "websocket_port",
-                        "polling_interval",
-                        "bus_monitor_enabled",
-                    ]:
+                    for key in ["polling_interval", "bus_monitor_enabled"]:
                         new_config.pop(key, None)
                     if new_config:
                         await bus.apply_bus_parameters(new_config)
                     await self._save_configuration()
                     return {
-                        "websocket_enabled": new_websocket_config.enabled,
-                        "websocket_port": new_websocket_config.port,
                         "polling_interval": bus.polling_interval,
                         "bus_monitor_enabled": bus.bus_monitor_enabled,
                     }
@@ -409,14 +456,57 @@ class Gateway:
         await bus.identify_device(device)
         return {}
 
-    async def get_gateway_rpc_handler(self, _params: dict):
-        return {"config": {}, "schema": {}}
+    async def get_gateway_rpc_handler(self, params: dict):
+        gateway_id = params.get("gatewayId")
+        if gateway_id is None:
+            raise ValueError("gatewayId parameter is required")
+        gw = self._find_gateway(gateway_id)
+        return {
+            "config": {
+                "websocket_enabled": gw.websocket_enabled,
+                "websocket_port": gw.websocket_port,
+            },
+            "schema": {},
+        }
 
-    def _is_websocket_port_in_use(self, port: int, bus_id: str) -> bool:
+    async def set_gateway_rpc_handler(self, params: dict):
+        gateway_id = params.get("gatewayId")
+        if gateway_id is None:
+            raise ValueError("gatewayId parameter is required")
+        new_config = params.get("config", {}) or {}
+
+        async with self._config_lock:
+            gw = self._find_gateway(gateway_id)
+
+            new_enabled = bool(new_config.get("websocket_enabled", gw.websocket_enabled))
+            new_port = int(new_config.get("websocket_port", gw.websocket_port))
+
+            if not MIN_WEBSOCKET_PORT <= new_port <= MAX_WEBSOCKET_PORT:
+                raise ValueError(
+                    f"WebSocket port {new_port} is out of range "
+                    f"[{MIN_WEBSOCKET_PORT}..{MAX_WEBSOCKET_PORT}]"
+                )
+
+            if new_enabled and self._is_gateway_websocket_port_in_use(new_port, gw.uid):
+                raise ValueError(f"WebSocket port {new_port} is already in use")
+
+            await gw.apply_websocket_config(new_enabled, new_port)
+            save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
+            return {
+                "websocket_enabled": gw.websocket_enabled,
+                "websocket_port": gw.websocket_port,
+            }
+
+    def _find_gateway(self, gateway_id: str) -> WbDaliGateway:
         for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                if bus.uid != bus_id and bus.websocket_config.enabled and bus.websocket_config.port == port:
-                    return True
+            if gw.uid == gateway_id:
+                return gw
+        raise ValueError(f"Gateway {gateway_id} not found")
+
+    def _is_gateway_websocket_port_in_use(self, port: int, gateway_id: str) -> bool:
+        for gw in self.wb_dali_gateways:
+            if gw.uid != gateway_id and gw.websocket_enabled and gw.websocket_port == port:
+                return True
         return False
 
     def _get_bus_and_group_index_by_id(
@@ -522,10 +612,10 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                 "gateways": [
                     {
                         "device_id": gw.uid,
+                        "websocket_enabled": gw.websocket_enabled,
+                        "websocket_port": gw.websocket_port,
                         "buses": [
                             {
-                                "websocket_enabled": bus.websocket_config.enabled,
-                                "websocket_port": bus.websocket_config.port,
                                 "polling_interval": bus.polling_interval,
                                 "devices": [
                                     get_dict_for_device_config(dev)

@@ -42,7 +42,6 @@ from .device_publisher import (
     MessageCallback,
     TranslatedTitle,
 )
-from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .utils import merge_json_schemas
@@ -63,20 +62,13 @@ class ApplicationControllerState(Enum):
 
 
 @dataclass
-class WebSocketConfig:
-    enabled: bool = False
-    port: int = 8080
-
-
-@dataclass
-class ApplicationControllerConfig:  # pylint: disable=too-many-instance-attributes
+class ApplicationControllerConfig:
     gateway_mqtt_device_id: str
     # Gateway bus number starting from 1
     bus: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
     polling_interval: float
-    websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
     enable_bus_monitor: bool = False
 
 
@@ -256,7 +248,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self.bus_name = f"Bus {config.bus}"
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
-        self.websocket_config = config.websocket_config
         self.logger = logging.getLogger(self.uid)
 
         self._state = ApplicationControllerState.UNINITIALIZED
@@ -282,9 +273,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         )
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
 
-        self._websocket_task: Optional[asyncio.Task] = None
-        self._websocket_lock = asyncio.Lock()
-
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
@@ -309,6 +297,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._init_scheduler = DeviceInitScheduler()
 
         self._controls_to_execute: dict[tuple[ControllableDevice, str], str] = {}
+
+    @property
+    def driver(self) -> WBDALIDriver:
+        return self._dev
 
     @property
     def polling_interval(self) -> float:
@@ -351,10 +343,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._polling_task = asyncio.create_task(self._polling_loop())
 
-        async with self._websocket_lock:
-            if self.websocket_config.enabled:
-                self._run_websocket()
-
     async def stop(self) -> None:
         async with self._state_lock:
             if self._state in (ApplicationControllerState.UNINITIALIZED, ApplicationControllerState.STOPPING):
@@ -389,9 +377,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._controls_to_execute.clear()
         self._init_scheduler.clear()
-
-        async with self._websocket_lock:
-            await self._stop_websocket()
 
         await self._device_publisher.cleanup()
         await self._dev.deinitialize()
@@ -495,36 +480,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._tasks_queue.put_nowait(task)
         await task.future
 
-    async def setup_websocket(self, config: WebSocketConfig) -> None:
-        async with self._state_lock:
-            if self._state != ApplicationControllerState.READY:
-                self.websocket_config = config
-                self.logger.debug(
-                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, "
-                    "just saving config",
-                )
-                return
-
-            async with self._websocket_lock:
-                if self.websocket_config == config:
-                    self.logger.debug("Lunatone IoT Gateway emulator config unchanged, no action needed")
-                    return
-
-                # Disable websocket
-                if not config.enabled:
-                    self.logger.info("Stop Lunatone IoT Gateway emulator")
-                    await self._stop_websocket()
-                    self.websocket_config = config
-                    self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
-                    return
-
-                # Port changed, so stop existing websocket first
-                if self.websocket_config.port != config.port:
-                    self.logger.info("Lunatone IoT Gateway emulator port changed, restarting")
-                    await self._stop_websocket()
-
-                self.websocket_config = config
-                self._run_websocket()
+    def release_quiescent_mode(self) -> None:
+        self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
 
     async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
         group_parameter_handlers = []
@@ -1035,22 +992,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         result,
                     )
 
-    def _run_websocket(self) -> None:
-        self._websocket_task = asyncio.create_task(
-            run_websocket(self._dev, "0.0.0.0", self.websocket_config.port, self.logger),
-            name=f"websocket-{self.uid}",
-        )
-
-    async def _stop_websocket(self) -> None:
-        if self._websocket_task is not None:
-            self._websocket_task.cancel()
-            try:
-                await self._websocket_task
-            except asyncio.CancelledError:
-                # Task cancellation is expected when stopping the websocket; ignore this error.
-                pass
-            self._websocket_task = None
-
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True
         if self._quiescent_mode_timer:
@@ -1080,7 +1021,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         self._one_shot_tasks.add(self._handle_start_quiescent_mode(), "Start quiescent mode")
                         return
                     if isinstance(incoming_command, StopQuiescentMode):
-                        self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
+                        self.release_quiescent_mode()
                         return
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass  # Ignore errors in bus traffic handling

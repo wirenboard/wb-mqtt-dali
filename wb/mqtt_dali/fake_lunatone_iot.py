@@ -13,6 +13,11 @@ usb-ip and restarting services.
 In the DALI Cockpit, select DALI Bus -> Bus Interface, pick the "Network"
 option and in there the "DALI-2 Display/DALI-2 IoT/DALI-2 WLAN", and enter
 your device's IP address and port, e.g., 192.0.2.3:8080.
+
+A single emulator instance maps multiple DALI buses to "lines" 0..N-1 of
+one Lunatone device: incoming `daliFrame` with `line=k` is routed to the
+k-th driver, and bus traffic from each driver is published with its own
+line index.
 """
 
 import asyncio
@@ -21,7 +26,7 @@ import logging
 from copy import deepcopy
 from enum import Enum
 from http import HTTPStatus
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 import dali.command
 import dali.frame
@@ -100,9 +105,10 @@ _INITIAL_GREET = {
 }
 
 
-def make_initial_greet(name: str) -> dict[str, Any]:
+def make_initial_greet(name: str, lines: int) -> dict[str, Any]:
     greet = deepcopy(_INITIAL_GREET)
     greet["data"]["name"] = name
+    greet["data"]["descriptor"]["lines"] = lines
     return greet
 
 
@@ -120,15 +126,15 @@ def _unbreak_jsonish(blob: Data) -> str:
 
 
 async def frame_result(websocket, line, result: SendingResult, logger: logging.Logger):
-    logger.debug("WS >> daliFrame result=%s", result)
+    logger.debug("WS >> daliFrame line=%s result=%s", line, result)
     await websocket.send(json.dumps({"type": "daliFrame", "data": {"line": line, "result": result.value}}))
 
 
 async def dali_answer(websocket, line, result, dali_data, logger: logging.Logger):
     if dali_data is None:
-        logger.debug("WS >> daliAnswer result=%s dali_data=%s", result, dali_data)
+        logger.debug("WS >> daliAnswer line=%s result=%s dali_data=%s", line, result, dali_data)
     else:
-        logger.debug("WS >> daliAnswer result=%s dali_data=%02x", result, dali_data)
+        logger.debug("WS >> daliAnswer line=%s result=%s dali_data=%02x", line, result, dali_data)
     await websocket.send(
         json.dumps(
             {"type": "daliAnswer", "data": {"line": line, "result": result.value, "daliData": dali_data}}
@@ -136,17 +142,20 @@ async def dali_answer(websocket, line, result, dali_data, logger: logging.Logger
     )
 
 
-async def emulate(
+async def emulate(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     websocket: WebSocketServerProtocol,
-    driver: WBDALIDriver,
+    drivers: Sequence[WBDALIDriver],
+    name: str,
     logger: logging.Logger,
-):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
+):
     one_shot_tasks = OneShotTasks(logger)
-    unregister_bus_traffic_watcher = driver.bus_traffic.register(
-        publish_traffic(websocket, logger, one_shot_tasks)
-    )
+    cleanup_callbacks: list[Callable[[], None]] = []
+    for line_index, driver in enumerate(drivers):
+        cleanup_callbacks.append(
+            driver.bus_traffic.register(publish_traffic(websocket, line_index, logger, one_shot_tasks))
+        )
     try:
-        await websocket.send(json.dumps(make_initial_greet(driver.config.device_name)))
+        await websocket.send(json.dumps(make_initial_greet(name, len(drivers))))
         async for raw_message in websocket:
             line = 0
             try:
@@ -178,10 +187,11 @@ async def emulate(
                         wait_for_answer,
                         " ".join(f"{b:02x}" for b in payload),
                     )
-                    if line != 0:
+                    if not 0 <= line < len(drivers):
                         await frame_result(websocket, line, SendingResult.NO_SUCH_LINE, logger)
                         continue
 
+                    driver = drivers[line]
                     if bits not in (16, 24, 25):
                         logger.error("bits=%s not supported yet, faking a no-reply", bits)
                         await frame_result(websocket, line, SendingResult.SENT, logger)
@@ -227,18 +237,21 @@ async def emulate(
     except websockets.exceptions.ConnectionClosed as e:
         logger.info("WS closed: %s", e)
     finally:
-        unregister_bus_traffic_watcher()
+        for cleanup in cleanup_callbacks:
+            cleanup()
         await one_shot_tasks.stop()
 
 
 def publish_traffic(
     websocket,
+    line: int,
     logger: logging.Logger,
     one_shot_tasks: OneShotTasks,
 ) -> Callable[[BusTrafficItem], None]:
     def _traffic_filter(bus_traffic_item: BusTrafficItem) -> None:
         logger.debug(
-            "WS >> daliMonitor: %sbits=%d %s",
+            "WS >> daliMonitor: line=%d %sbits=%d %s",
+            line,
             "FRAMING ERROR " if bus_traffic_item.request.error else "",
             len(bus_traffic_item.request),
             " ".join(f"{b:02x}" for b in bus_traffic_item.request.as_byte_sequence),
@@ -247,7 +260,7 @@ def publish_traffic(
             websocket.send(
                 json.dumps(
                     _msg_dali_monitor(
-                        0,
+                        line,
                         len(bus_traffic_item.request),
                         bus_traffic_item.request.as_byte_sequence,
                         bus_traffic_item.request.error is True,
@@ -262,7 +275,8 @@ def publish_traffic(
             and bus_traffic_item.response.raw_value is not None
         ):
             logger.debug(
-                "WS >> daliMonitor (response): %sbits=%d %s",
+                "WS >> daliMonitor (response): line=%d %sbits=%d %s",
+                line,
                 "FRAMING ERROR " if bus_traffic_item.response.raw_value.error else "",
                 len(bus_traffic_item.response.raw_value),
                 " ".join(f"{b:02x}" for b in bus_traffic_item.response.raw_value.as_byte_sequence),
@@ -271,7 +285,7 @@ def publish_traffic(
                 websocket.send(
                     json.dumps(
                         _msg_dali_monitor(
-                            0,
+                            line,
                             len(bus_traffic_item.response.raw_value),
                             bus_traffic_item.response.raw_value.as_byte_sequence,
                             bus_traffic_item.response.raw_value.error is True,
@@ -290,12 +304,18 @@ async def process_request(path: str, _request_headers: Headers) -> Optional[HTTP
     return None
 
 
-async def run_websocket(dev: WBDALIDriver, host: str, port: int, logger: logging.Logger) -> None:
+async def run_websocket(
+    drivers: Sequence[WBDALIDriver],
+    name: str,
+    host: str,
+    port: int,
+    logger: logging.Logger,
+) -> None:
     _log = logger.getChild("lunatone-iot-emulator")
     _log.info("Starting Lunatone IoT Gateway emulator on %s:%d", host, port)
 
     async def _handler(websocket: WebSocketServerProtocol, _path: str = "") -> None:
-        await emulate(websocket, dev, _log)
+        await emulate(websocket, drivers, name, _log)
 
     try:
         async with serve(

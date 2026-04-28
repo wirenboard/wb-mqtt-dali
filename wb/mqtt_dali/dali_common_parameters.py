@@ -23,6 +23,7 @@ from dali.gear.general import (
     SetSystemFailureLevel,
 )
 
+from .common_dali_device import PropertyStartOrder
 from .dali_parameters import NumberGearParam
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import WBDALIDriver
@@ -53,7 +54,7 @@ class MaxLevelParam(NumberGearParam):
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 17
+        self.property_order = PropertyStartOrder.COMMON.value + 2
 
 
 class MinLevelParam(NumberGearParam):
@@ -65,7 +66,7 @@ class MinLevelParam(NumberGearParam):
         self.maximum = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 18
+        self.property_order = PropertyStartOrder.COMMON.value + 1
 
 
 class PowerOnLevelParam(NumberGearParam):
@@ -79,7 +80,7 @@ class PowerOnLevelParam(NumberGearParam):
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 22
+        self.property_order = PropertyStartOrder.POWER_ON_LEVEL.value
 
 
 class SystemFailureLevelParam(NumberGearParam):
@@ -93,7 +94,7 @@ class SystemFailureLevelParam(NumberGearParam):
         self.default = 254
         self.format = "dali-level"
         self.grid_columns = 6
-        self.property_order = 30
+        self.property_order = PropertyStartOrder.SYSTEM_FAILURE_LEVEL.value
 
 
 class FadeTimeFadeRateParam(SettingsParamBase):
@@ -166,7 +167,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "fade_time": {
                     "type": "number",
                     "title": "Fade Time, s",
-                    "propertyOrder": 20,
+                    "propertyOrder": PropertyStartOrder.COMMON.value + 3,
                     "enum": list(range(16)),
                     "default": 0,
                     "options": {
@@ -197,7 +198,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                 "fade_rate": {
                     "type": "number",
                     "title": "Fade Rate, steps/s",
-                    "propertyOrder": 21,
+                    "propertyOrder": PropertyStartOrder.COMMON.value + 4,
                     "enum": list(range(1, 16)),
                     "default": 1,
                     "options": {
@@ -292,6 +293,20 @@ class GroupsParam(SettingsParamBase):
 
     def has_changes(self, new_params: dict) -> bool:
         return "groups" in new_params
+
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        return {
+            "properties": {
+                "groups": {
+                    "type": "array",
+                    "title": self.name.en,
+                    "propertyOrder": PropertyStartOrder.GROUPS.value,
+                    "items": {"type": "boolean", "format": "button"},
+                    "minItems": GROUPS_TOTAL,
+                    "maxItems": GROUPS_TOTAL,
+                }
+            }
+        }
 
     @property
     def groups(self) -> set[int]:
@@ -400,7 +415,7 @@ class ScenesParam(SettingsParamBase):
                         },
                         "required": ["enabled", "level"],
                     },
-                    "propertyOrder": 807,
+                    "propertyOrder": PropertyStartOrder.SCENES.value,
                 },
             },
             "translations": {

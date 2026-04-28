@@ -8,7 +8,7 @@ from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import oem
 from dali.memory.location import FlagValue
 
-from .common_dali_device import read_memory_bank
+from .common_dali_device import PropertyStartOrder, read_memory_bank
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .settings import SettingsParamBase, SettingsParamName
@@ -150,7 +150,7 @@ class Type50MemoryBankParam(SettingsParamBase):
                     "type": "object",
                     "format": "card",
                     "properties": properties,
-                    "propertyOrder": 50,
+                    "propertyOrder": PropertyStartOrder.DT50.value,
                 },
             },
             "translations": {

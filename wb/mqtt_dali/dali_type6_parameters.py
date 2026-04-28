@@ -11,6 +11,7 @@ from dali.gear.led import (
     StoreDTRAsFastFadeTime,
 )
 
+from .common_dali_device import PropertyStartOrder
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
 from .settings import SettingsParamName
@@ -33,7 +34,7 @@ class FastFadeTimeParam(NumberGearParam):
         )
         self.minimum = 0
         self.maximum = 27
-        self.grid_columns = 6
+        self.property_order = PropertyStartOrder.SPECIFIC.value
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
         schema = super().get_schema(group_and_broadcast)

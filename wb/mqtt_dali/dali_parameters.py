@@ -5,7 +5,7 @@ from dali.address import Address, GearShort
 from dali.command import Command
 from dali.gear.general import DTR0
 
-from .common_dali_device import MqttControlBase
+from .common_dali_device import MqttControlBase, PropertyStartOrder
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
 from .utils import add_enum, add_translations
@@ -64,7 +64,7 @@ class DimmingCurveParam(NumberGearParam):
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "dimming_curve")
         self._dimming_curve_state = dimming_curve_state
-        self.property_order = 16
+        self.property_order = PropertyStartOrder.COMMON.value
         self.description = "dimming_curve_desc"
 
     async def read(

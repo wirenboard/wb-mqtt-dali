@@ -1,9 +1,10 @@
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Any, Iterable, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Iterable, Optional, Type, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import (
@@ -21,7 +22,7 @@ from dali.gear.general import EnableDeviceType
 
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
-from .commissioning import Commissioning, CommissioningResult
+from .commissioning import Commissioning, CommissioningResult, CommissioningStage
 from .common_dali_device import DaliDeviceAddress, MqttControlBase, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import publish_dali2_event
@@ -60,6 +61,146 @@ class ApplicationControllerState(Enum):
     INITIALIZING = auto()
     READY = auto()
     STOPPING = auto()
+
+
+class CommissioningStatus(str, Enum):
+    """Lifecycle state of a commissioning run on a bus."""
+
+    IDLE = "idle"
+    QUEUED = "queued"
+    QUERY_SHORT_ADDRESSES = CommissioningStage.QUERY_SHORT_ADDRESSES.value
+    BINARY_SEARCH = CommissioningStage.BINARY_SEARCH.value
+    READ_DEVICE_INFO = "read_device_info"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class CommissioningStartResult(str, Enum):
+    STARTED = "started"
+    ALREADY_RUNNING = "already_running"
+
+
+@dataclass
+class CommissioningDeviceSummary:
+    id: str
+    name: str
+    groups: list[int] = field(default_factory=list)
+
+
+@dataclass
+class CommissioningState:
+
+    status: CommissioningStatus = CommissioningStatus.IDLE
+
+    # The progress is divided into three stages:
+    #   0-4 Queued,
+    #   5-50 DALI1 search,
+    #   51-80 DALI2 search,
+    #   81-100 reading device info.
+    # This allows the frontend to show a single progress bar for the entire commissioning process,
+    #  while still giving a rough indication of the current stage.
+    progress: int = 0
+    error: Optional[str] = None
+    device_count: int = 0
+    devices: list[CommissioningDeviceSummary] = field(default_factory=list)
+    finished_at: Optional[str] = None
+    dali2: bool = False
+
+    def to_dict(self) -> dict:
+        data = {}
+        if self.dali2 and self.status in {
+            CommissioningStatus.QUERY_SHORT_ADDRESSES,
+            CommissioningStatus.BINARY_SEARCH,
+        }:
+            data["status"] = f"dali2_{self.status.value}"
+        else:
+            data["status"] = self.status.value
+        data["progress"] = self.progress
+        data["stage"] = None
+        data["error"] = self.error
+        data["devices"] = [asdict(d) for d in self.devices]
+        data["finished_at"] = self.finished_at
+        data["device_count"] = self.device_count
+        return data
+
+    def mark_dali2(self) -> None:
+        self.dali2 = True
+
+    def mark_queued(self) -> None:
+        self.status = CommissioningStatus.QUEUED
+        self.progress = 3
+        self.error = None
+        self.device_count = 0
+        self.devices = []
+        self.finished_at = None
+        self.dali2 = False
+
+    def report_progress(
+        self,
+        stage: CommissioningStage,
+        progress: int,
+        device_found: bool,
+    ) -> None:
+        self.status = CommissioningStatus(stage.value)
+        if self.dali2:
+            self.progress = 50 + 30 * progress // 100
+        else:
+            self.progress = 5 + 45 * progress // 100
+        if device_found:
+            self.device_count += 1
+
+    def mark_completed(self, devices_summary: list[CommissioningDeviceSummary]) -> None:
+        self.status = CommissioningStatus.COMPLETED
+        self.progress = 100
+        self.error = None
+        self.finished_at = _utc_now_iso()
+        self.dali2 = False
+        self.devices = devices_summary
+
+    def mark_failed(self, error: str, devices_summary: list[CommissioningDeviceSummary]) -> None:
+        self.status = CommissioningStatus.FAILED
+        self.error = error
+        self.finished_at = _utc_now_iso()
+        self.dali2 = False
+        self.devices = devices_summary
+
+    def mark_cancelled(self) -> None:
+        self.status = CommissioningStatus.CANCELLED
+        self.devices = []
+        self.error = None
+        self.finished_at = _utc_now_iso()
+        self.dali2 = False
+
+    def mark_reading_info(self) -> None:
+        self.status = CommissioningStatus.READ_DEVICE_INFO
+        self.progress = 81
+
+    def snapshot(self) -> "CommissioningState":
+        return CommissioningState(
+            status=self.status,
+            progress=self.progress,
+            error=self.error,
+            device_count=self.device_count,
+            devices=([CommissioningDeviceSummary(d.id, d.name, d.groups) for d in self.devices]),
+            finished_at=self.finished_at,
+            dali2=self.dali2,
+        )
+
+    def is_running(self) -> bool:
+        return self.status in {
+            CommissioningStatus.QUEUED,
+            CommissioningStatus.QUERY_SHORT_ADDRESSES,
+            CommissioningStatus.BINARY_SEARCH,
+            CommissioningStatus.READ_DEVICE_INFO,
+        }
+
+
+CommissioningStateCallback = Callable[[CommissioningState], Union[None, Coroutine[Any, Any, None]]]
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 @dataclass
@@ -301,6 +442,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._controls_to_execute: dict[tuple[ControllableDevice, str], str] = {}
 
+        self._commissioning_state: CommissioningState = CommissioningState()
+        self._current_commissioning_task: Optional[asyncio.Task] = None
+        self._commissioning_state_cb: Optional[CommissioningStateCallback] = None
+
     @property
     def driver(self) -> WBDALIDriver:
         return self._dev
@@ -361,6 +506,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         if self._quiescent_mode_timer:
             self._quiescent_mode_timer.cancel()
 
+        if self._current_commissioning_task is not None and not self._current_commissioning_task.done():
+            current_commissioning_task = self._current_commissioning_task
+            current_commissioning_task.cancel()
+            try:
+                await current_commissioning_task
+            except asyncio.CancelledError:
+                pass
+
         if self._polling_task:
             self._polling_task.cancel()
             try:
@@ -386,13 +539,69 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         async with self._state_lock:
             self._state = ApplicationControllerState.UNINITIALIZED
 
-    async def rescan_bus(self) -> None:
+    @property
+    def commissioning_state(self) -> CommissioningState:
+        return self._commissioning_state
+
+    async def start_commissioning(
+        self, on_state_changed: Optional[CommissioningStateCallback] = None
+    ) -> CommissioningStartResult:
         async with self._state_lock:
             if self._state != ApplicationControllerState.READY:
                 raise RuntimeError("ApplicationController must be initialized")
+            if self._commissioning_state.is_running():
+                return CommissioningStartResult.ALREADY_RUNNING
+            self._commissioning_state_cb = on_state_changed
             task = ApplicationControllerTask(ApplicationControllerTaskType.COMMISSIONING)
+            self._commissioning_state.mark_queued()
+            self._publish_commissioning_state()
             self._tasks_queue.put_nowait(task)
-        await task.future
+        return CommissioningStartResult.STARTED
+
+    async def cancel_commissioning(self) -> bool:
+        """Cancel a running or queued commissioning scan. Idempotent.
+
+        Returns True if a cancel action was taken (task cancelled, or a
+        queued task was removed and state marked CANCELLED). Returns False
+        if no commissioning scan is in progress.
+        """
+        async with self._state_lock:
+            if not self._commissioning_state.is_running():
+                return False
+
+            if self._current_commissioning_task is not None:
+                self._current_commissioning_task.cancel()
+                return True
+
+            # Task is still in the queue. Try to remove it so it never runs.
+            removed = self._remove_queued_commissioning_task()
+            if removed:
+                self._commissioning_state.mark_cancelled()
+                self._publish_commissioning_state()
+                return True
+            return False
+
+    def _remove_queued_commissioning_task(self) -> bool:
+        """Remove a single pending COMMISSIONING task from the tasks queue.
+
+        Returns True if a task was removed. Preserves order of remaining tasks.
+        """
+        pending: list[ApplicationControllerTask] = []
+        removed = False
+        try:
+            while True:
+                task = self._tasks_queue.get_nowait()
+                if not removed and task.task_type == ApplicationControllerTaskType.COMMISSIONING:
+                    if not task.future.done():
+                        task.future.cancel()
+                    removed = True
+                    continue
+                pending.append(task)
+        except asyncio.QueueEmpty:
+            pass
+        for task in pending:
+            self._tasks_queue.put_nowait(task)
+        return removed
 
     async def load_device_info(
         self, device: Union[DaliDevice, Dali2Device], force_reload: bool = False
@@ -546,6 +755,29 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self.logger.warning("Failed to sync device %s: %s", device.name, exc)
 
+    def _publish_commissioning_state(self) -> None:
+        cb = self._commissioning_state_cb
+        if cb is None:
+            return
+        snapshot = self._commissioning_state.snapshot()
+        try:
+            result = cb(snapshot)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.error("Commissioning state callback failed: %s", exc)
+            return
+        if isinstance(result, Coroutine):
+            self._one_shot_tasks.add(result, "commissioning state publish")
+
+    async def _apply_commissioning_results(
+        self,
+        res_dali: Optional[CommissioningResult],
+        res_dali2: Optional[CommissioningResult],
+    ) -> None:
+        if res_dali is not None:
+            await self._update_dali_devices(res_dali)
+        if res_dali2 is not None:
+            await self._update_dali2_devices(res_dali2)
+
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
 
@@ -630,26 +862,70 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             await self._refresh_group_virtual_devices()
             await self._refresh_broadcast_device()
 
-    async def _commissioning_task(self):
+    async def _commissioning_task(self):  # pylint: disable=too-many-statements
         start_time = default_timer()
 
-        await asyncio.sleep(1)
-        await send_with_retry(self._dev, StartQuiescentMode(DeviceBroadcast()), self.logger)
+        res_dali: Optional[CommissioningResult] = None
+        res_dali2: Optional[CommissioningResult] = None
+        error = ""
         try:
-            self.logger.debug("Commissioning for DALI devices")
-            obj = Commissioning(self._dev, [d.address for d in self.dali_devices], dali2=False)
-            res_dali = await obj.smart_extend()
-            self.logger.debug("Commissioning for DALI 2 devices")
-            obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], dali2=True)
-            res_dali2 = await obj.smart_extend()
-        finally:
-            await send_with_retry(self._dev, StopQuiescentMode(DeviceBroadcast()), self.logger)
+            await asyncio.sleep(1)
+            await send_with_retry(self._dev, StartQuiescentMode(DeviceBroadcast()), self.logger)
+            try:
+                self.logger.debug("Commissioning for DALI devices")
 
-        end_time = default_timer()
-        self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
+                def _cb(stage: CommissioningStage, progress: int, device_found: bool) -> None:
+                    self._commissioning_state.report_progress(stage, progress, device_found)
+                    self._publish_commissioning_state()
 
-        await self._update_dali_devices(res_dali)
-        await self._update_dali2_devices(res_dali2)
+                obj = Commissioning(self._dev, [d.address for d in self.dali_devices], False, _cb)
+                res_dali = await obj.smart_extend()
+                self.logger.debug("Commissioning for DALI 2 devices")
+                self._commissioning_state.mark_dali2()
+                obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], True, _cb)
+                res_dali2 = await obj.smart_extend()
+            finally:
+                await send_with_retry(self._dev, StopQuiescentMode(DeviceBroadcast()), self.logger)
+            end_time = default_timer()
+            self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
+        except asyncio.CancelledError as exc:
+            self._commissioning_state.mark_cancelled()
+            self._publish_commissioning_state()
+            raise exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            error = str(exc) or type(exc).__name__
+            self.logger.error("Commissioning failed: %s", error)
+            if res_dali is None and res_dali2 is None:
+                device_summary = [
+                    CommissioningDeviceSummary(d.uid, d.name, sorted(d.groups))
+                    for d in (self.dali_devices + self.dali2_devices)
+                ]
+                self._commissioning_state.mark_failed(error, device_summary)
+                self._publish_commissioning_state()
+                # If both commissioning processes failed, there's no point in trying to apply results
+                raise
+
+        try:
+            self._commissioning_state.mark_reading_info()
+            self._publish_commissioning_state()
+            await self._apply_commissioning_results(res_dali, res_dali2)
+        except asyncio.CancelledError as exc:
+            self._commissioning_state.mark_cancelled()
+            self._publish_commissioning_state()
+            raise exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            error = str(exc) or type(exc).__name__
+            self.logger.error("Reading info after commissioning failed: %s", error)
+
+        device_summary = [
+            CommissioningDeviceSummary(d.uid, d.name, sorted(d.groups))
+            for d in (self.dali_devices + self.dali2_devices)
+        ]
+        if error:
+            self._commissioning_state.mark_failed(error, device_summary)
+        else:
+            self._commissioning_state.mark_completed(device_summary)
+        self._publish_commissioning_state()
 
     async def _resolve_initial_names(
         self,
@@ -1028,7 +1304,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                 else:
                     try:
                         if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
-                            await self._commissioning_task()
+                            await self._run_commissioning_in_child_task()
                             state.devices.clear()
                         elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
                             device, force_reload = item.data
@@ -1059,6 +1335,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
                 item = None
+
+    async def _run_commissioning_in_child_task(self) -> None:
+        child = asyncio.create_task(self._commissioning_task())
+        self._current_commissioning_task = child
+        try:
+            try:
+                await child
+            except asyncio.CancelledError:
+                return
+        finally:
+            self._current_commissioning_task = None
 
     async def _poll_device(self, device: DaliDevice) -> None:
         try:

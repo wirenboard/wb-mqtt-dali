@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from typing import Optional
+from typing import Optional, cast
 from unittest.mock import MagicMock, Mock
 
 from dali.gear.general import (
@@ -28,9 +28,13 @@ from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
     BinarySearchAddressFinder,
     Commissioning,
+    CommissioningStage,
+    ProgressReporter,
     SearchAddress,
+    _binary_search_local_progress,
 )
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
+from wb.mqtt_dali.wbdali import WBDALIDriver
 
 # pylint: disable=unsupported-binary-operation
 
@@ -1059,3 +1063,122 @@ class TestCommissioning(unittest.TestCase):
                 await commissioning.smart_extend()
 
         asyncio.run(run_test())
+
+
+class TestBinarySearchLocalProgress(unittest.TestCase):
+    def test_zero_found_yields_zero(self):
+        self.assertEqual(_binary_search_local_progress(0), 0)
+
+    def test_found_equal_to_softening_yields_fifty(self):
+        self.assertEqual(_binary_search_local_progress(8), 50)
+
+    def test_always_below_hundred(self):
+        for n in (1, 2, 5, 10, 50, 100, 1000, 10_000):
+            self.assertLess(_binary_search_local_progress(n), 100)
+
+    def test_monotonic_non_decreasing(self):
+        prev = -1
+        for n in range(0, 200):
+            value = _binary_search_local_progress(n)
+            self.assertGreaterEqual(value, prev)
+            prev = value
+
+
+class TestProgressReporter(unittest.TestCase):
+    def test_none_callback_is_noop_but_updates_last_state(self):
+        reporter = ProgressReporter(None)
+        # Must not raise — and must still update _last_* so a subsequent
+        # notify_device can attach to a known stage/percent.
+        reporter(CommissioningStage.BINARY_SEARCH, 50)
+
+    def test_reports_stage_name_and_global_percent_at_stage_start(self):
+        calls = []
+        reporter = ProgressReporter(lambda stage, pct, dev: calls.append((stage, pct, dev)))
+        # QUERY_SHORT_ADDRESSES base = 0; local=0 → 0.
+        reporter(CommissioningStage.QUERY_SHORT_ADDRESSES)
+        # QUERY_SHORT_ADDRESSES base = 0; local=25 → 12.
+        reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 25)
+        # BINARY_SEARCH base = 50, local=50 → 50 + 50*50//100 = 75.
+        reporter(CommissioningStage.BINARY_SEARCH, 50)
+
+        self.assertEqual(
+            calls,
+            [
+                (CommissioningStage.QUERY_SHORT_ADDRESSES, 0, 0),
+                (CommissioningStage.QUERY_SHORT_ADDRESSES, 12, 0),
+                (CommissioningStage.BINARY_SEARCH, 75, 0),
+            ],
+        )
+        # Callback receives the enum itself, not its string value.
+        for stage, _pct, _dev in calls:
+            self.assertIsInstance(stage, CommissioningStage)
+
+    def test_last_stage_and_percent_are_tracked_across_calls(self):
+        """Track ``_last_*`` indirectly by observing that ``notify_device``
+        after a given ``__call__`` emits with the corresponding stage/percent.
+        """
+        calls = []
+        reporter = ProgressReporter(lambda stage, pct, dev_found: calls.append((stage, pct, dev_found)))
+        reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 0)
+        reporter.notify_device()
+        reporter(CommissioningStage.BINARY_SEARCH, 50)
+        reporter.notify_device()
+        self.assertEqual(calls[0], (CommissioningStage.QUERY_SHORT_ADDRESSES, 0, False))
+        self.assertEqual(calls[1], (CommissioningStage.QUERY_SHORT_ADDRESSES, 0, True))
+        self.assertEqual(calls[2], (CommissioningStage.BINARY_SEARCH, 75, False))
+        self.assertEqual(calls[3], (CommissioningStage.BINARY_SEARCH, 75, True))
+
+    def test_notify_device_uses_last_stage_and_percent(self):
+        calls = []
+        reporter = ProgressReporter(lambda stage, pct, dev_found: calls.append((stage, pct, dev_found)))
+        reporter(CommissioningStage.BINARY_SEARCH, 50)  # last_percent=75
+        reporter.notify_device()
+        self.assertEqual(
+            calls,
+            [
+                (CommissioningStage.BINARY_SEARCH, 75, 0),
+                (CommissioningStage.BINARY_SEARCH, 75, 1),
+            ],
+        )
+
+    def test_notify_device_before_any_progress_is_noop(self):
+        calls = []
+        reporter = ProgressReporter(lambda stage, pct, dev: calls.append((stage, pct, dev)))
+        reporter.notify_device()
+        self.assertEqual(calls, [])
+
+    def test_notify_device_none_callback_is_noop(self):
+        reporter = ProgressReporter(None)
+        reporter(CommissioningStage.BINARY_SEARCH, 50)
+        # Must not raise even though callback is None.
+        reporter.notify_device()
+
+
+class TestCommissioningAddDeviceEmission(unittest.IsolatedAsyncioTestCase):
+    """``Commissioning._add_device`` is the single emission point for found
+    devices. It must route through ``ProgressReporter.notify_device`` so that
+    every successful discovery appears on the progress callback exactly once.
+    """
+
+    async def test_add_device_emits_via_reporter(self):
+        fake_bus = FakeDALIBus(devices={})
+        calls: list[tuple] = []
+        commissioning = Commissioning(
+            cast(WBDALIDriver, fake_bus),
+            [],
+            progress_cb=lambda stage, pct, dev: calls.append((stage, pct, dev)),
+        )
+        # Establish last_stage/last_percent before the emission.
+        commissioning._reporter(CommissioningStage.BINARY_SEARCH, 50)  # pylint: disable=protected-access
+        commissioning._add_device(7, 0xABCDEF)  # pylint: disable=protected-access
+
+        # Two calls: the first from reporter(...), the second from _add_device.
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[1],
+            (
+                CommissioningStage.BINARY_SEARCH,
+                75,
+                1,
+            ),
+        )

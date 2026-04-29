@@ -546,7 +546,8 @@ async def test_poll_controls_alarm_control_active_when_response_error_true():
     control.control_info.meta = MagicMock()
     control.control_info.meta.control_type = "alarm"
     control.get_query = MagicMock(return_value="Q_ALARM")
-    control.format_response = MagicMock(return_value="Lamp failure")
+    control.format_response = MagicMock(return_value="1")
+    control.format_title = MagicMock(return_value="Lamp failure")
 
     response = MagicMock()
     response.raw_value = MagicMock()
@@ -578,7 +579,8 @@ async def test_poll_controls_alarm_control_inactive_when_response_error_false_or
     control.control_info.meta = MagicMock()
     control.control_info.meta.control_type = "alarm"
     control.get_query = MagicMock(return_value="Q_ALARM2")
-    control.format_response = MagicMock(return_value="No alarms")
+    control.format_response = MagicMock(return_value="0")
+    control.format_title = MagicMock(return_value="No alarms")
 
     response = MagicMock()
     response.raw_value = MagicMock()
@@ -618,7 +620,8 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     c2.control_info.meta = MagicMock()
     c2.control_info.meta.control_type = "alarm"
     c2.get_query = MagicMock(return_value="Q2")
-    c2.format_response = MagicMock(return_value="Alarm text")
+    c2.format_title = MagicMock(return_value="Alarm text")
+    c2.format_response = MagicMock(return_value="0")
 
     c3 = MagicMock()
     c3.control_info = MagicMock()

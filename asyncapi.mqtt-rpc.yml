@@ -204,6 +204,38 @@ channels:
     parameters:
       clientId:
         $ref: '#/components/parameters/clientId'
+  wbdaliEditorResetDeviceSettings:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ResetDeviceSettings/{clientId}'
+    messages:
+      wbdaliEditorResetDeviceSettings:
+        $ref: '#/components/messages/wbdaliEditorResetDeviceSettings'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorResetDeviceSettingsReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ResetDeviceSettings/{clientId}/reply'
+    messages:
+      wbdaliEditorResetDeviceSettingsReply:
+        $ref: '#/components/messages/wbdaliEditorResetDeviceSettingsReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorResetDevice:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ResetDevice/{clientId}'
+    messages:
+      wbdaliEditorResetDevice:
+        $ref: '#/components/messages/wbdaliEditorResetDevice'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliEditorResetDeviceReply:
+    address: '/rpc/v1/wb-mqtt-dali/Editor/ResetDevice/{clientId}/reply'
+    messages:
+      wbdaliEditorResetDeviceReply:
+        $ref: '#/components/messages/wbdaliEditorResetDeviceReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
 operations:
   wbdaliEditorGetList:
     action: send
@@ -369,6 +401,32 @@ operations:
         $ref: '#/channels/wbdaliEditorIdentifyDeviceReply'
       messages:
         - $ref: '#/channels/wbdaliEditorIdentifyDeviceReply/messages/wbdaliEditorIdentifyDeviceReply'
+  wbdaliEditorResetDeviceSettings:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorResetDeviceSettings'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorResetDeviceSettings/messages/wbdaliEditorResetDeviceSettings'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorResetDeviceSettingsReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorResetDeviceSettingsReply/messages/wbdaliEditorResetDeviceSettingsReply'
+  wbdaliEditorResetDevice:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliEditorResetDevice'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliEditorResetDevice/messages/wbdaliEditorResetDevice'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliEditorResetDeviceReply'
+      messages:
+        - $ref: '#/channels/wbdaliEditorResetDeviceReply/messages/wbdaliEditorResetDeviceReply'
 components:
   messages:
     wbdaliEditorGetList:
@@ -471,6 +529,22 @@ components:
       name: editorIdentifyDeviceReply
       payload:
         $ref: '#/components/schemas/wbdaliEditorIdentifyDeviceReplyPayload'
+    wbdaliEditorResetDeviceSettings:
+      name: editorResetDeviceSettings
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorResetDeviceSettingsPayload'
+    wbdaliEditorResetDeviceSettingsReply:
+      name: editorResetDeviceSettingsReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorResetDeviceSettingsReplyPayload'
+    wbdaliEditorResetDevice:
+      name: editorResetDevice
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorResetDevicePayload'
+    wbdaliEditorResetDeviceReply:
+      name: editorResetDeviceReply
+      payload:
+        $ref: '#/components/schemas/wbdaliEditorResetDeviceReplyPayload'
   schemas:
     deviceItem:
       type: object
@@ -905,6 +979,64 @@ components:
         - id
         - params
     wbdaliEditorIdentifyDeviceReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+      required:
+        - id
+        - result
+    wbdaliEditorResetDeviceSettingsPayload:
+      description: >-
+        Reset DALI variables of one device to factory defaults. The short
+        address and the entry in the gateway configuration are kept; MQTT
+        controls of the device are republished.
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            deviceId:
+              type: string
+          required:
+            - deviceId
+      required:
+        - id
+        - params
+    wbdaliEditorResetDeviceSettingsReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: object
+      required:
+        - id
+        - result
+    wbdaliEditorResetDevicePayload:
+      description: >-
+        Reset DALI variables and clear the short address of one device. The
+        device is removed from the active gateway configuration; MQTT topics
+        are torn down and the configuration file is rewritten.
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            deviceId:
+              type: string
+          required:
+            - deviceId
+      required:
+        - id
+        - params
+    wbdaliEditorResetDeviceReplyPayload:
       type: object
       properties:
         id:

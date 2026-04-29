@@ -43,13 +43,13 @@ from .device_publisher import (
     MessageCallback,
     TranslatedTitle,
 )
-from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .utils import merge_json_schemas
 from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
+    MASK,
     AsyncDeviceInstanceTypeMapper,
     send_commands_with_retry,
     send_with_retry,
@@ -204,20 +204,13 @@ def _utc_now_iso() -> str:
 
 
 @dataclass
-class WebSocketConfig:
-    enabled: bool = False
-    port: int = 8080
-
-
-@dataclass
-class ApplicationControllerConfig:  # pylint: disable=too-many-instance-attributes
+class ApplicationControllerConfig:
     gateway_mqtt_device_id: str
     # Gateway bus number starting from 1
     bus: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
     polling_interval: float
-    websocket_config: WebSocketConfig = field(default_factory=WebSocketConfig)
     enable_bus_monitor: bool = False
 
 
@@ -229,6 +222,8 @@ class ApplicationControllerTaskType(Enum):
     EXECUTE_CONTROL = auto()
     APPLY_BUS_SETTING = auto()
     IDENTIFY_DEVICE = auto()
+    RESET_DEVICE_SETTINGS = auto()
+    RESET_DEVICE = auto()
 
 
 @dataclass
@@ -397,7 +392,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self.bus_name = f"Bus {config.bus}"
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
-        self.websocket_config = config.websocket_config
         self.logger = logging.getLogger(self.uid)
 
         self._state = ApplicationControllerState.UNINITIALIZED
@@ -422,9 +416,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             bus=config.bus,
         )
         self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
-
-        self._websocket_task: Optional[asyncio.Task] = None
-        self._websocket_lock = asyncio.Lock()
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
@@ -454,6 +445,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._commissioning_state: CommissioningState = CommissioningState()
         self._current_commissioning_task: Optional[asyncio.Task] = None
         self._commissioning_state_cb: Optional[CommissioningStateCallback] = None
+
+    @property
+    def driver(self) -> WBDALIDriver:
+        return self._dev
 
     @property
     def polling_interval(self) -> float:
@@ -495,10 +490,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._state = ApplicationControllerState.READY
 
         self._polling_task = asyncio.create_task(self._polling_loop())
-
-        async with self._websocket_lock:
-            if self.websocket_config.enabled:
-                self._run_websocket()
 
     async def stop(self) -> None:
         async with self._state_lock:
@@ -542,9 +533,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._controls_to_execute.clear()
         self._init_scheduler.clear()
-
-        async with self._websocket_lock:
-            await self._stop_websocket()
 
         await self._device_publisher.cleanup()
         await self._dev.deinitialize()
@@ -643,11 +631,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             result is not None and result.needs_mqtt_controls_refresh
         ) or old_mqtt_id != new_mqtt_id
         if needs_republish:
-            await self._device_publisher.remove_device(old_mqtt_id)
-            self._devices_by_mqtt_id.pop(old_mqtt_id, None)
-            await publish_device(device, self._device_publisher, self._run_on_topic_handler)
-            self._devices_by_mqtt_id[new_mqtt_id] = device
-            device.set_logger(self.logger)
+            await self._republish_device(old_mqtt_id, device)
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
@@ -704,36 +688,24 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._tasks_queue.put_nowait(task)
         await task.future
 
-    async def setup_websocket(self, config: WebSocketConfig) -> None:
+    async def reset_device_settings(self, device: Union[DaliDevice, Dali2Device]) -> None:
         async with self._state_lock:
             if self._state != ApplicationControllerState.READY:
-                self.websocket_config = config
-                self.logger.debug(
-                    "Trying to setup Lunatone IoT Gateway emulator in uninitialized state, "
-                    "just saving config",
-                )
-                return
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.RESET_DEVICE_SETTINGS, device)
+            self._tasks_queue.put_nowait(task)
+        await task.future
 
-            async with self._websocket_lock:
-                if self.websocket_config == config:
-                    self.logger.debug("Lunatone IoT Gateway emulator config unchanged, no action needed")
-                    return
+    async def reset_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.RESET_DEVICE, device)
+            self._tasks_queue.put_nowait(task)
+        await task.future
 
-                # Disable websocket
-                if not config.enabled:
-                    self.logger.info("Stop Lunatone IoT Gateway emulator")
-                    await self._stop_websocket()
-                    self.websocket_config = config
-                    self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
-                    return
-
-                # Port changed, so stop existing websocket first
-                if self.websocket_config.port != config.port:
-                    self.logger.info("Lunatone IoT Gateway emulator port changed, restarting")
-                    await self._stop_websocket()
-
-                self.websocket_config = config
-                self._run_websocket()
+    def release_quiescent_mode(self) -> None:
+        self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
 
     async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
         group_parameter_handlers = []
@@ -805,6 +777,90 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             await self._update_dali_devices(res_dali)
         if res_dali2 is not None:
             await self._update_dali2_devices(res_dali2)
+
+    async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
+        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+
+        if isinstance(device, DaliDevice):
+            new_device = DaliDevice(
+                DaliDeviceAddress(device.address.short, device.address.random),
+                self.uid,
+                self._gtin_db,
+                mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
+                name=device.name if device.has_custom_name else None,
+            )
+        else:
+            new_device = Dali2Device(
+                DaliDeviceAddress(device.address.short, device.address.random),
+                self.uid,
+                self._gtin_db,
+                mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
+                name=device.name if device.has_custom_name else None,
+            )
+        new_device.uid = device.uid
+        new_device.set_logger(self.logger)
+        await new_device.initialize(self._dev)
+
+        if isinstance(device, DaliDevice):
+            self._replace_dali_device_in_place(device, new_device)
+            await self._refresh_group_virtual_devices()
+            await self._refresh_broadcast_device()
+        else:
+            self._replace_dali2_device_in_place(device, new_device)
+
+        await self._republish_device(device.mqtt_id, new_device)
+
+    async def _republish_device(
+        self,
+        old_mqtt_id: str,
+        new_device: Union[DaliDevice, Dali2Device],
+    ) -> None:
+        await self._device_publisher.remove_device(old_mqtt_id)
+        self._devices_by_mqtt_id.pop(old_mqtt_id, None)
+        await publish_device(new_device, self._device_publisher, self._run_on_topic_handler)
+        self._devices_by_mqtt_id[new_device.mqtt_id] = new_device
+        new_device.set_logger(self.logger)
+
+    def _replace_dali_device_in_place(self, old: DaliDevice, new: DaliDevice) -> None:
+        for i, existing in enumerate(self.dali_devices):
+            if existing is old:
+                self.dali_devices[i] = new
+                return
+
+    def _replace_dali2_device_in_place(self, old: Dali2Device, new: Dali2Device) -> None:
+        for i, existing in enumerate(self.dali2_devices):
+            if existing is old:
+                self.dali2_devices[i] = new
+                break
+        self._dali2_devices_by_addr.pop(old.address.short, None)
+        self._dali2_devices_by_addr[new.address.short] = new
+        self._update_dali2_device_instance_map(new)
+
+    async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
+        commands = [
+            device.dali_commands.Reset(device.address.short),
+            *device.dali_commands.setShortAddressCommands(device.address.short, MASK),
+        ]
+        await send_commands_with_retry(self._dev, commands, self.logger)
+
+        mqtt_id = device.mqtt_id
+        old_short = device.address.short
+
+        if isinstance(device, DaliDevice):
+            self.dali_devices = [d for d in self.dali_devices if d is not device]
+        else:
+            self.dali2_devices = [d for d in self.dali2_devices if d is not device]
+            if self._dali2_devices_by_addr.get(old_short) is device:
+                self._dali2_devices_by_addr.pop(old_short, None)
+            self._dev_inst_map.remove_short_address(old_short)
+
+        self._devices_by_mqtt_id.pop(mqtt_id, None)
+        self._init_scheduler.remove(mqtt_id)
+        await self._device_publisher.remove_device(mqtt_id)
+
+        if isinstance(device, DaliDevice):
+            await self._refresh_group_virtual_devices()
+            await self._refresh_broadcast_device()
 
     async def _commissioning_task(self):  # pylint: disable=too-many-statements
         start_time = default_timer()
@@ -1264,6 +1320,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                             await self._apply_bus_parameters_task(item.data)
                         elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
                             await item.data.identify(self._dev)
+                        elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE_SETTINGS:
+                            await self._reset_device_settings_task(item.data)
+                        elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE:
+                            await self._reset_device_task(item.data)
                         if not item.future.done():
                             item.future.set_result(None)
                     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -1322,22 +1382,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         result,
                     )
 
-    def _run_websocket(self) -> None:
-        self._websocket_task = asyncio.create_task(
-            run_websocket(self._dev, "0.0.0.0", self.websocket_config.port, self.logger),
-            name=f"websocket-{self.uid}",
-        )
-
-    async def _stop_websocket(self) -> None:
-        if self._websocket_task is not None:
-            self._websocket_task.cancel()
-            try:
-                await self._websocket_task
-            except asyncio.CancelledError:
-                # Task cancellation is expected when stopping the websocket; ignore this error.
-                pass
-            self._websocket_task = None
-
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True
         if self._quiescent_mode_timer:
@@ -1367,7 +1411,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         self._one_shot_tasks.add(self._handle_start_quiescent_mode(), "Start quiescent mode")
                         return
                     if isinstance(incoming_command, StopQuiescentMode):
-                        self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
+                        self.release_quiescent_mode()
                         return
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass  # Ignore errors in bus traffic handling

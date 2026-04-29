@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.5.0) stable; urgency=medium
+
+  * Use one port for all gateway buses when Lunatone emulation is enabled
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 28 Apr 2026 11:46:41 +0500
+
 wb-mqtt-dali (1.4.1) stable; urgency=medium
 
   * Adjust MQTT controls order and settings order

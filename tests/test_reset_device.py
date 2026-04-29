@@ -406,7 +406,7 @@ async def test_reset_device_rpc_missing_device_id_raises():
 @pytest.mark.asyncio
 async def test_reset_device_settings_rpc_unknown_device_raises_not_found():
     gateway = Gateway.__new__(Gateway)
-    gateway._get_bus_and_device_by_id = MagicMock(return_value=(None, None))
+    gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
 
     with pytest.raises(ValueError, match="not found"):
         await gateway.reset_device_settings_rpc_handler({"deviceId": "missing"})
@@ -415,7 +415,7 @@ async def test_reset_device_settings_rpc_unknown_device_raises_not_found():
 @pytest.mark.asyncio
 async def test_reset_device_rpc_unknown_device_raises_not_found():
     gateway = Gateway.__new__(Gateway)
-    gateway._get_bus_and_device_by_id = MagicMock(return_value=(None, None))
+    gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
     gateway._save_configuration = AsyncMock()
 
     with pytest.raises(ValueError, match="not found"):

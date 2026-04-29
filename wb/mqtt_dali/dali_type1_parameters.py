@@ -12,6 +12,7 @@ from dali.gear.emergency import (
     StoreDTRAsEmergencyLevel,
 )
 
+from .common_dali_device import PropertyStartOrder
 from .dali_parameters import NumberGearParam, TypeParameters
 from .settings import SettingsParamName
 from .wbdali import WBDALIDriver
@@ -27,6 +28,7 @@ class EmergencyLevelParam(NumberGearParam):
             SettingsParamName("Emergency level", "Яркость аварийного освещения"), "type_1_emergency_level"
         )
         self.format = "dali-level"
+        self.property_order = PropertyStartOrder.SPECIFIC.value
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None

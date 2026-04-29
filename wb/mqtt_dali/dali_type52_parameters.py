@@ -53,7 +53,7 @@ from dali.memory.maintenance import (
     RatedMedianUsefulLightSourceStarts,
 )
 
-from .common_dali_device import read_memory_bank
+from .common_dali_device import PropertyStartOrder, read_memory_bank
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .wbdali import WBDALIDriver
@@ -212,7 +212,7 @@ class Type52Parameters(TypeParameters):
                 "type52_cg": {
                     "type": "object",
                     "title": "Control gear",
-                    "propertyOrder": 500,
+                    "propertyOrder": PropertyStartOrder.DT52.value,
                     "options": ro_6,
                     "format": "card",
                     "properties": {
@@ -347,7 +347,7 @@ class Type52Parameters(TypeParameters):
                 "type52_ls": {
                     "type": "object",
                     "title": "Light source",
-                    "propertyOrder": 530,
+                    "propertyOrder": PropertyStartOrder.DT52.value + 30,
                     "options": ro_6,
                     "format": "card",
                     "properties": {

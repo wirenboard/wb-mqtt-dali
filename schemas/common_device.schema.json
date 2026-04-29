@@ -175,17 +175,6 @@
           "read_only": true
         }
       }
-    },
-    "groups": {
-      "type": "array",
-      "title": "Groups",
-      "propertyOrder": 19,
-      "minItems": 16,
-      "maxItems": 16,
-      "items": {
-        "type": "boolean",
-        "format": "button"
-      }
     }
   },
 

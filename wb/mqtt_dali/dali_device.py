@@ -31,7 +31,12 @@ from .dali_common_parameters import (
     SystemFailureLevelParam,
 )
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_controls import CONTROLS, ActualLevelControl, WantedLevelControl
+from .dali_controls import (
+    ActualLevelControl,
+    ErrorStatusControl,
+    WantedLevelControl,
+    make_controls,
+)
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .dali_parameters import DimmingCurveParam, TypeParameters
 from .dali_type1_parameters import Type1Parameters
@@ -194,19 +199,23 @@ class DaliDevice(DaliDeviceBase):
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
         return [
+            ErrorStatusControl(),
             ActualLevelControl(self._dimming_curve_state),
             WantedLevelControl(self._dimming_curve_state),
-            *CONTROLS,
+            *make_controls(),
         ]
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
         mqtt_controls: list[MqttControlBase] = [
+            ErrorStatusControl(),
             ActualLevelControl(self._dimming_curve_state),
             WantedLevelControl(self._dimming_curve_state),
         ]
-        mqtt_controls.extend(CONTROLS)
+        mqtt_controls.extend(make_controls())
         for type_handler in self._type_handlers:
             mqtt_controls.extend(type_handler.get_mqtt_controls())
+        for i, control in enumerate(mqtt_controls, start=1):
+            control.control_info.meta.order = i
         return mqtt_controls
 
     async def _initialize_impl(  # pylint: disable=too-many-branches

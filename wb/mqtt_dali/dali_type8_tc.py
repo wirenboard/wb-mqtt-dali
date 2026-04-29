@@ -19,7 +19,12 @@ from dali.gear.colour import (
 )
 from dali.gear.general import DTR0, DTR1, DTR2, QueryActualLevel, QueryContentDTR0
 
-from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .common_dali_device import (
+    ControlPollResult,
+    MqttControl,
+    MqttControlBase,
+    PropertyStartOrder,
+)
 from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
@@ -353,7 +358,7 @@ class TcLimitsSettings(SettingsParamBase):
                     "type": "object",
                     "title": self.name.en,
                     "format": "card",
-                    "propertyOrder": 850,
+                    "propertyOrder": PropertyStartOrder.TC_LIMITS.value,
                     "properties": {
                         "tc_physical_warmest": {
                             "type": "integer",

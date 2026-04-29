@@ -11,7 +11,11 @@ import pytest
 
 from wb.mqtt_dali import dali_device as _dd
 from wb.mqtt_dali import settings as _settings
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import (
+    DaliDeviceAddress,
+    DaliDeviceBase,
+    PropertyStartOrder,
+)
 from wb.mqtt_dali.dali_common_parameters import GroupsParam
 from wb.mqtt_dali.dali_device import DaliDevice, DaliDeviceType
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
@@ -53,7 +57,7 @@ def test_editable_param_is_writable():
 def test_editable_param_property_order_and_description():
     state = DimmingCurveState()
     param = Type6DimmingCurveParam(state)
-    assert param.property_order == 16
+    assert param.property_order == PropertyStartOrder.COMMON.value
     assert param.description == "dimming_curve_desc"
 
 
@@ -64,7 +68,7 @@ def test_editable_schema_has_both_curve_options():
     prop = schema["properties"][param.property_name]
     assert prop["enum"] == [DimmingCurveType.LOGARITHMIC, DimmingCurveType.LINEAR]
     assert prop["options"]["enum_titles"] == ["standard", "linear"]
-    assert prop["propertyOrder"] == 16
+    assert prop["propertyOrder"] == PropertyStartOrder.COMMON.value
     assert prop["description"] == "dimming_curve_desc"
     assert "grid_columns" not in prop.get("options", {})
     # Editable description must mention linear curve in translations
@@ -81,7 +85,7 @@ def test_editable_schema_for_type17():
     schema = param.get_schema(group_and_broadcast=False)
     prop = schema["properties"][param.property_name]
     assert prop["enum"] == [DimmingCurveType.LOGARITHMIC, DimmingCurveType.LINEAR]
-    assert prop["propertyOrder"] == 16
+    assert prop["propertyOrder"] == PropertyStartOrder.COMMON.value
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +102,7 @@ def test_read_only_param_is_marked_read_only():
 def test_read_only_param_property_order():
     state = DimmingCurveState()
     param = DimmingCurveParam(state)
-    assert param.property_order == 16
+    assert param.property_order == PropertyStartOrder.COMMON.value
 
 
 @pytest.mark.asyncio
@@ -160,7 +164,7 @@ def test_read_only_schema_is_read_only_and_value_is_standard():
     assert prop["enum"] == [DimmingCurveType.LOGARITHMIC, DimmingCurveType.LINEAR]
     assert prop["options"]["enum_titles"] == ["standard", "linear"]
     assert prop["options"]["wb"] == {"read_only": True}
-    assert prop["propertyOrder"] == 16
+    assert prop["propertyOrder"] == PropertyStartOrder.COMMON.value
     assert prop["description"] == "dimming_curve_desc"
     # The read-only fallback always reports the standard (logarithmic) curve.
     assert param._is_read_only is True
@@ -270,7 +274,7 @@ async def test_dt6_keeps_editable_dimming_curve():
     param = _find_dimming_curve_param(parameter_handlers)
     assert isinstance(param, Type6DimmingCurveParam)
     assert param._is_read_only is False
-    assert param.property_order == 16
+    assert param.property_order == PropertyStartOrder.COMMON.value
 
     schema = param.get_schema(group_and_broadcast=False)
     assert schema["properties"][param.property_name]["enum"] == [
@@ -289,7 +293,7 @@ async def test_dt17_keeps_editable_dimming_curve():
     param = _find_dimming_curve_param(parameter_handlers)
     assert isinstance(param, Type17DimmingCurveParam)
     assert param._is_read_only is False
-    assert param.property_order == 16
+    assert param.property_order == PropertyStartOrder.COMMON.value
 
 
 @pytest.mark.parametrize(
@@ -308,7 +312,7 @@ async def test_unsupported_types_get_read_only_fallback(device_type):
     param = _find_dimming_curve_param(parameter_handlers)
     assert isinstance(param, DimmingCurveParam)
     assert param._is_read_only is True
-    assert param.property_order == 16
+    assert param.property_order == PropertyStartOrder.COMMON.value
 
     schema = param.get_schema(group_and_broadcast=False)
     prop = schema["properties"][param.property_name]

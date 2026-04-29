@@ -164,6 +164,10 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         if short_address in self._mapping:
             self._mapping[new_short_address] = self._mapping.pop(short_address)
 
+    def remove_short_address(self, short_address: int) -> None:
+        for key in [k for k in self._mapping if k[0] == short_address]:
+            self._mapping.pop(key, None)
+
 
 async def query_int(driver: WBDALIDriver, cmd: Command, logger: Optional[logging.Logger] = None) -> int:
     return (await query_response(driver, cmd, logger)).raw_value.as_integer

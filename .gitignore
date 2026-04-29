@@ -178,6 +178,9 @@ config.local.*
 # Workflow artifacts: review docs are per-iteration scratch, not merged
 doc/*_review.md
 
+# Claude Code local settings
+.claude/settings.local.json
+
 .devcontainer/
 .coveragerc
 pyproject.toml

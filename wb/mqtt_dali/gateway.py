@@ -313,6 +313,16 @@ class Gateway:
             "IdentifyDevice",
             self.identify_device_rpc_handler,
         )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "ResetDeviceSettings",
+            self.reset_device_settings_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Editor",
+            "ResetDevice",
+            self.reset_device_rpc_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -344,8 +354,6 @@ class Gateway:
             raise ValueError("deviceId parameter is required")
         force_reload = params.get("forceReload", False)
         bus, device = self._get_bus_and_device_by_id(device_id)
-        if bus is None or device is None:
-            raise ValueError(f"Device {device_id} not found")
         await bus.load_device_info(device, force_reload)
         return {
             "config": device.params,
@@ -358,8 +366,6 @@ class Gateway:
             raise ValueError("deviceId parameter is required")
         new_params = params.get("config", {})
         bus, device = self._get_bus_and_device_by_id(device_id)
-        if bus is None or device is None:
-            raise ValueError(f"Device {device_id} not found")
         new_short = new_params.get("short_address")
         if new_short is not None and new_short != device.address.short:
             if isinstance(device, Dali2Device):
@@ -451,9 +457,24 @@ class Gateway:
         if device_id is None:
             raise ValueError("deviceId parameter is required")
         bus, device = self._get_bus_and_device_by_id(device_id)
-        if bus is None or device is None:
-            raise ValueError(f"Device {device_id} not found")
         await bus.identify_device(device)
+        return {}
+
+    async def reset_device_settings_rpc_handler(self, params: dict):
+        device_id = params.get("deviceId")
+        if device_id is None:
+            raise ValueError("deviceId parameter is required")
+        bus, device = self._get_bus_and_device_by_id(device_id)
+        await bus.reset_device_settings(device)
+        return {}
+
+    async def reset_device_rpc_handler(self, params: dict):
+        device_id = params.get("deviceId")
+        if device_id is None:
+            raise ValueError("deviceId parameter is required")
+        bus, device = self._get_bus_and_device_by_id(device_id)
+        await bus.reset_device(device)
+        await self._save_configuration()
         return {}
 
     async def get_gateway_rpc_handler(self, params: dict):
@@ -529,7 +550,7 @@ class Gateway:
 
     def _get_bus_and_device_by_id(
         self, device_id: str
-    ) -> Tuple[Optional[ApplicationController], Optional[Union[DaliDevice, Dali2Device]]]:
+    ) -> Tuple[ApplicationController, Union[DaliDevice, Dali2Device]]:
         for gw in self.wb_dali_gateways:
             for bus in gw.buses:
                 for device in bus.dali_devices:
@@ -538,7 +559,7 @@ class Gateway:
                 for device in bus.dali2_devices:
                     if device.uid == device_id:
                         return bus, device
-        return None, None
+        raise ValueError(f"Device {device_id} not found")
 
     async def _save_configuration(self) -> None:
         async with self._config_lock:

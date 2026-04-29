@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.6.0) stable; urgency=medium
+
+  * Add ResetDevice and ResetDeviceSettings RPC
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 28 Apr 2026 17:12:11 +0500
+
 wb-mqtt-dali (1.5.0) stable; urgency=medium
 
   * Use one port for all gateway buses when Lunatone emulation is enabled

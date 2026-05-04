@@ -1275,3 +1275,75 @@ class TestGroupStateUpdate:  # pylint: disable=too-few-public-methods
         action = GroupStateUpdate(kind=GroupStateUpdateKind.VALUE, control_id="actual_level", payload="42")
         with pytest.raises(Exception):
             action.payload = "99"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Source-device isolation (no shared meta with the group)
+# ---------------------------------------------------------------------------
+
+
+class TestSourceMetaIsolation:  # pylint: disable=too-few-public-methods
+    def test_group_layout_does_not_mutate_source_meta(self):
+        source_control = ActualLevelControl(DimmingCurveState())
+        source_control.control_info.meta.order = 99
+
+        dev = _make_real_dali_device(
+            mqtt_id="real",
+            controls=[source_control],
+            short_address=1,
+            uid="real-uid",
+        )
+
+        templates, _ = collect_group_state_controls([dev])
+        group_controls = build_virtual_device_controls(
+            AggregatedCapabilities(), state_controls=templates.values()
+        )
+
+        assert group_controls["actual_level"].control_info.meta.order == 1
+        assert source_control.control_info.meta.order == 99
+
+
+# ---------------------------------------------------------------------------
+# _poll_device — whole-device failure releases group source pin
+# ---------------------------------------------------------------------------
+
+
+class TestPollDeviceFailureReleasesPin:
+    # pylint: disable=protected-access
+    @pytest.mark.asyncio
+    async def test_poll_exception_releases_pinned_group_source(self):
+        d1 = _make_device(groups=[1], mqtt_id="d1", short_address=1, uid="uid-1")
+        d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
+        ctrl = _make_controller(dali_devices=[d1, d2])
+        ctrl._dev = MagicMock()
+        await ctrl._refresh_group_virtual_devices()
+        source = ctrl._group_devices_by_number[1].state_source
+
+        source.record_poll("uid-1", "actual_level", success=True, value="42")
+        assert source.pinned_source("actual_level") == "uid-1"
+
+        d1.poll_controls = AsyncMock(side_effect=RuntimeError("bus down"))
+        await ctrl._poll_device(d1)
+
+        assert source.pinned_source("actual_level") is None
+
+    @pytest.mark.asyncio
+    async def test_poll_exception_emits_err_when_all_candidates_failed(self):
+        d1 = _make_device(groups=[1], mqtt_id="d1", short_address=1, uid="uid-1")
+        d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
+        ctrl = _make_controller(dali_devices=[d1, d2])
+        ctrl._dev = MagicMock()
+        await ctrl._refresh_group_virtual_devices()
+        source = ctrl._group_devices_by_number[1].state_source
+        group_mqtt_id = ctrl._group_devices_by_number[1].mqtt_id
+
+        d1.poll_controls = AsyncMock(side_effect=RuntimeError("bus down"))
+        d2.poll_controls = AsyncMock(side_effect=RuntimeError("bus down"))
+
+        await ctrl._poll_device(d1)
+        await ctrl._poll_device(d2)
+
+        assert source.is_err_set("actual_level")
+        cast(AsyncMock, ctrl._device_publisher.set_control_error).assert_any_await(
+            group_mqtt_id, "actual_level", "r"
+        )

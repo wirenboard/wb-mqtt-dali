@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Optional, Union
@@ -59,9 +60,9 @@ def collect_group_state_controls(
         for control in device.get_group_state_controls():
             control_id = control.control_info.id
             if control_id not in templates:
-                # First initialized candidate wins as the ControlInfo/ControlMeta template;
-                # ControlMeta is assumed identical across candidates for the same control_id.
-                templates[control_id] = control
+                # Deep-copy: meta.order is reassigned for the group's layout
+                # and must not bleed back into the source device.
+                templates[control_id] = MqttControlBase(deepcopy(control.control_info))
                 candidates[control_id] = []
             candidates[control_id].append(device.uid)
     return templates, candidates
@@ -191,8 +192,7 @@ class AggregatedCapabilities:
     dimming_curve_type: DimmingCurveType = DimmingCurveType.LOGARITHMIC
 
 
-# Each group state control sits immediately before its anchored setup control
-# on the group card, mirroring DaliDevice's natural layout.
+# Each state control sits immediately before its anchor on the group card.
 _GROUP_STATE_ANCHOR: dict[ControlId, ControlId] = {
     "actual_level": "wanted_level",
     "current_rgb": "set_rgb",

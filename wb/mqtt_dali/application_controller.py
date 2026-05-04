@@ -1250,28 +1250,36 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             responses = await device.poll_controls(self._dev)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.exception("Error polling device %s: %s", device.name, str(e))
-            return
-        tasks = []
-        for response in responses:
-            if response.error is not None:
-                tasks.append(
-                    self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
-                )
-                continue
-            if response.title is not None:
-                tasks.append(
-                    self._device_publisher.set_control_title(
-                        device.mqtt_id, response.control_id, response.title
+            # Synthesize per-control errors so a pinned group source releases
+            # off a dead member; device card is intentionally untouched.
+            tasks = self._build_group_state_tasks(
+                device,
+                [
+                    ControlPollResult(control_id=c.control_info.id, value=None, error="r")
+                    for c in device.get_group_state_controls()
+                ],
+            )
+        else:
+            tasks = []
+            for response in responses:
+                if response.error is not None:
+                    tasks.append(
+                        self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
                     )
-                )
-            if response.value is not None:
-                tasks.append(
-                    self._device_publisher.set_control_value(
-                        device.mqtt_id, response.control_id, response.value
+                    continue
+                if response.title is not None:
+                    tasks.append(
+                        self._device_publisher.set_control_title(
+                            device.mqtt_id, response.control_id, response.title
+                        )
                     )
-                )
-
-        tasks.extend(self._build_group_state_tasks(device, responses))
+                if response.value is not None:
+                    tasks.append(
+                        self._device_publisher.set_control_value(
+                            device.mqtt_id, response.control_id, response.value
+                        )
+                    )
+            tasks.extend(self._build_group_state_tasks(device, responses))
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)

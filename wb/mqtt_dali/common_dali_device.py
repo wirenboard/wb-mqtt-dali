@@ -84,7 +84,7 @@ class MqttControlBase:
 
 
 class MqttControl(MqttControlBase):
-    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         control_info: ControlInfo,
         query_builder: Optional[Callable[[Address], object]] = None,

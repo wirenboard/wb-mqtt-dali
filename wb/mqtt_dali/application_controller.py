@@ -22,23 +22,14 @@ from dali.gear.general import EnableDeviceType
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
-from .common_dali_device import (
-    ControlPollResult,
-    DaliDeviceAddress,
-    read_product_name,
-)
+from .common_dali_device import ControlPollResult, DaliDeviceAddress, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
-from .device_publisher import (
-    DeviceChange,
-    DeviceInfo,
-    DevicePublisher,
-    MessageCallback,
-)
+from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .utils import merge_json_schemas

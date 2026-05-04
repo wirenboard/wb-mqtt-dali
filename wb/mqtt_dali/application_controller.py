@@ -8,7 +8,6 @@ from typing import Any, Callable, Coroutine, Iterable, Optional, Type, Union
 
 import paho.mqtt.client as mqtt
 from dali.address import (
-    Address,
     DeviceBroadcast,
     DeviceShort,
     GearBroadcast,
@@ -23,29 +22,34 @@ from dali.gear.general import EnableDeviceType
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
-from .common_dali_device import DaliDeviceAddress, MqttControlBase, read_product_name
+from .common_dali_device import (
+    ControlPollResult,
+    DaliDeviceAddress,
+    read_product_name,
+)
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import publish_dali2_event
 from .dali2_device import Dali2Device
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_controls import WantedLevelControl, make_controls
 from .dali_device import DaliDevice
-from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
-from .dali_type8_parameters import ColourType
-from .dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
-from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import (
-    ControlInfo,
     DeviceChange,
     DeviceInfo,
     DevicePublisher,
     MessageCallback,
-    TranslatedTitle,
 )
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .utils import merge_json_schemas
+from .virtual_devices import (
+    AggregatedCapabilities,
+    BroadcastVirtualDevice,
+    GroupSpec,
+    GroupStateUpdateKind,
+    GroupVirtualDevice,
+    aggregate_capabilities,
+)
 from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
@@ -240,95 +244,7 @@ class ApplicationControllerTask:
     future: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
 
 
-@dataclass(frozen=True)
-class AggregatedCapabilities:
-    has_dt8_rgbwaf: bool = False
-    has_dt8_tc: bool = False
-    tc_min_mirek: int = 0
-    tc_max_mirek: int = 0
-    dimming_curve_type: DimmingCurveType = DimmingCurveType.LOGARITHMIC
-
-
-def build_virtual_device_controls(
-    capabilities: AggregatedCapabilities,
-) -> dict[str, MqttControlBase]:
-    dimming_state = DimmingCurveState()
-    dimming_state.curve_type = capabilities.dimming_curve_type
-    controls: list[MqttControlBase] = [WantedLevelControl(dimming_state), *make_controls()]
-    if capabilities.has_dt8_rgbwaf:
-        controls.extend(rgbwaf_mqtt_controls(only_setup_controls=True))
-    if capabilities.has_dt8_tc:
-        controls.extend(tc_mqtt_controls(capabilities.tc_min_mirek, capabilities.tc_max_mirek))
-    return {c.control_info.id: c for c in controls}
-
-
-def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilities:
-    has_rgbwaf = False
-    has_tc = False
-    tc_min_values: list[int] = []
-    tc_max_values: list[int] = []
-    curve_types: set[DimmingCurveType] = set()
-    for device in devices:
-        if not device.is_initialized:
-            continue
-        colour_type = device.dt8_colour_type
-        if colour_type == ColourType.RGBWAF:
-            has_rgbwaf = True
-        elif colour_type == ColourType.COLOUR_TEMPERATURE:
-            has_tc = True
-            limits = device.dt8_tc_limits
-            if limits is not None:
-                tc_min_values.append(limits.tc_min_mirek)
-                tc_max_values.append(limits.tc_max_mirek)
-        curve_types.add(device.dimming_curve_type)
-    dimming_curve_type = next(iter(curve_types)) if len(curve_types) == 1 else DimmingCurveType.LOGARITHMIC
-    return AggregatedCapabilities(
-        has_dt8_rgbwaf=has_rgbwaf,
-        has_dt8_tc=has_tc,
-        tc_min_mirek=min(tc_min_values) if tc_min_values else 0,
-        tc_max_mirek=max(tc_max_values) if tc_max_values else 0,
-        dimming_curve_type=dimming_curve_type,
-    )
-
-
-class AggregatedVirtualDevice:
-    def __init__(
-        self,
-        mqtt_id: str,
-        name: Union[str, TranslatedTitle],
-        capabilities: AggregatedCapabilities,
-        address: Address,
-    ) -> None:
-        self.mqtt_id = mqtt_id
-        self.name = name
-        self.capabilities = capabilities
-        self.logger = logging.getLogger()
-
-        self._controls = build_virtual_device_controls(capabilities)
-        self._address = address
-
-    def get_mqtt_controls(self) -> list[ControlInfo]:
-        return [control.control_info for control in self._controls.values()]
-
-    async def execute_control(
-        self,
-        driver: WBDALIDriver,
-        control_id: str,
-        value: str,
-    ) -> None:
-        control = self._controls.get(control_id)
-        if control is not None and control.is_writable():
-            await send_commands_with_retry(
-                driver,
-                control.get_setup_commands(self._address, value),
-                self.logger,
-            )
-
-    def set_logger(self, logger: logging.Logger) -> None:
-        self.logger = logger
-
-
-ControllableDevice = Union[DaliDevice, Dali2Device, AggregatedVirtualDevice]
+ControllableDevice = Union[DaliDevice, Dali2Device, GroupVirtualDevice, BroadcastVirtualDevice]
 
 
 async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
@@ -425,13 +341,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
         self._devices_by_mqtt_id: dict[str, ControllableDevice] = {}
-        self._broadcast_device = AggregatedVirtualDevice(
-            mqtt_id=f"{self.uid}_broadcast",
-            name=TranslatedTitle(f"{self.bus_name} Broadcast", f"{self.bus_name} широковещательный"),
+        self._broadcast_device = BroadcastVirtualDevice(
             capabilities=AggregatedCapabilities(),
-            address=GearBroadcast(),
+            mqtt_id_prefix=self.uid,
+            bus_name=self.bus_name,
         )
-        self._group_devices_by_number: dict[int, AggregatedVirtualDevice] = {}
+        self._group_devices_by_number: dict[int, GroupVirtualDevice] = {}
 
         self._gtin_db = gtin_db
 
@@ -1076,9 +991,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
             await self._device_publisher.set_control_error(device_id, control_id, "w")
 
-    def _get_group_capabilities(self, group_number: int) -> AggregatedCapabilities:
-        return aggregate_capabilities(d for d in self.dali_devices if group_number in d.groups)
-
     def _get_bus_capabilities(self) -> AggregatedCapabilities:
         return aggregate_capabilities(self.dali_devices)
 
@@ -1088,18 +1000,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             active_groups.update(device.groups)
         return sorted(active_groups)
 
-    def _make_group_virtual_device(self, group_number: int) -> AggregatedVirtualDevice:
-        return AggregatedVirtualDevice(
-            mqtt_id=f"{self.uid}_group_{group_number:02d}",
-            name=TranslatedTitle(
-                f"{self.bus_name} Group {group_number}",
-                f"{self.bus_name} группа {group_number}",
-            ),
-            capabilities=self._get_group_capabilities(group_number),
-            address=GearGroup(group_number),
-        )
+    def _build_group_spec(self, group_number: int) -> GroupSpec:
+        return GroupSpec.from_devices(d for d in self.dali_devices if group_number in d.groups)
 
-    async def _publish_virtual_device(self, device: AggregatedVirtualDevice) -> None:
+    async def _publish_virtual_device(
+        self, device: Union[GroupVirtualDevice, BroadcastVirtualDevice]
+    ) -> None:
         device_info = DeviceInfo(
             device.mqtt_id,
             device.name,
@@ -1173,7 +1079,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._devices_by_mqtt_id.pop(device.mqtt_id, None)
 
         for group_number in sorted(active_groups - existing_groups):
-            device = self._make_group_virtual_device(group_number)
+            spec = self._build_group_spec(group_number)
+            device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
             self.logger.debug(
                 "Adding group virtual device: group=%d mqtt_id=%s",
                 group_number,
@@ -1183,18 +1090,19 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._group_devices_by_number[group_number] = device
 
         for group_number in sorted(active_groups & existing_groups):
-            new_caps = self._get_group_capabilities(group_number)
+            spec = self._build_group_spec(group_number)
             old_device = self._group_devices_by_number[group_number]
-            if old_device.capabilities != new_caps:
-                self.logger.debug(
-                    "Rebuilding group virtual device: group=%d capabilities changed",
-                    group_number,
-                )
-                await self._device_publisher.remove_device(old_device.mqtt_id)
-                self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
-                new_device = self._make_group_virtual_device(group_number)
-                await self._publish_virtual_device(new_device)
-                self._group_devices_by_number[group_number] = new_device
+            if old_device.update_in_place(spec):
+                continue
+            self.logger.debug(
+                "Rebuilding group virtual device: group=%d capabilities or state-set changed",
+                group_number,
+            )
+            new_device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
+            await self._device_publisher.remove_device(old_device.mqtt_id)
+            self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
+            await self._publish_virtual_device(new_device)
+            self._group_devices_by_number[group_number] = new_device
 
     async def _refresh_broadcast_device(self) -> None:
         new_caps = self._get_bus_capabilities()
@@ -1207,11 +1115,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         await self._device_publisher.remove_device(old_mqtt_id)
         self._devices_by_mqtt_id.pop(old_mqtt_id, None)
 
-        self._broadcast_device = AggregatedVirtualDevice(
-            mqtt_id=old_mqtt_id,
-            name=self._broadcast_device.name,
+        self._broadcast_device = BroadcastVirtualDevice(
             capabilities=new_caps,
-            address=GearBroadcast(),
+            mqtt_id_prefix=self.uid,
+            bus_name=self.bus_name,
         )
 
         await self._publish_virtual_device(self._broadcast_device)
@@ -1372,6 +1279,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         device.mqtt_id, response.control_id, response.value
                     )
                 )
+
+        tasks.extend(self._build_group_state_tasks(device, responses))
+
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for result in results:
@@ -1381,6 +1291,49 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                         device.name,
                         result,
                     )
+
+    def _build_group_state_tasks(
+        self,
+        device: DaliDevice,
+        responses: Iterable[ControlPollResult],
+    ) -> list[Coroutine]:
+        if not device.groups:
+            return []
+        tasks: list[Coroutine] = []
+        for group_number in device.groups:
+            group_device = self._group_devices_by_number.get(group_number)
+            if group_device is None:
+                continue
+            source = group_device.state_source
+            for response in responses:
+                control_id = response.control_id
+                if control_id not in source.control_ids:
+                    continue
+                action = source.record_poll(
+                    candidate_uid=device.uid,
+                    control_id=control_id,
+                    success=response.error is None,
+                    value=response.value,
+                )
+                if action is None:
+                    continue
+                if action.kind is GroupStateUpdateKind.VALUE:
+                    tasks.append(
+                        self._device_publisher.set_control_value(
+                            group_device.mqtt_id,
+                            action.control_id,
+                            action.payload,
+                        )
+                    )
+                elif action.kind is GroupStateUpdateKind.ERROR:
+                    tasks.append(
+                        self._device_publisher.set_control_error(
+                            group_device.mqtt_id,
+                            action.control_id,
+                            action.payload,
+                        )
+                    )
+        return tasks
 
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True
@@ -1453,7 +1406,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                 if bus_traffic_item.request_source == BusTrafficSource.LUNATONE:
                     request_msg = f">>{request_msg} (from lunatone)"
                 else:
-                    request_msg = f">>{request_msg} {bus_traffic_item.frame_counter}"
+                    request_msg = f">>{request_msg}"
 
             self._one_shot_tasks.add(
                 self._mqtt_dispatcher.client.publish(

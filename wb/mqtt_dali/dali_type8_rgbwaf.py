@@ -167,6 +167,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
                 ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True),
                 "0;0;0",
             ),
+            is_group_state_control=True,
         ),
         setup_rgb_control,
         MqttControl(
@@ -175,6 +176,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
                 ControlMeta(title=TranslatedTitle("Current W", "Текущий W"), read_only=True),
                 "0",
             ),
+            is_group_state_control=True,
         ),
         setup_white_control,
     ]

@@ -3,12 +3,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dali.address import GearBroadcast
 
 from wb.mqtt_dali.application_controller import (
     AggregatedCapabilities,
-    AggregatedVirtualDevice,
     ApplicationController,
+    BroadcastVirtualDevice,
     PollingState,
     publish_device,
     try_initialize_device,
@@ -379,11 +378,10 @@ def _make_controller():
     ctrl._dev_inst_map = MagicMock()
     ctrl._group_devices_by_number = {}
     ctrl._devices_by_mqtt_id = {}
-    ctrl._broadcast_device = AggregatedVirtualDevice(
-        mqtt_id="test_broadcast",
-        name="Test Broadcast",
+    ctrl._broadcast_device = BroadcastVirtualDevice(
         capabilities=AggregatedCapabilities(),
-        address=GearBroadcast(),
+        mqtt_id_prefix="test",
+        bus_name="Test",
     )
     return ctrl
 

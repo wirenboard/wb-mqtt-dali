@@ -24,6 +24,12 @@ Always start by reading the plan and the latest review if they are specified. Th
 5. Follow all Agent Workflow Rules from CLAUDE.md — including the prohibition on commits and test modifications without explicit approval, and the prohibition on `# pylint: disable` / disabling tests without a reason.
 6. Do not create a PR.
 
+## Code style preferences
+
+- **Comments**: keep them compact and add them only where the logic is non-obvious — a hidden invariant, a workaround, a constraint that wouldn't be visible from the code itself. Don't restate what the code says, don't write multi-paragraph docstrings, don't reference the current task or PR. If removing the comment wouldn't confuse a future reader, don't write it.
+- **Enums over string/int constants**: when a value has a small, fixed set of options (status, kind, mode, action), model it with `enum.Enum` rather than string or integer literals. Plain `Enum` with descriptive values is the default; reach for `IntEnum`/`StrEnum`/`Flag` only when there's a concrete reason (interop, bitwise ops). Enums catch typos at type-check time, keep `repr()` informative, and make `is`-comparisons safe.
+- **Structures over nested type-soup**: avoid signatures and attributes like `dict[str, list[str]]`, `tuple[tuple[str, tuple[str, ...]], ...]`, or several parallel dicts keyed by the same value — they hide what each string means and force readers to reverse-engineer the shape. Prefer named structures: a frozen `dataclass` for immutable records, a mutable one for in-place state, a `NamedTuple` for small fixed pairs. When several dicts share the same key set (`a[k]`, `b[k]`, `c[k]` always read together), that's a missing `dataclass` — collapse them into one `dict[Key, RecordType]`. Type aliases (`ControlId = str`) are cheap and worth using even when the underlying type stays `str`, because they document intent in signatures.
+
 ## Output
 
 Return a short report:

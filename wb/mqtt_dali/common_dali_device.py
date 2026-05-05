@@ -58,6 +58,9 @@ class ApplyResult:
 
 
 class MqttControlBase:
+    # Marks a read-only control whose value is mirrored to group virtual devices.
+    is_group_state_control: bool = False
+
     def __init__(self, control_info: ControlInfo) -> None:
         # the property value is used as default value for the control
         self.control_info = control_info
@@ -81,17 +84,19 @@ class MqttControlBase:
 
 
 class MqttControl(MqttControlBase):
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         control_info: ControlInfo,
         query_builder: Optional[Callable[[Address], object]] = None,
         value_formatter: Optional[Callable[[Response], str]] = None,
         commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
+        is_group_state_control: bool = False,
     ) -> None:
         super().__init__(control_info)
         self.query_builder = query_builder
         self.value_formatter = value_formatter
         self.commands_builder = commands_builder
+        self.is_group_state_control = is_group_state_control
 
     def get_query(self, short_address: Address) -> Optional[Command]:
         if self.query_builder is not None:
@@ -617,6 +622,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                 f"Device {self.name} is not initialized. Call initialize() before getting MQTT controls."
             )
         return [descriptor.control_info for descriptor in self._controls.values()]
+
+    def get_group_state_controls(self) -> list[MqttControlBase]:
+        if not self.is_initialized:
+            return []
+        return [c for c in self._controls.values() if c.is_group_state_control]
 
     async def execute_control(self, driver: WBDALIDriver, control_id: str, value: str) -> None:
         if not self.is_initialized:

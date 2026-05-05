@@ -192,6 +192,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 ),
                 "4000",
             ),
+            is_group_state_control=True,
         ),
         *get_wanted_mqtt_controls(tc_min_mirek, tc_max_mirek),
         MqttControl(

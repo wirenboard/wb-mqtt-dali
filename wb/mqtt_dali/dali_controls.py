@@ -38,6 +38,8 @@ def handle_dapc(short_address: Address, value: str) -> list[Command]:
 
 
 class ActualLevelControl(MqttControlBase):
+    is_group_state_control = True
+
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__(
             ControlInfo(

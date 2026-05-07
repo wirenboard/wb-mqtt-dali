@@ -978,6 +978,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
+            await self._device_publisher.set_control_value(device_id, control_id, payload)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
             await self._device_publisher.set_control_error(device_id, control_id, "w")

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import re
 from types import SimpleNamespace
@@ -1075,10 +1076,8 @@ def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationControlle
 
 async def _cancel_loop(task: asyncio.Task) -> None:
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
 
 async def _run_loop_briefly(controller: ApplicationController, duration: float) -> None:

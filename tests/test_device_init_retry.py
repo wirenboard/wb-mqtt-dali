@@ -490,7 +490,7 @@ class TestPollStep:
     async def test_idle_fallback_caps_at_polling_due_time(self):
         """When polling is overdue and the idle fallback fires (poll_turn=False,
         no retry), the returned timeout must clamp to ~0.001 instead of 1.0 so
-        the loop does not waste a full second after a holostoy inline-check."""
+        the loop does not waste a full second after a idle inline-check."""
         ctrl = _make_controller()
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
         ctrl.dali_devices = [dev]

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.9.1) stable; urgency=medium
+
+  * Fix framing error handling in bus traffic logging
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 07 May 2026 20:38:22 +0500
+
 wb-mqtt-dali (1.9.0) stable; urgency=medium
 
   * Add event filter for pushbutton instance type

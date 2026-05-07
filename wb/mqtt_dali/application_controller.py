@@ -16,6 +16,7 @@ from dali.address import (
 )
 from dali.command import Command, Response, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
+from dali.exceptions import ResponseError
 from dali.frame import ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
 
@@ -1458,4 +1459,8 @@ def format_response(response: Response) -> str:
         and response.raw_value.error is not True
     ):
         return f"{format_frame(response.raw_value)} {response.raw_value.as_integer}"
-    return f"{format_frame(response.raw_value)} {response}"
+
+    try:
+        return f"{format_frame(response.raw_value)} {response}"
+    except ResponseError:
+        return "framing error"

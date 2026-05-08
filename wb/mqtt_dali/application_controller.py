@@ -194,6 +194,10 @@ class CommissioningState:
 
 CommissioningStateCallback = Callable[[CommissioningState], Union[None, Coroutine[Any, Any, None]]]
 
+# Sub-second polling overloads the bus and is rejected; values below this are
+# clamped to the minimum and a warning is logged on every offending call.
+MIN_POLLING_INTERVAL = 1.0
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -312,8 +316,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
 
-        self._polling_interval = config.polling_interval
+        # Route initial value through the setter so all entry points share the clamp/warn logic.
+        self._polling_interval = MIN_POLLING_INTERVAL
         self._polling_task: Optional[asyncio.Task] = None
+        self.set_polling_interval(config.polling_interval)
 
         # Special gear commands are preceded by EnableDeviceType
         # Store the type to correctly decode the following command frame
@@ -366,6 +372,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         return self._bus_monitor_enabled
 
     def set_polling_interval(self, value: float) -> None:
+        if value < MIN_POLLING_INTERVAL:
+            self.logger.warning(
+                "polling_interval=%s below minimum %.1fs, clamping to %.1fs",
+                value,
+                MIN_POLLING_INTERVAL,
+                MIN_POLLING_INTERVAL,
+            )
+            value = MIN_POLLING_INTERVAL
         self._polling_interval = value
 
     def set_bus_monitor_enabled(self, enabled: bool) -> None:
@@ -1143,7 +1157,11 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             return 0.001
 
         state.poll_turn = True
-        return 1.0
+        # If polling is overdue, return a near-zero wait so the next loop iteration
+        # gets another _poll_step call (with poll_turn=True) without burning a full
+        # second. The 1.0 cap preserves S3 (runtime polling_interval changes apply
+        # within ~1s).
+        return min(1.0, max(0.001, state.last_poll_time + self._polling_interval - current_time))
 
     async def _polling_loop(self) -> None:  # pylint: disable=too-many-branches, too-many-statements
         state = PollingState(last_poll_time=default_timer() - self._polling_interval)
@@ -1230,6 +1248,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                             item.future.set_exception(e)
                     finally:
                         item = None
+
+                # Slip a poll into the gap between bursts of tasks: if the queue
+                # is now empty and the polling interval has elapsed, run a poll
+                # step immediately instead of waiting for the queue_timeout to fire.
+                if (
+                    not self._in_quiescent_mode
+                    and self._tasks_queue.empty()
+                    and state.last_poll_time + self._polling_interval <= default_timer()
+                ):
+                    queue_timeout = await self._poll_step(state, default_timer())
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)

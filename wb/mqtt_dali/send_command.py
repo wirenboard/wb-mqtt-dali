@@ -15,6 +15,8 @@ from dali.address import (
     DeviceBroadcast,
     DeviceGroup,
     DeviceShort,
+    FeatureDevice,
+    FeatureInstanceNumber,
     GearAddress,
     GearBroadcast,
     GearGroup,
@@ -65,6 +67,27 @@ def _collect_commands(module: ModuleType, base_class: Type[Command]) -> Dict[str
         if _is_concrete_command(obj) and issubclass(obj, base_class):
             result[name] = obj
     return result
+
+
+def _register_feature_commands(registry: Dict[str, CommandInfo], device_inst_base: Type[Command]) -> None:
+    feature_modules = [
+        (feedback, feedback.feature_type),
+    ]
+    for module, ft in feature_modules:
+        for name, cls in _collect_commands(module, device_inst_base).items():
+            needs_data = getattr(cls, "_hasparam", None) is True
+            registry[f"FF24.F{ft}.{name}"] = CommandInfo(
+                cls=cls,
+                kind="device_feature_device",
+                device_type=0,
+                needs_data=needs_data,
+            )
+            registry[f"FF24.F{ft}.Ix.{name}"] = CommandInfo(
+                cls=cls,
+                kind="device_feature_instance",
+                device_type=0,
+                needs_data=needs_data,
+            )
 
 
 def build_command_registry() -> Dict[str, CommandInfo]:
@@ -155,15 +178,13 @@ def build_command_registry() -> Dict[str, CommandInfo]:
 
     # --- Instance-type-specific device instance commands (DT<instance_type>.Ix prefix) ---
     instance_type_modules = [
-        device_pushbutton,
-        absolute_input_device,
-        device_occupancy,
-        device_light,
-        general_purpose_sensor,
-        feedback,
+        (device_pushbutton, device_pushbutton.instance_type),
+        (absolute_input_device, absolute_input_device.instance_type),
+        (device_occupancy, device_occupancy.instance_type),
+        (device_light, device_light.instance_type),
+        (general_purpose_sensor, general_purpose_sensor.instance_type),
     ]
-    for module in instance_type_modules:
-        it = module.instance_type
+    for module, it in instance_type_modules:
         for name, cls in _collect_commands(module, device_inst_base).items():
             key = f"FF24.DT{it}.Ix.{name}"
             registry[key] = CommandInfo(
@@ -172,6 +193,8 @@ def build_command_registry() -> Dict[str, CommandInfo]:
                 device_type=0,
                 needs_data=getattr(cls, "_hasparam", None) is True,
             )
+
+    _register_feature_commands(registry, device_inst_base)
 
     # --- Device special commands (FF24 prefix, no address) ---
     device_specials = {
@@ -271,7 +294,13 @@ def parse_and_build_command(  # pylint: disable=too-many-arguments, R0917, too-m
     elif info.kind == "gear_dapc":
         if data is None:
             raise ValueError("DAPC command requires --data argument")
-    elif info.kind in ("gear_standard", "device_standard", "device_instance"):
+    elif info.kind in (
+        "gear_standard",
+        "device_standard",
+        "device_instance",
+        "device_feature_device",
+        "device_feature_instance",
+    ):
         if address is None and group is None and not broadcast:
             raise ValueError(f"Command '{command_name}' requires --address, --group or --broadcast")
 
@@ -314,6 +343,20 @@ def parse_and_build_command(  # pylint: disable=too-many-arguments, R0917, too-m
             return info.cls(addr, InstanceNumber(instance_number), data)
         return info.cls(addr, InstanceNumber(instance_number))
 
+    if info.kind == "device_feature_device":
+        addr = build_device_address(address, group, broadcast)
+        if info.needs_data:
+            return info.cls(addr, FeatureDevice(), data)
+        return info.cls(addr, FeatureDevice())
+
+    if info.kind == "device_feature_instance":
+        # Without I<K> the key matches device_feature_device above, so
+        # instance_number is guaranteed non-None on this branch.
+        addr = build_device_address(address, group, broadcast)
+        if info.needs_data:
+            return info.cls(addr, FeatureInstanceNumber(instance_number), data)
+        return info.cls(addr, FeatureInstanceNumber(instance_number))
+
     if info.kind == "device_special":
         if info.needs_data:
             return info.cls(data)
@@ -350,7 +393,10 @@ def list_commands(registry: Dict[str, CommandInfo]) -> str:
     for key, info in sorted(registry.items()):
 
         # Determine group
-        if ".Ix." in key:
+        if info.kind in ("device_feature_device", "device_feature_instance"):
+            # Both feature_device and feature_instance keys group under FF24.F<N>.
+            group = ".".join(key.split(".")[:2])
+        elif ".Ix." in key:
             # Instance commands: e.g., FF24.Ix.EnableInstance -> "FF24.Ix"
             # or DT2.Ix.SetReportTimer -> "DT2.Ix"
             group = key.split(".Ix.")[0] + ".Ix"
@@ -389,7 +435,7 @@ def list_commands(registry: Dict[str, CommandInfo]) -> str:
         "FF24.DT3.Ix": "Occupancy Sensor",
         "FF24.DT4.Ix": "Light Sensor",
         "FF24.DT6.Ix": "General Purpose Sensor",
-        "FF24.DT32.Ix": "Feedback",
+        "FF24.F32": "Feedback — FF24.F32.cmd targets the device, FF24.F32.Ix.cmd targets instance x",
     }
 
     lines = []

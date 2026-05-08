@@ -14,7 +14,7 @@ from dali.device.general import DTR0, QueryEventFilterZeroToSeven, SetEventFilte
 
 from wb.mqtt_dali.dali2_device import InstanceParameters
 from wb.mqtt_dali.dali2_type1_parameters import EventFilterParam
-from wb.mqtt_dali.device import absolute_input_device, feedback, general_purpose_sensor
+from wb.mqtt_dali.device import absolute_input_device, general_purpose_sensor
 
 # pylint: disable=protected-access
 
@@ -276,7 +276,6 @@ def test_dali2_instance_parameters_pushbutton_includes_event_filter():
         occupancy.instance_type,
         light.instance_type,
         general_purpose_sensor.instance_type,
-        feedback.instance_type,
     ]
     for instance_type in other_types:
         params = InstanceParameters(instance_number, instance_type)

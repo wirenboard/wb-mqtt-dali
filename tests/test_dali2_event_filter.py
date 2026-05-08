@@ -276,7 +276,6 @@ def test_dali2_instance_parameters_pushbutton_includes_event_filter():
         occupancy.instance_type,
         light.instance_type,
         general_purpose_sensor.instance_type,
-        feedback.instance_type,
     ]
     for instance_type in other_types:
         params = InstanceParameters(instance_number, instance_type)

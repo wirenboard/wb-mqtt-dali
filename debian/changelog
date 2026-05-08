@@ -1,8 +1,14 @@
-wb-mqtt-dali (1.9.1) stable; urgency=medium
+wb-mqtt-dali (1.10.0) stable; urgency=medium
 
   * Do not block polling if there are many /on-topic commands
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 07 May 2026 11:35:07 +0500
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 08 May 2026 11:20:16 +0500
+
+wb-mqtt-dali (1.9.1) stable; urgency=medium
+
+  * Fix framing error handling in bus traffic logging
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 07 May 2026 20:38:22 +0500
 
 wb-mqtt-dali (1.9.0) stable; urgency=medium
 

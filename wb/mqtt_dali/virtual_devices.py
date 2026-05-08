@@ -373,6 +373,9 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     def get_mqtt_controls(self) -> list[ControlInfo]:
         return [control.control_info for control in self._controls.values()]
 
+    def get_mqtt_control(self, control_id: str) -> Optional[MqttControlBase]:
+        return self._controls.get(control_id)
+
     async def execute_control(
         self,
         driver: WBDALIDriver,
@@ -413,6 +416,9 @@ class BroadcastVirtualDevice:
 
     def get_mqtt_controls(self) -> list[ControlInfo]:
         return [control.control_info for control in self._controls.values()]
+
+    def get_mqtt_control(self, control_id: str) -> Optional[MqttControlBase]:
+        return self._controls.get(control_id)
 
     async def execute_control(
         self,

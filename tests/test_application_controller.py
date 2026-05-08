@@ -838,7 +838,6 @@ class TestStopDuringRunningScan:
         one_shot.stop = AsyncMock()
         controller._one_shot_tasks = one_shot
         controller._quiescent_mode_timer = None
-        controller._controls_to_execute = {}
         controller._init_scheduler = MagicMock()
         controller._websocket_lock = asyncio.Lock()
         controller._stop_websocket = AsyncMock()

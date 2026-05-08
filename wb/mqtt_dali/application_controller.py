@@ -346,8 +346,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._in_quiescent_mode = False
         self._init_scheduler = DeviceInitScheduler()
 
-        self._controls_to_execute: dict[tuple[ControllableDevice, str], str] = {}
-
         self._commissioning_state: CommissioningState = CommissioningState()
         self._current_commissioning_task: Optional[asyncio.Task] = None
         self._commissioning_state_cb: Optional[CommissioningStateCallback] = None
@@ -437,7 +435,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         except asyncio.QueueEmpty:
             pass
 
-        self._controls_to_execute.clear()
         self._init_scheduler.clear()
 
         await self._device_publisher.cleanup()
@@ -963,22 +960,28 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         if device is None:
             return
 
-        key = (device, control_id)
-        if key in self._controls_to_execute:
-            self._controls_to_execute[key] = payload
+        control = device.get_mqtt_control(control_id)
+        if control is None:
+            self.logger.warning(
+                "Received MQTT message for unknown control %s of device %s", control_id, device_id
+            )
+            return
+        key = (device, control)
+        control_is_dirty = control.is_dirty()
+        control.value_to_set = payload
+        if control_is_dirty:
             self.logger.debug(
                 "Received new command for control %s of device %s while previous command is still pending",
                 control_id,
                 device_id,
             )
             return
-        self._controls_to_execute[key] = payload
         try:
             task = ApplicationControllerTask(ApplicationControllerTaskType.EXECUTE_CONTROL, key)
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
-            await self._device_publisher.set_control_value(device_id, control_id, payload)
+            await self._device_publisher.set_control_value(device_id, control_id, control.control_info.value)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
             await self._device_publisher.set_control_error(device_id, control_id, "w")
@@ -1163,8 +1166,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
                 if self._in_quiescent_mode:
                     if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
-                        self._controls_to_execute.pop(item.data, None)
-                    item.future.cancel()
+                        _device, control = item.data
+                        control.value_to_set = None
+                    item.future.set_exception(RuntimeError("Cannot execute tasks while in quiescent mode"))
                     item = None
                     continue
 
@@ -1173,33 +1177,27 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                     while (
                         item is not None and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
                     ):
-                        payload = self._controls_to_execute.pop(item.data, None)
-                        if payload is not None:
-                            device, control_id = item.data
-                            controls.append((item, payload, device, control_id))
-                        else:
-                            # Ensure futures are always resolved, even if there is no payload
-                            if not item.future.done():
-                                item.future.set_exception(
-                                    RuntimeError("No payload available for EXECUTE_CONTROL task")
-                                )
+                        controls.append((item, item.data.control.value_to_set))
+                        item.data.control.value_to_set = None
                         try:
                             item = self._tasks_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             item = None
                     results = await asyncio.gather(
                         *[
-                            device.execute_control(self._dev, control_id, payload)
-                            for _task, payload, device, control_id in controls
+                            device.execute_control(self._dev, control.control_info.id, value_to_set)
+                            for (_task_type, (device, control), _future), value_to_set in controls
                         ],
                         return_exceptions=True,
                     )
-                    for (processed_task, payload, device, control_id), result in zip(controls, results):
-                        if not processed_task.future.done():
+                    for (item, value_to_set), result in zip(controls, results):
+                        if not item.future.done():
                             if isinstance(result, Exception):
-                                processed_task.future.set_exception(result)
+                                item.future.set_exception(result)
                             else:
-                                processed_task.future.set_result(result)
+                                item.future.set_result(result)
+                                item.data.control.control_info.value = value_to_set
+
                 else:
                     try:
                         if item.task_type == ApplicationControllerTaskType.COMMISSIONING:

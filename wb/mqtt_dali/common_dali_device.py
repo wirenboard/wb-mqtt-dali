@@ -61,6 +61,8 @@ class MqttControlBase:
     # Marks a read-only control whose value is mirrored to group virtual devices.
     is_group_state_control: bool = False
 
+    value_to_set: Optional[str] = None
+
     def __init__(self, control_info: ControlInfo) -> None:
         # the property value is used as default value for the control
         self.control_info = control_info
@@ -81,6 +83,9 @@ class MqttControlBase:
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         del short_address, value_to_set
         return []
+
+    def is_dirty(self) -> bool:
+        return self.value_to_set is not None
 
 
 class MqttControl(MqttControlBase):
@@ -622,6 +627,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                 f"Device {self.name} is not initialized. Call initialize() before getting MQTT controls."
             )
         return [descriptor.control_info for descriptor in self._controls.values()]
+
+    def get_mqtt_control(self, control_id: str) -> Optional[MqttControlBase]:
+        return self._controls.get(control_id)
 
     def get_group_state_controls(self) -> list[MqttControlBase]:
         if not self.is_initialized:

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.9.2) stable; urgency=medium
+
+  * Add e2e test for /on topic handling latency
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 08 May 2026 11:13:26 +0500
+
 wb-mqtt-dali (1.9.1) stable; urgency=medium
 
   * Fix framing error handling in bus traffic logging

@@ -8,8 +8,8 @@ from __future__ import annotations
 from dali import command
 from dali.device import general
 
-# "32" corresponds with "Part 332", as per Table 4 of IEC 62386 part 103
-instance_type = 32  # pylint: disable=C0103
+# "32" corresponds with "Part 332", as per Table 4 of IEC 62386 part 103.
+feature_type = 32  # pylint: disable=C0103
 
 
 ###############################################################################

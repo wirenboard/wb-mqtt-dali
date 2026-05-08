@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import logging
 import re
 from types import SimpleNamespace
@@ -28,7 +27,7 @@ from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
 
-# pylint: disable=protected-access
+# pylint: disable=protected-access, duplicate-code
 
 # Prevent file system access inside DaliDeviceBase.__init__
 DaliDeviceBase._common_schema = {"title": "test-schema"}
@@ -1102,8 +1101,10 @@ def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationControlle
 
 async def _cancel_loop(task: asyncio.Task) -> None:
     task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
+    try:
         await task
+    except asyncio.CancelledError:
+        pass
 
 
 async def _run_loop_briefly(controller: ApplicationController, duration: float) -> None:
@@ -1122,7 +1123,6 @@ def _make_execute_control_task(device, control_id="ctrl") -> ApplicationControll
     )
 
 
-@pytest.mark.skip(reason="no way of currently testing this!!!")
 class TestPollingLoopFallback:
     @pytest.mark.asyncio
     async def test_poll_runs_when_queue_empties_after_interval(self):

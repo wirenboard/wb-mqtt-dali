@@ -1012,7 +1012,6 @@ def _make_polling_controller():
     return controller
 
 
-@pytest.mark.skip(reason="no way of currently testing this!!!")
 class TestPollingIntervalClamp:
     def test_set_polling_interval_clamped(self, caplog):
         """set_polling_interval(<1) is clamped to MIN_POLLING_INTERVAL with a warning."""
@@ -1057,7 +1056,6 @@ class TestPollingIntervalClamp:
             caplog.clear()
 
 
-@pytest.mark.skip(reason="no way of currently testing this!!!")
 @pytest.mark.asyncio
 async def test_rpc_config_update_clamps_polling_interval():
     """SetBus RPC with polling_interval=0 reaches the controller as MIN_POLLING_INTERVAL."""

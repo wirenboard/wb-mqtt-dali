@@ -7,10 +7,10 @@ from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
-# pylint: disable=protected-access,invalid-name
+# pylint: disable=invalid-name
 
 # Prevent file system access in __init__ by providing a non-empty common schema
-DaliDeviceBase._common_schema = {"title": "test-schema"}
+DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 @pytest.mark.asyncio
@@ -147,6 +147,7 @@ def test_name_setter_changes_internal_state():
 
 @pytest.mark.asyncio
 def test_name_setter_empty_string_is_custom():
+    # pylint: disable=protected-access
     addr = DaliDeviceAddress(short=0, random=0x00)
     d = DaliDeviceBase(
         address=addr,
@@ -167,6 +168,7 @@ def test_name_setter_empty_string_is_custom():
 
 @pytest.mark.asyncio
 def test_name_none_at_init_uses_default():
+    # pylint: disable=protected-access
     addr = DaliDeviceAddress(short=9, random=0xDEAD)
     d = DaliDeviceBase(
         address=addr,
@@ -333,6 +335,7 @@ async def test_load_info_skips_none_schemas():
 
 @pytest.mark.asyncio
 async def test_load_info_stores_parameter_handlers():
+    # pylint: disable=protected-access
     extra_handler = _make_mock_param_handler()
     d = _make_device(extra_param_handlers=[extra_handler])
     driver = AsyncMock()
@@ -350,6 +353,7 @@ async def test_load_info_stores_parameter_handlers():
 
 @pytest.mark.asyncio
 async def test_load_info_schema_is_deepcopy_of_common():
+    # pylint: disable=protected-access
     d = _make_device()
     driver = AsyncMock()
 
@@ -416,6 +420,7 @@ async def test_load_info_empty_params_dict_triggers_load():
 
 @pytest.mark.asyncio
 async def test_poll_controls_returns_error_when_response_is_none():
+    # pylint: disable=protected-access
     d = _make_device(mqtt_id="dev_custom")
     driver = AsyncMock()
 
@@ -444,6 +449,7 @@ async def test_poll_controls_returns_error_when_response_is_none():
 
 @pytest.mark.asyncio
 async def test_poll_controls_returns_error_when_raw_value_is_none():
+    # pylint: disable=protected-access
     d = _make_device()
     driver = AsyncMock()
 
@@ -473,6 +479,7 @@ async def test_poll_controls_returns_error_when_raw_value_is_none():
 
 @pytest.mark.asyncio
 async def test_poll_controls_returns_error_when_raw_value_has_error():
+    # pylint: disable=protected-access
     d = _make_device()
     driver = AsyncMock()
 
@@ -505,6 +512,7 @@ async def test_poll_controls_returns_error_when_raw_value_has_error():
 
 @pytest.mark.asyncio
 async def test_poll_controls_formats_regular_control_value():
+    # pylint: disable=protected-access
     d = _make_device(mqtt_id="dev42")
     driver = AsyncMock()
 
@@ -537,6 +545,7 @@ async def test_poll_controls_formats_regular_control_value():
 
 @pytest.mark.asyncio
 async def test_poll_controls_alarm_control_active_when_response_error_true():
+    # pylint: disable=protected-access
     d = _make_device()
     driver = AsyncMock()
 
@@ -570,6 +579,7 @@ async def test_poll_controls_alarm_control_active_when_response_error_true():
 
 @pytest.mark.asyncio
 async def test_poll_controls_alarm_control_inactive_when_response_error_false_or_missing():
+    # pylint: disable=protected-access
     d = _make_device()
     driver = AsyncMock()
 
@@ -603,6 +613,7 @@ async def test_poll_controls_alarm_control_inactive_when_response_error_false_or
 
 @pytest.mark.asyncio
 async def test_poll_controls_multiple_controls_and_queries_order():
+    # pylint: disable=protected-access
     d = _make_device(mqtt_id="dev_multi")
     driver = AsyncMock()
 
@@ -680,6 +691,7 @@ async def test_apply_parameters_raises_when_params_not_loaded():
 
 @pytest.mark.asyncio
 async def test_apply_parameters_does_not_call_load_info_when_params_present():
+    # pylint: disable=protected-access
     d = _make_device()
     d.is_initialized = True
     d.params = {"short_address": 1}
@@ -698,6 +710,7 @@ async def test_apply_parameters_does_not_call_load_info_when_params_present():
 
 @pytest.mark.asyncio
 async def test_apply_parameters_validates_with_current_schema():
+    # pylint: disable=protected-access
     d = _make_device()
     d.is_initialized = True
     d.params = {"short_address": 1}
@@ -719,6 +732,7 @@ async def test_apply_parameters_validates_with_current_schema():
 
 @pytest.mark.asyncio
 async def test_apply_parameters_calls_write_for_each_handler_and_updates_params():
+    # pylint: disable=protected-access
     h1 = MagicMock()
     h1.write = AsyncMock(return_value={"p1": "v1", "shared": "from_h1"})
     h2 = MagicMock()
@@ -747,6 +761,7 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
 
 @pytest.mark.asyncio
 async def test_apply_parameters_calls_apply_common_even_with_no_handlers():
+    # pylint: disable=protected-access
     d = _make_device()
     d.is_initialized = True
     d.params = {"short_address": 1}
@@ -764,6 +779,7 @@ async def test_apply_parameters_calls_apply_common_even_with_no_handlers():
 
 @pytest.mark.asyncio
 async def test_apply_parameters_propagates_validation_error_and_stops_processing():
+    # pylint: disable=protected-access
     h = MagicMock()
     h.write = AsyncMock(return_value={"x": 1})
 
@@ -788,6 +804,7 @@ async def test_apply_parameters_propagates_validation_error_and_stops_processing
 
 @pytest.mark.asyncio
 async def test_apply_parameters_propagates_write_error_and_does_not_apply_common():
+    # pylint: disable=protected-access
     h1 = MagicMock()
     h1.write = AsyncMock(side_effect=RuntimeError("write failed"))
     h2 = MagicMock()

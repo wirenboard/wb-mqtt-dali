@@ -13,7 +13,7 @@ from wb.mqtt_dali.application_controller import (
     try_initialize_device,
 )
 
-# pylint: disable=protected-access,too-many-public-methods
+# pylint: disable=too-many-public-methods
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_init_scheduler import (
     INIT_RETRY_INITIAL_DELAY,
@@ -366,6 +366,7 @@ class TestPublishDevice:  # pylint: disable=too-few-public-methods
 
 
 def _make_controller():
+    # pylint: disable=protected-access
     ctrl = ApplicationController.__new__(ApplicationController)
     ctrl.logger = logging.getLogger("test")
     ctrl._init_scheduler = DeviceInitScheduler()
@@ -389,6 +390,7 @@ def _make_controller():
 class TestPollStep:
     @pytest.mark.asyncio
     async def test_alternates_poll_and_retry(self):
+        # pylint: disable=protected-access
         """With one pollable and one retry device, steps alternate: poll, retry, poll."""
         ctrl = _make_controller()
         poll_dev = _make_mock_device(mqtt_id="p1", is_initialized=True)
@@ -419,6 +421,7 @@ class TestPollStep:
 
     @pytest.mark.asyncio
     async def test_poll_only_when_no_retries(self):
+        # pylint: disable=protected-access
         """Without pending retries, poll runs then idle (poll_turn resets)."""
         ctrl = _make_controller()
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
@@ -438,6 +441,7 @@ class TestPollStep:
 
     @pytest.mark.asyncio
     async def test_retry_only_when_no_poll_devices(self):
+        # pylint: disable=protected-access
         """Without initialized devices, only retry-init runs, polling is skipped."""
         ctrl = _make_controller()
         retry_dev = _make_mock_device(mqtt_id="r1", is_initialized=False)
@@ -457,6 +461,7 @@ class TestPollStep:
 
     @pytest.mark.asyncio
     async def test_first_attempt_has_priority(self):
+        # pylint: disable=protected-access
         """First-attempt batch runs before polling or retry."""
         ctrl = _make_controller()
         dev = _make_mock_device(mqtt_id="new1", is_initialized=False)
@@ -472,6 +477,7 @@ class TestPollStep:
 
     @pytest.mark.asyncio
     async def test_retry_not_due_yields_idle(self):
+        # pylint: disable=protected-access
         """When retry backoff has not elapsed, step returns idle timeout."""
         ctrl = _make_controller()
         retry_dev = _make_mock_device(mqtt_id="r1", is_initialized=False)
@@ -488,6 +494,7 @@ class TestPollStep:
 
     @pytest.mark.asyncio
     async def test_idle_fallback_caps_at_polling_due_time(self):
+        # pylint: disable=protected-access
         """When polling is overdue and the idle fallback fires (poll_turn=False,
         no retry), the returned timeout must clamp to ~0.001 instead of 1.0 so
         the loop does not waste a full second after a idle inline-check."""

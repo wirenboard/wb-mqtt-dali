@@ -14,7 +14,7 @@ from wb.mqtt_dali.wbmqtt import (
     retain_hack,
 )
 
-# pylint: disable=protected-access,redefined-outer-name,too-many-public-methods
+# pylint: disable=redefined-outer-name,too-many-public-methods
 
 
 class MockMessage:  # pylint: disable=too-few-public-methods
@@ -73,6 +73,7 @@ class MockMQTTDispatcher:
         self._subscriptions = {}
 
     async def subscribe(self, topic, callback):
+        # pylint: disable=protected-access
         if topic not in self._subscriptions:
             self._subscriptions[topic] = []
         self._subscriptions[topic].append(callback)
@@ -156,6 +157,7 @@ class TestControlState:
 class TestDevice:
     @pytest.mark.asyncio
     async def test_initialization(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -177,6 +179,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_create_control(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
@@ -193,6 +196,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_set_control_value(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
@@ -250,6 +254,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_set_control_read_only(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -277,6 +282,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_set_control_title(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -304,6 +310,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_set_control_error(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -324,6 +331,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_set_control_error_clears(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -355,6 +363,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_remove_control(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -422,6 +431,7 @@ class TestDevice:
 
     @pytest.mark.asyncio
     async def test_remove_device(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -515,6 +525,7 @@ class TestDevice:
         assert "order" not in meta_json
 
     def test_get_control_base_topic(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_device", "test_driver", "Test Device")
         topic = device._get_control_base_topic("my_control")
         assert topic == "/devices/test_device/controls/my_control"
@@ -647,6 +658,7 @@ class TestRemoveTopicsByDriver:
 class TestIntegration:  # pylint: disable=too-few-public-methods
     @pytest.mark.asyncio
     async def test_device_lifecycle(self, mock_client):
+        # pylint: disable=protected-access
         device = Device(mock_client, "test_dev", "test_driver", "Test Device")
         await device.initialize()
 

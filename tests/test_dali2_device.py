@@ -5,11 +5,10 @@ from dali.address import DeviceShort
 
 from wb.mqtt_dali.dali2_device import DeviceGroupsParam
 
-# pylint: disable=protected-access
-
 
 @pytest.mark.asyncio
 async def test_device_groups_write_updates_expected_masks(monkeypatch):
+    # pylint: disable=protected-access
     param = DeviceGroupsParam()
 
     initial_state = [False] * 32
@@ -80,6 +79,7 @@ async def test_device_groups_write_updates_expected_masks(monkeypatch):
 
 
 def test_device_groups_builds_command_sequence(monkeypatch):
+    # pylint: disable=protected-access
     param = DeviceGroupsParam()
     monkeypatch.setattr("wb.mqtt_dali.dali2_device.DTR1", lambda value: ("DTR1", value))
     monkeypatch.setattr("wb.mqtt_dali.dali2_device.DTR2", lambda value: ("DTR2", value))
@@ -95,6 +95,7 @@ def test_device_groups_builds_command_sequence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_device_groups_write_no_changes_skips_driver_call():
+    # pylint: disable=protected-access
     param = DeviceGroupsParam()
     current_state = [False] * 32
     current_state[5] = True

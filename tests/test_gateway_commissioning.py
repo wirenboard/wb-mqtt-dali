@@ -19,10 +19,9 @@ from wb.mqtt_dali.gateway import (
     commissioning_topic,
 )
 
-# pylint: disable=protected-access
-
 
 def _make_gateway_shell():
+    # pylint: disable=protected-access
     gw = Gateway.__new__(Gateway)
     gw.wb_dali_gateways = []
     gw._mqtt_dispatcher = MagicMock()
@@ -110,6 +109,7 @@ async def test_stop_scan_bus_handler_unknown_bus_raises():
 
 @pytest.mark.asyncio
 async def test_commissioning_state_cb_saves_on_completed():
+    # pylint: disable=protected-access
     gw = _make_gateway_shell()
     cb = gw._make_commissioning_state_cb("wb-mdali_1_bus_1")
 
@@ -134,6 +134,7 @@ async def test_commissioning_state_cb_saves_on_completed():
 
 @pytest.mark.asyncio
 async def test_commissioning_state_cb_skips_save_on_cancelled():
+    # pylint: disable=protected-access
     """CANCELLED means scan did not happen; config must NOT be saved.
 
     The state callback still publishes to MQTT, but ``_save_configuration``
@@ -159,6 +160,7 @@ async def test_commissioning_state_cb_skips_save_on_cancelled():
 
 @pytest.mark.asyncio
 async def test_commissioning_state_cb_skips_save_on_running():
+    # pylint: disable=protected-access
     gw = _make_gateway_shell()
     cb = gw._make_commissioning_state_cb("bus")
     state = CommissioningState(
@@ -171,6 +173,7 @@ async def test_commissioning_state_cb_skips_save_on_running():
 
 @pytest.mark.asyncio
 async def test_commissioning_state_cb_skips_save_on_idle():
+    # pylint: disable=protected-access
     gw = _make_gateway_shell()
     cb = gw._make_commissioning_state_cb("bus")
     state = CommissioningState(status=CommissioningStatus.IDLE)
@@ -180,6 +183,7 @@ async def test_commissioning_state_cb_skips_save_on_idle():
 
 @pytest.mark.asyncio
 async def test_publish_idle_emits_retained_for_every_bus():
+    # pylint: disable=protected-access
     gw = _make_gateway_shell()
     bus1 = _make_fake_bus("bus_1")
     bus2 = _make_fake_bus("bus_2")
@@ -199,6 +203,7 @@ async def test_publish_idle_emits_retained_for_every_bus():
 
 @pytest.mark.asyncio
 async def test_publish_idle_payload_matches_default_state_constructor():
+    # pylint: disable=protected-access
     """The idle payload must be generated from ``CommissioningState()`` — the
     constructor is the single source of truth for the payload shape.
     """
@@ -216,6 +221,7 @@ async def test_publish_idle_payload_matches_default_state_constructor():
 
 @pytest.mark.asyncio
 async def test_clear_retained_state_on_stop():
+    # pylint: disable=protected-access
     gw = _make_gateway_shell()
     bus = _make_fake_bus("bus_1")
     gw.wb_dali_gateways = [WbDaliGateway(uid="gw", buses=[bus])]

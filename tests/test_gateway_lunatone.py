@@ -22,8 +22,6 @@ from wb.mqtt_dali.gateway import (
     save_configuration,
 )
 
-# pylint: disable=protected-access
-
 
 def _bare_bus(uid: str) -> ApplicationController:
     """Return a minimally-functional ApplicationController-shaped mock.
@@ -49,6 +47,7 @@ def _make_gateway_object(uid: str, bus_count: int = 2) -> WbDaliGateway:
 
 
 def _make_gateway_service(wb_dali_gateways) -> Gateway:
+    # pylint: disable=protected-access
     """Build a `Gateway` skeleton bypassing __init__."""
     svc = Gateway.__new__(Gateway)
     svc.wb_dali_gateways = wb_dali_gateways
@@ -165,6 +164,7 @@ async def test_get_gateway_rpc_unknown_id_raises():
 
 @pytest.mark.asyncio
 async def test_set_gateway_rpc_starts_emulator():
+    # pylint: disable=protected-access
     gw = _make_gateway_object("gw1")
     svc = _make_gateway_service([gw])
 
@@ -189,6 +189,7 @@ async def test_set_gateway_rpc_starts_emulator():
 
 @pytest.mark.asyncio
 async def test_set_gateway_rpc_changes_port():
+    # pylint: disable=protected-access
     gw = _make_gateway_object("gw1")
     svc = _make_gateway_service([gw])
 
@@ -223,6 +224,7 @@ async def test_set_gateway_rpc_changes_port():
 
 @pytest.mark.asyncio
 async def test_set_gateway_rpc_disables_emulator_releases_quiescent():
+    # pylint: disable=protected-access
     """When emulator is disabled, all buses of the gateway exit quiescent mode."""
     gw = _make_gateway_object("gw1", bus_count=2)
     svc = _make_gateway_service([gw])
@@ -288,6 +290,7 @@ async def test_set_gateway_rpc_rejects_out_of_range_port():
 
 @pytest.mark.asyncio
 async def test_set_gateway_rpc_same_port_for_different_gateways_ok_when_disabled():
+    # pylint: disable=protected-access
     """A duplicate port is fine if the other gateway has the emulator disabled."""
     gw1 = _make_gateway_object("gw1")
     gw1.websocket_enabled = False
@@ -417,6 +420,7 @@ def test_legacy_config_save_rewrites_to_new_shape():
 
 @pytest.mark.asyncio
 async def test_auto_discovered_gateway_emulator_disabled_by_default():
+    # pylint: disable=protected-access
     """A new gateway added by `_update_gateways` starts with the emulator disabled."""
     svc = _make_gateway_service([])
     svc._mqtt_dispatcher = MagicMock()
@@ -458,6 +462,7 @@ async def test_auto_discovered_gateway_emulator_disabled_by_default():
 
 @pytest.mark.asyncio
 async def test_wb_dali_gateway_apply_no_op_when_unchanged():
+    # pylint: disable=protected-access
     gw = _make_gateway_object("gw1")
     gw.websocket_enabled = False
     gw.websocket_port = 8080

@@ -27,10 +27,10 @@ from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
 
-# pylint: disable=protected-access, duplicate-code
+# pylint: disable=duplicate-code
 
 # Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}
+DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-methods
@@ -46,6 +46,7 @@ class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-
 
 
 def _make_bare_controller():
+    # pylint: disable=protected-access
     controller = ApplicationController.__new__(ApplicationController)
     controller.uid = "gw_bus_1"
     controller.logger = logging.getLogger("test")
@@ -67,6 +68,7 @@ def _make_bare_controller():
 
 @pytest.mark.asyncio
 async def test_resolve_initial_names_formats_known_product():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     compat = DaliCommandsCompatibilityLayer()
     addresses = [DaliDeviceAddress(short=3, random=0x1234)]
@@ -82,6 +84,7 @@ async def test_resolve_initial_names_formats_known_product():
 
 @pytest.mark.asyncio
 async def test_resolve_initial_names_returns_none_for_unknown_product():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     compat = DaliCommandsCompatibilityLayer()
     addresses = [DaliDeviceAddress(short=7, random=0x22)]
@@ -97,6 +100,7 @@ async def test_resolve_initial_names_returns_none_for_unknown_product():
 
 @pytest.mark.asyncio
 async def test_resolve_initial_names_returns_none_on_exception():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     compat = DaliCommandsCompatibilityLayer()
     addresses = [DaliDeviceAddress(short=2, random=0x00)]
@@ -112,6 +116,7 @@ async def test_resolve_initial_names_returns_none_on_exception():
 
 @pytest.mark.asyncio
 async def test_resolve_initial_names_handles_empty_input():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     compat = DaliCommandsCompatibilityLayer()
 
@@ -124,6 +129,7 @@ async def test_resolve_initial_names_handles_empty_input():
 
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
 
     new_addr = DaliDeviceAddress(short=5, random=0xABCD)
@@ -144,6 +150,7 @@ async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
 
 @pytest.mark.asyncio
 async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
 
     new_addr = DaliDeviceAddress(short=8, random=0x01)
@@ -163,6 +170,7 @@ async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
 
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_changed_device():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
 
     # Simulate a previously-known device at short 2 that is now a replacement
@@ -195,6 +203,7 @@ async def test_update_dali_devices_sets_custom_name_for_changed_device():
 
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
 
     new_addr = DaliDeviceAddress(short=4, random=0x55)
@@ -215,6 +224,7 @@ async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
 
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_changed_device():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
 
     # Simulate a previously-known DALI2 device at short 6 that is now a replacement
@@ -249,6 +259,7 @@ async def test_update_dali2_devices_sets_custom_name_for_changed_device():
 
 
 def _make_commissioning_controller():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     controller._state = ApplicationControllerState.READY
     controller._state_lock = asyncio.Lock()
@@ -405,6 +416,7 @@ class TestCommissioningStateSnapshot:
 
 class TestPublishCommissioningState:
     def test_sync_callback_invoked_with_snapshot(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         received: list[CommissioningState] = []
         controller._commissioning_state_cb = received.append
@@ -421,6 +433,7 @@ class TestPublishCommissioningState:
         cast(MagicMock, controller._one_shot_tasks.add).assert_not_called()
 
     def test_async_callback_is_scheduled_via_one_shot_tasks(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
 
         async def _async_cb(_state):
@@ -436,6 +449,7 @@ class TestPublishCommissioningState:
         coro.close()
 
     def test_callback_exception_is_logged_and_swallowed(self, caplog):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
 
         def _bad_cb(_state):
@@ -448,6 +462,7 @@ class TestPublishCommissioningState:
         assert any("cb exploded" in rec.message for rec in caplog.records)
 
     def test_no_callback_is_noop(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         controller._commissioning_state_cb = None
         # No exception, no scheduling.
@@ -458,6 +473,7 @@ class TestPublishCommissioningState:
 class TestStartCommissioning:
     @pytest.mark.asyncio
     async def test_first_call_returns_started_and_marks_running(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         result = await controller.start_commissioning(on_state_changed=lambda _s: None)
         assert result is CommissioningStartResult.STARTED
@@ -469,6 +485,7 @@ class TestStartCommissioning:
 
     @pytest.mark.asyncio
     async def test_second_call_while_running_returns_already_running(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         await controller.start_commissioning()
         result = await controller.start_commissioning()
@@ -485,6 +502,7 @@ class TestCancelCommissioning:
 
     @pytest.mark.asyncio
     async def test_removes_queued_task_and_sets_cancelled(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         # Seed the bus with devices to make sure they are NOT mutated when
         # a queued commissioning task is cancelled before it starts.
@@ -508,6 +526,7 @@ class TestCancelCommissioning:
 
     @pytest.mark.asyncio
     async def test_cancels_running_task(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         await controller.start_commissioning()
         # Simulate the worker promoting the queued task.
@@ -533,6 +552,7 @@ class TestCancelCommissioning:
 
     @pytest.mark.asyncio
     async def test_idempotent_during_cancel(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         await controller.start_commissioning()
         controller._tasks_queue.get_nowait()
@@ -553,6 +573,7 @@ class TestCancelCommissioning:
 class TestCommissioningTaskTerminalBranches:
     @pytest.mark.asyncio
     async def test_happy_path_sets_completed(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
 
         async def _fake_send_with_retry(*_args, **_kwargs):
@@ -591,6 +612,7 @@ class TestCommissioningTaskTerminalBranches:
 
     @pytest.mark.asyncio
     async def test_failure_before_dali1_leaves_bus_untouched(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         original_dali = [
             SimpleNamespace(uid="7", name="0x7", groups=[], address=DaliDeviceAddress(short=7, random=0x7))
@@ -624,6 +646,7 @@ class TestCommissioningTaskTerminalBranches:
 
     @pytest.mark.asyncio
     async def test_failure_after_dali1_applies_partial_and_marks_failed(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         controller.dali_devices = cast(
             Any,
@@ -675,6 +698,7 @@ class TestCommissioningTaskTerminalBranches:
 
     @pytest.mark.asyncio
     async def test_cancel_sets_cancelled_and_reraises(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         original_dali = [
             SimpleNamespace(uid="9", name="0x9", groups=[], address=DaliDeviceAddress(short=9, random=0x9))
@@ -756,6 +780,7 @@ class TestRunCommissioningInChildTask:
 
     @pytest.mark.asyncio
     async def test_user_cancel_of_child_is_consumed_and_handle_cleared(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
 
         commissioning_started = asyncio.Event()
@@ -788,6 +813,7 @@ class TestRunCommissioningInChildTask:
 
     @pytest.mark.asyncio
     async def test_worker_survives_user_cancel_and_processes_next_task(self):
+        # pylint: disable=protected-access
         """End-to-end: after user-cancel of commissioning, a subsequent queued
         task is still processed by the same wrapper coroutine on the next
         invocation. This exercises the contract that the wrapper is a
@@ -834,6 +860,7 @@ class TestStopDuringRunningScan:
     """
 
     def _prepare_for_stop(self, controller):
+        # pylint: disable=protected-access
         """Fill in the fields stop() touches so we can call it directly."""
         controller._state = ApplicationControllerState.READY
         controller._bus_traffic_cleanup = MagicMock()
@@ -850,6 +877,7 @@ class TestStopDuringRunningScan:
 
     @pytest.mark.asyncio
     async def test_cancels_child_before_polling_task(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         self._prepare_for_stop(controller)
 
@@ -864,6 +892,7 @@ class TestStopDuringRunningScan:
         child_entered = asyncio.Event()
 
         async def _fake_commissioning_task():
+            # pylint: disable=protected-access
             # Behaves like the real _commissioning_task: on CancelledError it
             # publishes CANCELLED from inside the except branch, then re-raises.
             child_entered.set()
@@ -896,6 +925,7 @@ class TestStopDuringRunningScan:
 
     @pytest.mark.asyncio
     async def test_stop_without_running_scan_does_not_crash(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         self._prepare_for_stop(controller)
         controller._polling_task = None
@@ -909,6 +939,7 @@ class TestRetainedLifecycleIntegration:
 
     @pytest.mark.asyncio
     async def test_full_cycle_publishes_running_then_completed(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         statuses: list[CommissioningStatus] = []
 
@@ -948,6 +979,7 @@ class TestRetainedLifecycleIntegration:
 
     @pytest.mark.asyncio
     async def test_cancel_cycle_publishes_running_then_cancelled(self):
+        # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         statuses: list[CommissioningStatus] = []
 
@@ -1034,6 +1066,7 @@ class TestPollingIntervalClamp:
 
 @pytest.mark.asyncio
 async def test_rpc_config_update_clamps_polling_interval():
+    # pylint: disable=protected-access
     """SetBus RPC with polling_interval=0 reaches the controller as MIN_POLLING_INTERVAL."""
     bus = bus_from_json("gw1", 1, {"devices": [], "polling_interval": 5.0}, MagicMock(), MagicMock())
     svc = Gateway.__new__(Gateway)
@@ -1050,6 +1083,7 @@ async def test_rpc_config_update_clamps_polling_interval():
 
 
 def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationController:
+    # pylint: disable=protected-access
     """Return a controller with the loop's collaborators stubbed.
 
     Bypasses __init__ so we don't bring up MQTT/driver, but wires up the
@@ -1083,6 +1117,7 @@ async def _cancel_loop(task: asyncio.Task) -> None:
 
 
 async def _stop_polling_loop(controller: ApplicationController, task: asyncio.Task) -> None:
+    # pylint: disable=protected-access
     """Mirror ApplicationController.stop()'s polling-task shutdown sequence.
 
     Cancel alone is unreliable when the loop sits inside `gather(..., return_exceptions=True)`
@@ -1100,6 +1135,7 @@ async def _stop_polling_loop(controller: ApplicationController, task: asyncio.Ta
 
 
 async def _run_loop_briefly(controller: ApplicationController, duration: float) -> None:
+    # pylint: disable=protected-access
     """Run _polling_loop for `duration` seconds, then cancel cleanly."""
     task = asyncio.create_task(controller._polling_loop())
     try:
@@ -1118,6 +1154,7 @@ def _make_execute_control_task(device, control_id="ctrl") -> ApplicationControll
 class TestPollingLoopFallback:
     @pytest.mark.asyncio
     async def test_poll_runs_when_queue_empties_after_interval(self):
+        # pylint: disable=protected-access
         """After EXECUTE_CONTROL drains, _poll_step fires immediately, not after queue_timeout."""
         controller = _make_loop_controller(polling_interval=1.0)
         device = MagicMock()
@@ -1136,6 +1173,7 @@ class TestPollingLoopFallback:
 
     @pytest.mark.asyncio
     async def test_command_stream_does_not_starve_polling(self):
+        # pylint: disable=protected-access
         """Bursts of EXECUTE_CONTROL with sub-interval gaps still let polling slip in.
 
         Uses real `_poll_step` (with `_poll_device` mocked) so `state.last_poll_time`
@@ -1177,6 +1215,7 @@ class TestPollingLoopFallback:
 
     @pytest.mark.asyncio
     async def test_polling_waits_for_queue_to_drain(self):
+        # pylint: disable=protected-access
         """While the queue stays non-empty, polling does not fire (commands have priority).
 
         Uses real `_poll_step` with mocked `_poll_device` so a poll firing would
@@ -1200,6 +1239,7 @@ class TestPollingLoopFallback:
         counter = 0
 
         def _enqueue_pair():
+            # pylint: disable=protected-access
             nonlocal counter
             for _ in range(2):
                 cid = f"c{counter}"
@@ -1208,6 +1248,7 @@ class TestPollingLoopFallback:
                 controller._tasks_queue.put_nowait(_make_execute_control_task(device, cid))
 
         async def _feeder(stop_event: asyncio.Event):
+            # pylint: disable=protected-access
             while not stop_event.is_set():
                 if controller._tasks_queue.qsize() < 4:
                     _enqueue_pair()
@@ -1234,6 +1275,7 @@ class TestPollingLoopFallback:
 
     @pytest.mark.asyncio
     async def test_poll_runs_after_non_execute_control_task(self):
+        # pylint: disable=protected-access
         """Inline poll check fires after a single non-EXECUTE_CONTROL task too."""
         controller = _make_loop_controller(polling_interval=1.0)
         device = MagicMock()
@@ -1252,6 +1294,7 @@ class TestPollingLoopFallback:
 
     @pytest.mark.asyncio
     async def test_polling_interval_change_applies_within_one_second(self):
+        # pylint: disable=protected-access
         """Lowering polling_interval at runtime takes effect within ~1s.
 
         Uses real `_poll_step` so the actual gating (`last_poll_time + interval

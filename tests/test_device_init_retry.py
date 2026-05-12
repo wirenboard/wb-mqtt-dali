@@ -8,7 +8,7 @@ from wb.mqtt_dali.application_controller import (
     AggregatedCapabilities,
     ApplicationController,
     BroadcastVirtualDevice,
-    PollingState,
+    PollScheduler,
     publish_device,
     try_initialize_device,
 )
@@ -245,6 +245,7 @@ def _make_mock_device(mqtt_id="dev_1", name="DALI 1", is_initialized=False):
     device.get_mqtt_controls = MagicMock(return_value=[])
     device.get_common_mqtt_controls = MagicMock(return_value=[])
     device.set_logger = MagicMock()
+    device.time_until_next_poll = MagicMock(return_value=1.0)
     return device
 
 
@@ -370,6 +371,7 @@ def _make_controller():
     ctrl = ApplicationController.__new__(ApplicationController)
     ctrl.logger = logging.getLogger("test")
     ctrl._init_scheduler = DeviceInitScheduler()
+    ctrl._poll_scheduler = PollScheduler()
     ctrl._device_publisher = _make_publisher()
     ctrl._dev = AsyncMock()
     ctrl._handle_on_topic = MagicMock()
@@ -400,24 +402,23 @@ class TestPollStep:
         ctrl._devices_by_mqtt_id = {"p1": poll_dev, "r1": retry_dev}
         ctrl._init_scheduler.schedule("r1", 0.0)
         ctrl._init_scheduler.record_failure("r1", 0.0)
-        ctrl._poll_device = AsyncMock()
+        ctrl._poll_devices = AsyncMock()
         ctrl._polling_interval = 1.0
-        state = PollingState(last_poll_time=0.0)
+        ctrl._poll_scheduler.poll_turn = True
 
         t = 100.0
-        await ctrl._poll_step(state, t)
-        assert state.poll_turn is False
-        ctrl._poll_device.assert_awaited_once()
+        await ctrl._poll_step(t)
+        assert ctrl._poll_scheduler.poll_turn is False
+        ctrl._poll_devices.assert_awaited_once()
 
-        await ctrl._poll_step(state, t)
-        assert state.poll_turn is True
+        await ctrl._poll_step(t)
+        assert ctrl._poll_scheduler.poll_turn is True
         assert ctrl._init_scheduler.get_retry_count("r1") == 2
 
-        ctrl._poll_device.reset_mock()
-        # Advance past polling_interval so the third step is allowed to poll again.
-        await ctrl._poll_step(state, t + ctrl._polling_interval)
-        assert state.poll_turn is False
-        ctrl._poll_device.assert_awaited_once()
+        ctrl._poll_devices.reset_mock()
+        await ctrl._poll_step(t)
+        assert ctrl._poll_scheduler.poll_turn is False
+        ctrl._poll_devices.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_poll_only_when_no_retries(self):
@@ -427,16 +428,16 @@ class TestPollStep:
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
         ctrl.dali_devices = [dev]
         ctrl._devices_by_mqtt_id = {"d1": dev}
-        ctrl._poll_device = AsyncMock()
+        ctrl._poll_devices = AsyncMock()
         ctrl._polling_interval = 1.0
-        state = PollingState(last_poll_time=0.0)
+        ctrl._poll_scheduler.poll_turn = True
 
-        timeout = await ctrl._poll_step(state, 100.0)
-        assert state.poll_turn is False
-        ctrl._poll_device.assert_awaited_once()
+        await ctrl._poll_step(100.0)
+        assert ctrl._poll_scheduler.poll_turn is False
+        ctrl._poll_devices.assert_awaited_once()
 
-        timeout = await ctrl._poll_step(state, 100.0)
-        assert state.poll_turn is True
+        timeout = await ctrl._poll_step(100.0)
+        assert ctrl._poll_scheduler.poll_turn is True
         assert timeout == 1.0
 
     @pytest.mark.asyncio
@@ -450,14 +451,14 @@ class TestPollStep:
         ctrl._devices_by_mqtt_id = {"r1": retry_dev}
         ctrl._init_scheduler.schedule("r1", 0.0)
         ctrl._init_scheduler.record_failure("r1", 0.0)
-        ctrl._poll_device = AsyncMock()
+        ctrl._poll_devices = AsyncMock()
         ctrl._polling_interval = 1.0
-        state = PollingState(last_poll_time=0.0)
+        ctrl._poll_scheduler.poll_turn = True
 
-        timeout = await ctrl._poll_step(state, 100.0)
+        timeout = await ctrl._poll_step(100.0)
         assert timeout == 0.001
-        assert state.poll_turn is True
-        ctrl._poll_device.assert_not_awaited()
+        assert ctrl._poll_scheduler.poll_turn is True
+        ctrl._poll_devices.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_first_attempt_has_priority(self):
@@ -467,11 +468,10 @@ class TestPollStep:
         dev = _make_mock_device(mqtt_id="new1", is_initialized=False)
         ctrl._devices_by_mqtt_id = {"new1": dev}
         ctrl._init_scheduler.schedule("new1", 0.0)
-        ctrl._poll_device = AsyncMock()
         ctrl._polling_interval = 1.0
-        state = PollingState(last_poll_time=0.0)
+        ctrl._poll_scheduler.poll_turn = True
 
-        timeout = await ctrl._poll_step(state, 100.0)
+        timeout = await ctrl._poll_step(100.0)
         assert timeout == 0.001
         dev.initialize.assert_awaited_once()
 
@@ -485,36 +485,36 @@ class TestPollStep:
         ctrl._devices_by_mqtt_id = {"r1": retry_dev}
         ctrl._init_scheduler.schedule("r1", 0.0)
         ctrl._init_scheduler.record_failure("r1", 0.0)
-        ctrl._poll_device = AsyncMock()
         ctrl._polling_interval = 1.0
-        state = PollingState(last_poll_time=0.0)
+        ctrl._poll_scheduler.poll_turn = True
 
-        timeout = await ctrl._poll_step(state, 2.0)
+        timeout = await ctrl._poll_step(2.0)
         assert timeout == 1.0
 
     @pytest.mark.asyncio
     async def test_idle_fallback_caps_at_polling_due_time(self):
         # pylint: disable=protected-access
-        """When polling is overdue and the idle fallback fires (poll_turn=False,
-        no retry), the returned timeout must clamp to ~0.001 instead of 1.0 so
-        the loop does not waste a full second after a idle inline-check."""
+        """When the device reports polling overdue and the idle fallback fires
+        (poll_turn=False, no retry), the returned timeout must clamp to ~0
+        so the polling loop does not waste a full second before the next poll."""
         ctrl = _make_controller()
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
+        # Device reports polling is overdue — no wait needed.
+        dev.time_until_next_poll = MagicMock(return_value=0.0)
         ctrl.dali_devices = [dev]
         ctrl._devices_by_mqtt_id = {"d1": dev}
-        ctrl._poll_device = AsyncMock()
+        ctrl._poll_devices = AsyncMock()
         ctrl._polling_interval = 1.0
-        state = PollingState(last_poll_time=0.0)
+        ctrl._poll_scheduler.poll_turn = True
 
         t0 = 100.0
-        # First call performs a poll: poll_turn flips to False, last_poll_time=t0.
-        await ctrl._poll_step(state, t0)
-        assert state.poll_turn is False
-        assert state.last_poll_time == t0
+        # First call performs a poll: poll_turn flips to False.
+        await ctrl._poll_step(t0)
+        assert ctrl._poll_scheduler.poll_turn is False
 
-        # Second call at t0+2.0 with polling overdue and poll_turn=False:
-        # hits the idle fallback. Formula yields 1.0 + 1.0 - 2.0 = 0 → clamped
-        # to 0.001 by max(0.001, ...), not the constant 1.0.
-        timeout = await ctrl._poll_step(state, t0 + 2.0)
-        assert state.poll_turn is True
+        # Second call with poll_turn=False and polling overdue: hits the idle
+        # fallback which returns ~0 (capped by min(1.0, time_until_next_poll))
+        # rather than the polling_interval default.
+        timeout = await ctrl._poll_step(t0 + 2.0)
+        assert ctrl._poll_scheduler.poll_turn is True
         assert timeout <= 0.01

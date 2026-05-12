@@ -4,7 +4,7 @@ import asyncio
 import enum
 import logging
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Generator, List, Optional, Union
 
 from dali import command
@@ -28,7 +28,12 @@ from dali.gear.general import (
 )
 
 from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8_xy
-from .common_dali_device import ControlPollResult, MqttControlBase, PropertyStartOrder
+from .common_dali_device import (
+    ControlPollResult,
+    ControlsPollRequestResult,
+    MqttControlBase,
+    PropertyStartOrder,
+)
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .dali_type8_common import ColourComponent
@@ -44,6 +49,8 @@ from .wbdali_utils import (
     query_response,
     send_commands_with_retry,
 )
+
+MAX_COLOUR_SUBBATCH_RETRIES = 3
 
 # pylint: disable=duplicate-code
 
@@ -72,6 +79,14 @@ ACTUAL_LEVEL_COLOUR_TAGS = {
     ColourComponent.X_COORDINATE: QueryColourValueDTR.XCoordinate,
     ColourComponent.Y_COORDINATE: QueryColourValueDTR.YCoordinate,
 }
+
+COMPONENTS_BY_COLOUR_TYPE: "dict[ColourType, list[ColourComponent]]" = {
+    ColourType.RGBWAF: dali_type8_rgbwaf.RGBW_COLOUR_COMPONENTS,
+    ColourType.COLOUR_TEMPERATURE: dali_type8_tc.COLOR_TEMPERATURE_COLOUR_COMPONENTS,
+    ColourType.PRIMARY_N: dali_type8_primary_n.PRIMARY_N_COLOUR_COMPONENTS,
+    ColourType.XY: dali_type8_xy.XY_COLOUR_COMPONENTS,
+}
+
 
 REPORT_COLOUR_TAGS = {
     ColourComponent.RED: QueryColourValueDTR.ReportRedDimLevel,
@@ -557,6 +572,15 @@ class SystemFailureColourState(ColourState):
         )
 
 
+@dataclass
+class _Type8ColourReadProgress:
+    address: GearShort
+    level: int = MASK
+    colour_type: Optional[ColourType] = None
+    pending_components: list = field(default_factory=list)
+    done_values: dict = field(default_factory=dict)
+
+
 class Type8Parameters(TypeParameters):
     def __init__(self) -> None:
         super().__init__()
@@ -564,6 +588,11 @@ class Type8Parameters(TypeParameters):
         self._current_colour_type: Optional[ColourType] = None
         self._limits = Type8TcLimits()
         self._colour_type_lock = asyncio.Lock()
+
+        # Per-control polling deadline. None for poll_interval = use bus default.
+        self.poll_interval: Optional[float] = None
+        self.last_poll_time: Optional[float] = None
+        self._read_progress: Optional[_Type8ColourReadProgress] = None
 
     @property
     def default_colour_type(self) -> ColourType:
@@ -614,35 +643,159 @@ class Type8Parameters(TypeParameters):
             return dali_type8_xy.get_mqtt_controls()
         return []
 
-    async def poll_controls(self, driver: WBDALIDriver, short_address: int) -> list[ControlPollResult]:
-        """
-        Poll controls that require multiple commands to get their value, like current colour.
-        Return a list of ControlPollResult objects, e.g. [ControlPollResult("current_rgb", "1;2;3")].
-        """
-
+    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
         if self._current_colour_type is None:
-            return []
-        address = GearShort(short_address)
-        set_error = False
-        try:
-            resp = await driver.run_sequence(
-                query_colour_with_level(
-                    address, QueryActualLevel(address), ACTUAL_LEVEL_COLOUR_TAGS, self._current_colour_type
-                )
-            )
-        except Exception:  # pylint: disable=broad-exception-caught
-            set_error = True
-        if not set_error and resp.colour_type != self._current_colour_type:
-            set_error = True
-        if self._current_colour_type == ColourType.RGBWAF:
-            return dali_type8_rgbwaf.handle_poll_controls_result(None if set_error else resp.colour)
-        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-            return dali_type8_tc.handle_poll_controls_result(None if set_error else resp.colour)
-        if self._current_colour_type == ColourType.PRIMARY_N:
-            return dali_type8_primary_n.handle_poll_controls_result(None if set_error else resp.colour)
-        if self._current_colour_type == ColourType.XY:
-            return dali_type8_xy.handle_poll_controls_result(None if set_error else resp.colour)
+            return False
+        if self.last_poll_time is None:
+            return True
+        interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
+        return now - self.last_poll_time >= interval
 
+    def has_in_progress_read(self) -> bool:
+        return self._read_progress is not None
+
+    def reset_in_progress_read(self) -> None:
+        self._read_progress = None
+
+    def peek_next_subbatch_size(self) -> int:
+        """Size of the next subbatch ``next_poll_step`` would dispatch.
+
+        Lets the caller respect a remaining-budget limit before committing to
+        a subbatch — does not mutate state.
+        """
+        if self._current_colour_type is None:
+            return 0
+        if self._read_progress is None or self._read_progress.colour_type is None:
+            return 3
+        return 2 if self._read_progress.colour_type == ColourType.RGBWAF else 3
+
+    def next_poll_step(self, driver: WBDALIDriver, short_address: int) -> ControlsPollRequestResult:
+        """Return the next subbatch step of the split colour read.
+
+        Each call returns a ``ControlsPollRequestResult`` whose coroutine performs
+        ONE ``send_commands`` call (with up to 3 in-coroutine retries on
+        transmission/framing errors). The coroutine returns either an empty list
+        (more subbatches needed; an in-progress read remains) or the final
+        ``ControlPollResult`` list (success or per-component failure).
+        """
+        if self._current_colour_type is None:
+            return ControlsPollRequestResult(has_more=False)
+        if self._read_progress is None:
+            self._read_progress = _Type8ColourReadProgress(GearShort(short_address))
+        progress = self._read_progress
+
+        if progress.colour_type is None:
+            return ControlsPollRequestResult(
+                has_more=True,
+                poll_coroutine=lambda: self._do_first_subbatch(driver, progress),
+                commands_count=3,
+            )
+
+        is_rgbwaf = progress.colour_type == ColourType.RGBWAF
+        commands_count = 2 if is_rgbwaf else 3
+        more_after_this = len(progress.pending_components) > 1
+        return ControlsPollRequestResult(
+            has_more=more_after_this,
+            poll_coroutine=lambda: self._do_component_subbatch(driver, progress),
+            commands_count=commands_count,
+        )
+
+    async def _do_first_subbatch(
+        self, driver: WBDALIDriver, progress: _Type8ColourReadProgress
+    ) -> list[ControlPollResult]:
+        cmds = [
+            QueryActualLevel(progress.address),
+            DTR0(QueryColourValueDTR.ReportColourType),
+            QueryColourValue(progress.address),
+        ]
+        responses = await self._send_subbatch_with_retries(driver, cmds)
+        if responses is None:
+            self._read_progress = None
+            return self._build_error_results()
+        progress.level = responses[0].raw_value.as_integer
+        colour_type_raw = responses[-1].raw_value.as_integer
+        if colour_type_raw == MASK:
+            self._read_progress = None
+            return self._build_error_results()
+        try:
+            colour_type = ColourType(colour_type_raw)
+        except ValueError:
+            self._read_progress = None
+            return self._build_error_results()
+        if colour_type != self._current_colour_type:
+            self._read_progress = None
+            return self._build_error_results()
+        progress.colour_type = colour_type
+        progress.pending_components = list(COMPONENTS_BY_COLOUR_TYPE[colour_type])
+        return []
+
+    async def _do_component_subbatch(
+        self, driver: WBDALIDriver, progress: _Type8ColourReadProgress
+    ) -> list[ControlPollResult]:
+        component = progress.pending_components[0]
+        is_rgbwaf = progress.colour_type == ColourType.RGBWAF
+        cmds = [
+            DTR0(ACTUAL_LEVEL_COLOUR_TAGS[component]),
+            QueryColourValue(progress.address),
+        ]
+        if not is_rgbwaf:
+            cmds.append(QueryContentDTR0(progress.address))
+        responses = await self._send_subbatch_with_retries(driver, cmds)
+        if responses is None:
+            self._read_progress = None
+            return self._build_error_results()
+        msb = responses[1].raw_value.as_integer
+        if is_rgbwaf:
+            value = msb
+        else:
+            lsb = responses[2].raw_value.as_integer
+            value = (msb << 8) | lsb
+        progress.done_values[component.value] = value
+        progress.pending_components.pop(0)
+        if progress.pending_components:
+            return []
+        results = self._build_success_results(progress)
+        self._read_progress = None
+        return results
+
+    @staticmethod
+    async def _send_subbatch_with_retries(driver: WBDALIDriver, cmds: list) -> Optional[list]:
+        responses = None
+        for _ in range(MAX_COLOUR_SUBBATCH_RETRIES):
+            try:
+                responses = await driver.send_commands(cmds)
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue
+            if all(is_valid_colour_query_response(c, r) for c, r in zip(cmds, responses)):
+                return responses
+        return None
+
+    def _build_error_results(self) -> list[ControlPollResult]:
+        ct = self._current_colour_type
+        if ct == ColourType.RGBWAF:
+            return dali_type8_rgbwaf.handle_poll_controls_result(None)
+        if ct == ColourType.COLOUR_TEMPERATURE:
+            return dali_type8_tc.handle_poll_controls_result(None)
+        if ct == ColourType.PRIMARY_N:
+            return dali_type8_primary_n.handle_poll_controls_result(None)
+        if ct == ColourType.XY:
+            return dali_type8_xy.handle_poll_controls_result(None)
+        return []
+
+    def _build_success_results(self, progress: _Type8ColourReadProgress) -> list[ControlPollResult]:
+        ct = progress.colour_type
+        if ct == ColourType.RGBWAF:
+            colour = dali_type8_rgbwaf.RgbwafColourValues(**progress.done_values)
+            return dali_type8_rgbwaf.handle_poll_controls_result(colour)
+        if ct == ColourType.COLOUR_TEMPERATURE:
+            colour = dali_type8_tc.ColourTemperatureValue(**progress.done_values)
+            return dali_type8_tc.handle_poll_controls_result(colour)
+        if ct == ColourType.PRIMARY_N:
+            colour = dali_type8_primary_n.PrimaryNColourValues(**progress.done_values)
+            return dali_type8_primary_n.handle_poll_controls_result(colour)
+        if ct == ColourType.XY:
+            colour = dali_type8_xy.XYColourValues(**progress.done_values)
+            return dali_type8_xy.handle_poll_controls_result(colour)
         return []
 
     def get_group_parameters(self) -> list[SettingsParamBase]:

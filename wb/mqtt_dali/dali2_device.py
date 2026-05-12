@@ -51,7 +51,12 @@ from dali.device.general import (
     SetPrimaryInstanceGroup,
 )
 
-from .common_dali_device import DaliDeviceBase, MqttControlBase, PropertyStartOrder
+from .common_dali_device import (
+    ControlsPollRequestResult,
+    DaliDeviceBase,
+    MqttControlBase,
+    PropertyStartOrder,
+)
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import (
     get_absolute_input_device_controls,
@@ -684,6 +689,32 @@ class Dali2Device(DaliDeviceBase):
 
     async def identify(self, driver: WBDALIDriver) -> None:
         await send_with_retry(driver, IdentifyDevice(DeviceShort(self.address.short)), self.logger)
+
+    def poll_controls(
+        self, driver: WBDALIDriver, now: float, max_commands: int, default_poll_interval: float
+    ) -> ControlsPollRequestResult:
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before polling controls."
+            )
+
+        if not self._current_round_polling_controls:
+            self._refresh_round_snapshot(now, default_poll_interval)
+
+        if not self._current_round_polling_controls:
+            return ControlsPollRequestResult(has_more=False)
+
+        controls_to_poll = []
+        while self._current_round_polling_controls and len(controls_to_poll) < max_commands:
+            control = self._current_round_polling_controls.pop(0)
+            controls_to_poll.append(control)
+
+        if not controls_to_poll:
+            return ControlsPollRequestResult(has_more=False)
+        return ControlsPollRequestResult(
+            has_more=bool(self._current_round_polling_controls),
+            poll_coroutine=lambda: self._execute_poll_queries(driver, controls_to_poll),
+        )
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
         mqtt_controls: list[MqttControlBase] = []

@@ -1,3 +1,20 @@
+wb-mqtt-dali (1.12.0) stable; urgency=medium
+
+  * Per-control polling schedule: each readable control tracks its own
+    deadline. Controls without an override fall back to the bus
+    polling_interval; alarm-style controls (error_status,
+    thermal_lamp_protection, thermal_gear_protection) use a fixed 120 s
+    period independent of the bus default.
+  * Cap each polling tick at 3 DALI commands in total (across all devices on
+    the bus), so EXECUTE_CONTROL is dispatched between ticks instead of
+    waiting for a full per-device round.
+  * Split the DT-8 colour poll into preemptable subbatches: each goes to the
+    driver as a separate send_commands (≤ 3 commands), the bus lock is no
+    longer held for the whole colour read, and EXECUTE_CONTROL is processed
+    between subbatches.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 12 May 2026 21:42:54 +0500
+
 wb-mqtt-dali (1.11.1) stable; urgency=medium
 
   * Fix polling test

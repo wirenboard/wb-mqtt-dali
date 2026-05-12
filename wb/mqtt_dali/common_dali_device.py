@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Awaitable, Callable, Optional, Union
 
 import jsonschema
 from dali.address import Address
@@ -58,14 +58,17 @@ class ApplyResult:
 
 
 class MqttControlBase:
+
     # Marks a read-only control whose value is mirrored to group virtual devices.
     is_group_state_control: bool = False
 
     value_to_set: Optional[str] = None
 
-    def __init__(self, control_info: ControlInfo) -> None:
+    def __init__(self, control_info: ControlInfo, poll_interval: Optional[float] = None) -> None:
         # the property value is used as default value for the control
         self.control_info = control_info
+        self.poll_interval: Optional[float] = poll_interval
+        self.last_poll_time: Optional[float] = None
 
     def is_readable(self) -> bool:
         return False
@@ -87,6 +90,12 @@ class MqttControlBase:
     def is_dirty(self) -> bool:
         return self.value_to_set is not None
 
+    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
+        if self.last_poll_time is None:
+            return True
+        poll_interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
+        return now - self.last_poll_time >= poll_interval
+
 
 class MqttControl(MqttControlBase):
     def __init__(  # pylint: disable=too-many-arguments
@@ -96,8 +105,9 @@ class MqttControl(MqttControlBase):
         value_formatter: Optional[Callable[[Response], str]] = None,
         commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
         is_group_state_control: bool = False,
+        poll_interval: Optional[float] = None,
     ) -> None:
-        super().__init__(control_info)
+        super().__init__(control_info, poll_interval)
         self.query_builder = query_builder
         self.value_formatter = value_formatter
         self.commands_builder = commands_builder
@@ -131,6 +141,16 @@ class ControlPollResult:
     value: Optional[str] = None
     error: Optional[str] = None
     title: Optional[Union[str, TranslatedTitle]] = None
+
+
+ControlPollCoroutine = Callable[[], Awaitable[list[ControlPollResult]]]
+
+
+@dataclass
+class ControlsPollRequestResult:
+    has_more: bool
+    poll_coroutine: Optional[ControlPollCoroutine] = None
+    commands_count: int = 0
 
 
 @dataclass
@@ -477,6 +497,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         self._controls: dict[str, MqttControlBase] = {}
         self._polling_controls: list[MqttControlBase] = []
+        self._current_round_polling_controls: list[MqttControlBase] = []
 
         self._compat = compat
 
@@ -613,6 +634,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         mqtt_controls = self._build_mqtt_controls()
         self._controls.clear()
         self._polling_controls.clear()
+        self._current_round_polling_controls.clear()
         for control in mqtt_controls:
             if control.is_readable():
                 self._polling_controls.append(control)
@@ -650,46 +672,74 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                 self.logger,
             )
 
-    async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
-        if not self.is_initialized:
-            raise RuntimeError(
-                f"Device {self.name} is not initialized. Call initialize() before polling controls."
+    def poll_controls(
+        self, driver: WBDALIDriver, now: float, max_commands: int, default_poll_interval: float
+    ) -> ControlsPollRequestResult:
+        del driver, now, max_commands, default_poll_interval
+        raise NotImplementedError("Subclasses should implement this method")
+
+    def _refresh_round_snapshot(self, now: float, default_poll_interval: float) -> None:
+        """Append all readable controls due at ``now`` to the active round."""
+        for control in self._polling_controls:
+            if control.is_poll_due(now, default_poll_interval):
+                self._current_round_polling_controls.append(control)
+                control.last_poll_time = now
+
+    def time_until_next_poll(self, now: float, default_poll_interval: float) -> float:
+        # If a round is in progress, only its remaining controls matter; the
+        # rest of _polling_controls have already been advanced past their next
+        # due time inside this round. Once the round drains, fall back to the
+        # full set so the caller learns when the next round should start
+        # rather than a stale "default_poll_interval" placeholder.
+        controls = self._current_round_polling_controls or self._polling_controls
+        res = default_poll_interval
+        for control in controls:
+            if control.last_poll_time is None:
+                return 0
+            poll_interval = (
+                control.poll_interval if control.poll_interval is not None else default_poll_interval
             )
+            time_until_poll = poll_interval - (now - control.last_poll_time)
+            res = min(time_until_poll, res)
+        return res
 
-        queries = []
-        for descriptor in self._polling_controls:
-            queries.append(descriptor.get_query(self._compat.getAddress(self.address.short)))
-        if not queries:
-            return []
-        responses = await send_commands_with_retry(driver, queries, self.logger)
+    async def _execute_poll_queries(
+        self, driver: WBDALIDriver, controls: list[MqttControlBase]
+    ) -> list[ControlPollResult]:
+        try:
+            queries = [control.get_query(self._compat.getAddress(self.address.short)) for control in controls]
+            responses = await send_commands_with_retry(driver, queries, self.logger)
 
-        res = []
-        for descriptor, response in zip(self._polling_controls, responses):
-            try:
-                check_query_response(response)
-            except RuntimeError:
-                res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
-                continue
+            res = []
+            for descriptor, response in zip(controls, responses):
+                try:
+                    check_query_response(response)
+                except RuntimeError:
+                    res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
+                    continue
 
-            if descriptor.control_info.meta.control_type == "alarm":
-                alarm_title = descriptor.format_title(response)
-                alarm_value = descriptor.format_response(response)
+                if descriptor.control_info.meta.control_type == "alarm":
+                    alarm_title = descriptor.format_title(response)
+                    alarm_value = descriptor.format_response(response)
+                    res.append(
+                        ControlPollResult(
+                            control_id=descriptor.control_info.id,
+                            value=alarm_value,
+                            title=alarm_title,
+                        )
+                    )
+                    continue
+
                 res.append(
                     ControlPollResult(
                         control_id=descriptor.control_info.id,
-                        value=alarm_value,
-                        title=alarm_title,
+                        value=descriptor.format_response(response),
                     )
                 )
-                continue
-
-            res.append(
-                ControlPollResult(
-                    control_id=descriptor.control_info.id,
-                    value=descriptor.format_response(response),
-                )
-            )
-        return res
+            return res
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.warning("Failed to poll controls for device %s: %s", self.name, e)
+            return [ControlPollResult(control_id=c.control_info.id, value="", error="r") for c in controls]
 
     async def sync_controls_after_broadcast(self, driver: WBDALIDriver, new_params: dict) -> bool:
         controls_updated = False

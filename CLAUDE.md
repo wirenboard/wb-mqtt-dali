@@ -66,6 +66,8 @@ python setup.py build   # Build package
 - Do not introduce temporary local variables for single or double use; introduce them only if used 3+ times or if they materially improve readability.
 - Do not disable or skip tests, and do not add `# pylint: disable` / `# noqa` / `# type: ignore` without a concrete reason. Fix the underlying issue instead.
 - Never force-push (`git push --force` / `--force-with-lease`) to update a PR. Add new commits instead — reviewers need to see incremental changes.
+- Tests must not **add new** access to private attributes (`_underscore`) of production classes. If a planned test cannot be expressed against the public API, **stop and ask the user** — the fix usually requires widening the public API or rethinking the test, both of which need explicit approval. Pre-existing private access in untouched test code is tolerated debt; do not refactor it as a side-quest.
+- `# pylint: disable=protected-access` must scope to a single function or single line, never to a whole module/file. A file-level disable hides every new private access from pylint and defeats the rule above. Existing file-level disables are being migrated; do not add new ones.
 
 ## Task Workflow
 

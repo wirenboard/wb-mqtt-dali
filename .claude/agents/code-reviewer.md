@@ -20,7 +20,11 @@ Always start by reading the plan if one exists (`doc/<topic>_plan.md`). The `doc
 1. **Plan compliance.** Every item in the plan must be either implemented or explicitly left out of scope. Extra changes not in the plan are flagged separately.
 2. **Dead code.** Unused functions/classes/parameters/imports/constants left after refactoring. Verify via `Grep` on the symbol name.
 3. **Duplication.** Copy-pasted logic between modules, repeated constructs that already exist in project helpers.
-4. **Encapsulation.** Access to `_private` attributes from outside the class, internal types leaking through the public API, law-of-demeter-violating accesses between modules.
+4. **Encapsulation.** Access to `_private` attributes from outside the class, internal types leaking through the public API, law-of-demeter-violating accesses between modules. **Scope to the current diff** — pre-existing private-attribute access in untouched code is grandfathered debt, not a finding. For tests specifically:
+   - if the diff **adds** a new `obj._private` line in a test file → **blocker** (the test should be using a public API);
+   - if the diff **modifies a line** that already accessed a private attribute → **minor**, with a note that widening the public API would require user approval;
+   - if the diff introduces a new file-level `# pylint: disable=...protected-access...` → **blocker** (file-level disables are forbidden by CLAUDE.md — must be per-function or per-line);
+   - untouched private access in the same file → **silent**, do not list.
 5. **Project rules compliance** (CLAUDE.md → Agent Workflow Rules and Code Style):
    - identifiers (local variables, parameters, functions, methods, classes, constants) must not be renamed without a functional necessity — "consistency" and "shorter name" do not count;
    - temporary variables must not be introduced for only 1–2 uses;

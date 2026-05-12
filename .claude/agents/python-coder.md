@@ -22,7 +22,8 @@ Always start by reading the plan and the latest review if they are specified. Th
 3. Run the Mandatory Verification Pipeline from CLAUDE.md (same-named section).
 4. If anything fails — fix until green.
 5. Follow all Agent Workflow Rules from CLAUDE.md — including the prohibition on commits and test modifications without explicit approval, and the prohibition on `# pylint: disable` / disabling tests without a reason.
-6. Do not create a PR.
+6. If a task would require **adding new** `obj._private` access (any `_underscore` attribute of a production class) from a test — **stop**. Report which scenario you're trying to cover and which public API is missing. Wait for explicit user approval before either widening the public API or editing existing tests. Existing private-access lines in unrelated tests are grandfathered — do not refactor them as a side-quest. Never add a file-level `# pylint: disable=...protected-access...` — use per-function or per-line disables only.
+7. Do not create a PR.
 
 ## Code style preferences
 

@@ -10,7 +10,7 @@ from wb.mqtt_dali.dali_type50_parameters import (
     Type50Parameters,
 )
 
-# pylint: disable=protected-access,redefined-outer-name,import-outside-toplevel
+# pylint: disable=redefined-outer-name,import-outside-toplevel
 
 
 def _make_raw(overrides: dict) -> dict:
@@ -197,6 +197,7 @@ async def test_write_returns_empty(param, mock_driver):
 
 
 def test_type50_parameters_has_memory_bank_param():
+    # pylint: disable=protected-access
     tp = Type50Parameters()
     assert len(tp._parameters) == 1
     assert isinstance(tp._parameters[0], Type50MemoryBankParam)

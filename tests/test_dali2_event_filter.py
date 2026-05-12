@@ -16,8 +16,6 @@ from wb.mqtt_dali.dali2_device import InstanceParameters
 from wb.mqtt_dali.dali2_type1_parameters import EventFilterParam
 from wb.mqtt_dali.device import absolute_input_device, general_purpose_sensor
 
-# pylint: disable=protected-access
-
 
 def _bits_from_mask(mask: int) -> dict:
     return {
@@ -266,6 +264,7 @@ async def test_event_filter_param_write_round_trip_returns_actual_device_value()
 
 
 def test_dali2_instance_parameters_pushbutton_includes_event_filter():
+    # pylint: disable=protected-access
     instance_number = InstanceNumber(0)
     pushbutton_params = InstanceParameters(instance_number, pushbutton.instance_type)
     assert any(isinstance(p, EventFilterParam) for p in pushbutton_params._parameters)

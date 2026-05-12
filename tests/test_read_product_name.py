@@ -6,8 +6,6 @@ from dali.address import GearShort
 from wb.mqtt_dali.common_dali_device import read_product_name
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
-# pylint: disable=protected-access
-
 
 @pytest.mark.asyncio
 async def test_read_product_name_returns_string_when_gtin_is_known():

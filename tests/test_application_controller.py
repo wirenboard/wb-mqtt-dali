@@ -122,7 +122,6 @@ async def test_resolve_initial_names_handles_empty_input():
     assert names == []
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
     controller = _make_bare_controller()

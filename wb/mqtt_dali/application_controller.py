@@ -917,12 +917,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             commissioning_result, DaliCommandsCompatibilityLayer(), DaliDevice
         )
 
-        # removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
-        #     d.short for d in commissioning_result.missing
-        # }
-        # removed_ids = [d.mqtt_id for d in self.dali_devices if d.address.short in removed_short_addresses]
-        # changes = DeviceChange(removed=removed_ids)
-        # await self._device_publisher.rebuild(changes)
+        removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
+            d.short for d in commissioning_result.missing
+        }
+        removed_ids = [d.mqtt_id for d in self.dali_devices if d.address.short in removed_short_addresses]
+        changes = DeviceChange(removed=removed_ids)
+        await self._device_publisher.rebuild(changes)
 
         # for removed_id in removed_ids:
         #     self._devices_by_mqtt_id.pop(removed_id, None)

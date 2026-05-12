@@ -1234,14 +1234,6 @@ class TestPollingLoopFallback:
         device = MagicMock()
         device.is_initialized = True
 
-        async def _slow_execute(*_args, **_kwargs):
-            # Yield the loop so the feeder can refill the queue before the
-            # inline check sees it empty.
-            await asyncio.sleep(0)
-
-        device.execute_control = AsyncMock(side_effect=_slow_execute)
-        controller.dali_devices = [device]
-
         counter = 0
 
         def _enqueue_pair():
@@ -1252,25 +1244,28 @@ class TestPollingLoopFallback:
                 counter += 1
                 controller._tasks_queue.put_nowait(_make_execute_control_task(device, control_id=cid))
 
-        async def _feeder(stop_event: asyncio.Event):
+        async def _execute_and_refill(*_args, **_kwargs):
+            # Refill the queue from inside execute_control. With no awaits in
+            # this body, every refill completes within the gather'd task's
+            # single scheduler step, so the polling loop returns from `gather`
+            # to its inline empty() check with a non-empty queue — deterministic
+            # across Python versions, unlike a parallel feeder task that relies
+            # on asyncio scheduling fairness.
             # pylint: disable=protected-access
-            while not stop_event.is_set():
-                if controller._tasks_queue.qsize() < 4:
-                    _enqueue_pair()
-                await asyncio.sleep(0)
+            if controller._tasks_queue.qsize() < 4:
+                _enqueue_pair()
+
+        device.execute_control = AsyncMock(side_effect=_execute_and_refill)
+        controller.dali_devices = [device]
 
         # Preload so the loop's first wait_for resolves immediately rather than
-        # timing out into a poll before the feeder is scheduled.
+        # timing out into a poll before any command is enqueued.
         _enqueue_pair()
 
-        stop_event = asyncio.Event()
-        feeder_task = asyncio.create_task(_feeder(stop_event))
         loop_task = asyncio.create_task(controller._polling_loop())
         try:
             await asyncio.sleep(0.3)
         finally:
-            stop_event.set()
-            await feeder_task
             await _stop_polling_loop(controller, loop_task)
 
         # Many commands processed, but no poll fired because the inline check

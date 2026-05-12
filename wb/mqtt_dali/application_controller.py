@@ -1176,7 +1176,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         # within ~1s).
         return min(1.0, max(0.001, state.last_poll_time + self._polling_interval - current_time))
 
-    async def _polling_loop(self) -> None:  # pylint: disable=too-many-branches, too-many-statements
+    async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
+        self,
+    ) -> None:
         state = PollingState(last_poll_time=default_timer() - self._polling_interval)
         queue_timeout = 0.001
         item = None
@@ -1205,26 +1207,30 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                     while (
                         item is not None and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
                     ):
-                        controls.append((item, item.data.control.value_to_set))
-                        item.data.control.value_to_set = None
+                        _device, control = item.data
+                        controls.append((item, control.value_to_set))
+                        control.value_to_set = None
                         try:
                             item = self._tasks_queue.get_nowait()
                         except asyncio.QueueEmpty:
                             item = None
                     results = await asyncio.gather(
                         *[
-                            device.execute_control(self._dev, control.control_info.id, value_to_set)
-                            for (_task_type, (device, control), _future), value_to_set in controls
+                            control_task.data[0].execute_control(
+                                self._dev, control_task.data[1].control_info.id, value_to_set
+                            )
+                            for control_task, value_to_set in controls
                         ],
                         return_exceptions=True,
                     )
-                    for (item, value_to_set), result in zip(controls, results):
-                        if not item.future.done():
+                    for (control_task, value_to_set), result in zip(controls, results):
+                        _device, control = control_task.data
+                        if not control_task.future.done():
                             if isinstance(result, Exception):
-                                item.future.set_exception(result)
+                                control_task.future.set_exception(result)
                             else:
-                                item.future.set_result(result)
-                                item.data.control.control_info.value = value_to_set
+                                control_task.future.set_result(result)
+                                control.control_info.value = value_to_set
 
                 else:
                     try:

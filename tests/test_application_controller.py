@@ -1093,7 +1093,6 @@ def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationControlle
     controller.logger = logging.getLogger("test.loop")
     controller._dev = AsyncMock()
     controller._tasks_queue = asyncio.Queue()
-    controller._controls_to_execute = {}
     controller._in_quiescent_mode = False
     controller._polling_interval = polling_interval
     controller._stop_requested = False
@@ -1143,10 +1142,21 @@ async def _run_loop_briefly(controller: ApplicationController, duration: float) 
         await _cancel_loop(task)
 
 
-def _make_execute_control_task(device, control_id="ctrl") -> ApplicationControllerTask:
+def _make_execute_control(control_id: str = "ctrl", value_to_set: str = "payload") -> MagicMock:
+    """Build a stand-in for MqttControlBase carrying the fields the loop touches."""
+    control = MagicMock()
+    control.control_info.id = control_id
+    control.control_info.value = None
+    control.value_to_set = value_to_set
+    return control
+
+
+def _make_execute_control_task(device, control=None, control_id="ctrl") -> ApplicationControllerTask:
+    if control is None:
+        control = _make_execute_control(control_id=control_id)
     return ApplicationControllerTask(
         task_type=ApplicationControllerTaskType.EXECUTE_CONTROL,
-        data=(device, control_id),
+        data=(device, control),
     )
 
 
@@ -1160,7 +1170,6 @@ class TestPollingLoopFallback:
         device.execute_control = AsyncMock(return_value=None)
 
         task = _make_execute_control_task(device)
-        controller._controls_to_execute[task.data] = "payload"
         controller._tasks_queue.put_nowait(task)
 
         # Poll step returns a long timeout so any fallback fire would be visible
@@ -1189,8 +1198,7 @@ class TestPollingLoopFallback:
 
         # Pre-enqueue so the very first iteration doesn't time out into a poll
         # before the test's deliberate gaps start.
-        controller._controls_to_execute[(device, "ctrl0")] = "payload"
-        controller._tasks_queue.put_nowait(_make_execute_control_task(device, "ctrl0"))
+        controller._tasks_queue.put_nowait(_make_execute_control_task(device, control_id="ctrl0"))
 
         loop_task = asyncio.create_task(controller._polling_loop())
         try:
@@ -1198,8 +1206,7 @@ class TestPollingLoopFallback:
             for i in range(1, 4):
                 await asyncio.sleep(0.08)
                 cid = f"ctrl{i}"
-                controller._controls_to_execute[(device, cid)] = "payload"
-                controller._tasks_queue.put_nowait(_make_execute_control_task(device, cid))
+                controller._tasks_queue.put_nowait(_make_execute_control_task(device, control_id=cid))
             # Trailing gap to let the post-last-command inline check fire.
             await asyncio.sleep(0.08)
         finally:
@@ -1243,8 +1250,7 @@ class TestPollingLoopFallback:
             for _ in range(2):
                 cid = f"c{counter}"
                 counter += 1
-                controller._controls_to_execute[(device, cid)] = "payload"
-                controller._tasks_queue.put_nowait(_make_execute_control_task(device, cid))
+                controller._tasks_queue.put_nowait(_make_execute_control_task(device, control_id=cid))
 
         async def _feeder(stop_event: asyncio.Event):
             # pylint: disable=protected-access

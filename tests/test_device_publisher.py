@@ -12,7 +12,7 @@ from wb.mqtt_dali.device_publisher import (
 )
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
-# pylint: disable=protected-access,redefined-outer-name,comparison-with-callable,too-many-public-methods
+# pylint: disable=redefined-outer-name,comparison-with-callable,too-many-public-methods
 
 
 class MockMessage:  # pylint: disable=too-few-public-methods
@@ -102,12 +102,14 @@ class TestControlHandler:  # pylint: disable=too-few-public-methods
 class TestDevicePublisher:
     @pytest.mark.asyncio
     async def test_initialization(self, publisher):
+        # pylint: disable=protected-access
         assert len(publisher._devices) == 0
         assert len(publisher._control_handlers) == 0
         assert publisher._initialized is False
 
     @pytest.mark.asyncio
     async def test_initialize(self, publisher: DevicePublisher, mock_client):
+        # pylint: disable=protected-access
         device_info = DeviceInfo("dev1", "Device 1")
         await publisher.add_device(device_info)
         await publisher.initialize()
@@ -116,6 +118,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_add_device(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -131,6 +134,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_add_device_with_no_title(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo("dev1")
         await publisher.add_device(device_info)
 
@@ -148,6 +152,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_remove_device(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo("dev1", "Device 1")
 
         await publisher.add_device(device_info)
@@ -163,6 +168,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_rebuild_with_changes(self, publisher):
+        # pylint: disable=protected-access
         initial_devices = [
             DeviceInfo("dev1", "Device 1"),
             DeviceInfo("dev2", "Device 2"),
@@ -184,6 +190,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_set_control_value(self, publisher, mock_client):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -209,6 +216,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_set_control_title(self, publisher, mock_client):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -234,6 +242,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_register_control_handler(self, publisher, mock_dispatcher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -270,6 +279,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_unregister_control_handler(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -289,6 +299,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_handle_on_message(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -309,6 +320,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_handle_on_message_with_error(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -362,6 +374,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_cleanup(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -382,11 +395,13 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_get_control_on_topic(self, publisher):
+        # pylint: disable=protected-access
         topic = publisher._get_control_on_topic("test_bus_dev1", "ctrl1")
         assert topic == "/devices/test_bus_dev1/controls/ctrl1/on"
 
     @pytest.mark.asyncio
     async def test_concurrent_operations(self, publisher):
+        # pylint: disable=protected-access
         device_infos = [
             DeviceInfo(
                 f"dev{i}",
@@ -408,6 +423,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_remove_device_removes_handlers(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -434,6 +450,7 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_add_control_with_all_fields(self, publisher):
+        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",

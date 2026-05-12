@@ -9,7 +9,7 @@ from wb.mqtt_dali.settings import (
     SettingsParamName,
 )
 
-# pylint: disable=protected-access,redefined-outer-name
+# pylint: disable=redefined-outer-name
 
 
 @pytest.fixture
@@ -243,6 +243,7 @@ async def test_get_schema_with_options(number_settings_param):
 
 @pytest.mark.asyncio
 async def test_get_schema_read_only(number_settings_param):
+    # pylint: disable=protected-access
     number_settings_param._is_read_only = True
     schema = number_settings_param.get_schema(False)
     assert "options" in schema["properties"]["test_property"]
@@ -278,6 +279,7 @@ async def test_get_schema_property_order(number_settings_param):
 
 @pytest.mark.asyncio
 async def test_settings_param_group_read(number_settings_param):
+    # pylint: disable=protected-access
     mock_driver = AsyncMock()
     mock_address = MagicMock()
 
@@ -291,6 +293,7 @@ async def test_settings_param_group_read(number_settings_param):
 
 @pytest.mark.asyncio
 async def test_settings_param_group_write(number_settings_param):
+    # pylint: disable=protected-access
     mock_driver = AsyncMock()
     mock_address = MagicMock()
 
@@ -305,6 +308,7 @@ async def test_settings_param_group_write(number_settings_param):
 
 @pytest.mark.asyncio
 async def test_settings_param_group_write_missing_property(number_settings_param):
+    # pylint: disable=protected-access
     mock_driver = AsyncMock()
     mock_address = MagicMock()
 
@@ -317,6 +321,7 @@ async def test_settings_param_group_write_missing_property(number_settings_param
 
 @pytest.mark.asyncio
 async def test_settings_param_group_read_exception(number_settings_param):
+    # pylint: disable=protected-access
     mock_driver = AsyncMock()
     mock_address = MagicMock()
 
@@ -330,6 +335,7 @@ async def test_settings_param_group_read_exception(number_settings_param):
 
 @pytest.mark.asyncio
 async def test_settings_param_group_get_schema(number_settings_param):
+    # pylint: disable=protected-access
 
     number_settings_param.name.ru = "тестовое_имя"
     group = SettingsParamGroup(

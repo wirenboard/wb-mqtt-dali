@@ -15,9 +15,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Environment Setup
 
+Use Python 3.9 — same as CI (Debian bullseye). Newer interpreters mask real
+bugs that hit on 3.9 only.
+
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -U pip
+curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv if missing
+uv python install 3.9                              # install Python 3.9 if missing
+uv venv --python 3.9 .venv
 .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 ```
 

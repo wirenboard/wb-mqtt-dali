@@ -931,7 +931,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
-        # await self._refresh_group_virtual_devices()
+        await self._refresh_group_virtual_devices()
         # await self._refresh_broadcast_device()
 
     async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:

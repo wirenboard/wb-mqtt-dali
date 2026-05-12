@@ -9,7 +9,7 @@ from jsonrpc.exceptions import (
     JSONRPCMethodNotFound,
 )
 
-# pylint: disable=protected-access,redefined-outer-name
+# pylint: disable=redefined-outer-name
 from mqttrpc.protocol import MQTTRPC10Request
 
 from wb.mqtt_dali.mqtt_rpc_server import (
@@ -53,6 +53,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_add_endpoint(self, rpc_server, mock_mqtt_dispatcher):
+        # pylint: disable=protected-access
         async def test_handler(_params):
             return {"result": "test"}
 
@@ -65,6 +66,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_remove_endpoint(self, rpc_server, mock_mqtt_dispatcher):
+        # pylint: disable=protected-access
         async def test_handler(_params):
             return {"result": "test"}
 
@@ -80,6 +82,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_remove_endpoint_error(self, rpc_server, mock_mqtt_dispatcher):
+        # pylint: disable=protected-access
         async def test_handler(_params):
             return {"result": "test"}
 
@@ -92,6 +95,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_stop(self, rpc_server, mock_mqtt_dispatcher):
+        # pylint: disable=protected-access
         async def test_handler(_params):
             return {"result": "test"}
 
@@ -120,6 +124,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_on_request_creates_task(self, rpc_server):
+        # pylint: disable=protected-access
         mqtt_message = MagicMock()
         original_create_task = asyncio.create_task
         created_tasks = []
@@ -136,6 +141,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_handle_request_success(self, rpc_server):
+        # pylint: disable=protected-access
         async def test_handler(params):
             return {"result": "success", "value": params.get("test")}
 
@@ -154,6 +160,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_handle_request_invalid_json(self, rpc_server):
+        # pylint: disable=protected-access
         mqtt_message = MagicMock()
         mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
         mqtt_message.payload.decode.return_value = "invalid json"
@@ -165,6 +172,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_handle_request_method_not_found(self, rpc_server):
+        # pylint: disable=protected-access
         mqtt_message = MagicMock()
         mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
         request = MQTTRPC10Request(params={}, _id="req1")
@@ -178,6 +186,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_handle_request_handler_exception(self, rpc_server):
+        # pylint: disable=protected-access
 
         async def failing_handler(params):
             if params.get("first_call"):
@@ -214,6 +223,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_process_callback(self, rpc_server, mock_mqtt_dispatcher):
+        # pylint: disable=protected-access
         async def test_handler(_params):
             return {"result": "success"}
 
@@ -236,6 +246,7 @@ class TestMQTTRPCServer:
 
     @pytest.mark.asyncio
     async def test_process_callback_publish_error(self, rpc_server, mock_mqtt_dispatcher):
+        # pylint: disable=protected-access
         async def test_handler(_params):
             return {"result": "success"}
 

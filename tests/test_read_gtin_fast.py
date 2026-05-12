@@ -11,8 +11,6 @@ from dali.gear.general import DTR0, DTR1, QueryVersionNumber, ReadMemoryLocation
 from wb.mqtt_dali.common_dali_device import read_gtin_fast, read_product_name
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
-# pylint: disable=protected-access
-
 
 def _ok_response(value: int):
     """Build a response mock matching the shape expected by the sequence code."""

@@ -68,6 +68,12 @@ Required sections, in this order:
    methods.
 5. **Tests.** Bullet list of planned `test_*` names with one-line
    purpose. Cover the scenarios, not the imagined implementation.
+   Tests must be expressible through the public API alone. If a planned
+   scenario can only be verified via **new** `_private` access, raise
+   it as a **decision point** (Section 3): name the missing public API
+   and let the user decide whether to extend the API or accept the gap.
+   Pre-existing private access in untouched test code is not a
+   planning concern.
 6. **Documentation.** What user-facing docs to update (AsyncAPI, schema
    files, READMEs). Skip unless something user-visible actually changes.
 7. **Out of scope.** Explicit list of things deliberately not done.

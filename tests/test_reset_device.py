@@ -19,13 +19,12 @@ from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.wbdali_utils import AsyncDeviceInstanceTypeMapper
 
-# pylint: disable=protected-access
-
 # Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}
+DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 def _make_bare_controller():
+    # pylint: disable=protected-access
     controller = ApplicationController.__new__(ApplicationController)
     controller.uid = "gw_bus_1"
     controller.logger = logging.getLogger("test")
@@ -68,6 +67,7 @@ def _make_initialized_dali2_device(short=3, random=0xABCDEF, mqtt_id=None, name=
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_dali_sends_reset_and_reinitializes():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     controller.dali_devices = [device]
@@ -110,6 +110,7 @@ async def test_reset_device_settings_dali_sends_reset_and_reinitializes():
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_dali2_sends_reset_and_reinitializes():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali2_device()
     controller.dali2_devices = [device]
@@ -143,6 +144,7 @@ async def test_reset_device_settings_dali2_sends_reset_and_reinitializes():
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_does_not_force_reload_params():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     # Stub out previous params/schema as if loaded once before
@@ -170,6 +172,7 @@ async def test_reset_device_settings_does_not_force_reload_params():
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_propagates_reset_failure_without_reinit():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     controller.dali_devices = [device]
@@ -194,6 +197,7 @@ async def test_reset_device_settings_propagates_reset_failure_without_reinit():
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_propagates_init_failure_without_republish():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     controller.dali_devices = [device]
@@ -220,6 +224,7 @@ async def test_reset_device_settings_propagates_init_failure_without_republish()
 
 @pytest.mark.asyncio
 async def test_reset_device_dali_sends_reset_and_set_short_mask_and_removes():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     controller.dali_devices = [device]
@@ -252,6 +257,7 @@ async def test_reset_device_dali_sends_reset_and_set_short_mask_and_removes():
 
 @pytest.mark.asyncio
 async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali2_device()
     controller.dali2_devices = [device]
@@ -298,6 +304,7 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
 
 @pytest.mark.asyncio
 async def test_reset_device_propagates_failure_without_removal():
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     controller.dali_devices = [device]
@@ -323,6 +330,7 @@ async def test_reset_device_propagates_failure_without_removal():
 
 
 def _make_controller_with_state(state):
+    # pylint: disable=protected-access
     controller = _make_bare_controller()
     controller._state = state
     controller._state_lock = asyncio.Lock()
@@ -332,6 +340,7 @@ def _make_controller_with_state(state):
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_raises_when_not_ready():
+    # pylint: disable=protected-access
     controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
     device = _make_initialized_dali_device()
 
@@ -343,6 +352,7 @@ async def test_reset_device_settings_raises_when_not_ready():
 
 @pytest.mark.asyncio
 async def test_reset_device_raises_when_not_ready():
+    # pylint: disable=protected-access
     controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
     device = _make_initialized_dali_device()
 
@@ -357,6 +367,7 @@ async def test_reset_device_raises_when_not_ready():
 
 
 def _make_bare_gateway_with_device(device, bus):
+    # pylint: disable=protected-access
     gateway = Gateway.__new__(Gateway)
     gateway._save_configuration = AsyncMock()
     gateway._get_bus_and_device_by_id = MagicMock(return_value=(bus, device))
@@ -365,6 +376,7 @@ def _make_bare_gateway_with_device(device, bus):
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_rpc_calls_bus_and_returns_empty():
+    # pylint: disable=protected-access
     bus = SimpleNamespace(reset_device_settings=AsyncMock())
     device = _make_initialized_dali_device()
     gateway = _make_bare_gateway_with_device(device, bus)
@@ -378,6 +390,7 @@ async def test_reset_device_settings_rpc_calls_bus_and_returns_empty():
 
 @pytest.mark.asyncio
 async def test_reset_device_rpc_calls_bus_and_saves_configuration():
+    # pylint: disable=protected-access
     bus = SimpleNamespace(reset_device=AsyncMock())
     device = _make_initialized_dali_device()
     gateway = _make_bare_gateway_with_device(device, bus)
@@ -405,6 +418,7 @@ async def test_reset_device_rpc_missing_device_id_raises():
 
 @pytest.mark.asyncio
 async def test_reset_device_settings_rpc_unknown_device_raises_not_found():
+    # pylint: disable=protected-access
     gateway = Gateway.__new__(Gateway)
     gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
 
@@ -414,6 +428,7 @@ async def test_reset_device_settings_rpc_unknown_device_raises_not_found():
 
 @pytest.mark.asyncio
 async def test_reset_device_rpc_unknown_device_raises_not_found():
+    # pylint: disable=protected-access
     gateway = Gateway.__new__(Gateway)
     gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
     gateway._save_configuration = AsyncMock()
@@ -425,6 +440,7 @@ async def test_reset_device_rpc_unknown_device_raises_not_found():
 
 @pytest.mark.asyncio
 async def test_reset_device_rpc_does_not_save_when_bus_call_fails():
+    # pylint: disable=protected-access
     bus = SimpleNamespace(reset_device=AsyncMock(side_effect=RuntimeError("bus down")))
     device = _make_initialized_dali_device()
     gateway = _make_bare_gateway_with_device(device, bus)
@@ -442,6 +458,7 @@ async def test_reset_device_rpc_does_not_save_when_bus_call_fails():
 
 @pytest.mark.asyncio
 async def test_reset_endpoints_registered_on_start():
+    # pylint: disable=protected-access
     """Verify both reset endpoints are registered with the RPC server during start()."""
     gateway = Gateway.__new__(Gateway)
     gateway.rpc_server = MagicMock()

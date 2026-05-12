@@ -27,7 +27,7 @@ from wb.mqtt_dali.dali_type17_parameters import (
     Type17Parameters,
 )
 
-# pylint: disable=protected-access,redefined-outer-name
+# pylint: disable=redefined-outer-name
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +49,7 @@ def _stub_common_schema(monkeypatch):
 
 
 def test_editable_param_is_writable():
+    # pylint: disable=protected-access
     state = DimmingCurveState()
     param = Type6DimmingCurveParam(state)
     assert param._is_read_only is False
@@ -94,6 +95,7 @@ def test_editable_schema_for_type17():
 
 
 def test_read_only_param_is_marked_read_only():
+    # pylint: disable=protected-access
     state = DimmingCurveState()
     param = DimmingCurveParam(state)
     assert param._is_read_only is True
@@ -155,6 +157,7 @@ async def test_read_only_param_write_is_noop_and_does_not_touch_bus(monkeypatch)
 
 
 def test_read_only_schema_is_read_only_and_value_is_standard():
+    # pylint: disable=protected-access
     state = DimmingCurveState()
     param = DimmingCurveParam(state)
     schema = param.get_schema(group_and_broadcast=False)
@@ -204,6 +207,7 @@ async def _initialize(
     types: list[int],
     type5_supports_nonlog: Optional[bool] = None,
 ):
+    # pylint: disable=protected-access
     """Run DaliDevice._initialize_impl with the given list of DALI types.
 
     Stubs out the per-type-handler ``read_mandatory_info`` and
@@ -240,6 +244,7 @@ async def _initialize(
         if type5_supports_nonlog is not None:
 
             async def _type5_read(self, _driver, _address, _logger=None):
+                # pylint: disable=protected-access
                 if type5_supports_nonlog:
                     # Mimic Type5Parameters when feature bit is True: install the param
                     self._dimming_curve_parameter = Type5DimmingCurveParam(self._dimming_curve_state)
@@ -267,6 +272,7 @@ def _find_dimming_curve_param(handlers) -> Optional[DimmingCurveParam]:
 
 @pytest.mark.asyncio
 async def test_dt6_keeps_editable_dimming_curve():
+    # pylint: disable=protected-access
     device = _make_dali_device()
     parameter_handlers, group_parameter_handlers = await _initialize(
         device, types=[DaliDeviceType.LED_MODULES.value]
@@ -288,6 +294,7 @@ async def test_dt6_keeps_editable_dimming_curve():
 
 @pytest.mark.asyncio
 async def test_dt17_keeps_editable_dimming_curve():
+    # pylint: disable=protected-access
     device = _make_dali_device()
     parameter_handlers, _ = await _initialize(device, types=[DaliDeviceType.DIMMING_CURVE_SELECTION.value])
     param = _find_dimming_curve_param(parameter_handlers)
@@ -307,6 +314,7 @@ async def test_dt17_keeps_editable_dimming_curve():
 )
 @pytest.mark.asyncio
 async def test_unsupported_types_get_read_only_fallback(device_type):
+    # pylint: disable=protected-access
     device = _make_dali_device()
     parameter_handlers, group_parameter_handlers = await _initialize(device, types=[device_type])
     param = _find_dimming_curve_param(parameter_handlers)
@@ -334,6 +342,7 @@ async def test_unsupported_types_get_read_only_fallback(device_type):
 
 @pytest.mark.asyncio
 async def test_dt5_without_nonlog_support_gets_fallback():
+    # pylint: disable=protected-access
     device = _make_dali_device()
     parameter_handlers, group_parameter_handlers = await _initialize(
         device,
@@ -355,6 +364,7 @@ async def test_dt5_without_nonlog_support_gets_fallback():
 
 @pytest.mark.asyncio
 async def test_dt5_with_nonlog_support_keeps_editable_param():
+    # pylint: disable=protected-access
     device = _make_dali_device()
     parameter_handlers, _ = await _initialize(
         device,

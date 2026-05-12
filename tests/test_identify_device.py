@@ -11,9 +11,7 @@ from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
 
-# pylint: disable=protected-access
-
-DaliDeviceBase._common_schema = {"title": "test-schema"}
+DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 def make_version_response(version_byte):

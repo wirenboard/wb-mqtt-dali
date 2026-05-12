@@ -161,7 +161,6 @@ async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
     assert device.has_custom_name is False
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_changed_device():
     controller = _make_bare_controller()
@@ -194,7 +193,6 @@ async def test_update_dali_devices_sets_custom_name_for_changed_device():
     assert device.has_custom_name is True
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
     controller = _make_bare_controller()
@@ -215,7 +213,6 @@ async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
     assert device.has_custom_name is True
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_changed_device():
     controller = _make_bare_controller()

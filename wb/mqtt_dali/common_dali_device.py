@@ -460,7 +460,7 @@ class GeneralMemoryParams(SettingsParamBase):
                 dst[param] = value
 
 
-class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, R0917
+class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
     _common_schema = {}
 
     def __init__(

@@ -198,7 +198,7 @@ async def test_round_snapshot_excludes_controls_matured_mid_round():
     # Tick 2 at t=2: snapshot still has [f1, f2]; no rebuild, `fast` ignored.
     res2 = dev.poll_controls(driver, now=2.0, max_commands=3, default_poll_interval=5.0)
     await res2.poll_coroutine()
-    assert dev._current_round_polling_controls == []
+    assert not dev._current_round_polling_controls
 
     # Tick 3 at t=2: snapshot empty → new round. Only `fast` is due now.
     res3 = dev.poll_controls(driver, now=2.0, max_commands=3, default_poll_interval=5.0)

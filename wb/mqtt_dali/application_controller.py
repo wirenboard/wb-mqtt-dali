@@ -1218,9 +1218,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         # take effect within ~1s.
         return min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
 
-    async def _polling_loop(
+    async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,
-    ) -> None:  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
+    ) -> None:
         # Absolute deadline by which the next _poll_step must run. Each
         # iteration recomputes the wait_for budget as `next_poll_time - now`,
         # so time spent processing tasks naturally consumes the budget. When

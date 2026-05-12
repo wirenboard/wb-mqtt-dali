@@ -359,6 +359,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._current_commissioning_task: Optional[asyncio.Task] = None
         self._commissioning_state_cb: Optional[CommissioningStateCallback] = None
 
+        # Primary stop signal for the polling loop. Cancel-based shutdown alone is
+        # unreliable: `gather(..., return_exceptions=True)` can swallow the cancel
+        # if children resolve in the same tick — see
+        # https://github.com/python/cpython/issues/76865 (only fully fixed in 3.11).
+        self._stop_requested = False
+
     @property
     def driver(self) -> WBDALIDriver:
         return self._dev
@@ -436,11 +442,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                 pass
 
         if self._polling_task:
+            self._stop_requested = True
             self._polling_task.cancel()
             try:
-                await self._polling_task
+                await asyncio.wait_for(self._polling_task, timeout=2.0)
             except asyncio.CancelledError:
                 pass
+            except asyncio.TimeoutError:
+                self.logger.warning("Polling task did not stop within 2s; abandoning")
             self._polling_task = None
 
         # Cancel any queued ApplicationControllerTasks so that callers awaiting
@@ -1167,7 +1176,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         state = PollingState(last_poll_time=default_timer() - self._polling_interval)
         queue_timeout = 0.001
         item = None
-        while True:
+        while not self._stop_requested:
             try:
                 try:
                     if item is None:

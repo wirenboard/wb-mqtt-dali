@@ -1063,6 +1063,7 @@ def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationControlle
     controller._controls_to_execute = {}
     controller._in_quiescent_mode = False
     controller._polling_interval = polling_interval
+    controller._stop_requested = False
     controller.dali_devices = []
     controller.dali2_devices = []
     controller._init_scheduler = MagicMock()
@@ -1078,6 +1079,23 @@ async def _cancel_loop(task: asyncio.Task) -> None:
     try:
         await task
     except asyncio.CancelledError:
+        pass
+
+
+async def _stop_polling_loop(controller: ApplicationController, task: asyncio.Task) -> None:
+    """Mirror ApplicationController.stop()'s polling-task shutdown sequence.
+
+    Cancel alone is unreliable when the loop sits inside `gather(..., return_exceptions=True)`
+    on Python 3.9 (see https://github.com/python/cpython/issues/76865), so production sets
+    `_stop_requested` first and the loop exits at the next iteration even if the cancel is
+    swallowed. Tests that drive `_polling_loop` directly use this helper to follow the same
+    contract.
+    """
+    controller._stop_requested = True
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=2.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
 
@@ -1207,7 +1225,7 @@ class TestPollingLoopFallback:
         finally:
             stop_event.set()
             await feeder_task
-            await _cancel_loop(loop_task)
+            await _stop_polling_loop(controller, loop_task)
 
         # Many commands processed, but no poll fired because the inline check
         # always saw a non-empty queue.

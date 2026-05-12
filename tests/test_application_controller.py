@@ -110,7 +110,6 @@ async def test_resolve_initial_names_returns_none_on_exception():
     assert names == [None]
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_resolve_initial_names_handles_empty_input():
     controller = _make_bare_controller()

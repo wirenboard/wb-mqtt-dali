@@ -264,7 +264,6 @@ def _make_commissioning_controller():
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningStateMarkQueued:  # pylint: disable=too-few-public-methods
     def test_sets_running_queued_fields(self):
         # Seed the state with a terminal result to make sure queued clears it.
@@ -283,7 +282,6 @@ class TestCommissioningStateMarkQueued:  # pylint: disable=too-few-public-method
         assert state.finished_at is None
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningStateReportProgress:
     def test_updates_only_stage_and_progress(self):
         # Seed an arbitrary baseline we want to keep untouched.
@@ -315,7 +313,6 @@ class TestCommissioningStateReportProgress:
         assert state.finished_at == baseline_finished_at
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningStateMarkCompleted:  # pylint: disable=too-few-public-methods
     def test_sets_terminal_happy_path_fields(self):
         state = CommissioningState()
@@ -327,7 +324,6 @@ class TestCommissioningStateMarkCompleted:  # pylint: disable=too-few-public-met
         assert _TIMESTAMP_RE.match(state.finished_at)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningStateMarkFailed:  # pylint: disable=too-few-public-methods
     def test_preserves_progress_and_stage(self):
         """FAILED is a diagnostic signal — progress and stage are not reset."""
@@ -348,7 +344,6 @@ class TestCommissioningStateMarkFailed:  # pylint: disable=too-few-public-method
         assert _TIMESTAMP_RE.match(state.finished_at)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningStateMarkCancelled:  # pylint: disable=too-few-public-methods
     def test_preserves_progress(self):
         """CANCELLED is a diagnostic signal — progress is not reset."""
@@ -369,7 +364,6 @@ class TestCommissioningStateMarkCancelled:  # pylint: disable=too-few-public-met
         assert _TIMESTAMP_RE.match(state.finished_at)
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningStateSnapshot:
     def test_returns_independent_copy(self):
         original = CommissioningState(
@@ -409,7 +403,6 @@ class TestCommissioningStateSnapshot:
         assert not snapshot.devices
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestPublishCommissioningState:
     def test_sync_callback_invoked_with_snapshot(self):
         controller = _make_commissioning_controller()
@@ -462,7 +455,6 @@ class TestPublishCommissioningState:
         cast(MagicMock, controller._one_shot_tasks.add).assert_not_called()
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestStartCommissioning:
     @pytest.mark.asyncio
     async def test_first_call_returns_started_and_marks_running(self):
@@ -485,7 +477,6 @@ class TestStartCommissioning:
         assert controller._tasks_queue.qsize() == 1
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCancelCommissioning:
     @pytest.mark.asyncio
     async def test_returns_false_when_not_running(self):
@@ -559,7 +550,6 @@ class TestCancelCommissioning:
                 pass
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestCommissioningTaskTerminalBranches:
     @pytest.mark.asyncio
     async def test_happy_path_sets_completed(self):
@@ -740,7 +730,6 @@ class TestCommissioningTaskTerminalBranches:
         assert "StopQuiescentMode" in stop_calls
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestFinishedAtLifecycle:
     def test_queued_after_completed_clears_finished_at(self):
         state = CommissioningState()
@@ -762,7 +751,6 @@ class TestFinishedAtLifecycle:
         assert state.finished_at is None
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestRunCommissioningInChildTask:
     """Worker-level wrapper must survive user-initiated cancel of the child."""
 
@@ -834,7 +822,6 @@ class TestRunCommissioningInChildTask:
         assert controller._current_commissioning_task is None
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestStopDuringRunningScan:
     """stop() must cancel a running commissioning child before the worker.
 
@@ -917,7 +904,6 @@ class TestStopDuringRunningScan:
         await controller.stop()
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestRetainedLifecycleIntegration:
     """End-to-end sequence of state callback invocations across a full run."""
 

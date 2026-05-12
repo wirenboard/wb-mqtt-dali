@@ -1,7 +1,16 @@
 import logging
+from dataclasses import dataclass
 from typing import Optional, Type
 
-from dali.address import Address, DeviceShort, InstanceNumber
+from dali.address import (
+    Address,
+    Device,
+    DeviceShort,
+    FeatureDevice,
+    FeatureInstanceNumber,
+    Instance,
+    InstanceNumber,
+)
 from dali.command import Command
 from dali.device import light, occupancy, pushbutton
 from dali.device.general import (
@@ -24,10 +33,12 @@ from dali.device.general import (
     QueryDeviceGroupsZeroToSeven,
     QueryEventPriority,
     QueryEventScheme,
+    QueryFeatureType,
     QueryInstanceEnabled,
     QueryInstanceGroup1,
     QueryInstanceGroup2,
     QueryInstanceType,
+    QueryNextFeatureType,
     QueryNumberOfInstances,
     QueryPowerCycleNotification,
     QueryPrimaryInstanceGroup,
@@ -77,6 +88,111 @@ from .wbdali_utils import (
     send_with_retry,
 )
 
+# IEC 62386-103 §11.9.14–15: QueryFeatureType / QueryNextFeatureType.
+_FEATURE_TYPE_NONE = 254
+_FEATURE_TYPE_MASK = 255
+_FEATURE_TYPE_MIN = 32
+_FEATURE_TYPE_MAX = 96
+_FEATURE_TYPE_ITERATION_LIMIT = _FEATURE_TYPE_MAX - _FEATURE_TYPE_MIN + 1
+
+
+@dataclass(frozen=True)
+class _FeedbackScope:
+    query_address: Instance
+    feature_address: Instance
+    label: str
+
+
+async def _query_feature_types(
+    driver: WBDALIDriver,
+    short_address: Address,
+    scope: _FeedbackScope,
+    logger: Optional[logging.Logger],
+) -> list[int]:
+    try:
+        first_value = (
+            await query_response(driver, QueryFeatureType(short_address, scope.query_address), logger)
+        ).raw_value.as_integer
+    except RuntimeError:
+        return []
+    if first_value == _FEATURE_TYPE_NONE:
+        return []
+    if _FEATURE_TYPE_MIN <= first_value <= _FEATURE_TYPE_MAX:
+        return [first_value]
+    if first_value != _FEATURE_TYPE_MASK:
+        if logger is not None:
+            logger.info(
+                "%s: unexpected QueryFeatureType response %d, ignoring",
+                scope.label,
+                first_value,
+            )
+        return []
+    feature_types: list[int] = []
+    for _ in range(_FEATURE_TYPE_ITERATION_LIMIT):
+        try:
+            value = (
+                await query_response(driver, QueryNextFeatureType(short_address, scope.query_address), logger)
+            ).raw_value.as_integer
+        except RuntimeError:
+            break
+        if value == _FEATURE_TYPE_NONE:
+            break
+        if _FEATURE_TYPE_MIN <= value <= _FEATURE_TYPE_MAX:
+            feature_types.append(value)
+        elif logger is not None:
+            logger.info(
+                "%s: unexpected QueryNextFeatureType response %d, ignoring",
+                scope.label,
+                value,
+            )
+    return feature_types
+
+
+async def _query_feedback_capability(
+    driver: WBDALIDriver,
+    short_address: Address,
+    feature_address: Instance,
+    logger: Optional[logging.Logger],
+) -> Optional[int]:
+    try:
+        return (
+            await query_response(
+                driver, feedback.QueryFeedbackCapability(short_address, feature_address), logger
+            )
+        ).raw_value.as_integer
+    except RuntimeError:
+        return None
+
+
+async def _discover_feedback_capability(
+    driver: WBDALIDriver,
+    short_address: Address,
+    scope: _FeedbackScope,
+    logger: Optional[logging.Logger],
+) -> Optional[int]:
+    feature_types = await _query_feature_types(driver, short_address, scope, logger)
+    has_feedback = feedback.feature_type in feature_types
+    other_features = [ft for ft in feature_types if ft != feedback.feature_type]
+    if other_features and logger is not None:
+        for other in other_features:
+            logger.info("%s: feature type %d is not implemented", scope.label, other)
+    if has_feedback:
+        capability = await _query_feedback_capability(driver, short_address, scope.feature_address, logger)
+        if capability is None and logger is not None:
+            logger.debug(
+                "%s: feedback feature present but capability query had no answer",
+                scope.label,
+            )
+        return capability
+    if feature_types:
+        return None
+    # Some firmware doesn't advertise feature 32 via QueryFeatureType but still
+    # implements Part 332. Probe capability directly before giving up.
+    capability = await _query_feedback_capability(driver, short_address, scope.feature_address, logger)
+    if capability is not None and logger is not None:
+        logger.debug("%s: feedback discovered via heuristic fallback", scope.label)
+    return capability
+
 
 class ApplicationActiveParam(BooleanSettingsParam):
     def __init__(self) -> None:
@@ -110,7 +226,7 @@ class InstanceParameters(SettingsParamGroup):
             f"instance{instance_number.value}",
         )
         self.property_order = instance_number.value + 100
-        self._parameters = [
+        self._base_parameters: list[SettingsParamBase] = [
             InstanceActiveParam(instance_number),
             InstanceTypeParam(instance_type),
             EventPriorityParam(instance_number),
@@ -120,19 +236,74 @@ class InstanceParameters(SettingsParamGroup):
             InstanceGroup2Param(instance_number),
         ]
         if instance_type == pushbutton.instance_type:
-            self._parameters.extend(build_type1_push_button_parameters(instance_number))
+            self._base_parameters.extend(build_type1_push_button_parameters(instance_number))
         elif instance_type == absolute_input_device.instance_type:
-            self._parameters.extend(build_type2_absolute_input_device_parameters(instance_number))
+            self._base_parameters.extend(build_type2_absolute_input_device_parameters(instance_number))
         elif instance_type == occupancy.instance_type:
-            self._parameters.extend(build_type3_occupancy_sensor_parameters(instance_number))
+            self._base_parameters.extend(build_type3_occupancy_sensor_parameters(instance_number))
         elif instance_type == light.instance_type:
-            self._parameters.extend(build_type4_light_sensor_parameters(instance_number))
+            self._base_parameters.extend(build_type4_light_sensor_parameters(instance_number))
         elif instance_type == general_purpose_sensor.instance_type:
-            self._parameters.extend(build_type6_general_purpose_sensor_parameters(instance_number))
-        elif instance_type == feedback.instance_type:
-            self._parameters.extend(build_type32_feedback_parameters(instance_number))
+            self._base_parameters.extend(build_type6_general_purpose_sensor_parameters(instance_number))
         self.instance_number = instance_number
         self.instance_type = instance_type
+        self.feature_address = FeatureInstanceNumber(instance_number.value)
+        self.feedback_capability: Optional[int] = None
+        self._parameters = list(self._base_parameters)
+
+    async def discover_feedback(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> None:
+        scope = _FeedbackScope(
+            query_address=self.instance_number,
+            feature_address=self.feature_address,
+            label=f"Instance {self.instance_number.value}",
+        )
+        self.feedback_capability = await _discover_feedback_capability(driver, short_address, scope, logger)
+
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        self._parameters = list(self._base_parameters)
+        if self.feedback_capability is not None:
+            self._parameters.extend(
+                build_type32_feedback_parameters(self.feature_address, self.feedback_capability)
+            )
+        return await super().read(driver, short_address, logger)
+
+
+class DeviceFeedbackParameters(SettingsParamGroup):
+    PROPERTY_NAME = "feedback"
+
+    def __init__(self) -> None:
+        super().__init__(
+            SettingsParamName("Feedback", "Обратная связь"),
+            self.PROPERTY_NAME,
+        )
+        self.feedback_capability: Optional[int] = None
+
+    async def discover_feedback(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> None:
+        scope = _FeedbackScope(
+            query_address=Device(),
+            feature_address=FeatureDevice(),
+            label="Device-level",
+        )
+        self.feedback_capability = await _discover_feedback_capability(driver, short_address, scope, logger)
+
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        if self.feedback_capability is None:
+            return {}
+        self._parameters = build_type32_feedback_parameters(FeatureDevice(), self.feedback_capability)
+        return await super().read(driver, short_address, logger)
+
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        if self.feedback_capability is None:
+            return {}
+        return super().get_schema(group_and_broadcast)
 
 
 class EventSchemeParam(NumberSettingsParam):
@@ -292,7 +463,6 @@ class InstanceTypeParam(SettingsParamBase):
         3: "Occupancy sensor",
         4: "Light sensor",
         6: "General purpose sensor",
-        32: "Feedback",
     }
 
     def __init__(self, instance_type: int) -> None:
@@ -328,7 +498,6 @@ class InstanceTypeParam(SettingsParamBase):
                     "Occupancy sensor": "Датчик присутствия",
                     "Light sensor": "Датчик освещённости",
                     "General purpose sensor": "Датчик общего назначения",
-                    "Feedback": "Обратная связь",
                 },
             },
         }
@@ -504,6 +673,7 @@ class Dali2Device(DaliDeviceBase):
         self.instances: dict[int, InstanceParameters] = {}
         self._gtin_db = gtin_db
         self._groups_parameter = DeviceGroupsParam()
+        self._device_feedback = DeviceFeedbackParameters()
 
     @property
     def groups(self) -> set[int]:
@@ -528,8 +698,18 @@ class Dali2Device(DaliDeviceBase):
                 mqtt_controls.extend(get_absolute_input_device_controls(instance.instance_number.value))
             elif instance.instance_type == general_purpose_sensor.instance_type:
                 mqtt_controls.extend(get_general_purpose_sensor_controls(instance.instance_number.value))
-            elif instance.instance_type == feedback.instance_type:
-                mqtt_controls.extend(get_feedback_controls(instance.instance_number.value))
+            if instance.feedback_capability:
+                mqtt_controls.extend(
+                    get_feedback_controls(
+                        instance.feature_address,
+                        suffix=str(instance.instance_number.value),
+                        order_base=instance.instance_number.value * 10 + 8,
+                    )
+                )
+        if self._device_feedback.feedback_capability:
+            mqtt_controls.extend(
+                get_feedback_controls(FeatureDevice(), suffix="", order_base=900),
+            )
         return mqtt_controls
 
     async def _initialize_impl(
@@ -554,9 +734,14 @@ class Dali2Device(DaliDeviceBase):
         for i, instance_type in enumerate(instance_types):
             self.add_instance(i, instance_type.value)
 
+        await self._device_feedback.discover_feedback(driver, addr, self.logger)
+        for instance in self.instances.values():
+            await instance.discover_feedback(driver, addr, self.logger)
+
         parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,
             PowerCycleNotificationParam(),
+            self._device_feedback,
         ]
         parameter_handlers.extend(self.instances.values())
 

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.11.0) stable; urgency=medium
+
+  * Add support for DALI2 Feedback feature
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 12 May 2026 17:18:51 +0500
+
 wb-mqtt-dali (1.10.1) stable; urgency=medium
 
   * Publish value after successful control execution

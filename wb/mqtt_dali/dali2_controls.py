@@ -1,5 +1,5 @@
 import asyncio_mqtt as aiomqtt
-from dali.address import DeviceShort
+from dali.address import DeviceShort, Instance
 from dali.device.general import _Event
 from dali.device.light import LightEvent
 from dali.device.occupancy import OccupancyEvent
@@ -164,40 +164,43 @@ def get_general_purpose_sensor_controls(instance_index: int) -> list[MqttControl
     ]
 
 
-def get_feedback_controls(instance_index: int) -> list[MqttControl]:
+def get_feedback_controls(feature_address: Instance, suffix: str, order_base: int) -> list[MqttControl]:
+    title_tail = f" {suffix}" if suffix else ""
     return [
         MqttControl(
             ControlInfo(
-                id=f"activate_feedback{instance_index}",
+                id=f"activate_feedback{suffix}",
                 meta=ControlMeta(
                     "pushbutton",
                     TranslatedTitle(
-                        f"Activate feedback {instance_index}",
-                        f"Активировать обратную связь {instance_index}",
+                        f"Activate feedback{title_tail}",
+                        f"Активировать обратную связь{title_tail}",
                     ),
-                    order=instance_index * 10 + 1,
+                    read_only=False,
+                    order=order_base,
                 ),
                 value="0",
             ),
-            commands_builder=lambda short_address, _: [
-                feedback.ActivateFeedback(DeviceShort(short_address), instance_index)
+            commands_builder=lambda short_address, _value, addr=feature_address: [
+                feedback.ActivateFeedback(short_address, addr)
             ],
         ),
         MqttControl(
             ControlInfo(
-                id=f"stop_feedback{instance_index}",
+                id=f"stop_feedback{suffix}",
                 meta=ControlMeta(
                     "pushbutton",
                     TranslatedTitle(
-                        f"Stop feedback {instance_index}",
-                        f"Остановить обратную связь {instance_index}",
+                        f"Stop feedback{title_tail}",
+                        f"Остановить обратную связь{title_tail}",
                     ),
-                    order=instance_index * 10 + 2,
+                    read_only=False,
+                    order=order_base + 1,
                 ),
                 value="0",
             ),
-            commands_builder=lambda short_address, _: [
-                feedback.StopFeedback(DeviceShort(short_address), instance_index)
+            commands_builder=lambda short_address, _value, addr=feature_address: [
+                feedback.StopFeedback(short_address, addr)
             ],
         ),
     ]

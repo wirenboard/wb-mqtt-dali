@@ -1,7 +1,7 @@
 import logging
 from typing import Callable, Optional
 
-from dali.address import Address, InstanceNumber
+from dali.address import Address, Instance
 from dali.command import Command
 from dali.device.general import DTR0
 
@@ -14,9 +14,9 @@ class InstanceParam(NumberSettingsParam):
         self,
         name: SettingsParamName,
         property_name: str,
-        instance_number: InstanceNumber,
-        query_command: Callable[[Address, InstanceNumber], Command],
-        set_command: Callable[[Address, InstanceNumber], Command],
+        instance_number: Instance,
+        query_command: Callable[[Address, Instance], Command],
+        set_command: Callable[[Address, Instance], Command],
     ) -> None:
         super().__init__(name, property_name)
         self._query_command = query_command

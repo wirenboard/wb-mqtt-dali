@@ -77,10 +77,6 @@ class TestBuildCommandRegistry(unittest.TestCase):
         self.assertFalse(self.registry["FF24.Terminate"].needs_data)
 
     def test_instance_type_specific_commands_present(self):
-        # feedback: instance_type=32
-        self.assertIn("FF24.DT32.Ix.ActivateFeedback", self.registry)
-        self.assertEqual(self.registry["FF24.DT32.Ix.ActivateFeedback"].kind, "device_instance")
-
         # absolute_input_device: instance_type=2
         self.assertIn("FF24.DT2.Ix.QuerySwitch", self.registry)
         self.assertEqual(self.registry["FF24.DT2.Ix.QuerySwitch"].kind, "device_instance")
@@ -172,10 +168,10 @@ class TestParseAndBuildCommand(unittest.TestCase):
         self.assertNotEqual(cmd0.frame.as_integer, cmd3.frame.as_integer)
 
     def test_instance_type_specific_command(self):
-        from wb.mqtt_dali.device.feedback import ActivateFeedback
+        from dali.device.pushbutton import QueryShortTimer
 
-        cmd = parse_and_build_command("FF24.DT32.I2.ActivateFeedback", self.registry, address=5)
-        self.assertIsInstance(cmd, ActivateFeedback)
+        cmd = parse_and_build_command("FF24.DT1.I2.QueryShortTimer", self.registry, address=5)
+        self.assertIsInstance(cmd, QueryShortTimer)
 
     def test_device_special_command(self):
         from dali.device.general import DTR0 as DeviceDTR0

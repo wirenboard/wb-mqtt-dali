@@ -33,7 +33,6 @@ from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
 DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-methods
     def test_get_active_group_numbers(self):
         controller = ApplicationController.__new__(ApplicationController)
@@ -66,7 +65,6 @@ def _make_bare_controller():
     return controller
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_resolve_initial_names_formats_known_product():
     controller = _make_bare_controller()
@@ -82,7 +80,6 @@ async def test_resolve_initial_names_formats_known_product():
     assert names == ["LED Driver 3"]
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_resolve_initial_names_returns_none_for_unknown_product():
     controller = _make_bare_controller()
@@ -98,7 +95,6 @@ async def test_resolve_initial_names_returns_none_for_unknown_product():
     assert names == [None]
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_resolve_initial_names_returns_none_on_exception():
     controller = _make_bare_controller()
@@ -114,7 +110,6 @@ async def test_resolve_initial_names_returns_none_on_exception():
     assert names == [None]
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_resolve_initial_names_handles_empty_input():
     controller = _make_bare_controller()
@@ -127,7 +122,6 @@ async def test_resolve_initial_names_handles_empty_input():
     assert names == []
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
     controller = _make_bare_controller()
@@ -148,7 +142,6 @@ async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
     assert device.has_custom_name is True
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
     controller = _make_bare_controller()
@@ -168,7 +161,6 @@ async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
     assert device.has_custom_name is False
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_changed_device():
     controller = _make_bare_controller()
@@ -201,7 +193,6 @@ async def test_update_dali_devices_sets_custom_name_for_changed_device():
     assert device.has_custom_name is True
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
     controller = _make_bare_controller()
@@ -222,7 +213,6 @@ async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
     assert device.has_custom_name is True
 
 
-@pytest.mark.skip(reason="no way of currently testing this")
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_changed_device():
     controller = _make_bare_controller()

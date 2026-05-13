@@ -10,6 +10,7 @@ from wb.mqtt_dali.common_dali_device import (
     DaliDeviceBase,
     MqttControl,
 )
+from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_controls import ErrorStatusControl
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type8_parameters import ColourType, Type8Parameters
@@ -46,6 +47,20 @@ def _make_dali_device(short=1, mqtt_id=None, controls=None, type8_handler=None) 
     dev._polling_controls = list(controls or [])
     dev._current_round_polling_controls = []
     dev._type8_handler = type8_handler
+    return dev
+
+
+def _make_dali2_device(short=1, mqtt_id=None, controls=None) -> Dali2Device:
+    dev = Dali2Device(
+        DaliDeviceAddress(short=short, random=0),
+        "bus1",
+        MagicMock(),
+        mqtt_id,
+        None,
+    )
+    dev.is_initialized = True
+    dev._polling_controls = list(controls or [])
+    dev._current_round_polling_controls = []
     return dev
 
 
@@ -153,6 +168,34 @@ async def test_polling_tick_budget_capped_at_three_commands():
     controls_b = [_readable_control(f"b{i}") for i in range(3)]
     dev_a = _make_dali_device(short=1, controls=controls_a)
     dev_b = _make_dali_device(short=2, controls=controls_b)
+
+    scheduler = PollScheduler()
+    scheduler.set_devices([dev_a, dev_b])
+
+    sent_per_call = []
+
+    async def fake_send(cmds, _source):
+        sent_per_call.append(list(cmds))
+        return [_ok_response() for _ in cmds]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+
+    await scheduler.poll(driver, 0.0, 5.0)
+
+    total = sum(len(call) for call in sent_per_call)
+    assert total <= 3
+
+
+@pytest.mark.asyncio
+async def test_dali2_device_polling_tick_budget_capped_at_three_commands():
+    # Regression: Dali2Device.poll_controls must report commands_count so the
+    # scheduler can decrement the per-tick budget. Otherwise a second DALI 2
+    # device gets polled in the same tick and the 3-command cap is exceeded.
+    controls_a = [_readable_control(f"a{i}") for i in range(3)]
+    controls_b = [_readable_control(f"b{i}") for i in range(3)]
+    dev_a = _make_dali2_device(short=1, controls=controls_a)
+    dev_b = _make_dali2_device(short=2, controls=controls_b)
 
     scheduler = PollScheduler()
     scheduler.set_devices([dev_a, dev_b])

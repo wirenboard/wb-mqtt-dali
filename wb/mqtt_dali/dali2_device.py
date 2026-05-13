@@ -714,6 +714,7 @@ class Dali2Device(DaliDeviceBase):
         return ControlsPollRequestResult(
             has_more=bool(self._current_round_polling_controls),
             poll_coroutine=lambda: self._execute_poll_queries(driver, controls_to_poll),
+            commands_count=len(controls_to_poll),
         )
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:

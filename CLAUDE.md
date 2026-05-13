@@ -11,11 +11,13 @@ Guidance for Claude Code in this repo.
 Use Python 3.9 — same as CI (Debian bullseye). Newer interpreters mask bugs that only hit on 3.9.
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv if missing
-uv python install 3.9
-uv venv --python 3.9 --seed .venv
-.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+./scripts/bootstrap-venv.sh
 ```
+
+The script builds a self-contained `.venv` with Python 3.9 bundled inside
+(`.venv/python/`), so the same `.venv` works both on the host and inside the
+agent-vm (which bind-mount the project at the same absolute path but have
+different `$HOME`). It is idempotent — safe to rerun to sync dependencies.
 
 Always use tools from `.venv/bin/...`.
 

@@ -13,7 +13,7 @@ Use Python 3.9 — same as CI (Debian bullseye). Newer interpreters mask bugs th
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv if missing
 uv python install 3.9
-uv venv --python 3.9 .venv
+uv venv --python 3.9 --seed .venv
 .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 ```
 

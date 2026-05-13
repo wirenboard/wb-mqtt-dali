@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.11.2) stable; urgency=medium
+
+  * Add e2e test for /on topic handling latency
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 12 May 2026 21:41:13 +0500
+
 wb-mqtt-dali (1.11.1) stable; urgency=medium
 
   * Fix polling test

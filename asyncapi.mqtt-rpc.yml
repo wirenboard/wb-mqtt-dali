@@ -1218,40 +1218,10 @@ components:
         snippet:
           type: string
           description: Insert template with `${N:placeholder}` tabstops.
-        description:
-          type: string
-          nullable: true
-        address_kind:
-          type: string
-          nullable: true
-          enum:
-            - gear
-            - device
-          description: Address-space hint for client-side group-range validation.
-        needs_data:
-          type: boolean
-        needs_address:
-          type: boolean
-        needs_instance:
-          type: boolean
-        instance_optional:
-          type: boolean
-          description: >-
-            True for commands that may target either the whole device or a
-            specific instance (I<n>). Mutually exclusive with needs_instance.
-        has_response:
-          type: boolean
       required:
         - name
         - category
         - snippet
-        - description
-        - address_kind
-        - needs_data
-        - needs_address
-        - needs_instance
-        - instance_optional
-        - has_response
     wbdaliBusListCommandsReplyPayload:
       type: object
       properties:

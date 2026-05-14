@@ -1461,7 +1461,7 @@ def test_send_command_registry_uses_f32_for_feedback():
     assert "FF24.F32.ActivateFeedback" in registry
     assert not any(".Ix." in k for k in registry), "Ix. suffix must be gone from registry keys"
     assert registry["FF24.F32.QueryFeedbackCapability"].instance_mode is InstanceMode.OPTIONAL
-    # list_commands renders an FF24.F32 section with a Feedback description.
+    # list_commands renders an FF24.F32 Feedback section header.
     listing = list_commands(registry)
     assert "FF24.F32 Feedback" in listing
 

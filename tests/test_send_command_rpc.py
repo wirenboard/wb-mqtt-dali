@@ -41,7 +41,7 @@ class TestListCommandsRpc:
     async def test_list_commands_rpc_contains_known_commands(self, registry):
         """Catalog is 1-to-1 with the registry: feature commands are registered
         once with `instance_mode=OPTIONAL`, and each registry entry produces
-        exactly one catalog row.
+        exactly one catalog row with only `name` / `category` / `snippet`.
         """
         gateway = _make_bare_gateway(registry=registry)
 
@@ -51,30 +51,31 @@ class TestListCommandsRpc:
         assert len(names) == len(set(names)), "catalog has duplicate command names"
 
         by_name = {entry["name"]: entry for entry in catalog}
-        # Spot-check entries from each major category.
-        assert by_name["Off"]["address_kind"] == "gear"
-        assert by_name["DAPC"]["needs_data"] is True
+        expected_names = [
+            "Off",
+            "DAPC",
+            "DT8.Activate",
+            "FF24.QueryDeviceStatus",
+            "FF24.EnableInstance",
+            "FF24.F32.QueryFeedbackCapability",
+            "FF24.F32.QueryFeedbackActive",
+            "DTR0",
+            "Terminate",
+            "FF24.Terminate",
+        ]
+        for name in expected_names:
+            assert name in by_name, f"missing {name} in catalog"
+            entry = by_name[name]
+            assert set(entry.keys()) == {"name", "category", "snippet"}
+
+        # EnableInstance lives under "FF24 Device General" (it's a general
+        # device command, not feature- or instance-type-specific).
+        assert by_name["FF24.EnableInstance"]["category"] == "FF24 Device General"
         assert by_name["DT8.Activate"]["category"] == "DT8 Colour Control"
-        assert by_name["FF24.QueryDeviceStatus"]["address_kind"] == "device"
-        assert by_name["FF24.QueryDeviceStatus"]["has_response"] is True
-        assert by_name["DTR0"]["needs_data"] is True and by_name["DTR0"]["needs_address"] is False
-        assert by_name["Terminate"]["needs_data"] is False
 
         # Regression guard: if anyone ever reintroduces an `Ix.`-shaped key in
         # the registry, this test catches it.
         assert not any(".Ix." in name for name in names)
-
-        # EnableInstance lives under "FF24 Device General" (it's a general
-        # device command, not feature- or instance-type-specific).
-        enable_instance = by_name["FF24.EnableInstance"]
-        assert enable_instance["needs_instance"] is True
-        assert enable_instance["category"] == "FF24 Device General"
-
-        # Feature commands (Part 332) carry `instance_mode=OPTIONAL`, so the
-        # catalog entry exposes `instance_optional=True` and `needs_instance=False`.
-        feedback = by_name["FF24.F32.QueryFeedbackActive"]
-        assert feedback["needs_instance"] is False
-        assert feedback["instance_optional"] is True
 
     @pytest.mark.asyncio
     async def test_list_commands_rpc_snippet_shapes(self, registry):
@@ -97,30 +98,6 @@ class TestListCommandsRpc:
             by_name["FF24.F32.QueryFeedbackActive"]["snippet"]
             == "FF24.F32.QueryFeedbackActive(${1:A0}, ${2:I0})"
         )
-
-    @pytest.mark.asyncio
-    async def test_list_commands_rpc_address_kind(self, registry):
-        gateway = _make_bare_gateway(registry=registry)
-
-        catalog = await gateway.list_commands_rpc_handler({})
-        by_name = {entry["name"]: entry for entry in catalog}
-
-        assert by_name["Off"]["address_kind"] == "gear"
-        assert by_name["FF24.QueryDeviceStatus"]["address_kind"] == "device"
-        assert by_name["Terminate"]["address_kind"] is None
-        assert by_name["FF24.Terminate"]["address_kind"] is None
-
-    @pytest.mark.asyncio
-    async def test_list_commands_rpc_description_present(self, registry):
-        gateway = _make_bare_gateway(registry=registry)
-
-        catalog = await gateway.list_commands_rpc_handler({})
-        by_name = {entry["name"]: entry for entry in catalog}
-
-        # DTR0 has a docstring in python-dali.
-        assert by_name["DTR0"]["description"]
-        # Off has a docstring in python-dali.
-        assert by_name["Off"]["description"]
 
     @pytest.mark.asyncio
     async def test_list_commands_sorts_dt_numerically(self, registry):

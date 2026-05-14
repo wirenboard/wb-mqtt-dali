@@ -66,41 +66,20 @@ class AddressKind(enum.Enum):
 
 
 @dataclass(frozen=True)
-class CatalogEntry:  # pylint: disable=too-many-instance-attributes
-    """Catalog row for `Bus/ListCommands` and `--list-commands`. Serialized
-    to JSON via `to_dict()` (preferred over `dataclasses.asdict` so the
-    `InstanceMode` enum is rendered as a string)."""
+class CatalogEntry:
+    """Catalog row exposed via `Bus/ListCommands` — just what the frontend
+    needs to render an autocomplete entry and insert it. Range/instance
+    validation lives on the server; the parser owns the full contract."""
 
     name: str
     category: str
     snippet: str
-    description: Optional[str]
-    address_kind: Optional[AddressKind]
-    needs_data: bool
-    needs_address: bool
-    instance_mode: InstanceMode
-    has_response: bool
-
-    @property
-    def needs_instance(self) -> bool:
-        return self.instance_mode is InstanceMode.REQUIRED
-
-    @property
-    def instance_optional(self) -> bool:
-        return self.instance_mode is InstanceMode.OPTIONAL
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "category": self.category,
             "snippet": self.snippet,
-            "description": self.description,
-            "address_kind": self.address_kind.value if self.address_kind is not None else None,
-            "needs_data": self.needs_data,
-            "needs_address": self.needs_address,
-            "needs_instance": self.needs_instance,
-            "instance_optional": self.instance_optional,
-            "has_response": self.has_response,
         }
 
 
@@ -113,33 +92,16 @@ class CommandInfo:  # pylint: disable=too-many-instance-attributes
     instance_mode: InstanceMode
     display_name: str = ""
     snippet: str = ""
-    description: Optional[str] = None
     address_kind: Optional[AddressKind] = None
     category: str = ""
     needs_address: bool = False
     has_response: bool = False
 
     def to_catalog_entry(self) -> CatalogEntry:
-        description = self.description
-        if self.instance_mode is InstanceMode.OPTIONAL:
-            note = "Can be addressed to the whole device or to a specific instance (I<n>)."
-            if description:
-                head = description.rstrip()
-                if not head.endswith((".", "!", "?")):
-                    head = head + "."
-                description = f"{head} {note}"
-            else:
-                description = note
         return CatalogEntry(
             name=self.display_name,
             category=self.category,
             snippet=self.snippet,
-            description=description,
-            address_kind=self.address_kind,
-            needs_data=self.needs_data,
-            needs_address=self.needs_address,
-            instance_mode=self.instance_mode,
-            has_response=self.has_response,
         )
 
 
@@ -220,17 +182,6 @@ def _collect_commands(module: ModuleType, base_class: Type[Command]) -> Dict[str
     return result
 
 
-def _first_doc_line(cls: Type[Command]) -> Optional[str]:
-    doc = inspect.getdoc(cls)
-    if not doc:
-        return None
-    for line in doc.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    return None
-
-
 def _make_info(  # pylint: disable=too-many-arguments, R0917
     cls: Type[Command],
     kind: str,
@@ -252,7 +203,6 @@ def _make_info(  # pylint: disable=too-many-arguments, R0917
         instance_mode=traits.instance_mode,
         display_name=display_name,
         snippet=snippet,
-        description=_first_doc_line(cls),
         address_kind=traits.address_kind,
         category=category,
         needs_address=traits.needs_address,
@@ -728,7 +678,7 @@ _INSTANCE_FORM_REQUIRED = "requires I0..31"
 _INSTANCE_FORM_OPTIONAL = "I<n> optional"
 
 
-def category_header_suffix(entries: list[CatalogEntry]) -> str:
+def category_header_suffix(infos: list[CommandInfo]) -> str:
     """Return the parenthesised suffix for a category header — address form
     plus, when uniform across the category, the instance form. Empty string
     if the category is empty.
@@ -739,10 +689,10 @@ def category_header_suffix(entries: list[CatalogEntry]) -> str:
     mixed categories leave the instance form off the header — individual
     commands carry per-line markers instead (see `_command_instance_marker`).
     """
-    if not entries:
+    if not infos:
         return ""
 
-    address_kinds = {e.address_kind for e in entries}
+    address_kinds = {info.address_kind for info in infos}
     if len(address_kinds) != 1:
         # Mixed address kinds would only happen if the catalog grouping
         # changed; treat as no useful header rather than asserting.
@@ -757,7 +707,7 @@ def category_header_suffix(entries: list[CatalogEntry]) -> str:
 
     parts = [address_part]
     if kind is AddressKind.DEVICE:
-        modes = {e.instance_mode for e in entries}
+        modes = {info.instance_mode for info in infos}
         if modes == {InstanceMode.REQUIRED}:
             parts.append(_INSTANCE_FORM_REQUIRED)
         elif modes == {InstanceMode.OPTIONAL}:
@@ -767,44 +717,44 @@ def category_header_suffix(entries: list[CatalogEntry]) -> str:
     return f" ({'; '.join(parts)})"
 
 
-def _command_instance_marker(entries: list[CatalogEntry], entry: CatalogEntry) -> str:
+def _command_instance_marker(infos: list[CommandInfo], info: CommandInfo) -> str:
     """Per-command marker shown only when the category has a mixed
     `instance_mode` and this command is not DISALLOWED — the header can't
     express the rule for the whole section, so each non-DISALLOWED line
     carries it."""
-    modes = {e.instance_mode for e in entries}
+    modes = {item.instance_mode for item in infos}
     if len(modes) <= 1:
         return ""
-    if entry.instance_mode is InstanceMode.REQUIRED:
+    if info.instance_mode is InstanceMode.REQUIRED:
         return " — requires I<n>"
-    if entry.instance_mode is InstanceMode.OPTIONAL:
+    if info.instance_mode is InstanceMode.OPTIONAL:
         return f" — {_INSTANCE_FORM_OPTIONAL}"
     return ""
 
 
 def list_commands(registry: Dict[str, CommandInfo]) -> str:
-    """Render the command catalog as human-readable text from the registry,
-    using the same source as `Bus/ListCommands`. Preserves the catalog's
-    category order so users see Gear sections before FF24 ones.
+    """Render the command catalog as human-readable text from the registry.
+    Shares ordering with `Bus/ListCommands` (same `_category_sort_key`) but
+    reads address/instance/data flags straight off `CommandInfo` — the RPC
+    catalog entry no longer carries them.
     """
-    catalog = build_command_catalog(registry)
+    sorted_infos = sorted(
+        registry.values(), key=lambda info: (_category_sort_key(info.category), info.display_name)
+    )
 
-    grouped: Dict[str, list[CatalogEntry]] = {}
-    for entry in catalog:
-        grouped.setdefault(entry.category, []).append(entry)
+    grouped: Dict[str, list[CommandInfo]] = {}
+    for info in sorted_infos:
+        grouped.setdefault(info.category, []).append(info)
 
     lines = []
     # Categories already have the "<code> <label>" shape (e.g. "Gear General",
     # "FF24.F32 Feedback"); the header suffix carries address/instance form.
-    for category, entries in grouped.items():
-        header_suffix = category_header_suffix(entries)
+    for category, infos in grouped.items():
+        header_suffix = category_header_suffix(infos)
         lines.append(f"\n{category}{header_suffix}:")
-        for entry in entries:
-            suffix_parts = []
-            if entry.needs_data:
-                suffix_parts.append("(requires data)")
-            data_suffix = (" " + " ".join(suffix_parts)) if suffix_parts else ""
-            instance_marker = _command_instance_marker(entries, entry)
-            lines.append(f"  {entry.name}{data_suffix}{instance_marker}")
+        for info in infos:
+            data_suffix = " (requires data)" if info.needs_data else ""
+            instance_marker = _command_instance_marker(infos, info)
+            lines.append(f"  {info.display_name}{data_suffix}{instance_marker}")
 
     return "\n".join(lines)

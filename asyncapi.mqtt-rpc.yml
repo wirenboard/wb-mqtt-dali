@@ -236,6 +236,38 @@ channels:
     parameters:
       clientId:
         $ref: '#/components/parameters/clientId'
+  wbdaliBusSendCommand:
+    address: '/rpc/v1/wb-mqtt-dali/Bus/SendCommand/{clientId}'
+    messages:
+      wbdaliBusSendCommand:
+        $ref: '#/components/messages/wbdaliBusSendCommand'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliBusSendCommandReply:
+    address: '/rpc/v1/wb-mqtt-dali/Bus/SendCommand/{clientId}/reply'
+    messages:
+      wbdaliBusSendCommandReply:
+        $ref: '#/components/messages/wbdaliBusSendCommandReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliBusListCommands:
+    address: '/rpc/v1/wb-mqtt-dali/Bus/ListCommands/{clientId}'
+    messages:
+      wbdaliBusListCommands:
+        $ref: '#/components/messages/wbdaliBusListCommands'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
+  wbdaliBusListCommandsReply:
+    address: '/rpc/v1/wb-mqtt-dali/Bus/ListCommands/{clientId}/reply'
+    messages:
+      wbdaliBusListCommandsReply:
+        $ref: '#/components/messages/wbdaliBusListCommandsReply'
+    parameters:
+      clientId:
+        $ref: '#/components/parameters/clientId'
 operations:
   wbdaliEditorGetList:
     action: send
@@ -427,6 +459,32 @@ operations:
         $ref: '#/channels/wbdaliEditorResetDeviceReply'
       messages:
         - $ref: '#/channels/wbdaliEditorResetDeviceReply/messages/wbdaliEditorResetDeviceReply'
+  wbdaliBusSendCommand:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliBusSendCommand'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliBusSendCommand/messages/wbdaliBusSendCommand'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliBusSendCommandReply'
+      messages:
+        - $ref: '#/channels/wbdaliBusSendCommandReply/messages/wbdaliBusSendCommandReply'
+  wbdaliBusListCommands:
+    action: send
+    channel:
+      $ref: '#/channels/wbdaliBusListCommands'
+    traits:
+      - $ref: '#/components/operationTraits/mqtt'
+    messages:
+      - $ref: '#/channels/wbdaliBusListCommands/messages/wbdaliBusListCommands'
+    reply:
+      channel:
+        $ref: '#/channels/wbdaliBusListCommandsReply'
+      messages:
+        - $ref: '#/channels/wbdaliBusListCommandsReply/messages/wbdaliBusListCommandsReply'
 components:
   messages:
     wbdaliEditorGetList:
@@ -545,6 +603,22 @@ components:
       name: editorResetDeviceReply
       payload:
         $ref: '#/components/schemas/wbdaliEditorResetDeviceReplyPayload'
+    wbdaliBusSendCommand:
+      name: busSendCommand
+      payload:
+        $ref: '#/components/schemas/wbdaliBusSendCommandPayload'
+    wbdaliBusSendCommandReply:
+      name: busSendCommandReply
+      payload:
+        $ref: '#/components/schemas/wbdaliBusSendCommandReplyPayload'
+    wbdaliBusListCommands:
+      name: busListCommands
+      payload:
+        $ref: '#/components/schemas/wbdaliBusListCommandsPayload'
+    wbdaliBusListCommandsReply:
+      name: busListCommandsReply
+      payload:
+        $ref: '#/components/schemas/wbdaliBusListCommandsReplyPayload'
   schemas:
     deviceItem:
       type: object
@@ -1043,6 +1117,150 @@ components:
           type: number
         result:
           type: object
+      required:
+        - id
+        - result
+    wbdaliBusSendCommandPayload:
+      description: >-
+        Execute an arbitrary batch of DALI commands on the given bus
+        atomically (no polling or other RPC tasks interleave). Each command
+        is a string in `Name(arg, arg, ...)` form. Arguments are prefixed:
+        `A<n>` short address (0..63), `G<n>` group (gear 0..15, device
+        0..31), `I<n>` instance (0..31), or a bare integer for data
+        (decimal, 0xHEX, 0bBIN, 0oOCT). Parens are optional when no
+        argument is needed; address-taking commands without `A<n>`/`G<n>`
+        broadcast. On transport error the batch is truncated.
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+          properties:
+            busId:
+              type: string
+              description: Bus UID, e.g. `wb-mdali_1_bus_1`.
+            commands:
+              type: array
+              minItems: 1
+              items:
+                type: string
+                description: Single command expression, e.g. `Off(A5)`, `DAPC(A5, 0xFE)`, `DT8.Activate`, `FF24.EnableInstance(A3, I0)`, `DTR0(42)`, `Terminate`.
+          required:
+            - busId
+            - commands
+      required:
+        - id
+        - params
+    wbdaliBusSendCommandResultItem:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - error
+        response:
+          description: >-
+            Present only when `status == "ok"` for a query command whose
+            backward frame was received and decoded.
+          type: object
+          properties:
+            raw:
+              type: integer
+            value:
+              type: string
+          required:
+            - raw
+            - value
+        error:
+          description: >-
+            Present only when `status == "error"`. Set on transport error,
+            on missing backward frame (timeout) for a query, and on
+            response-decoding failure.
+          type: string
+      required:
+        - status
+    wbdaliBusSendCommandReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: array
+          description: >-
+            Per-command outcomes in the same order as `params.commands`. Shorter
+            than the request only when a transport error truncated the batch.
+          items:
+            $ref: '#/components/schemas/wbdaliBusSendCommandResultItem'
+      required:
+        - id
+        - result
+    wbdaliBusListCommandsPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        params:
+          type: object
+      required:
+        - id
+        - params
+    wbdaliBusListCommandsEntry:
+      description: One command in the registry, shaped for CodeMirror autocomplete.
+      type: object
+      properties:
+        name:
+          type: string
+        category:
+          type: string
+          description: Section label (CodeMirror Completion.section).
+        snippet:
+          type: string
+          description: Insert template with `${N:placeholder}` tabstops.
+        description:
+          type: string
+          nullable: true
+        address_kind:
+          type: string
+          nullable: true
+          enum:
+            - gear
+            - device
+          description: Address-space hint for client-side group-range validation.
+        needs_data:
+          type: boolean
+        needs_address:
+          type: boolean
+        needs_instance:
+          type: boolean
+        instance_optional:
+          type: boolean
+          description: >-
+            True for commands that may target either the whole device or a
+            specific instance (I<n>). Mutually exclusive with needs_instance.
+        has_response:
+          type: boolean
+      required:
+        - name
+        - category
+        - snippet
+        - description
+        - address_kind
+        - needs_data
+        - needs_address
+        - needs_instance
+        - instance_optional
+        - has_response
+    wbdaliBusListCommandsReplyPayload:
+      type: object
+      properties:
+        id:
+          type: number
+        result:
+          type: array
+          items:
+            $ref: '#/components/schemas/wbdaliBusListCommandsEntry'
       required:
         - id
         - result

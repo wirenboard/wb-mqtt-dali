@@ -87,7 +87,12 @@ async def test_dali_device_identify_yes_version_response_blinks():
     driver = AsyncMock()
     driver.send = AsyncMock(return_value=make_version_response(1))
 
-    await device.identify(driver)
+    orig_sleep = asyncio.sleep
+    asyncio.sleep = AsyncMock(return_value=None)
+    try:
+        await device.identify(driver)
+    finally:
+        asyncio.sleep = orig_sleep
 
     # 2 retries of QueryVersionNumber, then blink sequence
     sent_types = [type(c.args[0]) for c in driver.send.call_args_list[2:]]

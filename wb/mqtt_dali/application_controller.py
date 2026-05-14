@@ -47,6 +47,7 @@ from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
     MASK,
     AsyncDeviceInstanceTypeMapper,
+    check_query_response,
     send_commands_with_retry,
     send_with_retry,
 )
@@ -224,6 +225,33 @@ class ApplicationControllerTaskType(Enum):
     IDENTIFY_DEVICE = auto()
     RESET_DEVICE_SETTINGS = auto()
     RESET_DEVICE = auto()
+    SEND_COMMAND_BATCH = auto()
+
+
+class SendCommandStatus(Enum):
+    OK = "ok"
+    ERROR = "error"
+
+
+@dataclass
+class SendCommandResponse:
+    raw: int
+    value: str
+
+
+@dataclass
+class SendCommandResult:
+    status: SendCommandStatus
+    response: Optional[SendCommandResponse] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        out: dict = {"status": self.status.value}
+        if self.response is not None:
+            out["response"] = {"raw": self.response.raw, "value": self.response.value}
+        if self.error is not None:
+            out["error"] = self.error
+        return out
 
 
 @dataclass
@@ -293,7 +321,7 @@ async def publish_device(
             await publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
 
 
-class ApplicationController:  # pylint: disable=too-many-instance-attributes
+class ApplicationController:  # pylint: disable=too-many-instance-attributes, too-many-public-methods
     def __init__(
         self,
         config: ApplicationControllerConfig,
@@ -631,6 +659,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             self._tasks_queue.put_nowait(task)
         await task.future
 
+    async def send_command_batch(self, commands: list[Command]) -> list[SendCommandResult]:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            if self._commissioning_state.is_running():
+                raise RuntimeError("Cannot send commands while commissioning is in progress")
+            task = ApplicationControllerTask(ApplicationControllerTaskType.SEND_COMMAND_BATCH, list(commands))
+            self._tasks_queue.put_nowait(task)
+        return await task.future
+
     def release_quiescent_mode(self) -> None:
         self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
 
@@ -762,6 +800,32 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._dali2_devices_by_addr.pop(old.address.short, None)
         self._dali2_devices_by_addr[new.address.short] = new
         self._update_dali2_device_instance_map(new)
+
+    async def _send_command_batch_task(self, commands: list[Command]) -> list[SendCommandResult]:
+        results: list[SendCommandResult] = []
+        for cmd in commands:
+            response = await send_with_retry(self._dev, cmd, self.logger)
+            if isinstance(response, WbGatewayTransmissionError):
+                results.append(SendCommandResult(status=SendCommandStatus.ERROR, error=str(response)))
+                break
+            if cmd.response is None:
+                results.append(SendCommandResult(status=SendCommandStatus.OK))
+                continue
+            try:
+                check_query_response(response)
+            except RuntimeError as exc:
+                results.append(SendCommandResult(status=SendCommandStatus.ERROR, error=str(exc)))
+                continue
+            results.append(
+                SendCommandResult(
+                    status=SendCommandStatus.OK,
+                    response=SendCommandResponse(
+                        raw=response.raw_value.as_integer,
+                        value=str(response),
+                    ),
+                )
+            )
+        return results
 
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         commands = [
@@ -1255,6 +1319,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                             await self._reset_device_settings_task(item.data)
                         elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE:
                             await self._reset_device_task(item.data)
+                        elif item.task_type == ApplicationControllerTaskType.SEND_COMMAND_BATCH:
+                            batch_result = await self._send_command_batch_task(item.data)
+                            if not item.future.done():
+                                item.future.set_result(batch_result)
                         if not item.future.done():
                             item.future.set_result(None)
                     except Exception as e:  # pylint: disable=broad-exception-caught

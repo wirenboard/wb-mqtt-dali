@@ -44,9 +44,10 @@ from wb.mqtt_dali.device.feedback import (
     StopFeedback,
 )
 from wb.mqtt_dali.send_command import (
+    InstanceMode,
     build_command_registry,
     list_commands,
-    parse_and_build_command,
+    parse_expression,
 )
 
 # pylint: disable=protected-access
@@ -1446,25 +1447,29 @@ async def test_dali2_feedback_runtime_init_survives_discovery_no_answer():
 
 def test_send_command_registry_uses_f32_for_feedback():
     """Plan §S2: Part 332 commands are registered under FF24.F32.* — the old
-    DT32 keys must be gone. DT-marker stays only on Part 30x instance types."""
+    DT32 keys must be gone. DT-marker stays only on Part 30x instance types.
+    Each feature command has a single registry entry with
+    `instance_mode=OPTIONAL` (covers both per-device and per-instance forms).
+    """
     registry = build_command_registry()
     f32_keys = [k for k in registry if k.startswith("FF24.F32.")]
     dt32_keys = [k for k in registry if k.startswith("FF24.DT32")]
     assert f32_keys, "expected FF24.F32.* keys for feedback commands"
     assert not dt32_keys, f"unexpected DT32 keys still in registry: {dt32_keys}"
-    # Spot-check a few representative commands.
+    # Spot-check a few representative commands; no `.Ix.` keys exist after the refactor.
     assert "FF24.F32.QueryFeedbackCapability" in registry
-    assert "FF24.F32.Ix.QueryFeedbackCapability" in registry
-    assert "FF24.F32.Ix.ActivateFeedback" in registry
+    assert "FF24.F32.ActivateFeedback" in registry
+    assert not any(".Ix." in k for k in registry), "Ix. suffix must be gone from registry keys"
+    assert registry["FF24.F32.QueryFeedbackCapability"].instance_mode is InstanceMode.OPTIONAL
     # list_commands renders an FF24.F32 section with a Feedback description.
     listing = list_commands(registry)
-    assert "FF24.F32 (Feedback" in listing
+    assert "FF24.F32 Feedback" in listing
 
 
 def test_send_command_parses_f_prefix_with_instance():
-    """FF24.F32.I<K>.<cmd> resolves to FeatureInstanceNumber(K) → instance byte 0x20+K."""
+    """FF24.F32.<cmd>(A<n>, I<K>) resolves to FeatureInstanceNumber(K) → instance byte 0x20+K."""
     registry = build_command_registry()
-    cmd = parse_and_build_command("FF24.F32.I3.QueryFeedbackCapability", registry, address=5)
+    cmd = parse_expression("FF24.F32.QueryFeedbackCapability(A5, I3)", registry)
     assert isinstance(cmd, QueryFeedbackCapability)
     assert _instance_byte(cmd) == 0x20 | 3
 
@@ -1472,6 +1477,6 @@ def test_send_command_parses_f_prefix_with_instance():
 def test_send_command_parses_f_prefix_without_instance():
     """FF24.F32.<cmd> with no I<K> resolves to FeatureDevice() → instance byte 0xFC."""
     registry = build_command_registry()
-    cmd = parse_and_build_command("FF24.F32.QueryFeedbackCapability", registry, address=5)
+    cmd = parse_expression("FF24.F32.QueryFeedbackCapability(A5)", registry)
     assert isinstance(cmd, QueryFeedbackCapability)
     assert _instance_byte(cmd) == 0xFC

@@ -4,7 +4,7 @@ import logging
 import os
 import tempfile
 from itertools import chain
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 from .application_controller import (
     ApplicationController,
@@ -20,6 +20,12 @@ from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
+from .send_command import (
+    CommandInfo,
+    build_command_catalog,
+    build_command_registry,
+    parse_expression,
+)
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_POLLING_INTERVAL = 5.0
@@ -206,15 +212,18 @@ def bus_to_json(bus: ApplicationController) -> dict:
     }
 
 
-class Gateway:
-    # pylint: disable=too-many-locals, too-many-branches
+class Gateway:  # pylint: disable=too-many-instance-attributes
+    # pylint: disable=too-many-locals, too-many-branches, too-many-arguments
     def __init__(
         self,
         config: dict,
         mqtt_dispatcher: MQTTDispatcher,
         config_path: str,
         gtin_db: DaliDatabase,
+        command_registry: Optional[Dict[str, CommandInfo]] = None,
     ) -> None:
+        if command_registry is None:
+            command_registry = build_command_registry()
         self.rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
         self.wb_dali_gateways: list[WbDaliGateway] = list(
             map(
@@ -242,6 +251,8 @@ class Gateway:
         self._debug = config.get("debug", False)
 
         self._gtin_db = gtin_db
+
+        self._command_registry = command_registry
 
     async def start(self) -> None:
         try:
@@ -340,6 +351,16 @@ class Gateway:
             "ResetDevice",
             self.reset_device_rpc_handler,
         )
+        await self.rpc_server.add_endpoint(
+            "Bus",
+            "SendCommand",
+            self.send_command_rpc_handler,
+        )
+        await self.rpc_server.add_endpoint(
+            "Bus",
+            "ListCommands",
+            self.list_commands_rpc_handler,
+        )
 
     async def stop(self) -> None:
         await self.rpc_server.stop()
@@ -422,25 +443,17 @@ class Gateway:
         return device.params
 
     async def rescan_bus_rpc_handler(self, params: dict):
-        bus_id = params.get("busId")
-        for bus in self._iter_buses():
-            if bus.uid == bus_id:
-                result = await bus.start_commissioning(
-                    on_state_changed=self._make_commissioning_state_cb(bus.uid)
-                )
-                return {
-                    "status": result.value,
-                    "progressTopic": commissioning_topic(bus.uid),
-                }
-        raise ValueError("Bus not found")
+        bus = self._find_bus(params.get("busId"))
+        result = await bus.start_commissioning(on_state_changed=self._make_commissioning_state_cb(bus.uid))
+        return {
+            "status": result.value,
+            "progressTopic": commissioning_topic(bus.uid),
+        }
 
     async def stop_scan_bus_rpc_handler(self, params: dict):
-        bus_id = params.get("busId")
-        for bus in self._iter_buses():
-            if bus.uid == bus_id:
-                cancelled = await bus.cancel_commissioning()
-                return {"status": "stopped" if cancelled else "not_running"}
-        raise ValueError("Bus not found")
+        bus = self._find_bus(params.get("busId"))
+        cancelled = await bus.cancel_commissioning()
+        return {"status": "stopped" if cancelled else "not_running"}
 
     def _make_commissioning_state_cb(self, bus_uid: str):
         topic = commissioning_topic(bus_uid)
@@ -467,48 +480,37 @@ class Gateway:
         return _cb
 
     async def get_bus_rpc_handler(self, params: dict):
-        bus_id = params.get("busId")
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                if bus.uid == bus_id:
-                    try:
-                        schema = await bus.load_bus_info()
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        logging.error("Failed to load bus info for bus %s: %s", bus_id, e)
-                        schema = {
-                            "type": "object",
-                            "properties": {},
-                        }
-                    result = {
-                        "config": {
-                            "polling_interval": bus.polling_interval,
-                            "bus_monitor_enabled": bus.bus_monitor_enabled,
-                        },
-                        "schema": schema,
-                    }
-                    return result
-        raise ValueError(f"Bus {bus_id} not found")
+        bus = self._find_bus(params.get("busId"))
+        try:
+            schema = await bus.load_bus_info()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logging.error("Failed to load bus info for bus %s: %s", bus.uid, e)
+            schema = {
+                "type": "object",
+                "properties": {},
+            }
+        return {
+            "config": {
+                "polling_interval": bus.polling_interval,
+                "bus_monitor_enabled": bus.bus_monitor_enabled,
+            },
+            "schema": schema,
+        }
 
     async def set_bus_rpc_handler(self, params: dict):
-        bus_id = params.get("busId")
+        bus = self._find_bus(params.get("busId"))
         new_config = dict(params.get("config", {}))
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                if bus.uid == bus_id:
-                    bus.set_polling_interval(new_config.get("polling_interval", bus.polling_interval))
-                    bus.set_bus_monitor_enabled(
-                        new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled)
-                    )
-                    for key in ["polling_interval", "bus_monitor_enabled"]:
-                        new_config.pop(key, None)
-                    if new_config:
-                        await bus.apply_bus_parameters(new_config)
-                    await self._save_configuration()
-                    return {
-                        "polling_interval": bus.polling_interval,
-                        "bus_monitor_enabled": bus.bus_monitor_enabled,
-                    }
-        raise ValueError("Bus not found")
+        bus.set_polling_interval(new_config.get("polling_interval", bus.polling_interval))
+        bus.set_bus_monitor_enabled(new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled))
+        for key in ["polling_interval", "bus_monitor_enabled"]:
+            new_config.pop(key, None)
+        if new_config:
+            await bus.apply_bus_parameters(new_config)
+        await self._save_configuration()
+        return {
+            "polling_interval": bus.polling_interval,
+            "bus_monitor_enabled": bus.bus_monitor_enabled,
+        }
 
     async def get_group_rpc_handler(self, params: dict):
         group_id = params.get("groupId")
@@ -554,6 +556,31 @@ class Gateway:
         await bus.reset_device(device)
         await self._save_configuration()
         return {}
+
+    async def send_command_rpc_handler(self, params: dict):
+        bus_id = params.get("busId")
+        if bus_id is None:
+            raise ValueError("busId parameter is required")
+        commands = params.get("commands")
+        if not isinstance(commands, list) or not commands:
+            raise ValueError("commands must be a non-empty list of expression strings")
+        if not all(isinstance(c, str) for c in commands):
+            raise ValueError("commands must contain only strings")
+
+        bus = self._find_bus(bus_id)
+
+        parsed = [parse_expression(expr, self._command_registry) for expr in commands]
+        results = await bus.send_command_batch(parsed)
+        return [r.to_dict() for r in results]
+
+    async def list_commands_rpc_handler(self, _params: dict):
+        return [entry.to_dict() for entry in build_command_catalog(self._command_registry)]
+
+    def _find_bus(self, bus_id: Optional[str]) -> ApplicationController:
+        bus = next((b for b in self._iter_buses() if b.uid == bus_id), None)
+        if bus is None:
+            raise ValueError(f"Bus {bus_id} not found")
+        return bus
 
     async def get_gateway_rpc_handler(self, params: dict):
         gateway_id = params.get("gatewayId")
@@ -620,23 +647,16 @@ class Gateway:
             return None, None
         if not 0 <= group_index <= 15:
             return None, None
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                if bus.uid == bus_uid:
-                    return bus, group_index
-        return None, None
+        bus = next((b for b in self._iter_buses() if b.uid == bus_uid), None)
+        return (bus, group_index) if bus is not None else (None, None)
 
     def _get_bus_and_device_by_id(
         self, device_id: str
     ) -> Tuple[ApplicationController, Union[DaliDevice, Dali2Device]]:
-        for gw in self.wb_dali_gateways:
-            for bus in gw.buses:
-                for device in bus.dali_devices:
-                    if device.uid == device_id:
-                        return bus, device
-                for device in bus.dali2_devices:
-                    if device.uid == device_id:
-                        return bus, device
+        for bus in self._iter_buses():
+            for device in chain(bus.dali_devices, bus.dali2_devices):
+                if device.uid == device_id:
+                    return bus, device
         raise ValueError(f"Device {device_id} not found")
 
     async def _save_configuration(self) -> None:

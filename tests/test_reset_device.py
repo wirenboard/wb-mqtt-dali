@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code  # shared gateway.start() boilerplate with tests/test_send_command_rpc.py
 import asyncio
 import logging
 from types import SimpleNamespace

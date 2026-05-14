@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code  # shared gateway.start() boilerplate with tests/test_reset_device.py
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -226,11 +226,65 @@ class ApplicationControllerTaskType(Enum):
     RESET_DEVICE = auto()
 
 
-@dataclass
-class PollingState:
-    devices: list = field(default_factory=list)
-    last_poll_time: float = 0.0
-    poll_turn: bool = True
+class PollScheduler:
+    def __init__(self) -> None:
+        self._devices = []
+        self._current_device_index = 0
+        self.poll_turn = False
+
+    def set_devices(self, devices: list[DaliDevice]) -> None:
+        self._devices = [d for d in devices if d.is_initialized]
+        self._current_device_index = 0
+
+    def is_empty(self) -> bool:
+        return self._current_device_index >= len(self._devices)
+
+    def clear(self) -> None:
+        self._devices = []
+        self._current_device_index = 0
+
+    async def poll(
+        self, driver: WBDALIDriver, current_time: float, default_poll_interval: float
+    ) -> list[tuple[DaliDevice, Union[list[ControlPollResult], BaseException]]]:
+        if not self._devices:
+            return []
+        max_commands_count = 3
+        devices_to_poll = []
+        coros = []
+        while max_commands_count > 0 and not self.is_empty():
+            device = self._devices[self._current_device_index]
+            res = device.poll_controls(driver, current_time, max_commands_count, default_poll_interval)
+            if res.poll_coroutine is not None:
+                coros.append(res.poll_coroutine)
+                devices_to_poll.append(device)
+                max_commands_count -= res.commands_count or 0
+            if res.has_more:
+                break
+            self._current_device_index += 1
+        if not coros:
+            return []
+        return list(zip(devices_to_poll, await asyncio.gather(*[c() for c in coros], return_exceptions=True)))
+
+    def remove_device(self, device: DaliDevice) -> None:
+        try:
+            index = self._devices.index(device)
+        except ValueError:
+            return
+        self._devices.pop(index)
+        if index < self._current_device_index:
+            self._current_device_index -= 1
+
+    def time_until_next_poll(self, current_time: float, default_poll_interval: float) -> float:
+        if not self.poll_turn:
+            return 0.001
+        if not self._devices:
+            return default_poll_interval
+        if self.is_empty():
+            # Round done — return the time until the earliest control across
+            # all known devices becomes due again.
+            return min(d.time_until_next_poll(current_time, default_poll_interval) for d in self._devices)
+        device = self._devices[self._current_device_index]
+        return device.time_until_next_poll(current_time, default_poll_interval)
 
 
 @dataclass
@@ -362,6 +416,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         # if children resolve in the same tick — see
         # https://github.com/python/cpython/issues/76865 (only fully fixed in 3.11).
         self._stop_requested = False
+
+        self._poll_scheduler = PollScheduler()
 
     @property
     def driver(self) -> WBDALIDriver:
@@ -726,16 +782,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             )
         new_device.uid = device.uid
         new_device.set_logger(self.logger)
-        await new_device.initialize(self._dev)
 
-        if isinstance(device, DaliDevice):
-            self._replace_dali_device_in_place(device, new_device)
-            await self._refresh_group_virtual_devices()
-            await self._refresh_broadcast_device()
+        await self._remove_device(device)
+        if isinstance(new_device, DaliDevice):
+            self.dali_devices.append(new_device)
+            self.dali_devices.sort(key=lambda d: d.address.short)
         else:
-            self._replace_dali2_device_in_place(device, new_device)
-
-        await self._republish_device(device.mqtt_id, new_device)
+            self.dali2_devices.append(new_device)
+            self.dali2_devices.sort(key=lambda d: d.address.short)
+            self._dali2_devices_by_addr[new_device.address.short] = new_device
+        await self._try_init_new_device(new_device)
 
     async def _republish_device(
         self,
@@ -746,22 +802,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         self._devices_by_mqtt_id.pop(old_mqtt_id, None)
         await publish_device(new_device, self._device_publisher, self._run_on_topic_handler)
         self._devices_by_mqtt_id[new_device.mqtt_id] = new_device
-        new_device.set_logger(self.logger)
-
-    def _replace_dali_device_in_place(self, old: DaliDevice, new: DaliDevice) -> None:
-        for i, existing in enumerate(self.dali_devices):
-            if existing is old:
-                self.dali_devices[i] = new
-                return
-
-    def _replace_dali2_device_in_place(self, old: Dali2Device, new: Dali2Device) -> None:
-        for i, existing in enumerate(self.dali2_devices):
-            if existing is old:
-                self.dali2_devices[i] = new
-                break
-        self._dali2_devices_by_addr.pop(old.address.short, None)
-        self._dali2_devices_by_addr[new.address.short] = new
-        self._update_dali2_device_instance_map(new)
 
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         commands = [
@@ -769,7 +809,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
             *device.dali_commands.setShortAddressCommands(device.address.short, MASK),
         ]
         await send_commands_with_retry(self._dev, commands, self.logger)
+        await self._remove_device(device)
 
+    async def _remove_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
         mqtt_id = device.mqtt_id
         old_short = device.address.short
 
@@ -783,6 +825,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self._devices_by_mqtt_id.pop(mqtt_id, None)
         self._init_scheduler.remove(mqtt_id)
+        if isinstance(device, DaliDevice):
+            self._poll_scheduler.remove_device(device)
         await self._device_publisher.remove_device(mqtt_id)
 
         if isinstance(device, DaliDevice):
@@ -936,7 +980,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
-        self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
         await self._refresh_group_virtual_devices()
         await self._refresh_broadcast_device()
 
@@ -1142,8 +1185,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
         await self._publish_virtual_device(self._broadcast_device)
 
-    async def _poll_step(self, state: "PollingState", current_time: float) -> float:
-        """Execute one poll/init step. Returns queue_timeout for next iteration."""
+    async def _poll_step(self, current_time: float) -> float:
+        """Execute one poll/init step. Returns the relative wait until the next call."""
         # First-attempt batch — fast startup, no interleaving needed
         first_attempt_ids = self._init_scheduler.get_first_attempt_ready(current_time)
         if first_attempt_ids:
@@ -1151,47 +1194,52 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                 await self._do_init_device(mqtt_id, current_time)
             return 0.001
 
-        # Alternate: poll one device, then retry-init one device
-        if state.poll_turn and state.last_poll_time + self._polling_interval <= current_time:
-            if not state.devices:
-                state.devices = [d for d in self.dali_devices if d.is_initialized]
-            if state.devices:
-                await self._poll_device(state.devices.pop())
-                if not state.devices:
-                    state.last_poll_time = current_time
-                state.poll_turn = False
-                return 0.001
-            state.last_poll_time = current_time
+        # Refresh the scheduler's device list before any timing decision so that
+        # the wait-time computation at the bottom sees up-to-date state. Without
+        # this the very first idle return after init would block on a stale
+        # empty _devices and stall for ~polling_interval before the first poll.
+        if self._poll_scheduler.is_empty():
+            self._poll_scheduler.set_devices(self.dali_devices)
+
+        # Alternate: poll devices, then retry-init one device
+        if self._poll_scheduler.poll_turn and not self._poll_scheduler.is_empty():
+            await self._poll_devices(self._poll_scheduler, current_time)
+            self._poll_scheduler.poll_turn = False
+            return 0.001
 
         retry_id = self._init_scheduler.get_one_retry_ready(current_time)
         if retry_id:
             await self._do_init_device(retry_id, current_time)
-            state.poll_turn = True
+            self._poll_scheduler.poll_turn = True
             return 0.001
 
-        state.poll_turn = True
-        # If polling is overdue, return a near-zero wait so the next loop iteration
-        # gets another _poll_step call (with poll_turn=True) without burning a full
-        # second. The 1.0 cap preserves S3 (runtime polling_interval changes apply
-        # within ~1s).
-        return min(1.0, max(0.001, state.last_poll_time + self._polling_interval - current_time))
+        self._poll_scheduler.poll_turn = True
+        # Cap at 1.0s so runtime polling_interval changes (via SetBus RPC)
+        # take effect within ~1s.
+        return min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
 
     async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,
     ) -> None:
-        state = PollingState(last_poll_time=default_timer() - self._polling_interval)
-        queue_timeout = 0.001
+        # Absolute deadline by which the next _poll_step must run. Each
+        # iteration recomputes the wait_for budget as `next_poll_time - now`,
+        # so time spent processing tasks naturally consumes the budget. When
+        # the budget falls to zero, wait_for times out (provided the queue is
+        # briefly empty) and polling fires — without raising polling priority
+        # above command processing.
+        next_poll_time = default_timer()
         item = None
         while not self._stop_requested:
             try:
                 try:
                     if item is None:
+                        queue_timeout = max(0.001, next_poll_time - default_timer())
                         item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
                 except asyncio.TimeoutError:
                     if self._in_quiescent_mode:
-                        queue_timeout = 1.0
+                        next_poll_time = default_timer() + 1.0
                         continue
-                    queue_timeout = await self._poll_step(state, default_timer())
+                    next_poll_time = default_timer() + await self._poll_step(default_timer())
                     continue
 
                 if self._in_quiescent_mode:
@@ -1236,7 +1284,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                     try:
                         if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
                             await self._run_commissioning_in_child_task()
-                            state.devices.clear()
+                            self._poll_scheduler.clear()
                         elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
                             device, force_reload = item.data
                             await device.load_info(self._dev, force_reload)
@@ -1269,9 +1317,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
                 if (
                     not self._in_quiescent_mode
                     and self._tasks_queue.empty()
-                    and state.last_poll_time + self._polling_interval <= default_timer()
+                    and next_poll_time <= default_timer()
                 ):
-                    queue_timeout = await self._poll_step(state, default_timer())
+                    next_poll_time = default_timer() + await self._poll_step(default_timer())
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
@@ -1288,41 +1336,39 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
         finally:
             self._current_commissioning_task = None
 
-    async def _poll_device(self, device: DaliDevice) -> None:
+    async def _poll_devices(self, poll_scheduler: PollScheduler, current_time: float) -> None:
         try:
-            responses = await device.poll_controls(self._dev)
+            responses = await poll_scheduler.poll(self._dev, current_time, self._polling_interval)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.exception("Error polling device %s: %s", device.name, str(e))
-            # Synthesize per-control errors so a pinned group source releases
-            # off a dead member; device card is intentionally untouched.
-            tasks = self._build_group_state_tasks(
-                device,
-                [
-                    ControlPollResult(control_id=c.control_info.id, value=None, error="r")
-                    for c in device.get_group_state_controls()
-                ],
-            )
+            self.logger.exception("Error polling devices %s", str(e))
         else:
-            tasks = []
-            for response in responses:
-                if response.error is not None:
-                    tasks.append(
-                        self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
+            for device, device_responses in responses:
+                if isinstance(device_responses, BaseException):
+                    self.logger.error("Error polling device %s: %s", device.name, device_responses)
+                else:
+                    await self._publish_poll_results(device, device_responses)
+
+    async def _publish_poll_results(self, device: DaliDevice, responses: Iterable[ControlPollResult]) -> None:
+        tasks = []
+        for response in responses:
+            if response.error is not None:
+                tasks.append(
+                    self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
+                )
+                continue
+            if response.title is not None:
+                tasks.append(
+                    self._device_publisher.set_control_title(
+                        device.mqtt_id, response.control_id, response.title
                     )
-                    continue
-                if response.title is not None:
-                    tasks.append(
-                        self._device_publisher.set_control_title(
-                            device.mqtt_id, response.control_id, response.title
-                        )
+                )
+            if response.value is not None:
+                tasks.append(
+                    self._device_publisher.set_control_value(
+                        device.mqtt_id, response.control_id, response.value
                     )
-                if response.value is not None:
-                    tasks.append(
-                        self._device_publisher.set_control_value(
-                            device.mqtt_id, response.control_id, response.value
-                        )
-                    )
-            tasks.extend(self._build_group_state_tasks(device, responses))
+                )
+        tasks.extend(self._build_group_state_tasks(device, responses))
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -1379,6 +1425,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes
 
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True
+        for device in self.dali_devices:
+            device.reset_polling_state()
         if self._quiescent_mode_timer:
             self._quiescent_mode_timer.cancel()
         self._quiescent_mode_timer = asyncio.get_event_loop().call_later(

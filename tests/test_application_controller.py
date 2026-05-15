@@ -17,6 +17,7 @@ from wb.mqtt_dali.application_controller import (
     CommissioningStartResult,
     CommissioningState,
     CommissioningStatus,
+    PollScheduler,
 )
 from wb.mqtt_dali.commissioning import (
     ChangedDevice,
@@ -1078,10 +1079,10 @@ async def test_rpc_config_update_clamps_polling_interval():
     assert bus.polling_interval == MIN_POLLING_INTERVAL
 
 
-# --- polling-loop fallback (S2) ----------------------------------------------
+# --- polling-loop fallback under sustained EXECUTE_CONTROL load ---------------
 
 
-def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationController:
+def _make_polling_loop_controller(polling_interval: float = 1.0) -> ApplicationController:
     # pylint: disable=protected-access
     """Return a controller with the loop's collaborators stubbed.
 
@@ -1090,7 +1091,7 @@ def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationControlle
     """
     controller = ApplicationController.__new__(ApplicationController)
     controller.uid = "gw_bus_1"
-    controller.logger = logging.getLogger("test.loop")
+    controller.logger = logging.getLogger("test.polling_loop")
     controller._dev = AsyncMock()
     controller._tasks_queue = asyncio.Queue()
     controller._in_quiescent_mode = False
@@ -1101,8 +1102,7 @@ def _make_loop_controller(polling_interval: float = 1.0) -> ApplicationControlle
     controller._init_scheduler = MagicMock()
     controller._init_scheduler.get_first_attempt_ready = MagicMock(return_value=[])
     controller._init_scheduler.get_one_retry_ready = MagicMock(return_value=None)
-    controller._poll_device = AsyncMock()
-    controller._poll_step = AsyncMock(return_value=10.0)
+    controller._poll_scheduler = PollScheduler()
     return controller
 
 
@@ -1165,7 +1165,8 @@ class TestPollingLoopFallback:
     async def test_poll_runs_when_queue_empties_after_interval(self):
         # pylint: disable=protected-access
         """After EXECUTE_CONTROL drains, _poll_step fires immediately, not after queue_timeout."""
-        controller = _make_loop_controller(polling_interval=1.0)
+        controller = _make_polling_loop_controller(polling_interval=1.0)
+        controller._poll_step = AsyncMock(return_value=10.0)
         device = MagicMock()
         device.execute_control = AsyncMock(return_value=None)
 
@@ -1184,17 +1185,17 @@ class TestPollingLoopFallback:
         # pylint: disable=protected-access
         """Bursts of EXECUTE_CONTROL with sub-interval gaps still let polling slip in.
 
-        Uses real `_poll_step` (with `_poll_device` mocked) so `state.last_poll_time`
+        Uses real `_poll_step` (with `_poll_devices` mocked) so `next_poll_time`
         actually advances on each successful poll — without that, the inline check
         is permanently true and the test would pass even with the fix removed.
         """
-        controller = _make_loop_controller(polling_interval=0.05)
-        # Drop the helper's AsyncMock so attribute access falls back to the real method.
-        del controller._poll_step
+        controller = _make_polling_loop_controller(polling_interval=0.05)
         device = MagicMock()
         device.is_initialized = True
         device.execute_control = AsyncMock(return_value=None)
+        device.time_until_next_poll = MagicMock(return_value=0.05)
         controller.dali_devices = [device]
+        controller._poll_devices = AsyncMock()
 
         # Pre-enqueue so the very first iteration doesn't time out into a poll
         # before the test's deliberate gaps start.
@@ -1217,22 +1218,31 @@ class TestPollingLoopFallback:
         # in roughly every second gap, so >= 2 polls is the strong invariant the
         # fix actually guarantees.
         assert device.execute_control.await_count == 4
-        assert controller._poll_device.await_count >= 2
+        assert controller._poll_devices.await_count >= 2
 
     @pytest.mark.asyncio
     async def test_polling_waits_for_queue_to_drain(self):
         # pylint: disable=protected-access
         """While the queue stays non-empty, polling does not fire (commands have priority).
 
-        Uses real `_poll_step` with mocked `_poll_device` so a poll firing would
-        be observable via `_poll_device.await_count` — with `_poll_step` mocked
-        out, `state.last_poll_time` never advances and the assertion would pass
+        Uses real `_poll_step` with mocked `_poll_devices` so a poll firing would
+        be observable via `_poll_devices.await_count` — with `_poll_step` mocked
+        out, `next_poll_time` never advances and the assertion would pass
         regardless of whether the queue-empty check actually gates polling.
         """
-        controller = _make_loop_controller(polling_interval=0.05)
-        del controller._poll_step
+        controller = _make_polling_loop_controller(polling_interval=0.05)
         device = MagicMock()
         device.is_initialized = True
+        device.time_until_next_poll = MagicMock(return_value=0.05)
+
+        async def _slow_execute(*_args, **_kwargs):
+            # Yield the loop so the feeder can refill the queue before the
+            # inline check sees it empty.
+            await asyncio.sleep(0)
+
+        device.execute_control = AsyncMock(side_effect=_slow_execute)
+        controller.dali_devices = [device]
+        controller._poll_devices = AsyncMock()
 
         counter = 0
 
@@ -1271,13 +1281,14 @@ class TestPollingLoopFallback:
         # Many commands processed, but no poll fired because the inline check
         # always saw a non-empty queue.
         assert device.execute_control.await_count >= 10
-        assert controller._poll_device.await_count == 0
+        assert controller._poll_devices.await_count == 0
 
     @pytest.mark.asyncio
     async def test_poll_runs_after_non_execute_control_task(self):
         # pylint: disable=protected-access
         """Inline poll check fires after a single non-EXECUTE_CONTROL task too."""
-        controller = _make_loop_controller(polling_interval=1.0)
+        controller = _make_polling_loop_controller(polling_interval=1.0)
+        controller._poll_step = AsyncMock(return_value=10.0)
         device = MagicMock()
         device.load_info = AsyncMock(return_value=None)
 
@@ -1297,33 +1308,100 @@ class TestPollingLoopFallback:
         # pylint: disable=protected-access
         """Lowering polling_interval at runtime takes effect within ~1s.
 
-        Uses real `_poll_step` so the actual gating (`last_poll_time + interval
-        <= now`) is exercised. With `_poll_step` mocked, `state.last_poll_time`
-        never advances and the test would tick on the idle-fallback's 1s
+        Uses real `_poll_step` so the actual gating via `_poll_scheduler` and
+        the `min(1.0, time_until_next_poll)` cap is exercised. With
+        `_poll_step` mocked, the test would tick on the mock's hard-coded
         timeout regardless of the interval value.
         """
-        controller = _make_loop_controller(polling_interval=10.0)
-        del controller._poll_step
+        controller = _make_polling_loop_controller(polling_interval=10.0)
         device = MagicMock()
         device.is_initialized = True
+        device.time_until_next_poll = MagicMock(side_effect=lambda _t, default: default)
         controller.dali_devices = [device]
+        controller._poll_devices = AsyncMock()
+        # Start with poll_turn=True so the first _poll_step call performs a
+        # poll immediately (matches the original test's "first poll fires
+        # immediately" precondition).
+        controller._poll_scheduler.poll_turn = True
 
         loop_task = asyncio.create_task(controller._polling_loop())
         try:
-            # First poll fires immediately (last_poll_time is initialized
-            # `polling_interval` in the past). With interval=10, no further
-            # poll should fire for ~10s.
+            # First poll fires immediately. With interval=10 (capped by
+            # `min(1.0, ...)` to 1.0 in _poll_step), no further poll should
+            # fire within 0.2s.
             await asyncio.sleep(0.2)
-            polls_before = controller._poll_device.await_count
+            polls_before = controller._poll_devices.await_count
             assert polls_before == 1, "expected exactly one initial poll"
 
             # Shrink the interval; the next poll should fire within ~1s of the
-            # change. If the fix were missing (or the interval still 10s), no
-            # additional poll would happen during this 1.2s window.
+            # change.
             controller._polling_interval = 1.0
             await asyncio.sleep(1.2)
-            polls_after = controller._poll_device.await_count
+            polls_after = controller._poll_devices.await_count
         finally:
             await _cancel_loop(loop_task)
 
         assert polls_after > polls_before
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_command_stream_does_not_starve_polling():
+    # pylint: disable=protected-access
+    """EXECUTE_CONTROL arriving faster than the previous wait_for budget
+    must not starve polling.
+
+    Reproduces the production bug where /on writes coming in at sub-1s
+    intervals kept `wait_for(queue.get(), queue_timeout)` returning a task
+    before its timeout, so the timeout-fallback `_poll_step` never ran and
+    polling stalled. With absolute `next_poll_time` deadlines the budget
+    naturally shrinks across iterations and times out during a brief empty
+    window — without raising polling priority.
+    """
+    controller = _make_polling_loop_controller(polling_interval=0.05)
+    device = MagicMock()
+    device.is_initialized = True
+    device.execute_control = AsyncMock(return_value=None)
+    # Stand in for the device's poll-cadence calculation: report the configured
+    # interval whenever asked, so _poll_step's bottom path returns a deadline
+    # in the future rather than a hard-coded constant.
+    device.time_until_next_poll = MagicMock(return_value=0.05)
+    controller.dali_devices = [device]
+
+    poll_count = 0
+
+    async def _fake_poll_devices(poll_scheduler, current_time):
+        nonlocal poll_count
+        del current_time
+        poll_count += 1
+        # Mirror what real PollScheduler.poll does after a complete pass:
+        # the device index sits at the end so the next round needs set_devices.
+        poll_scheduler._current_device_index = len(poll_scheduler._devices)
+
+    controller._poll_devices = _fake_poll_devices
+
+    # Pre-enqueue so the very first iteration doesn't time out into a poll
+    # before the test's deliberate gaps start.
+    controller._tasks_queue.put_nowait(_make_execute_control_task(device, control_id="ctrl0"))
+
+    loop_task = asyncio.create_task(controller._polling_loop())
+    try:
+        # Stream more commands at 80ms gaps — bigger than polling_interval
+        # (50ms) so polling is overdue between every pair, but small enough
+        # that without the absolute-deadline fix `wait_for` would never time
+        # out: tasks consistently arrive within the previous queue_timeout=1.0s
+        # window.
+        for i in range(1, 6):
+            await asyncio.sleep(0.08)
+            controller._tasks_queue.put_nowait(_make_execute_control_task(device, control_id=f"ctrl{i}"))
+        # Trailing gap so the post-last-command iteration's wait_for can
+        # time out.
+        await asyncio.sleep(0.08)
+    finally:
+        await _cancel_loop(loop_task)
+
+    assert device.execute_control.await_count == 6
+    # Without the fix, queue_timeout settles at 1.0, tasks always arrive
+    # within that window, and no _poll_step ever runs. With the fix, the
+    # absolute `next_poll_time` ensures wait_for's budget shrinks across
+    # iterations and times out during the empty windows between bursts.
+    assert poll_count >= 2

@@ -15,7 +15,7 @@ from dali.gear.general import (
 )
 
 from .common_dali_device import (
-    ControlPollResult,
+    ControlsPollRequestResult,
     DaliDeviceAddress,
     DaliDeviceBase,
     MqttControlBase,
@@ -170,11 +170,58 @@ class DaliDevice(DaliDeviceBase):
         await super().load_info(driver, force_reload)
         self.params["types"] = self.types
 
-    async def poll_controls(self, driver: WBDALIDriver) -> list[ControlPollResult]:
-        res = await super().poll_controls(driver)
-        if self._type8_handler is not None:
-            res.extend(await self._type8_handler.poll_controls(driver, self.address.short))
-        return res
+    def poll_controls(
+        self, driver: WBDALIDriver, now: float, max_commands: int, default_poll_interval: float
+    ) -> ControlsPollRequestResult:
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before polling controls."
+            )
+
+        # An in-flight DT-8 colour read survives across ticks; continue with the
+        # next subbatch before touching the snapshot. If the subbatch would
+        # exceed remaining budget this tick, defer to the next tick.
+        if self._type8_handler is not None and self._type8_handler.has_in_progress_read():
+            if self._type8_handler.peek_next_subbatch_size() > max_commands:
+                return ControlsPollRequestResult(has_more=True)
+            return self._type8_handler.next_poll_step(driver, self.address.short)
+
+        if not self._current_round_polling_controls:
+            self._refresh_round_snapshot(now, default_poll_interval)
+            if self._type8_handler is not None and self._type8_handler.is_poll_due(
+                now, default_poll_interval
+            ):
+                self._current_round_polling_controls.append(self._type8_handler)
+                self._type8_handler.last_poll_time = now
+
+        controls_to_poll = []
+        while (
+            self._current_round_polling_controls
+            and len(controls_to_poll) < max_commands
+            and self._current_round_polling_controls[0] is not self._type8_handler
+        ):
+            controls_to_poll.append(self._current_round_polling_controls.pop(0))
+
+        if controls_to_poll:
+            return ControlsPollRequestResult(
+                has_more=bool(self._current_round_polling_controls),
+                poll_coroutine=lambda: self._execute_poll_queries(driver, controls_to_poll),
+                commands_count=len(controls_to_poll),
+            )
+
+        # No single-cmd controls left this tick. If the snapshot still holds the
+        # DT-8 sentinel, kick off the colour read — provided the opening batch
+        # fits in the remaining budget; otherwise defer to the next tick.
+        if (
+            self._current_round_polling_controls
+            and self._current_round_polling_controls[0] is self._type8_handler
+        ):
+            if self._type8_handler.peek_next_subbatch_size() > max_commands:
+                return ControlsPollRequestResult(has_more=True)
+            self._current_round_polling_controls.pop(0)
+            return self._type8_handler.next_poll_step(driver, self.address.short)
+
+        return ControlsPollRequestResult(has_more=False)
 
     @property
     def groups(self) -> set[int]:
@@ -217,6 +264,11 @@ class DaliDevice(DaliDeviceBase):
         for i, control in enumerate(mqtt_controls, start=1):
             control.control_info.meta.order = i
         return mqtt_controls
+
+    def reset_polling_state(self) -> None:
+        self._current_round_polling_controls.clear()
+        if self._type8_handler is not None:
+            self._type8_handler.reset_in_progress_read()
 
     async def _initialize_impl(  # pylint: disable=too-many-branches
         self, driver: WBDALIDriver

@@ -432,12 +432,10 @@ async def test_poll_controls_returns_error_when_response_is_none():
     control.get_query = MagicMock(return_value="Q1")
     control.format_response = MagicMock(return_value="formatted")
 
-    d._polling_controls = [control]
     d.is_initialized = True
-
     driver.send_commands = AsyncMock(return_value=[None])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [control])
 
     driver.send_commands.assert_awaited_once_with(["Q1"], BusTrafficSource.WB)
     assert len(res) == 1
@@ -464,11 +462,10 @@ async def test_poll_controls_returns_error_when_raw_value_is_none():
     response = MagicMock()
     response.raw_value = None
 
-    d._polling_controls = [control]
     d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [control])
 
     assert len(res) == 1
     assert res[0].control_id == "c2"
@@ -497,11 +494,10 @@ async def test_poll_controls_returns_error_when_raw_value_has_error():
     response._error_acceptable = False
     response.raw_value.error = True
 
-    d._polling_controls = [control]
     d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [control])
 
     assert len(res) == 1
     assert res[0].control_id == "c3"
@@ -528,11 +524,10 @@ async def test_poll_controls_formats_regular_control_value():
     response.raw_value = MagicMock()
     response.raw_value.error = False
 
-    d._polling_controls = [control]
     d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [control])
 
     control.get_query.assert_called_once_with(GearShort(d.address.short))
     control.format_response.assert_called_once_with(response)
@@ -563,11 +558,10 @@ async def test_poll_controls_alarm_control_active_when_response_error_true():
     response.raw_value.error = False
     response.error = True
 
-    d._polling_controls = [control]
     d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [control])
 
     assert len(res) == 1
     assert res[0].control_id == "alarm1"
@@ -598,11 +592,10 @@ async def test_poll_controls_alarm_control_inactive_when_response_error_false_or
     if hasattr(response, "error"):
         del response.error
 
-    d._polling_controls = [control]
     d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [control])
 
     assert len(res) == 1
     assert res[0].control_id == "alarm2"
@@ -653,11 +646,10 @@ async def test_poll_controls_multiple_controls_and_queries_order():
 
     r3 = None
 
-    d._polling_controls = [c1, c2, c3]
     d.is_initialized = True
     driver.send_commands = AsyncMock(return_value=[r1, r2, r3])
 
-    res = await d.poll_controls(driver)
+    res = await d._execute_poll_queries(driver, [c1, c2, c3])
 
     driver.send_commands.assert_awaited_once_with(["Q1", "Q2", "Q3"], BusTrafficSource.WB)
     assert [x.control_id for x in res] == ["regular", "alarm", "bad"]

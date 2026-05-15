@@ -40,5 +40,6 @@ class Type21Parameters(TypeParameters):
                 ),
                 query_builder=QueryFailureStatus,
                 value_formatter=_format_failure_status,
+                poll_interval=120.0,
             ),
         ]

@@ -131,7 +131,7 @@ async def resolve_target_device(target_gateway: str, mqtt_dispatcher: MQTTDispat
     except (ValueError, IndexError) as exc:
         raise RuntimeError(
             f"Cannot parse short address from device name {name!r}. "
-            f"The test assumes default device names (e.g. 'DALI 11', 'DALI2 0'); "
+            f"The test assumes default device names (e.g. 'DALI 11', 'DALI-2 0'); "
             f"a rename was likely applied — see README."
         ) from exc
     bus_uid = bus["id"]

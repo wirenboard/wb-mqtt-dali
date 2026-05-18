@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.12.1) stable; urgency=medium
+
+  * Use DALI-2 instead of DALI2 in naming and logs
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 18 May 2026 14:08:35 +0500
+
 wb-mqtt-dali (1.12.0) stable; urgency=medium
 
   * Per-control polling schedule: each readable control tracks its own
@@ -29,7 +35,7 @@ wb-mqtt-dali (1.11.1) stable; urgency=medium
 
 wb-mqtt-dali (1.11.0) stable; urgency=medium
 
-  * Add support for DALI2 Feedback feature
+  * Add support for DALI-2 Feedback feature
 
  -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 12 May 2026 17:18:51 +0500
 

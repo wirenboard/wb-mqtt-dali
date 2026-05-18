@@ -228,7 +228,7 @@ async def test_update_dali2_devices_sets_custom_name_for_changed_device():
     # pylint: disable=protected-access
     controller = _make_bare_controller()
 
-    # Simulate a previously-known DALI2 device at short 6 that is now a replacement
+    # Simulate a previously-known DALI-2 device at short 6 that is now a replacement
     old_device = SimpleNamespace(
         address=DaliDeviceAddress(short=6, random=0x11),
         mqtt_id="gw_bus_1_d2_6",
@@ -347,9 +347,9 @@ class TestCommissioningStateMarkFailed:  # pylint: disable=too-few-public-method
             devices=[],
             finished_at=None,
         )
-        state.mark_failed("DALI2 phase failed", [])
+        state.mark_failed("DALI-2 phase failed", [])
         assert state.status == CommissioningStatus.FAILED
-        assert state.error == "DALI2 phase failed"
+        assert state.error == "DALI-2 phase failed"
         # Diagnostic signal — progress and stage intentionally left intact.
         assert state.progress == 63
         assert state.finished_at is not None
@@ -670,8 +670,8 @@ class TestCommissioningTaskTerminalBranches:
                     if progress_cb is not None:
                         progress_cb(CommissioningStage.BINARY_SEARCH, 100, dali1_device)
                     return CommissioningResult()
-                # DALI2 phase raises before emitting anything.
-                raise RuntimeError("DALI2 phase failed")
+                # DALI-2 phase raises before emitting anything.
+                raise RuntimeError("DALI-2 phase failed")
 
             return SimpleNamespace(smart_extend=_fake_smart_extend)
 
@@ -686,7 +686,7 @@ class TestCommissioningTaskTerminalBranches:
             await controller._commissioning_task()
 
         assert controller._commissioning_state.status == CommissioningStatus.FAILED
-        assert controller._commissioning_state.error == "DALI2 phase failed"
+        assert controller._commissioning_state.error == "DALI-2 phase failed"
         assert controller._commissioning_state.finished_at is not None
         # Only DALI1-phase devices remain on FAILED.
         assert controller._commissioning_state.devices == [dali1_device]

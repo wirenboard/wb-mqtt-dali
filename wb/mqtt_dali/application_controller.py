@@ -91,8 +91,8 @@ class CommissioningState:
 
     # The progress is divided into three stages:
     #   0-4 Queued,
-    #   5-50 DALI1 search,
-    #   51-80 DALI2 search,
+    #   5-50 DALI-1 search,
+    #   51-80 DALI-2 search,
     #   81-100 reading device info.
     # This allows the frontend to show a single progress bar for the entire commissioning process,
     #  while still giving a rough indication of the current stage.

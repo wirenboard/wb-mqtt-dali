@@ -183,13 +183,15 @@ def make_controls() -> list[MqttControlBase]:
 
 
 class ErrorStatusControl(MqttControlBase):
+
     def __init__(self) -> None:
         super().__init__(
             ControlInfo(
                 "error_status",
                 ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True),
                 "0",
-            )
+            ),
+            poll_interval=120.0,
         )
 
     def get_query(self, short_address: Address) -> Optional[Command]:

@@ -37,7 +37,13 @@ def _make_bare_controller():
     controller._dev_inst_map = MagicMock(mapping={})
     controller._gtin_db = MagicMock()
     controller._device_publisher = AsyncMock()
-    controller._init_scheduler = MagicMock(remove=MagicMock(), schedule=MagicMock())
+    controller._device_publisher.has_device = MagicMock(return_value=False)
+    controller._init_scheduler = MagicMock(
+        remove=MagicMock(),
+        schedule=MagicMock(),
+        get_retry_count=MagicMock(return_value=0),
+    )
+    controller._poll_scheduler = MagicMock(remove_device=MagicMock(), clear=MagicMock())
     controller._refresh_group_virtual_devices = AsyncMock()
     controller._refresh_broadcast_device = AsyncMock()
     controller._update_dali2_device_instance_map = MagicMock()
@@ -101,12 +107,11 @@ async def test_reset_device_settings_dali_sends_reset_and_reinitializes():
     assert new_device.address.random == device.address.random
     assert new_device.mqtt_id == device.mqtt_id
     assert new_device.name == device.name
-    # Aggregated virtual devices were refreshed (DALI 1 only)
-    controller._refresh_group_virtual_devices.assert_awaited_once()
-    controller._refresh_broadcast_device.assert_awaited_once()
-    # Scenario 1 must not touch the init scheduler: short address and mqtt_id are unchanged
-    controller._init_scheduler.remove.assert_not_called()
-    controller._init_scheduler.schedule.assert_not_called()
+    # Aggregated virtual devices were refreshed (DALI 1 only). The reset
+    # path removes the old device and re-initializes a new one, refreshing
+    # virtual devices on both transitions.
+    controller._refresh_group_virtual_devices.assert_awaited()
+    controller._refresh_broadcast_device.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -197,7 +202,7 @@ async def test_reset_device_settings_propagates_reset_failure_without_reinit():
 
 
 @pytest.mark.asyncio
-async def test_reset_device_settings_propagates_init_failure_without_republish():
+async def test_reset_device_settings_handles_init_failure_via_retry_scheduler():
     # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
@@ -210,12 +215,19 @@ async def test_reset_device_settings_propagates_init_failure_without_republish()
     ), patch.object(DaliDevice, "initialize", AsyncMock(side_effect=RuntimeError("init failed"))), patch(
         "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
     ) as publish_mock:
-        with pytest.raises(RuntimeError, match="init failed"):
-            await controller._reset_device_settings_task(device)
+        # Init failure is funnelled through the init scheduler (retry),
+        # so the task itself completes without raising.
+        await controller._reset_device_settings_task(device)
 
-    publish_mock.assert_not_awaited()
-    controller._device_publisher.remove_device.assert_not_awaited()
-    assert controller.dali_devices == [device]
+    # publish_device is invoked in error-mode by try_initialize_device
+    publish_mock.assert_awaited()
+    # The original device was removed; a freshly-built (uninitialized)
+    # replacement now occupies the same short address.
+    controller._device_publisher.remove_device.assert_awaited()
+    assert len(controller.dali_devices) == 1
+    new_device = controller.dali_devices[0]
+    assert new_device is not device
+    assert new_device.address.short == device.address.short
 
 
 # ---------------------------------------------------------------------------

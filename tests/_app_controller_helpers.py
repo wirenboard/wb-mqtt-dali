@@ -16,6 +16,7 @@ from wb.mqtt_dali.application_controller import (
     ApplicationController,
     ApplicationControllerState,
     CommissioningState,
+    PollScheduler,
 )
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
@@ -39,13 +40,11 @@ def make_loop_controller(polling_interval: float = 1.0) -> ApplicationController
         get_first_attempt_ready=MagicMock(return_value=[]),
         get_one_retry_ready=MagicMock(return_value=None),
     )
-    controller._poll_device = AsyncMock()
-    controller._poll_step = AsyncMock(return_value=10.0)
+    controller._poll_scheduler = PollScheduler()
     controller._current_commissioning_task = None
     controller._commissioning_state = CommissioningState()
     controller._commissioning_state_cb = None
     return controller
-
 
 def make_bare_gateway(
     command_registry: Optional[Dict[str, CommandInfo]] = None,

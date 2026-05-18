@@ -17,7 +17,6 @@ from wb.mqtt_dali.application_controller import (
     CommissioningStartResult,
     CommissioningState,
     CommissioningStatus,
-    PollScheduler,
 )
 from wb.mqtt_dali.commissioning import (
     ChangedDevice,

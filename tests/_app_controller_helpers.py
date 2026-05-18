@@ -46,6 +46,7 @@ def make_loop_controller(polling_interval: float = 1.0) -> ApplicationController
     controller._commissioning_state_cb = None
     return controller
 
+
 def make_bare_gateway(
     command_registry: Optional[Dict[str, CommandInfo]] = None,
     config: Optional[dict] = None,

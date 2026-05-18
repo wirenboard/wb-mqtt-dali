@@ -146,7 +146,6 @@ class TestSendCommandBatchPollingLoop:
         """No poll step is taken between commands of a batch (only between bursts)."""
         controller = make_loop_controller()
         controller._polling_interval = 0.01  # pylint: disable=protected-access
-        del controller._poll_step  # use real implementation
 
         sent = []
 

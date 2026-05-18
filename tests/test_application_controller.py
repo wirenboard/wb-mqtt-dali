@@ -17,7 +17,6 @@ from wb.mqtt_dali.application_controller import (
     CommissioningStartResult,
     CommissioningState,
     CommissioningStatus,
-    PollScheduler,
 )
 from wb.mqtt_dali.commissioning import (
     ChangedDevice,
@@ -27,6 +26,8 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
+
+from ._app_controller_helpers import make_loop_controller, stop_loop
 
 # pylint: disable=duplicate-code
 
@@ -1082,28 +1083,7 @@ async def test_rpc_config_update_clamps_polling_interval():
 # --- polling-loop fallback under sustained EXECUTE_CONTROL load ---------------
 
 
-def _make_polling_loop_controller(polling_interval: float = 1.0) -> ApplicationController:
-    # pylint: disable=protected-access
-    """Return a controller with the loop's collaborators stubbed.
-
-    Bypasses __init__ so we don't bring up MQTT/driver, but wires up the
-    minimal real state needed by `_polling_loop`.
-    """
-    controller = ApplicationController.__new__(ApplicationController)
-    controller.uid = "gw_bus_1"
-    controller.logger = logging.getLogger("test.polling_loop")
-    controller._dev = AsyncMock()
-    controller._tasks_queue = asyncio.Queue()
-    controller._in_quiescent_mode = False
-    controller._polling_interval = polling_interval
-    controller._stop_requested = False
-    controller.dali_devices = []
-    controller.dali2_devices = []
-    controller._init_scheduler = MagicMock()
-    controller._init_scheduler.get_first_attempt_ready = MagicMock(return_value=[])
-    controller._init_scheduler.get_one_retry_ready = MagicMock(return_value=None)
-    controller._poll_scheduler = PollScheduler()
-    return controller
+_make_loop_controller = make_loop_controller
 
 
 async def _cancel_loop(task: asyncio.Task) -> None:
@@ -1114,22 +1094,7 @@ async def _cancel_loop(task: asyncio.Task) -> None:
         pass
 
 
-async def _stop_polling_loop(controller: ApplicationController, task: asyncio.Task) -> None:
-    # pylint: disable=protected-access
-    """Mirror ApplicationController.stop()'s polling-task shutdown sequence.
-
-    Cancel alone is unreliable when the loop sits inside `gather(..., return_exceptions=True)`
-    on Python 3.9 (see https://github.com/python/cpython/issues/76865), so production sets
-    `_stop_requested` first and the loop exits at the next iteration even if the cancel is
-    swallowed. Tests that drive `_polling_loop` directly use this helper to follow the same
-    contract.
-    """
-    controller._stop_requested = True
-    task.cancel()
-    try:
-        await asyncio.wait_for(task, timeout=2.0)
-    except (asyncio.CancelledError, asyncio.TimeoutError):
-        pass
+_stop_polling_loop = stop_loop
 
 
 async def _run_loop_briefly(controller: ApplicationController, duration: float) -> None:
@@ -1165,7 +1130,7 @@ class TestPollingLoopFallback:
     async def test_poll_runs_when_queue_empties_after_interval(self):
         # pylint: disable=protected-access
         """After EXECUTE_CONTROL drains, _poll_step fires immediately, not after queue_timeout."""
-        controller = _make_polling_loop_controller(polling_interval=1.0)
+        controller = _make_loop_controller(polling_interval=1.0)
         controller._poll_step = AsyncMock(return_value=10.0)
         device = MagicMock()
         device.execute_control = AsyncMock(return_value=None)
@@ -1189,7 +1154,7 @@ class TestPollingLoopFallback:
         actually advances on each successful poll — without that, the inline check
         is permanently true and the test would pass even with the fix removed.
         """
-        controller = _make_polling_loop_controller(polling_interval=0.05)
+        controller = _make_loop_controller(polling_interval=0.05)
         device = MagicMock()
         device.is_initialized = True
         device.execute_control = AsyncMock(return_value=None)
@@ -1230,7 +1195,7 @@ class TestPollingLoopFallback:
         out, `next_poll_time` never advances and the assertion would pass
         regardless of whether the queue-empty check actually gates polling.
         """
-        controller = _make_polling_loop_controller(polling_interval=0.05)
+        controller = _make_loop_controller(polling_interval=0.05)
         device = MagicMock()
         device.is_initialized = True
         device.time_until_next_poll = MagicMock(return_value=0.05)
@@ -1287,7 +1252,7 @@ class TestPollingLoopFallback:
     async def test_poll_runs_after_non_execute_control_task(self):
         # pylint: disable=protected-access
         """Inline poll check fires after a single non-EXECUTE_CONTROL task too."""
-        controller = _make_polling_loop_controller(polling_interval=1.0)
+        controller = _make_loop_controller(polling_interval=1.0)
         controller._poll_step = AsyncMock(return_value=10.0)
         device = MagicMock()
         device.load_info = AsyncMock(return_value=None)
@@ -1313,7 +1278,7 @@ class TestPollingLoopFallback:
         `_poll_step` mocked, the test would tick on the mock's hard-coded
         timeout regardless of the interval value.
         """
-        controller = _make_polling_loop_controller(polling_interval=10.0)
+        controller = _make_loop_controller(polling_interval=10.0)
         device = MagicMock()
         device.is_initialized = True
         device.time_until_next_poll = MagicMock(side_effect=lambda _t, default: default)
@@ -1357,7 +1322,7 @@ async def test_polling_loop_command_stream_does_not_starve_polling():
     naturally shrinks across iterations and times out during a brief empty
     window — without raising polling priority.
     """
-    controller = _make_polling_loop_controller(polling_interval=0.05)
+    controller = _make_loop_controller(polling_interval=0.05)
     device = MagicMock()
     device.is_initialized = True
     device.execute_control = AsyncMock(return_value=None)

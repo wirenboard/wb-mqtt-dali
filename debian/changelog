@@ -1,3 +1,12 @@
+wb-mqtt-dali (1.13.0) stable; urgency=medium
+
+  * Add Bus/SendCommand RPC for sending arbitrary DALI command batches on a running bus
+  * Add Bus/ListCommands RPC exposing the catalog of supported DALI commands
+  * Rework CLI --send-command to use expression syntax: --command "Name(A<n>, I<n>, data)"; remove --address/--group/--broadcast/--data flags
+  * Show address and instance hints in --list-commands category headers
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 18 May 2026 10:39:04 +0500
+
 wb-mqtt-dali (1.12.0) stable; urgency=medium
 
   * Per-control polling schedule: each readable control tracks its own

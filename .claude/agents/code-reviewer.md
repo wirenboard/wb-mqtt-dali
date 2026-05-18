@@ -21,10 +21,10 @@ Always start by reading the plan if one exists (`doc/<topic>_plan.md`). The `doc
 2. **Dead code.** Unused functions/classes/parameters/imports/constants left after refactoring. Verify via `Grep` on the symbol name.
 3. **Duplication.** Copy-pasted logic between modules, repeated constructs that already exist in project helpers.
 4. **Encapsulation.** Access to `_private` attributes from outside the class, internal types leaking through the public API, law-of-demeter-violating accesses between modules. **Scope to the current diff** — pre-existing private-attribute access in untouched code is grandfathered debt, not a finding. For tests specifically:
-   - if the diff **adds** a new `obj._private` line in a test file → **blocker** (the test should be using a public API);
-   - if the diff **modifies a line** that already accessed a private attribute → **minor**, with a note that widening the public API would require user approval;
-   - if the diff introduces a new file-level `# pylint: disable=...protected-access...` → **blocker** (file-level disables are forbidden by CLAUDE.md — must be per-function or per-line);
-   - untouched private access in the same file → **silent**, do not list.
+   - if the diff **adds** a new `obj._private` line in a test file → finding (the test should be using a public API; widening the API requires user approval);
+   - if the diff **modifies a line** that already accessed a private attribute → finding, with the same note;
+   - if the diff introduces a new file-level `# pylint: disable=...protected-access...` → finding (file-level disables are forbidden by CLAUDE.md — must be per-function or per-line);
+   - untouched private access in the same file → silent, do not list.
 5. **Project rules compliance** (CLAUDE.md → Agent Workflow Rules and Code Style):
    - identifiers (local variables, parameters, functions, methods, classes, constants) must not be renamed without a functional necessity — "consistency" and "shorter name" do not count;
    - temporary variables must not be introduced for only 1–2 uses;
@@ -57,50 +57,35 @@ Structure of `doc/<topic>_review.md`:
 
 ## Summary
 
-<2–4 lines: overall impression, number of findings by severity>
+<2–4 lines: overall impression, total number of findings>
 
 ## Findings
 
-### blocker
-- **`path/to/file.py:123`** — description. Why this is a blocker.
-
-### major
-- ...
-
-### minor
-- ...
-
-### nit
+- **`path/to/file.py:123`** — description. Why it needs to be fixed.
 - ...
 
 ## Plan compliance
 
 - [x] Plan item 1 — implemented, file X
 - [ ] Plan item 2 — NOT implemented / deviation from plan: ...
-- [~] Plan item 3 — partial, see finding in major
+- [~] Plan item 3 — partial, see findings
 
 ## Out-of-scope changes
 
 <changes not in the plan — list with files and short descriptions. Empty if none.>
 ```
 
-Severity:
-- **blocker** — cannot merge: bug, regression, contract violation, data loss.
-- **major** — must fix before merge: architectural issue, significant duplication, encapsulation violation, clear deviation from the plan.
-- **minor** — should fix: readability, minor duplication, suboptimal naming.
-- **nit** — author's discretion: style, taste.
+Everything in *Findings* must be fixed before merge — there are no severity tiers. If something is genuinely the author's stylistic choice and not worth fixing, don't list it.
 
 Plus a short summary to stdout after saving the file:
 ```
 Review saved: doc/<topic>_review.md
-Findings: B=<n> M=<n> m=<n> nit=<n>
+Findings: <n>
 Plan compliance: <N/M items>
 ```
 
 ## Report rules
 
 - Every finding must include a specific reference `file:line`. No "somewhere in module X".
-- Do not duplicate the same finding across multiple severity levels.
-- If uncertain between severities — pick the lower one and explain in the text.
 - Do not quote large blocks of code. Line references are sufficient.
 - Follow the Agent Workflow Rules from CLAUDE.md.

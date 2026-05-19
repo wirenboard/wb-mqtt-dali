@@ -11,9 +11,10 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 
 
 class MockMessage:  # pylint: disable=R0903
-    def __init__(self, topic: str, payload: bytes):
+    def __init__(self, topic: str, payload: bytes, retain: bool = False):
         self.topic = topic
         self.payload = payload
+        self.retain = retain
 
 
 class MockClient:

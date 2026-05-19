@@ -12,10 +12,15 @@ class MQTTDispatcher:
     def __init__(self, client: aiomqtt.Client):
         self.client = client
         self._subscriptions: Dict[str, Set[MessageCallback]] = {}
+        # Last retained message observed per exact topic, replayed to late subscribers.
+        # The broker only delivers retained on the first SUBSCRIBE; without this cache
+        # additional callbacks on the same topic miss the initial state.
+        self._retained_cache: Dict[str, mqtt.MQTTMessage] = {}
         self._running = False
         self._lock = asyncio.Lock()
 
     async def subscribe(self, topic: str, callback: MessageCallback) -> None:
+        replay: Optional[mqtt.MQTTMessage] = None
         async with self._lock:
             if topic not in self._subscriptions:
                 self._subscriptions[topic] = set()
@@ -27,6 +32,12 @@ class MQTTDispatcher:
                     raise e
             else:
                 self._subscriptions[topic].add(callback)
+                replay = self._retained_cache.get(topic)
+        if replay is not None:
+            try:
+                callback(replay)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logging.error("Error replaying retained message for topic %s: %s", topic, e)
 
     async def unsubscribe(self, topic: str, callback: Optional[MessageCallback] = None) -> None:
         async with self._lock:
@@ -35,12 +46,14 @@ class MQTTDispatcher:
 
             if callback is None:
                 del self._subscriptions[topic]
+                self._retained_cache.pop(topic, None)
                 await self.client.unsubscribe(topic)
             else:
                 self._subscriptions[topic].discard(callback)
 
                 if not self._subscriptions[topic]:
                     del self._subscriptions[topic]
+                    self._retained_cache.pop(topic, None)
                     await self.client.unsubscribe(topic)
 
     async def clear_subscriptions(self) -> None:
@@ -50,6 +63,7 @@ class MQTTDispatcher:
                 await self.client.unsubscribe(topic)
 
             self._subscriptions.clear()
+            self._retained_cache.clear()
 
     async def run(self) -> None:
         self._running = True
@@ -70,10 +84,17 @@ class MQTTDispatcher:
         finally:
             async with self._lock:
                 self._subscriptions.clear()
+                self._retained_cache.clear()
                 self._running = False
 
     def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
         topic = str(message.topic)
+
+        if message.retain:
+            if message.payload:
+                self._retained_cache[topic] = message
+            else:
+                self._retained_cache.pop(topic, None)
 
         callbacks = set()
         for callback_topic, cbs in self._subscriptions.items():

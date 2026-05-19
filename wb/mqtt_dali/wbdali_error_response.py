@@ -96,3 +96,18 @@ class UnknownResponseStatus(WbGatewayTransmissionError):
 
     def __str__(self) -> str:
         return "unknown response status"
+
+
+class GatewayUnavailable(WbGatewayTransmissionError):
+    """Returned while wb-mqtt-serial reports the gateway device as `r` on `/meta/error`."""
+
+    @property
+    def raw_value(self):
+        raise RuntimeError("Gateway unavailable")
+
+    @property
+    def value(self):
+        raise RuntimeError("Gateway unavailable")
+
+    def __str__(self) -> str:
+        return "gateway unavailable"

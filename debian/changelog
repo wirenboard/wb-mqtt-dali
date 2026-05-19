@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.14.0) stable; urgency=medium
+
+  * Handle gateway reset
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 19 May 2026 14:15:43 +0500
+
 wb-mqtt-dali (1.13.1) stable; urgency=medium
 
   * Use DALI-2 instead of DALI2 in naming and logs

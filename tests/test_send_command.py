@@ -1,18 +1,249 @@
 import unittest
 
-from dali.address import GearBroadcast, GearShort
+import pytest
+from dali.address import (
+    DeviceBroadcast,
+    DeviceShort,
+    GearBroadcast,
+    GearGroup,
+    GearShort,
+)
 from dali.command import Response
+from dali.device.general import DTR0 as DeviceDTR0
+from dali.device.general import EnableInstance, QueryDeviceStatus
+from dali.device.general import Reset as DeviceReset
+from dali.device.general import Terminate as DeviceTerminate
+from dali.device.pushbutton import QueryShortTimer
 from dali.frame import BackwardFrame
+from dali.gear.colour import Activate as DT8Activate
 from dali.gear.general import DAPC, DTR0, Off, Terminate
 
+from wb.mqtt_dali.device.feedback import QueryFeedbackActive
 from wb.mqtt_dali.send_command import (
     build_command_registry,
     format_response,
     list_commands,
-    parse_and_build_command,
+    parse_expression,
 )
 
 # pylint: disable=import-outside-toplevel
+# `registry` is a module-scope pytest fixture; tests receive it as a parameter,
+# which pylint sees as redefining the fixture's outer name.
+# pylint: disable=redefined-outer-name
+
+
+@pytest.fixture(scope="module")
+def registry():
+    return build_command_registry()
+
+
+class TestParseExpression:  # pylint: disable=too-many-public-methods
+    def test_parse_off_short(self, registry):
+        cmd = parse_expression("Off(A5)", registry)
+        assert isinstance(cmd, Off)
+        assert cmd.frame.as_integer == Off(GearShort(5)).frame.as_integer
+
+    def test_parse_off_group(self, registry):
+        cmd = parse_expression("Off(G3)", registry)
+        assert isinstance(cmd, Off)
+        assert cmd.frame.as_integer == Off(GearGroup(3)).frame.as_integer
+
+    def test_parse_off_implicit_broadcast(self, registry):
+        """`Off()` and `Off` (no parens) are equivalent broadcasts."""
+        cmd_parens = parse_expression("Off()", registry)
+        cmd_no_parens = parse_expression("Off", registry)
+        broadcast_frame = Off(GearBroadcast()).frame.as_integer
+        assert cmd_parens.frame.as_integer == broadcast_frame
+        assert cmd_no_parens.frame.as_integer == broadcast_frame
+
+    def test_parse_dt8_activate_no_parens(self, registry):
+        cmd_no_parens = parse_expression("DT8.Activate", registry)
+        cmd_parens = parse_expression("DT8.Activate()", registry)
+        assert isinstance(cmd_no_parens, DT8Activate)
+        assert cmd_no_parens.frame.as_integer == cmd_parens.frame.as_integer
+
+    def test_parse_ff24_reset_no_parens(self, registry):
+        cmd = parse_expression("FF24.Reset", registry)
+        assert isinstance(cmd, DeviceReset)
+        assert cmd.frame.as_integer == DeviceReset(DeviceBroadcast()).frame.as_integer
+
+    def test_parse_ff24_terminate_no_parens(self, registry):
+        cmd_no_parens = parse_expression("FF24.Terminate", registry)
+        cmd_parens = parse_expression("FF24.Terminate()", registry)
+        assert isinstance(cmd_no_parens, DeviceTerminate)
+        assert cmd_no_parens.frame.as_integer == cmd_parens.frame.as_integer
+
+    def test_parse_dapc_decimal_data(self, registry):
+        cmd = parse_expression("DAPC(A5, 100)", registry)
+        assert isinstance(cmd, DAPC)
+        assert cmd.frame.as_integer == DAPC(GearShort(5), 100).frame.as_integer
+
+    def test_parse_dapc_hex_data(self, registry):
+        lower = parse_expression("DAPC(A5, 0xFE)", registry)
+        upper = parse_expression("DAPC(A5, 0XFE)", registry)
+        expected = DAPC(GearShort(5), 254).frame.as_integer
+        assert lower.frame.as_integer == expected
+        assert upper.frame.as_integer == expected
+
+    def test_parse_dapc_bin_oct_data(self, registry):
+        bin_cmd = parse_expression("DAPC(A5, 0b1100100)", registry)
+        oct_cmd = parse_expression("DAPC(A5, 0o144)", registry)
+        expected = DAPC(GearShort(5), 100).frame.as_integer
+        assert bin_cmd.frame.as_integer == expected
+        assert oct_cmd.frame.as_integer == expected
+
+    def test_parse_dapc_implicit_broadcast(self, registry):
+        cmd = parse_expression("DAPC(100)", registry)
+        assert isinstance(cmd, DAPC)
+        assert cmd.frame.as_integer == DAPC(GearBroadcast(), 100).frame.as_integer
+
+    def test_parse_dt8_activate_broadcast(self, registry):
+        cmd = parse_expression("DT8.Activate()", registry)
+        assert isinstance(cmd, DT8Activate)
+
+    def test_parse_special_terminate_no_parens(self, registry):
+        cmd_no_parens = parse_expression("Terminate", registry)
+        cmd_parens = parse_expression("Terminate()", registry)
+        assert isinstance(cmd_no_parens, Terminate)
+        assert cmd_no_parens.frame.as_integer == cmd_parens.frame.as_integer
+
+    def test_parse_special_dtr_with_data(self, registry):
+        gear_cmd = parse_expression("DTR0(42)", registry)
+        device_cmd = parse_expression("FF24.DTR0(42)", registry)
+        assert isinstance(gear_cmd, DTR0)
+        assert gear_cmd.frame.as_integer == DTR0(42).frame.as_integer
+        assert isinstance(device_cmd, DeviceDTR0)
+        assert device_cmd.frame.as_integer == DeviceDTR0(42).frame.as_integer
+
+    def test_parse_ff24_standard(self, registry):
+        """Standard FF24 device commands accept short address or implicit broadcast."""
+        cmd_short = parse_expression("FF24.QueryDeviceStatus(A5)", registry)
+        cmd_bcast = parse_expression("FF24.Reset()", registry)
+        assert isinstance(cmd_short, QueryDeviceStatus)
+        assert cmd_short.frame.as_integer == QueryDeviceStatus(DeviceShort(5)).frame.as_integer
+        assert isinstance(cmd_bcast, DeviceReset)
+        assert cmd_bcast.frame.as_integer == DeviceReset(DeviceBroadcast()).frame.as_integer
+
+    def test_parse_device_instance_general(self, registry):
+        cmd_addr = parse_expression("FF24.EnableInstance(A3, I0)", registry)
+        cmd_bcast = parse_expression("FF24.EnableInstance(I0)", registry)
+        assert isinstance(cmd_addr, EnableInstance)
+        assert isinstance(cmd_bcast, EnableInstance)
+
+    def test_parse_device_instance_different_numbers(self, registry):
+        """Different I<n> produce different frames for the same instance command."""
+        cmd0 = parse_expression("FF24.EnableInstance(A5, I0)", registry)
+        cmd3 = parse_expression("FF24.EnableInstance(A5, I3)", registry)
+        assert isinstance(cmd0, EnableInstance)
+        assert isinstance(cmd3, EnableInstance)
+        assert cmd0.frame.as_integer != cmd3.frame.as_integer
+
+    def test_parse_device_instance_rejects_inline_data(self, registry):
+        """Instance-commands don't take inline data in the current python-dali —
+        the data byte is delivered via a preceding DTR0/1/2 send. The parser
+        rejects the inline-data form on both `FF24.SetEventFilter(A3, I0, 0x1F)`
+        and `FF24.DT1.SetEventFilter(A3, I0, 0x1F)` (different failure paths —
+        registered without `needs_data` vs. not registered at all — but both
+        surface as `ValueError`).
+        """
+        with pytest.raises(ValueError):
+            parse_expression("FF24.SetEventFilter(A3, I0, 0x1F)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("FF24.DT1.SetEventFilter(A3, I0, 0x1F)", registry)
+
+    def test_parse_device_instance_type_specific(self, registry):
+        cmd = parse_expression("FF24.DT1.QueryShortTimer(A3, I2)", registry)
+        assert isinstance(cmd, QueryShortTimer)
+
+    def test_parse_dt_specific_command(self, registry):
+        """DT-specific gear commands resolve via `DT<n>.<Name>` lookup."""
+        from wb.mqtt_dali.gear.dimming_curve import QueryDimmingCurve
+
+        cmd = parse_expression("DT17.QueryDimmingCurve(A5)", registry)
+        assert isinstance(cmd, QueryDimmingCurve)
+
+    def test_parse_device_feature_device(self, registry):
+        """Without I<n> a feature command targets the device-level variant."""
+        cmd_addr = parse_expression("FF24.F32.QueryFeedbackActive(A3)", registry)
+        cmd_bcast = parse_expression("FF24.F32.QueryFeedbackActive()", registry)
+        assert isinstance(cmd_addr, QueryFeedbackActive)
+        assert isinstance(cmd_bcast, QueryFeedbackActive)
+
+    def test_parse_device_feature_instance(self, registry):
+        """With I<n> the same name resolves to the per-instance variant."""
+        cmd = parse_expression("FF24.F32.QueryFeedbackActive(A3, I0)", registry)
+        assert isinstance(cmd, QueryFeedbackActive)
+
+    def test_parse_rejects_unknown_command(self, registry):
+        with pytest.raises(ValueError, match="Unknown command"):
+            parse_expression("WhatIsThis(A5)", registry)
+
+    def test_parse_rejects_unbalanced_parens(self, registry):
+        """Unbalanced parens get an explicit error message, not the generic
+        'cannot parse' fallback.
+        """
+        with pytest.raises(ValueError, match="unbalanced parentheses"):
+            parse_expression("Off(A5", registry)
+        with pytest.raises(ValueError, match="unbalanced parentheses"):
+            parse_expression("Off A5)", registry)
+
+    def test_parse_rejects_unknown_prefix(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("Off(X5)", registry)
+
+    def test_parse_rejects_address_on_special(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("DTR0(A5, 42)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("Terminate(G3)", registry)
+
+    def test_parse_rejects_two_addresses(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("Off(A5, G3)", registry)
+
+    def test_parse_rejects_data_when_not_needed(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("Off(A5, 100)", registry)
+
+    def test_parse_rejects_missing_data(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("DAPC(A5)", registry)
+
+    def test_parse_rejects_missing_instance(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("FF24.EnableInstance(A3)", registry)
+
+    def test_parse_rejects_instance_on_non_instance_command(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("FF24.QueryDeviceStatus(A3, I0)", registry)
+
+    def test_parse_rejects_out_of_range(self, registry):
+        with pytest.raises(ValueError):
+            parse_expression("Off(A64)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("Off(G16)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("FF24.EnableInstance(A3, I32)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("DAPC(A5, 256)", registry)
+
+    def test_parse_rejects_negative_address(self, registry):
+        """A<n>/G<n>/I<n> are unsigned; signed forms get a parser-level error
+        instead of leaking down to dali address classes.
+        """
+        with pytest.raises(ValueError):
+            parse_expression("Off(A-5)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("Off(G-1)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("FF24.EnableInstance(A3, I-3)", registry)
+
+    def test_parse_ff24_group_upper_bound_31(self, registry):
+        """FF24 commands allow groups 0..31 (vs gear 0..15)."""
+        ok = parse_expression("FF24.QueryDeviceStatus(G31)", registry)
+        assert ok is not None
+        with pytest.raises(ValueError):
+            parse_expression("FF24.QueryDeviceStatus(G32)", registry)
 
 
 class TestBuildCommandRegistry(unittest.TestCase):
@@ -29,7 +260,7 @@ class TestBuildCommandRegistry(unittest.TestCase):
 
     def test_dapc_present(self):
         self.assertIn("DAPC", self.registry)
-        self.assertEqual(self.registry["DAPC"].kind, "gear_dapc")
+        self.assertEqual(self.registry["DAPC"].kind, "gear_standard")
         self.assertTrue(self.registry["DAPC"].needs_data)
 
     def test_gear_special_commands_present(self):
@@ -61,11 +292,11 @@ class TestBuildCommandRegistry(unittest.TestCase):
         self.assertEqual(self.registry["FF24.Reset"].kind, "device_standard")
 
     def test_device_instance_commands_present(self):
-        self.assertIn("FF24.Ix.EnableInstance", self.registry)
-        self.assertEqual(self.registry["FF24.Ix.EnableInstance"].kind, "device_instance")
+        self.assertIn("FF24.EnableInstance", self.registry)
+        self.assertEqual(self.registry["FF24.EnableInstance"].kind, "device_instance")
 
-        self.assertIn("FF24.Ix.QueryInstanceType", self.registry)
-        self.assertEqual(self.registry["FF24.Ix.QueryInstanceType"].kind, "device_instance")
+        self.assertIn("FF24.QueryInstanceType", self.registry)
+        self.assertEqual(self.registry["FF24.QueryInstanceType"].kind, "device_instance")
 
     def test_device_special_commands_present(self):
         self.assertIn("FF24.DTR0", self.registry)
@@ -78,12 +309,12 @@ class TestBuildCommandRegistry(unittest.TestCase):
 
     def test_instance_type_specific_commands_present(self):
         # absolute_input_device: instance_type=2
-        self.assertIn("FF24.DT2.Ix.QuerySwitch", self.registry)
-        self.assertEqual(self.registry["FF24.DT2.Ix.QuerySwitch"].kind, "device_instance")
+        self.assertIn("FF24.DT2.QuerySwitch", self.registry)
+        self.assertEqual(self.registry["FF24.DT2.QuerySwitch"].kind, "device_instance")
 
         # general_purpose_sensor: instance_type=6
-        self.assertIn("FF24.DT6.Ix.SetReportTimer", self.registry)
-        self.assertEqual(self.registry["FF24.DT6.Ix.SetReportTimer"].kind, "device_instance")
+        self.assertIn("FF24.DT6.SetReportTimer", self.registry)
+        self.assertEqual(self.registry["FF24.DT6.SetReportTimer"].kind, "device_instance")
 
     def test_no_private_classes_in_registry(self):
         for key in self.registry:
@@ -98,108 +329,6 @@ class TestBuildCommandRegistry(unittest.TestCase):
                     info.cls.response,
                     f"Query command {key} should have a response class",
                 )
-
-
-class TestParseAndBuildCommand(unittest.TestCase):
-    def setUp(self):
-        self.registry = build_command_registry()
-
-    def test_gear_standard_with_address(self):
-        cmd = parse_and_build_command("Off", self.registry, address=5)
-        self.assertIsInstance(cmd, Off)
-
-    def test_gear_standard_broadcast(self):
-        cmd = parse_and_build_command("Off", self.registry, broadcast=True)
-        self.assertIsInstance(cmd, Off)
-        self.assertEqual(cmd.frame.as_integer, Off(GearBroadcast()).frame.as_integer)
-
-    def test_gear_standard_requires_address_or_broadcast(self):
-        with self.assertRaises(ValueError):
-            parse_and_build_command("Off", self.registry)
-
-    def test_dapc_with_data(self):
-        cmd = parse_and_build_command("DAPC", self.registry, address=5, data=200)
-        self.assertIsInstance(cmd, DAPC)
-        self.assertEqual(cmd.frame.as_integer, DAPC(GearShort(5), 200).frame.as_integer)
-
-    def test_dapc_requires_data(self):
-        with self.assertRaises(ValueError):
-            parse_and_build_command("DAPC", self.registry, address=5)
-
-    def test_gear_special_no_address(self):
-        cmd = parse_and_build_command("DTR0", self.registry, data=128)
-        self.assertIsInstance(cmd, DTR0)
-        self.assertEqual(cmd.frame.as_integer, DTR0(128).frame.as_integer)
-
-    def test_gear_special_rejects_address(self):
-        with self.assertRaises(ValueError):
-            parse_and_build_command("DTR0", self.registry, address=5, data=128)
-
-    def test_terminate_no_args(self):
-        cmd = parse_and_build_command("Terminate", self.registry)
-        self.assertIsInstance(cmd, Terminate)
-
-    def test_dt_specific_command(self):
-        from wb.mqtt_dali.gear.dimming_curve import QueryDimmingCurve
-
-        cmd = parse_and_build_command("DT17.QueryDimmingCurve", self.registry, address=5)
-        self.assertIsInstance(cmd, QueryDimmingCurve)
-
-    def test_device_standard_command(self):
-        from dali.device.general import QueryDeviceStatus
-
-        cmd = parse_and_build_command("FF24.QueryDeviceStatus", self.registry, address=5)
-        self.assertIsInstance(cmd, QueryDeviceStatus)
-
-    def test_device_instance_command(self):
-        from dali.device.general import EnableInstance
-
-        cmd = parse_and_build_command("FF24.I0.EnableInstance", self.registry, address=5)
-        self.assertIsInstance(cmd, EnableInstance)
-
-    def test_device_instance_different_numbers(self):
-        from dali.device.general import EnableInstance
-
-        cmd0 = parse_and_build_command("FF24.I0.EnableInstance", self.registry, address=5)
-        cmd3 = parse_and_build_command("FF24.I3.EnableInstance", self.registry, address=5)
-        self.assertIsInstance(cmd0, EnableInstance)
-        self.assertIsInstance(cmd3, EnableInstance)
-        # Different instance numbers should produce different frames
-        self.assertNotEqual(cmd0.frame.as_integer, cmd3.frame.as_integer)
-
-    def test_instance_type_specific_command(self):
-        from dali.device.pushbutton import QueryShortTimer
-
-        cmd = parse_and_build_command("FF24.DT1.I2.QueryShortTimer", self.registry, address=5)
-        self.assertIsInstance(cmd, QueryShortTimer)
-
-    def test_device_special_command(self):
-        from dali.device.general import DTR0 as DeviceDTR0
-
-        cmd = parse_and_build_command("FF24.DTR0", self.registry, data=42)
-        self.assertIsInstance(cmd, DeviceDTR0)
-
-    def test_device_standard_broadcast(self):
-        from dali.device.general import QueryDeviceStatus
-
-        cmd = parse_and_build_command("FF24.QueryDeviceStatus", self.registry, broadcast=True)
-        self.assertIsInstance(cmd, QueryDeviceStatus)
-
-    def test_address_and_broadcast_conflict(self):
-        with self.assertRaises(ValueError) as ctx:
-            parse_and_build_command("Off", self.registry, address=5, broadcast=True)
-        self.assertIn("cannot use --address together with --broadcast", str(ctx.exception))
-
-    def test_address_out_of_range(self):
-        with self.assertRaises(ValueError):
-            parse_and_build_command("Off", self.registry, address=64)
-        with self.assertRaises(ValueError):
-            parse_and_build_command("Off", self.registry, address=-1)
-
-    def test_unknown_command(self):
-        with self.assertRaises(ValueError) as ctx:
-            parse_and_build_command("NotARealCommand", self.registry)
-        self.assertIn("Unknown command", str(ctx.exception))
 
 
 class TestFormatResponse(unittest.TestCase):
@@ -228,15 +357,161 @@ class TestListCommands(unittest.TestCase):
         self.assertIn("Off", result)
         self.assertIn("DAPC", result)
         self.assertIn("DTR0", result)
-        self.assertIn("General:", result)
+        self.assertIn("Gear General", result)
 
-    def test_query_commands_marked(self):
+    def test_query_marker_not_rendered(self):
+        """User-facing output must not surface the internal `has_response`
+        marker as `[query]`; the flag is still on the catalog entries for
+        machine consumers (Bus/ListCommands) but the rendered CLI listing
+        stays uncluttered.
+        """
         result = list_commands(self.registry)
-        self.assertIn("[query]", result)
+        self.assertNotIn("[query]", result)
 
     def test_data_required_marked(self):
         result = list_commands(self.registry)
-        self.assertIn("(requires --data)", result)
+        self.assertIn("(requires data)", result)
+
+    def test_category_order(self):
+        """The catalog header order matches user expectations: Gear General →
+        Gear Special → DT<n> (numeric) → FF24 Device General → FF24 Device
+        Special → FF24.DT<m> (numeric) → FF24.F<ft> (numeric).
+        """
+        import re
+
+        result = list_commands(self.registry)
+        # Headers now carry a parenthesised address/instance suffix
+        # ("Gear General (gear: A0..63 ...):"); strip it so the order check
+        # works on the bare category code+label.
+        headers = [
+            re.sub(r"\s*\(.*\)$", "", line[:-1])
+            for line in result.splitlines()
+            if line.endswith(":") and not line.startswith(" ")
+        ]
+
+        self.assertEqual(headers[0], "Gear General")
+        self.assertEqual(headers[1], "Gear Special")
+
+        # DT<n> gear categories follow Gear Special, in numeric order.
+        dt_gear_idx = 2
+        dt_numbers: list[int] = []
+        while dt_gear_idx < len(headers) and re.match(r"^DT\d+ ", headers[dt_gear_idx]):
+            dt_numbers.append(int(headers[dt_gear_idx].split(" ", 1)[0][2:]))
+            dt_gear_idx += 1
+        self.assertGreater(len(dt_numbers), 0, "expected DT<n> gear sections")
+        self.assertEqual(dt_numbers, sorted(dt_numbers))
+
+        # Next: FF24 Device General, FF24 Device Special.
+        self.assertEqual(headers[dt_gear_idx], "FF24 Device General")
+        self.assertEqual(headers[dt_gear_idx + 1], "FF24 Device Special")
+
+        # Then FF24.DT<m> (numeric), then FF24.F<ft> (numeric).
+        ff24_dt_numbers: list[int] = []
+        i = dt_gear_idx + 2
+        while i < len(headers) and headers[i].startswith("FF24.DT"):
+            ff24_dt_numbers.append(int(headers[i].split(" ", 1)[0][len("FF24.DT") :]))
+            i += 1
+        self.assertGreater(len(ff24_dt_numbers), 0, "expected FF24.DT<m> sections")
+        self.assertEqual(ff24_dt_numbers, sorted(ff24_dt_numbers))
+
+        ff24_f_numbers: list[int] = []
+        while i < len(headers) and headers[i].startswith("FF24.F"):
+            ff24_f_numbers.append(int(headers[i].split(" ", 1)[0][len("FF24.F") :]))
+            i += 1
+        self.assertGreater(len(ff24_f_numbers), 0, "expected FF24.F<ft> sections")
+        self.assertEqual(ff24_f_numbers, sorted(ff24_f_numbers))
+
+    def test_no_duplicate_command_names_in_catalog(self):
+        """Catalog is 1-to-1 with the registry — no dedup logic involved.
+        Regression guard: if someone reintroduces a double-registration scheme
+        (e.g. `Name` plus `Name.Ix`), this test catches it.
+        """
+        from wb.mqtt_dali.send_command import build_command_catalog
+
+        catalog = build_command_catalog(self.registry)
+        names = [entry.name for entry in catalog]
+        self.assertEqual(len(names), len(set(names)), "duplicate command names in catalog")
+
+    def test_special_section_has_full_set(self):
+        """Gear Special and FF24 Device Special expose the full set of
+        single-arg special commands from python-dali (not just DTR0/1/2
+        + Terminate).
+        """
+        result = list_commands(self.registry)
+
+        gear_section, _, _ = result.partition("\nDT1 ")
+        # Category headers now carry an "(address-form; ...)" suffix; split on
+        # the bare category code to stay agnostic of the exact header text.
+        gear_special_section = gear_section.split("\nGear Special")[1]
+        for expected in ("DTR0", "DTR1", "DTR2", "Terminate", "Initialise", "Randomise", "Compare"):
+            self.assertIn(expected, gear_special_section, f"missing gear special: {expected}")
+
+        ff24_section = result.split("\nFF24 Device Special")[1].split("\nFF24.")[0]
+        for expected in (
+            "FF24.DTR0",
+            "FF24.DTR1",
+            "FF24.DTR2",
+            "FF24.Terminate",
+            "FF24.Initialise",
+            "FF24.Randomise",
+            "FF24.Compare",
+        ):
+            self.assertIn(expected, ff24_section, f"missing device special: {expected}")
+
+        # Each Special section should have more than 5 entries (the user's
+        # explicit ask — full set, not just the bare minimum).
+        gear_special_count = sum(
+            1 for line in gear_special_section.splitlines() if line.strip() and line.startswith("  ")
+        )
+        self.assertGreater(gear_special_count, 5)
+        ff24_special_count = sum(
+            1 for line in ff24_section.splitlines() if line.strip() and line.startswith("  ")
+        )
+        self.assertGreater(ff24_special_count, 5)
+
+    def test_category_header_gear_general_shows_address_form(self):
+        result = list_commands(self.registry)
+        self.assertIn("Gear General (gear: A0..63 or G0..15; omit address for broadcast)", result)
+
+    def test_category_header_gear_special_shows_no_address(self):
+        result = list_commands(self.registry)
+        self.assertIn("Gear Special (no address)", result)
+
+    def test_category_header_ff24_dtm_shows_requires_instance(self):
+        """Uniform-REQUIRED instance categories surface the instance form in
+        the header so the user doesn't read it off every line."""
+        result = list_commands(self.registry)
+        expected = (
+            "FF24.DT3 Occupancy Sensor "
+            + "(device: A0..63 or G0..31; omit address for broadcast; requires I0..31)"
+        )
+        self.assertIn(expected, result)
+
+    def test_category_header_ff24_f32_shows_instance_optional(self):
+        """Uniform-OPTIONAL feature categories — Feedback today — note the
+        optional `I<n>` slot in the header."""
+        result = list_commands(self.registry)
+        self.assertIn(
+            "FF24.F32 Feedback (device: A0..63 or G0..31; omit address for broadcast; I<n> optional)",
+            result,
+        )
+
+    def test_mixed_category_marks_individual_commands(self):
+        """FF24 Device General mixes REQUIRED (instance-scoped) and DISALLOWED
+        (device-scoped) commands — the header drops the instance form and the
+        REQUIRED rows pick up a per-line marker instead.
+        """
+        result = list_commands(self.registry)
+
+        ff24_general_section = result.split("FF24 Device General")[1].split("\nFF24 Device Special")[0]
+        header_line = ff24_general_section.splitlines()[0]
+        self.assertIn("device: A0..63 or G0..31; omit address for broadcast", header_line)
+        self.assertNotIn("requires I", header_line)
+        self.assertNotIn("I<n> optional", header_line)
+
+        enable_lines = [line for line in ff24_general_section.splitlines() if "FF24.EnableInstance" in line]
+        self.assertEqual(len(enable_lines), 1)
+        self.assertIn("requires I<n>", enable_lines[0])
 
 
 if __name__ == "__main__":

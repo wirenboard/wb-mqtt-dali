@@ -19,11 +19,11 @@ from .send_command import (
     build_command_registry,
     format_response,
     list_commands,
-    parse_and_build_command,
+    parse_expression,
 )
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
-from .wbdali_utils import send_commands_with_retry, send_with_retry
+from .wbdali_utils import send_commands_with_retry
 from .wbmqtt import make_mqtt_client
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
@@ -189,22 +189,28 @@ async def short_search_service(gateway: str, args, dali2: bool, bus: int = 1):
     return EXIT_SUCCESS
 
 
-async def send_command_service(
-    gateway: str, args
-):  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
-    registry = build_command_registry()
+def _next_batch(commands, total, sent):
+    """Slice up to SEND_BATCH_SIZE commands from the repeating `commands`
+    sequence starting at offset `sent`. Returns an empty list when nothing
+    is left (`total is not None` and `sent >= total`).
+    """
+    if total is not None and sent >= total:
+        return []
+    remaining = SEND_BATCH_SIZE if total is None else min(SEND_BATCH_SIZE, total - sent)
+    n = len(commands)
+    return [commands[(sent + i) % n] for i in range(remaining)]
 
-    data = int(args.data, 0) if args.data is not None else None
-    cmd = parse_and_build_command(
-        args.command,
-        registry,
-        address=args.address,
-        data=data,
-        group=args.group,
-        broadcast=args.broadcast,
-    )
+
+async def send_command_service(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
+    gateway: str, args
+) -> int:
+    registry = build_command_registry()
+    commands = [parse_expression(expr, registry) for expr in args.command]
 
     repeat = args.repeat
+    # repeat == 0 → infinite (until Ctrl+C); otherwise N full passes of `commands`.
+    total = None if repeat == 0 else len(commands) * repeat
+    logger = logging.getLogger()
     client = make_mqtt_client(args.broker_url)
     mqtt_dispatcher = MQTTDispatcher(client)
     async with client:
@@ -212,7 +218,7 @@ async def send_command_service(
         driver = WBDALIDriverNew(
             WBDALIDriverNewConfig(gateway, args.bus),
             mqtt_dispatcher=mqtt_dispatcher,
-            logger=logging.getLogger(),
+            logger=logger,
         )
         await driver.initialize()
         try:
@@ -225,42 +231,46 @@ async def send_command_service(
             loop.add_signal_handler(signal.SIGINT, signal_handler)
             loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
-            if repeat == 1:
-                response = await send_with_retry(driver, cmd, logging.getLogger())
-                print(format_response(response))
-            else:
-                scheduled = 0
-                printed = 0
-                bs = min(SEND_BATCH_SIZE, repeat) if repeat > 0 else SEND_BATCH_SIZE
-                scheduled += bs
-                current_task = asyncio.create_task(
-                    send_commands_with_retry(driver, [cmd] * bs, logging.getLogger())
-                )
-                next_task = None
-                try:
-                    while not cancel_event.is_set():
-                        bs = min(SEND_BATCH_SIZE, repeat - scheduled) if repeat > 0 else SEND_BATCH_SIZE
-                        if bs > 0 and not cancel_event.is_set():
-                            scheduled += bs
-                            next_task = asyncio.create_task(
-                                send_commands_with_retry(driver, [cmd] * bs, logging.getLogger())
-                            )
-                        else:
-                            next_task = None
-                        responses = await current_task
-                        for response in responses:
-                            printed += 1
-                            print(f"[{printed}] {format_response(response)}")
-                        if next_task is None:
-                            break
-                        current_task = next_task
-                finally:
-                    if next_task is not None and not next_task.done():
-                        next_task.cancel()
-                        try:
-                            await next_task
-                        except asyncio.CancelledError:
-                            pass
+            printed = 0
+            sent = 0
+
+            # argparse `nargs="+"` guarantees `commands` is non-empty and `repeat >= 0`
+            # is checked upstream, so the first batch is always populated.
+            first_batch = _next_batch(commands, total, sent)
+            sent += len(first_batch)
+            current_task = asyncio.create_task(send_commands_with_retry(driver, first_batch, logger))
+            next_task = None
+            try:
+                while True:
+                    # Pipeline: prefetch the next batch while current is in flight,
+                    # so the bus queue does not idle between batches.
+                    # On Ctrl+C an already-dispatched `next_task` may still run
+                    # to completion before the loop exits — accepted trade-off
+                    # to keep the bus busy under load, not a bug.
+                    next_batch = [] if cancel_event.is_set() else _next_batch(commands, total, sent)
+                    if next_batch:
+                        sent += len(next_batch)
+                        next_task = asyncio.create_task(send_commands_with_retry(driver, next_batch, logger))
+                    else:
+                        next_task = None
+
+                    responses = await current_task
+                    for response in responses:
+                        printed += 1
+                        print(f"[{printed}] {format_response(response)}")
+                    if next_task is None:
+                        break
+                    current_task = next_task
+                    next_task = None
+            finally:
+                # On error / Ctrl+C, cancel the queued-but-unawaited next batch
+                # so we don't leak a pending send into shutdown.
+                if next_task is not None and not next_task.done():
+                    next_task.cancel()
+                    try:
+                        await next_task
+                    except asyncio.CancelledError:
+                        pass
         finally:
             await driver.deinitialize()
             dispatcher_task.cancel()
@@ -351,43 +361,19 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         "--send-command",
         dest="send_command_gateway",
         type=str,
-        help="Send a DALI command via specified gateway",
-    )
-
-    parser.add_argument(
-        "--address",
-        dest="address",
-        type=int,
-        help="DALI short address (0-63) for --send-command",
+        help="Send DALI commands via specified gateway",
     )
 
     parser.add_argument(
         "--command",
         dest="command",
-        type=str,
-        help="DALI command name (e.g., Off, DAPC, DT8.Activate, FF24.QueryDeviceStatus)",
-    )
-
-    parser.add_argument(
-        "--data",
-        dest="data",
-        type=str,
-        help="Data value for commands that require it (e.g., DAPC power level, DTR value)",
-    )
-
-    parser.add_argument(
-        "--group",
-        dest="group",
-        type=int,
-        help="DALI group (0-15) or DALI 2 group (0-31) for --send-command",
-    )
-
-    parser.add_argument(
-        "--broadcast",
-        dest="broadcast",
-        action="store_true",
-        default=False,
-        help="Send command as broadcast (no address needed)",
+        nargs="+",
+        metavar="EXPR",
+        help=(
+            "One or more DALI command expressions in `Name(args)` form "
+            "(e.g., `Off(A5)`, `DAPC(A5, 100)`, `DT8.Activate`, `DTR0(0xFF)`, "
+            "`FF24.EnableInstance(A3, I0)`). Same syntax as the Bus/SendCommand RPC."
+        ),
     )
 
     parser.add_argument(
@@ -395,7 +381,13 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         dest="repeat",
         type=int,
         default=1,
-        help="Number of times to send the command (0 = infinite, until Ctrl+C)",
+        help=(
+            "Repeat the whole batch of expressions N times "
+            "(0 = infinite until Ctrl+C; default 1). "
+            "Transport errors on individual expressions are printed and the CLI "
+            "continues — useful for load testing. The Bus/SendCommand RPC stops "
+            "the batch on transport error; the CLI deliberately does not."
+        ),
     )
 
     parser.add_argument(
@@ -429,7 +421,7 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         return EXIT_SUCCESS
     if args.send_command_gateway:
         if not args.command:
-            parser.error("--send-command requires --command")
+            parser.error("--send-command requires --command with one or more expressions")
         if args.repeat < 0:
             parser.error("--repeat must be non-negative (0 = infinite)")
         try:

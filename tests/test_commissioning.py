@@ -1280,7 +1280,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
 
             msg = str(ctx.exception)
             self.assertIn(f"0x{test_random:06x}", msg)
-            self.assertIn("0", msg)  # the attempted short address (0 = first available)
+            self.assertIn("short address 0", msg)  # the attempted short (0 = first available)
 
         asyncio.run(run_test())
 

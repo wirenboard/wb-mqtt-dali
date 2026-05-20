@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.15.0) stable; urgency=medium
+
+  * Add DT51 (energy reporting device): publish active energy/power
+    controls and read DT51 memory banks (202 mandatory; 203/204 picked up
+    if apparent/loadside reporting is supported). Energy reads are
+    chunked into preemptable subbatches like DT-8 colour.
+  * Fix DT-8 / DT51 chunked polls stalling ~1 s between subbatches.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 20 May 2026 13:30:00 +0500
+
 wb-mqtt-dali (1.14.0) stable; urgency=medium
 
   * Handle gateway reset

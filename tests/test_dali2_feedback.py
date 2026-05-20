@@ -1403,7 +1403,9 @@ async def test_dali2_feedback_runtime_no_query_feedback_active_polling():
     )
 
     capture_driver, sent = _captured_command_driver()
-    res = device.poll_controls(capture_driver, now=0.0, max_commands=100, default_poll_interval=5.0)
+    res = device.poll_controls(
+        capture_driver, now=0.0, max_commands=100, default_max_commands=100, default_poll_interval=5.0
+    )
     if res.poll_coroutine is not None:
         await res.poll_coroutine()
 

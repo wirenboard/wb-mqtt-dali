@@ -4,11 +4,9 @@ import logging
 from typing import Optional
 
 from dali.address import Address
-from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import oem
-from dali.memory.location import FlagValue
 
-from .common_dali_device import PropertyStartOrder, read_memory_bank
+from .common_dali_device import PropertyStartOrder, read_bank_as_dict
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .settings import SettingsParamBase, SettingsParamName
@@ -104,15 +102,18 @@ class Type50MemoryBankParam(SettingsParamBase):
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        try:
-            raw = await driver.run_sequence(read_memory_bank(oem.BANK_1, short_address, self._compat))
-        except (MemoryLocationNotImplemented, ResponseError) as e:
-            raise RuntimeError(f"Failed to read DT50 memory bank: {e}") from e
+        raw = await read_bank_as_dict(
+            driver,
+            oem.BANK_1,
+            short_address,
+            self._compat,
+            error_label="DT50 memory bank",
+        )
 
         self._values = {}
         for oem_class, key, _, _, json_type in _FIELD_SPECS:
-            value = raw.get(oem_class)
-            if value is None or isinstance(value, FlagValue):
+            value = raw.get(oem_class.name)
+            if value is None:
                 continue
             if json_type == "integer":
                 if not isinstance(value, int):

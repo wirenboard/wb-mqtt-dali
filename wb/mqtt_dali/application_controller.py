@@ -276,12 +276,19 @@ class PollScheduler:
     ) -> list[tuple[DaliDevice, Union[list[ControlPollResult], BaseException]]]:
         if not self._devices:
             return []
-        max_commands_count = 3
+        default_max_commands = 3
+        max_commands_count = default_max_commands
         devices_to_poll = []
         coros = []
         while max_commands_count > 0 and not self.is_empty():
             device = self._devices[self._current_device_index]
-            res = device.poll_controls(driver, current_time, max_commands_count, default_poll_interval)
+            res = device.poll_controls(
+                driver,
+                current_time,
+                max_commands_count,
+                default_max_commands,
+                default_poll_interval,
+            )
             if res.poll_coroutine is not None:
                 coros.append(res.poll_coroutine)
                 devices_to_poll.append(device)
@@ -1112,7 +1119,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
-            await self._device_publisher.set_control_value(device_id, control_id, control.control_info.value)
+            new_value = control.control_info.value
+            if new_value is not None:
+                await self._device_publisher.set_control_value(device_id, control_id, new_value)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
             await self._device_publisher.set_control_error(device_id, control_id, "w")
@@ -1258,14 +1267,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 await self._do_init_device(mqtt_id, current_time)
             return 0.001
 
-        # Refresh the scheduler's device list before any timing decision so that
-        # the wait-time computation at the bottom sees up-to-date state. Without
-        # this the very first idle return after init would block on a stale
-        # empty _devices and stall for ~polling_interval before the first poll.
         if self._poll_scheduler.is_empty():
             self._poll_scheduler.set_devices(self.dali_devices)
 
-        # Alternate: poll devices, then retry-init one device
         if self._poll_scheduler.poll_turn and not self._poll_scheduler.is_empty():
             await self._poll_devices(self._poll_scheduler, current_time)
             self._poll_scheduler.poll_turn = False
@@ -1285,12 +1289,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,
     ) -> None:
-        # Absolute deadline by which the next _poll_step must run. Each
-        # iteration recomputes the wait_for budget as `next_poll_time - now`,
-        # so time spent processing tasks naturally consumes the budget. When
-        # the budget falls to zero, wait_for times out (provided the queue is
-        # briefly empty) and polling fires — without raising polling priority
-        # above command processing.
         next_poll_time = default_timer()
         item = None
         while not self._stop_requested:

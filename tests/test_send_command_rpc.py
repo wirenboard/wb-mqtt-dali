@@ -170,14 +170,12 @@ class TestSendCommandBatchPollingLoop:
 
     @pytest.mark.asyncio
     async def test_batch_atomic_against_control_topic(self, registry):
-        # pylint: disable=too-many-locals
         """EXECUTE_CONTROL queued during a running batch waits for the batch."""
         controller = make_loop_controller()
         controller._polling_interval = 100.0  # pylint: disable=protected-access
 
+        commands = [parse_expression(f"DAPC(A{i}, 1)", registry) for i in range(2)]
         sent_during_batch: list = []
-        control_done_index: list = []
-        batch_done_index: list = []
         order: list = []
         send_release = asyncio.Event()
 
@@ -187,18 +185,21 @@ class TestSendCommandBatchPollingLoop:
             # queue EXECUTE_CONTROL while the batch holds the loop.
             if len(sent_during_batch) == 1:
                 await send_release.wait()
+            # Record batch completion at the last command, inside the polling
+            # loop's processing of SEND_COMMAND_BATCH — observing it from the
+            # test coroutine after `await batch_task` races with the loop
+            # picking up the next queued task.
+            if len(sent_during_batch) == len(commands):
+                order.append("batch")
             return Response(BackwardFrame(0))
 
         device = MagicMock()
 
         async def fake_execute_control(*_a, **_kw):
             order.append("control")
-            control_done_index.append(len(order))
             return None
 
         device.execute_control = AsyncMock(side_effect=fake_execute_control)
-
-        commands = [parse_expression(f"DAPC(A{i}, 1)", registry) for i in range(2)]
 
         with patch_send_with_retry(fake_send):
             loop_task = asyncio.create_task(controller._polling_loop())  # pylint: disable=protected-access
@@ -223,15 +224,12 @@ class TestSendCommandBatchPollingLoop:
 
                 send_release.set()
                 await batch_task
-                order.append("batch")
-                batch_done_index.append(len(order))
                 await asyncio.wait_for(exec_task.future, timeout=1.0)
             finally:
                 await stop_loop(controller, loop_task)
 
         # The batch completed before the EXECUTE_CONTROL handler ran.
-        assert batch_done_index and control_done_index
-        assert batch_done_index[0] <= control_done_index[0]
+        assert order == ["batch", "control"]
 
     @pytest.mark.asyncio
     async def test_parallel_calls_serialized(self, registry):

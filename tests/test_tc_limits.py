@@ -526,7 +526,7 @@ def test_rebuild_mqtt_controls_updates_controls_dict():
     assert len(controls) == 2
 
 
-def test_rebuild_mqtt_controls_populates_polling_controls():
+def test_rebuild_mqtt_controls_populates_pollables():
     readable = _make_readable_control("poll_me")
     writable = _make_writable_control("write_only")
     d = _make_device(mqtt_controls_factory=lambda: [readable, writable])
@@ -535,9 +535,9 @@ def test_rebuild_mqtt_controls_populates_polling_controls():
 
     d.rebuild_mqtt_controls()
 
-    polling = d._polling_controls  # pylint: disable=protected-access
-    assert len(polling) == 1
-    assert polling[0] is readable
+    pollables = d._pollables  # pylint: disable=protected-access
+    assert len(pollables) == 1
+    assert pollables[0] is readable
 
 
 def test_rebuild_mqtt_controls_does_not_touch_schema():

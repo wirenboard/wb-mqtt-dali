@@ -107,9 +107,7 @@ async def test_reset_device_settings_dali_sends_reset_and_reinitializes():
     assert new_device.address.random == device.address.random
     assert new_device.mqtt_id == device.mqtt_id
     assert new_device.name == device.name
-    # Aggregated virtual devices were refreshed (DALI 1 only). The reset
-    # path removes the old device and re-initializes a new one, refreshing
-    # virtual devices on both transitions.
+    # Virtual devices refresh on both remove and re-init.
     controller._refresh_group_virtual_devices.assert_awaited()
     controller._refresh_broadcast_device.assert_awaited()
 
@@ -215,14 +213,11 @@ async def test_reset_device_settings_handles_init_failure_via_retry_scheduler():
     ), patch.object(DaliDevice, "initialize", AsyncMock(side_effect=RuntimeError("init failed"))), patch(
         "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
     ) as publish_mock:
-        # Init failure is funnelled through the init scheduler (retry),
-        # so the task itself completes without raising.
+        # Init failure is funnelled through the init scheduler retry; the task does not raise.
         await controller._reset_device_settings_task(device)
 
-    # publish_device is invoked in error-mode by try_initialize_device
+    # try_initialize_device publishes in error-mode even when init fails.
     publish_mock.assert_awaited()
-    # The original device was removed; a freshly-built (uninitialized)
-    # replacement now occupies the same short address.
     controller._device_publisher.remove_device.assert_awaited()
     assert len(controller.dali_devices) == 1
     new_device = controller.dali_devices[0]

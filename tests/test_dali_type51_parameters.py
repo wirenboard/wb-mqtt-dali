@@ -224,7 +224,7 @@ async def test_type51_mqtt_controls_only_active_energy():
     energy = [c for c in controls if c.id == "active_energy"]
     assert len(energy) == 1
     assert energy[0].meta.units == "kWh"
-    assert energy[0].meta.title.en == "Energy consumption"
+    assert energy[0].meta.title.en == "Active energy"
     assert energy[0].meta.read_only is True
 
 

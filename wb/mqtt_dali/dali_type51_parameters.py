@@ -181,7 +181,7 @@ class Type51EnergyParam(SettingsParamBase):
         # at read time the params simply won't carry values).
         inner_properties["active_energy"] = {
             "type": "number",
-            "title": "Energy consumption, kWh",
+            "title": "Active energy, kWh",
             "options": ro,
             "propertyOrder": 1,
         }
@@ -191,7 +191,7 @@ class Type51EnergyParam(SettingsParamBase):
             "options": ro,
             "propertyOrder": 2,
         }
-        translations_ru["Energy consumption, kWh"] = "Потребление энергии, кВт·ч"
+        translations_ru["Active energy, kWh"] = "Активная энергия, кВт·ч"
         translations_ru["Active power, W"] = "Активная мощность, Вт"
 
         if self._has_apparent:
@@ -207,8 +207,8 @@ class Type51EnergyParam(SettingsParamBase):
                 "options": ro,
                 "propertyOrder": 4,
             }
-            translations_ru["Apparent energy, kVAh"] = "Полная энергия, кВА·ч"
-            translations_ru["Apparent power, VA"] = "Полная мощность, ВА"
+            translations_ru["Apparent energy, kVAh"] = "Кажущаяся энергия, кВА·ч"
+            translations_ru["Apparent power, VA"] = "Кажущаяся мощность, ВА"
 
         if self._has_loadside:
             inner_properties["loadside_energy"] = {
@@ -274,7 +274,7 @@ class _ActiveEnergyControl(MqttControlBase):
                 _ACTIVE_ENERGY_CONTROL_ID,
                 ControlMeta(
                     "value",
-                    title=TranslatedTitle("Energy consumption", "Потребление энергии"),
+                    title=TranslatedTitle("Active energy", "Активная энергия"),
                     read_only=True,
                     units="kWh",
                 ),

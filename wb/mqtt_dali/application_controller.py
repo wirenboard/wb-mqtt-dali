@@ -1267,13 +1267,15 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 await self._do_init_device(mqtt_id, current_time)
             return 0.001
 
-        if self._poll_scheduler.is_empty():
-            self._poll_scheduler.set_devices(self.dali_devices)
-
-        if self._poll_scheduler.poll_turn and not self._poll_scheduler.is_empty():
-            await self._poll_devices(self._poll_scheduler, current_time)
-            self._poll_scheduler.poll_turn = False
-            return 0.001
+        if self._poll_scheduler.poll_turn:
+            # Poll tick.
+            if self._poll_scheduler.is_empty():
+                self._poll_scheduler.set_devices(self.dali_devices)
+            if not self._poll_scheduler.is_empty():
+                await self._poll_devices(self._poll_scheduler, current_time)
+                self._poll_scheduler.poll_turn = False
+                return 0.001
+            # Nothing to poll — fall through to retry/sleep without burning poll_turn.
 
         retry_id = self._init_scheduler.get_one_retry_ready(current_time)
         if retry_id:
@@ -1282,6 +1284,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             return 0.001
 
         self._poll_scheduler.poll_turn = True
+        if not self._poll_scheduler.is_empty():
+            # The round is not over yet, just check incoming queries
+            return 0.001
         # Cap at 1.0s so runtime polling_interval changes (via SetBus RPC)
         # take effect within ~1s.
         return min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))

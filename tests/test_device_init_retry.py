@@ -428,7 +428,12 @@ class TestPollStep:
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
         ctrl.dali_devices = [dev]
         ctrl._devices_by_mqtt_id = {"d1": dev}
-        ctrl._poll_devices = AsyncMock()
+
+        async def _drain(scheduler, current_time):
+            del current_time
+            scheduler._current_device_index = len(scheduler._devices)
+
+        ctrl._poll_devices = AsyncMock(side_effect=_drain)
         ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 

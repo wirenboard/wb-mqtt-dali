@@ -1248,7 +1248,12 @@ class TestPollingLoopFallback:
         device.is_initialized = True
         device.time_until_next_poll = MagicMock(side_effect=lambda _t, default: default)
         controller.dali_devices = [device]
-        controller._poll_devices = AsyncMock()
+
+        async def _drain(scheduler, current_time):
+            del current_time
+            scheduler._current_device_index = len(scheduler._devices)
+
+        controller._poll_devices = AsyncMock(side_effect=_drain)
         controller._poll_scheduler.poll_turn = True
 
         loop_task = asyncio.create_task(controller._polling_loop())

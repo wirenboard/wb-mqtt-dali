@@ -768,9 +768,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return ApplyResult(needs_mqtt_controls_refresh=needs_refresh)
 
     def rebuild_mqtt_controls(self) -> None:
+        self.reset_polling_state()
         mqtt_controls = self._build_mqtt_controls()
         self._controls.clear()
-        self._current_round.clear()
         for control in mqtt_controls:
             self._controls[control.control_info.id] = control
         self._pollables = self._build_pollables()

@@ -1154,6 +1154,137 @@ class TestProgressReporter(unittest.TestCase):
         reporter.notify_device()
 
 
+class TestCommissioningShortAddressFailure(unittest.TestCase):
+    """``smart_extend`` must abort with a clear exception when it cannot give a
+    newly-found device a valid short address. Two situations qualify:
+
+    1. The pool of 64 short addresses is exhausted (more devices on the bus
+       than DALI can address).
+    2. PROGRAM SHORT ADDRESS was sent but neither VERIFY SHORT ADDRESS nor a
+       follow-up QUERY SHORT ADDRESS confirmed the write.
+
+    Continuing past either case would corrupt the bus model, so we surface
+    the error to the user through the existing ``except Exception`` path in
+    ``_commissioning_task``.
+    """
+
+    def test_smart_extend_raises_when_more_than_64_devices(self):
+        """64 already-addressed devices plus a 65th unaddressed device on the
+        bus: binary search picks up the extra, ``_assign_short_address`` finds
+        the available-address pool empty and raises a RuntimeError that names
+        how many devices were addressed so far.
+        """
+
+        async def run_test():
+            fake_bus = FakeDALIBus(devices={i: 0x100000 + i for i in range(64)})
+            # Phantom 65th device: discoverable by Compare, advertises MASK
+            # short on QueryShortAddress so the assign-new-short branch fires.
+            extra_random = 0x300000
+
+            original_send = fake_bus.send
+
+            async def mock_send(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+                if isinstance(cmd, Compare):
+                    if None in fake_bus.search_addr:
+                        return MockResponse(value=False)
+                    search = (
+                        (fake_bus.search_addr[0] << 16)
+                        | (fake_bus.search_addr[1] << 8)
+                        | fake_bus.search_addr[2]
+                    )
+                    if extra_random not in fake_bus.withdrawn and extra_random <= search:
+                        return MockResponse(value=True)
+                    return await original_send(cmd, source=source)
+                if isinstance(cmd, QueryShortAddress):
+                    if None not in fake_bus.search_addr:
+                        search = (
+                            (fake_bus.search_addr[0] << 16)
+                            | (fake_bus.search_addr[1] << 8)
+                            | fake_bus.search_addr[2]
+                        )
+                        if search == extra_random and extra_random not in fake_bus.withdrawn:
+                            raw_val = Mock()
+                            raw_val.error = False
+                            return MockResponse(value="MASK", raw_value=raw_val)
+                    return await original_send(cmd, source=source)
+                return await original_send(cmd, source=source)
+
+            fake_bus.send = mock_send
+
+            commissioning = Commissioning(fake_bus, [])
+
+            with self.assertRaises(RuntimeError) as ctx:
+                await commissioning.smart_extend()
+
+            msg = str(ctx.exception)
+            self.assertIn("0x300000", msg)
+            self.assertIn("64", msg)  # total short-address pool size in the message
+            # All 64 pre-addressed devices made it into found_devices before
+            # the failure on the 65th.
+            self.assertEqual(len(commissioning.found_devices), 64)
+
+        asyncio.run(run_test())
+
+    def test_smart_extend_raises_when_program_short_address_not_confirmed(self):
+        """Unaddressed device responds to Compare and QueryShortAddress (MASK)
+        but neither VERIFY SHORT ADDRESS nor a follow-up QUERY SHORT ADDRESS
+        confirms the programmed short — ``smart_extend`` raises with a message
+        that contains the device's random address and the attempted short.
+        """
+
+        async def run_test():
+            fake_bus = FakeDALIBus(devices={})
+            test_random = 0x123456
+
+            original_send = fake_bus.send
+
+            async def mock_send(
+                cmd, source=BusTrafficSource.WB
+            ):  # pylint: disable=R0911 disable=unused-argument
+                # Phantom unaddressed device: Compare/QueryShortAddress need to
+                # see it at `test_random`; VERIFY and follow-up QUERY must both
+                # fail to confirm the programmed short.
+                if isinstance(cmd, Compare):
+                    if None in fake_bus.search_addr:
+                        return MockResponse(value=False)
+                    search = (
+                        (fake_bus.search_addr[0] << 16)
+                        | (fake_bus.search_addr[1] << 8)
+                        | fake_bus.search_addr[2]
+                    )
+                    if test_random not in fake_bus.withdrawn and test_random <= search:
+                        return MockResponse(value=True)
+                    return MockResponse(value=False)
+                if isinstance(cmd, QueryShortAddress):
+                    raw_val = Mock()
+                    raw_val.error = False
+                    # Discovery and the post-VERIFY follow-up both report MASK.
+                    # MASK != attempted short (0), so smart_extend raises.
+                    return MockResponse(value="MASK", raw_value=raw_val)
+                if isinstance(cmd, VerifyShortAddress):
+                    # Device responds but does NOT confirm (value is not True).
+                    raw_val = Mock()
+                    raw_val.error = False
+                    return MockResponse(value=False, raw_value=raw_val)
+                if isinstance(cmd, ProgramShortAddress):
+                    # No-op: device EEPROM doesn't take the write.
+                    return MockResponse(value=None)
+                return await original_send(cmd, source=source)
+
+            fake_bus.send = mock_send
+
+            commissioning = Commissioning(fake_bus, [])
+
+            with self.assertRaises(RuntimeError) as ctx:
+                await commissioning.smart_extend()
+
+            msg = str(ctx.exception)
+            self.assertIn(f"0x{test_random:06x}", msg)
+            self.assertIn("0", msg)  # the attempted short address (0 = first available)
+
+        asyncio.run(run_test())
+
+
 class TestCommissioningAddDeviceEmission(unittest.IsolatedAsyncioTestCase):
     """``Commissioning._add_device`` is the single emission point for found
     devices. It must route through ``ProgressReporter.notify_device`` so that

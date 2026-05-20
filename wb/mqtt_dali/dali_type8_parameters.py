@@ -574,7 +574,7 @@ class SystemFailureColourState(ColourState):
 
 @dataclass
 class _Type8ColourReadProgress:
-    address: GearShort
+    address: Address
     level: int = MASK
     colour_type: Optional[ColourType] = None
     pending_components: list = field(default_factory=list)
@@ -589,7 +589,6 @@ class Type8Parameters(TypeParameters):
         self._limits = Type8TcLimits()
         self._colour_type_lock = asyncio.Lock()
 
-        # Per-control polling deadline. None for poll_interval = use bus default.
         self.poll_interval: Optional[float] = None
         self.last_poll_time: Optional[float] = None
         self._read_progress: Optional[_Type8ColourReadProgress] = None
@@ -646,42 +645,45 @@ class Type8Parameters(TypeParameters):
     def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
         if self._current_colour_type is None:
             return False
+        # In-progress read keeps the handler eligible for the next round so the
+        # remaining subbatches can run regardless of the per-handler interval.
+        if self._read_progress is not None:
+            return True
         if self.last_poll_time is None:
             return True
         interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
         return now - self.last_poll_time >= interval
 
+    def cancel_pending_poll(self) -> None:
+        self._read_progress = None
+
     def has_in_progress_read(self) -> bool:
         return self._read_progress is not None
 
-    def reset_in_progress_read(self) -> None:
-        self._read_progress = None
-
     def peek_next_subbatch_size(self) -> int:
-        """Size of the next subbatch ``next_poll_step`` would dispatch.
-
-        Lets the caller respect a remaining-budget limit before committing to
-        a subbatch — does not mutate state.
-        """
         if self._current_colour_type is None:
             return 0
         if self._read_progress is None or self._read_progress.colour_type is None:
             return 3
         return 2 if self._read_progress.colour_type == ColourType.RGBWAF else 3
 
-    def next_poll_step(self, driver: WBDALIDriver, short_address: int) -> ControlsPollRequestResult:
-        """Return the next subbatch step of the split colour read.
-
-        Each call returns a ``ControlsPollRequestResult`` whose coroutine performs
-        ONE ``send_commands`` call (with up to 3 in-coroutine retries on
-        transmission/framing errors). The coroutine returns either an empty list
-        (more subbatches needed; an in-progress read remains) or the final
-        ``ControlPollResult`` list (success or per-component failure).
-        """
+    def next_poll_step(  # pylint: disable=too-many-arguments
+        self,
+        driver: WBDALIDriver,
+        address: Address,
+        max_commands: int,
+        default_max_commands: int,
+        now: float,
+        logger: Optional[logging.Logger] = None,
+    ) -> ControlsPollRequestResult:
+        del default_max_commands, logger
         if self._current_colour_type is None:
             return ControlsPollRequestResult(has_more=False)
+        if self.peek_next_subbatch_size() > max_commands:
+            return ControlsPollRequestResult(has_more=True)
         if self._read_progress is None:
-            self._read_progress = _Type8ColourReadProgress(GearShort(short_address))
+            self._read_progress = _Type8ColourReadProgress(address)
+            self.last_poll_time = now
         progress = self._read_progress
 
         if progress.colour_type is None:

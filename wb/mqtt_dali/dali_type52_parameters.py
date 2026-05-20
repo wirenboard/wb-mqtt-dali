@@ -4,7 +4,6 @@ import logging
 from typing import Optional
 
 from dali.address import Address
-from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory.diagnostics import (
     BANK_205,
     BANK_206,
@@ -53,7 +52,7 @@ from dali.memory.maintenance import (
     RatedMedianUsefulLightSourceStarts,
 )
 
-from .common_dali_device import PropertyStartOrder, read_memory_bank
+from .common_dali_device import PropertyStartOrder, read_bank_as_dict
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .wbdali import WBDALIDriver
@@ -61,7 +60,7 @@ from .wbdali import WBDALIDriver
 
 def _get(data: dict, cls):
     """Return the value from a memory bank data dict, or None if unavailable."""
-    v = data.get(cls)
+    v = data.get(cls.name)
     if v is None or isinstance(v, FlagValue):
         return None
     return v
@@ -90,29 +89,38 @@ class Type52Parameters(TypeParameters):
     ) -> dict:
         cg: dict = {}
         ls: dict = {}
-        try:
-            data = await driver.run_sequence(read_memory_bank(BANK_205, short_address, self._compat))
-            cg.update(self._extract_bank205(data))
-        except (MemoryLocationNotImplemented, ResponseError) as e:
-            raise RuntimeError(f"Failed to read DT52 memory bank 205: {e}") from e
-        try:
-            data = await driver.run_sequence(read_memory_bank(BANK_206, short_address, self._compat))
-            ls.update(self._extract_bank206(data))
-        except (MemoryLocationNotImplemented, ResponseError) as e:
-            raise RuntimeError(f"Failed to read DT52 memory bank 206: {e}") from e
-        try:
-            data = await driver.run_sequence(read_memory_bank(BANK_207, short_address, self._compat))
-            v = _get(data, InternalControlGearReferenceTemperature)
-            if v is not None:
-                cg["reference_temperature_c"] = int(v)
-            v = _get(data, RatedMedianUsefulLifeOfLuminaire)
-            if v is not None:
-                ls["rated_median_useful_life_h"] = int(v)
-            v = _get(data, RatedMedianUsefulLightSourceStarts)
-            if v is not None:
-                ls["rated_median_useful_starts"] = int(v)
-        except (MemoryLocationNotImplemented, ResponseError) as e:
-            raise RuntimeError(f"Failed to read DT52 memory bank 207: {e}") from e
+        data = await read_bank_as_dict(
+            driver,
+            BANK_205,
+            short_address,
+            self._compat,
+            error_label="DT52 memory bank 205",
+        )
+        cg.update(self._extract_bank205(data))
+        data = await read_bank_as_dict(
+            driver,
+            BANK_206,
+            short_address,
+            self._compat,
+            error_label="DT52 memory bank 206",
+        )
+        ls.update(self._extract_bank206(data))
+        data = await read_bank_as_dict(
+            driver,
+            BANK_207,
+            short_address,
+            self._compat,
+            error_label="DT52 memory bank 207",
+        )
+        v = _get(data, InternalControlGearReferenceTemperature)
+        if v is not None:
+            cg["reference_temperature_c"] = int(v)
+        v = _get(data, RatedMedianUsefulLifeOfLuminaire)
+        if v is not None:
+            ls["rated_median_useful_life_h"] = int(v)
+        v = _get(data, RatedMedianUsefulLightSourceStarts)
+        if v is not None:
+            ls["rated_median_useful_starts"] = int(v)
         res = {}
         if cg:
             res["type52_cg"] = cg

@@ -428,7 +428,12 @@ class TestPollStep:
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
         ctrl.dali_devices = [dev]
         ctrl._devices_by_mqtt_id = {"d1": dev}
-        ctrl._poll_devices = AsyncMock()
+
+        async def _drain(scheduler, current_time):
+            del current_time
+            scheduler._current_device_index = len(scheduler._devices)
+
+        ctrl._poll_devices = AsyncMock(side_effect=_drain)
         ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
@@ -499,7 +504,6 @@ class TestPollStep:
         so the polling loop does not waste a full second before the next poll."""
         ctrl = _make_controller()
         dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
-        # Device reports polling is overdue — no wait needed.
         dev.time_until_next_poll = MagicMock(return_value=0.0)
         ctrl.dali_devices = [dev]
         ctrl._devices_by_mqtt_id = {"d1": dev}
@@ -508,13 +512,9 @@ class TestPollStep:
         ctrl._poll_scheduler.poll_turn = True
 
         t0 = 100.0
-        # First call performs a poll: poll_turn flips to False.
         await ctrl._poll_step(t0)
         assert ctrl._poll_scheduler.poll_turn is False
 
-        # Second call with poll_turn=False and polling overdue: hits the idle
-        # fallback which returns ~0 (capped by min(1.0, time_until_next_poll))
-        # rather than the polling_interval default.
         timeout = await ctrl._poll_step(t0 + 2.0)
         assert ctrl._poll_scheduler.poll_turn is True
         assert timeout <= 0.01

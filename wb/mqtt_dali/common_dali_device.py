@@ -6,13 +6,14 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Awaitable, Callable, Optional, Union
+from typing import Any, Awaitable, Callable, Optional, Protocol, Union
 
 import jsonschema
 from dali.address import Address
 from dali.command import Command, Response
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import info, location, oem
+from dali.memory.location import FlagValue
 
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
@@ -36,6 +37,7 @@ class PropertyStartOrder(Enum):
     POWER_ON_LEVEL = 105
     SYSTEM_FAILURE_LEVEL = 106
     TC_LIMITS = 200
+    DT51 = 450  # Energy reporting
     DT52 = 500  # Diagnostics and maintenance
     SPECIFIC = 600
     GROUPS = 700
@@ -83,6 +85,10 @@ class MqttControlBase:
         del response
         return ""
 
+    def format_title(self, response: Response) -> Union[str, TranslatedTitle]:
+        del response
+        return ""
+
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         del short_address, value_to_set
         return []
@@ -95,6 +101,55 @@ class MqttControlBase:
             return True
         poll_interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
         return now - self.last_poll_time >= poll_interval
+
+    def next_poll_step(  # pylint: disable=too-many-arguments
+        self,
+        driver: "WBDALIDriver",
+        address: Address,
+        max_commands: int,
+        default_max_commands: int,
+        now: float,
+        logger: Optional[logging.Logger] = None,
+    ) -> "ControlsPollRequestResult":
+        del default_max_commands
+        if max_commands < 1:
+            return ControlsPollRequestResult(has_more=True)
+        self.last_poll_time = now
+        return ControlsPollRequestResult(
+            has_more=False,
+            poll_coroutine=lambda: self._run_single_query(driver, address, logger),
+            commands_count=1,
+        )
+
+    def cancel_pending_poll(self) -> None:
+        pass
+
+    async def _run_single_query(
+        self,
+        driver: "WBDALIDriver",
+        address: Address,
+        logger: Optional[logging.Logger] = None,
+    ) -> list["ControlPollResult"]:
+        try:
+            # pylint: disable-next=assignment-from-no-return
+            query = self.get_query(address)
+            responses = await send_commands_with_retry(driver, [query])
+            response = responses[0]
+            try:
+                check_query_response(response)
+            except RuntimeError:
+                return [ControlPollResult(control_id=self.control_info.id, value="", error="r")]
+
+            if self.control_info.meta.control_type == "alarm":
+                title = self.format_title(response)
+                value = self.format_response(response)
+                return [ControlPollResult(control_id=self.control_info.id, value=value, title=title)]
+
+            return [ControlPollResult(control_id=self.control_info.id, value=self.format_response(response))]
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            if logger is not None:
+                logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
+            return [ControlPollResult(control_id=self.control_info.id, value="", error="r")]
 
 
 class MqttControl(MqttControlBase):
@@ -151,6 +206,45 @@ class ControlsPollRequestResult:
     has_more: bool
     poll_coroutine: Optional[ControlPollCoroutine] = None
     commands_count: int = 0
+
+
+class Pollable(Protocol):
+    """Structural interface for anything `DaliDeviceBase.poll_controls` rotates.
+
+    Regular MQTT controls (`MqttControlBase`) and chunked handlers
+    (`Type8Parameters`, `Type51Parameters`) implement it. `last_poll_time` is
+    owned by the pollable: it stamps the field inside `next_poll_step` when it
+    actually commits to a poll (single-shot controls on every dispatch; chunked
+    handlers only when starting a new cycle). `is_poll_due` /
+    `time_until_next_poll` read it. `next_poll_step` returns the plan for the
+    current tick (a coroutine plus command-cost), with `has_more=True`
+    signalling the pollable wants to stay at the head of the round for the
+    next tick. Multi-tick state is encoded entirely by `has_more`.
+    """
+
+    last_poll_time: Optional[float]
+    poll_interval: Optional[float]
+
+    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
+        """Whether the pollable is eligible for the next round."""
+
+    def next_poll_step(  # pylint: disable=too-many-arguments
+        self,
+        driver: Any,
+        address: Address,
+        max_commands: int,
+        default_max_commands: int,
+        now: float,
+        logger: Optional[logging.Logger] = None,
+    ) -> ControlsPollRequestResult:
+        """Plan for the current tick: optional coroutine + command-cost + has_more.
+
+        ``has_more=True`` keeps the pollable at the head of the round for the
+        next tick. ``poll_coroutine=None`` means skip dispatch this tick.
+        """
+
+    def cancel_pending_poll(self) -> None:
+        """Drop any in-flight multi-tick state. No-op for single-shot pollables."""
 
 
 @dataclass
@@ -231,6 +325,45 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
         else:
             result[memory_value] = r
     return result
+
+
+async def read_bank_as_dict(
+    driver: WBDALIDriver,
+    bank: info.MemoryBank,
+    short_address: Address,
+    compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    *,
+    error_label: Optional[str] = None,
+) -> dict[str, Any]:
+    """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
+
+    Raises ``RuntimeError`` if the bank is not implemented or unresponsive.
+    ``error_label`` overrides the generic prefix in the raised RuntimeError —
+    callers pass e.g. ``"DT50 memory bank"`` to preserve their existing message.
+    """
+    try:
+        data = await driver.run_sequence(read_memory_bank(bank, short_address, compat))
+    except (MemoryLocationNotImplemented, ResponseError) as e:
+        label = error_label or f"memory bank {bank.address}"
+        raise RuntimeError(f"Failed to read {label}: {e}") from e
+    return {mv.name: parsed for mv, parsed in data.items() if not isinstance(parsed, FlagValue)}
+
+
+async def try_read_bank_as_dict(
+    driver: WBDALIDriver,
+    bank: info.MemoryBank,
+    short_address: Address,
+    compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+) -> Optional[dict[str, Any]]:
+    """Like ``read_bank_as_dict`` but returns ``None`` instead of raising on bank failure.
+
+    Use when the bank is optional (e.g. DT51 banks 203/204) and the caller
+    can proceed without it.
+    """
+    try:
+        return await read_bank_as_dict(driver, bank, short_address, compat)
+    except RuntimeError:
+        return None
 
 
 def _is_empty_memory_int(value: int) -> bool:
@@ -496,8 +629,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self._group_parameter_handlers: list[SettingsParamBase] = []
 
         self._controls: dict[str, MqttControlBase] = {}
-        self._polling_controls: list[MqttControlBase] = []
-        self._current_round_polling_controls: list[MqttControlBase] = []
+        self._pollables: list[Pollable] = []
+        self._current_round: list[Pollable] = []
 
         self._compat = compat
 
@@ -547,6 +680,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
     @property
     def default_mqtt_id(self) -> str:
         return f"{self._bus_id}_{self._default_mqtt_id_part}{self.address.short}"
+
+    @property
+    def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
+        return self._compat
 
     async def initialize(self, driver: WBDALIDriver) -> None:
         async with self._initialize_lock:
@@ -631,17 +768,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return ApplyResult(needs_mqtt_controls_refresh=needs_refresh)
 
     def rebuild_mqtt_controls(self) -> None:
+        self.reset_polling_state()
         mqtt_controls = self._build_mqtt_controls()
         self._controls.clear()
-        self._polling_controls.clear()
-        self._current_round_polling_controls.clear()
         for control in mqtt_controls:
-            if control.is_readable():
-                self._polling_controls.append(control)
             self._controls[control.control_info.id] = control
-
-    def _build_mqtt_controls(self) -> list[MqttControlBase]:
-        return []
+        self._pollables = self._build_pollables()
 
     def get_mqtt_controls(self) -> list[ControlInfo]:
         if not self.is_initialized:
@@ -673,73 +805,69 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
             )
 
     def poll_controls(
-        self, driver: WBDALIDriver, now: float, max_commands: int, default_poll_interval: float
+        self,
+        driver: WBDALIDriver,
+        now: float,
+        max_commands: int,
+        default_max_commands: int,
+        default_poll_interval: float,
     ) -> ControlsPollRequestResult:
-        del driver, now, max_commands, default_poll_interval
-        raise NotImplementedError("Subclasses should implement this method")
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before polling controls."
+            )
 
-    def _refresh_round_snapshot(self, now: float, default_poll_interval: float) -> None:
-        """Append all readable controls due at ``now`` to the active round."""
-        for control in self._polling_controls:
-            if control.is_poll_due(now, default_poll_interval):
-                self._current_round_polling_controls.append(control)
-                control.last_poll_time = now
+        coroutines: list[ControlPollCoroutine] = []
+        consumed_commands = 0
+        address = self._compat.getAddress(self.address.short)
+        if not self._current_round:
+            self._refresh_round_snapshot(now, default_poll_interval)
+        while self._current_round:
+            head = self._current_round[0]
+            remaining_budget = max_commands - consumed_commands
+            step = head.next_poll_step(
+                driver, address, remaining_budget, default_max_commands, now, self.logger
+            )
+            if step.poll_coroutine is not None:
+                coroutines.append(step.poll_coroutine)
+                consumed_commands += step.commands_count or 0
+            if step.has_more:
+                break
+            self._current_round.pop(0)
+
+        if not coroutines:
+            return ControlsPollRequestResult(has_more=bool(self._current_round))
+
+        async def _run_batch() -> list[ControlPollResult]:
+            batches = await asyncio.gather(*[c() for c in coroutines])
+            results: list[ControlPollResult] = []
+            for batch in batches:
+                results.extend(batch)
+            return results
+
+        return ControlsPollRequestResult(
+            has_more=bool(self._current_round),
+            poll_coroutine=_run_batch,
+            commands_count=consumed_commands,
+        )
+
+    def reset_polling_state(self) -> None:
+        self._current_round.clear()
+        for pollable in self._pollables:
+            pollable.cancel_pending_poll()
 
     def time_until_next_poll(self, now: float, default_poll_interval: float) -> float:
-        # If a round is in progress, only its remaining controls matter; the
-        # rest of _polling_controls have already been advanced past their next
-        # due time inside this round. Once the round drains, fall back to the
-        # full set so the caller learns when the next round should start
-        # rather than a stale "default_poll_interval" placeholder.
-        controls = self._current_round_polling_controls or self._polling_controls
+        pollables = self._current_round or self._pollables
         res = default_poll_interval
-        for control in controls:
-            if control.last_poll_time is None:
+        for pollable in pollables:
+            if pollable.last_poll_time is None:
                 return 0
             poll_interval = (
-                control.poll_interval if control.poll_interval is not None else default_poll_interval
+                pollable.poll_interval if pollable.poll_interval is not None else default_poll_interval
             )
-            time_until_poll = poll_interval - (now - control.last_poll_time)
+            time_until_poll = poll_interval - (now - pollable.last_poll_time)
             res = min(time_until_poll, res)
         return res
-
-    async def _execute_poll_queries(
-        self, driver: WBDALIDriver, controls: list[MqttControlBase]
-    ) -> list[ControlPollResult]:
-        try:
-            queries = [control.get_query(self._compat.getAddress(self.address.short)) for control in controls]
-            responses = await send_commands_with_retry(driver, queries, self.logger)
-
-            res = []
-            for descriptor, response in zip(controls, responses):
-                try:
-                    check_query_response(response)
-                except RuntimeError:
-                    res.append(ControlPollResult(control_id=descriptor.control_info.id, value="", error="r"))
-                    continue
-
-                if descriptor.control_info.meta.control_type == "alarm":
-                    alarm_title = descriptor.format_title(response)
-                    alarm_value = descriptor.format_response(response)
-                    res.append(
-                        ControlPollResult(
-                            control_id=descriptor.control_info.id,
-                            value=alarm_value,
-                            title=alarm_title,
-                        )
-                    )
-                    continue
-
-                res.append(
-                    ControlPollResult(
-                        control_id=descriptor.control_info.id,
-                        value=descriptor.format_response(response),
-                    )
-                )
-            return res
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.warning("Failed to poll controls for device %s: %s", self.name, e)
-            return [ControlPollResult(control_id=c.control_info.id, value="", error="r") for c in controls]
 
     async def sync_controls_after_broadcast(self, driver: WBDALIDriver, new_params: dict) -> bool:
         controls_updated = False
@@ -766,20 +894,36 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
 
-    @property
-    def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
-        return self._compat
-
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
 
+    # --- Hooks for subclasses ---
+
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
-        """
-        Return a list of MQTT controls that are common to all DALI devices.
-        This is used then initializing fails, but we still want to expose some basic controls in MQTT.
-        The controls are overridden with more specific ones when the device is successfully initialized.
+        """Controls exposed to MQTT when full initialization fails.
+
+        Overridden by subclasses; the controls are replaced with the
+        type-specific set as soon as the device initializes successfully.
         """
         return []
+
+    def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        return []
+
+    def _build_pollables(self) -> list[Pollable]:
+        return [c for c in self._controls.values() if c.is_readable()]
+
+    async def _initialize_impl(
+        self, driver: WBDALIDriver
+    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
+        raise NotImplementedError()
+
+    # --- Private ---
+
+    def _refresh_round_snapshot(self, now: float, default_poll_interval: float) -> None:
+        for pollable in self._pollables:
+            if pollable.is_poll_due(now, default_poll_interval):
+                self._current_round.append(pollable)
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
         self.name = new_values.get("name", self.name)
@@ -797,9 +941,3 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self.params["short_address"] = self.address.short
         self.params["name"] = self.name
         self.params["mqtt_id"] = self.mqtt_id
-
-    # Must be implemented by subclasses
-    async def _initialize_impl(
-        self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
-        raise NotImplementedError()

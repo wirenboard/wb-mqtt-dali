@@ -1,3 +1,12 @@
+wb-mqtt-dali (1.15.1) stable; urgency=medium
+
+  * Fail commissioning with a clear error when a device cannot be assigned a
+    short address (bus has more than 64 devices, or PROGRAM SHORT ADDRESS is
+    not confirmed by VERIFY/QUERY). Previously such cases could silently
+    corrupt the commissioning result.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 20 May 2026 17:09:54 +0500
+
 wb-mqtt-dali (1.15.0) stable; urgency=medium
 
   * Add DT51 (energy reporting device): publish active energy/power

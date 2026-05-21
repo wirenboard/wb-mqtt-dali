@@ -216,43 +216,48 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             return self.available_addresses.pop(0)
         return None
 
-    async def _assign_short_address(self, found_addr: int) -> Optional[int]:
+    async def _assign_short_address(self, found_addr: int) -> int:
         new_addr = self._pick_new_short_address(found_addr)
-        if new_addr is not None:
+        if new_addr is None:
+            # All 64 DALI short addresses are taken — bus has more devices than
+            # DALI can address. Abort: we can't keep a consistent bus model.
+            raise RuntimeError(
+                f"Cannot assign short address to device at 0x{found_addr:06x}: "
+                f"all {MAX_SHORT_ADDRESS + 1} short addresses are already taken"
+            )
+
+        log.info(
+            "Programming short address %d for device at 0x%06x",
+            new_addr,
+            found_addr,
+        )
+        await send_with_retry(self.driver, self._cmds.ProgramShortAddress(new_addr), log)
+        await asyncio.sleep(0.3)  # Wait for flash write
+        r = await query_response(self.driver, self._cmds.VerifyShortAddress(new_addr), log)
+        if r.value is True:
+            log.info("Short address %d programmed successfully", new_addr)
+            return new_addr
+
+        log.warning(
+            "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
+            new_addr,
+        )
+        r = await query_response(self.driver, self._cmds.QueryShortAddress(), log)
+        short_addr = self._cmds.QueryShortAddressResponseValue(r)
+        if short_addr == new_addr:
             log.info(
-                "Programming short address %d for device at 0x%06x",
-                new_addr,
-                found_addr,
-            )
-            await send_with_retry(self.driver, self._cmds.ProgramShortAddress(new_addr), log)
-            await asyncio.sleep(0.3)  # Wait for flash write
-            r = await query_response(self.driver, self._cmds.VerifyShortAddress(new_addr), log)
-            if r.value is True:
-                log.info("Short address %d programmed successfully", new_addr)
-                return new_addr
-
-            log.warning(
-                "No answer to VERIFY SHORT ADDRESS %d, try QUERY SHORT ADDRESS instead",
+                "Short address %d programmed successfully (QUERY SHORT ADDRESS)",
                 new_addr,
             )
-            r = await query_response(self.driver, self._cmds.QueryShortAddress(), log)
-            short_addr = self._cmds.QueryShortAddressResponseValue(r)
-            if short_addr == new_addr:
-                log.info(
-                    "Short address %d programmed successfully (QUERY SHORT ADDRESS)",
-                    new_addr,
-                )
-                return new_addr
+            return new_addr
 
-            log.error(
-                "Failed to program short address %d for device at 0x%06x",
-                new_addr,
-                found_addr,
-            )
-
-        else:
-            log.warning("Device found but no short addresses available")
-        return None
+        # PROGRAM SHORT ADDRESS not confirmed by VERIFY or QUERY — device
+        # may be broken or its EEPROM didn't take the write. Abort: leaving
+        # the device with an unknown short would corrupt the bus model.
+        raise RuntimeError(
+            f"Failed to program short address {new_addr} for device at 0x{found_addr:06x}: "
+            f"neither VERIFY SHORT ADDRESS nor QUERY SHORT ADDRESS confirmed the write"
+        )
 
     async def find_next_device(self, low: int, high: int) -> Optional[int]:
         return await self.binary_search_finder.find_next_device(low, high)
@@ -324,8 +329,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 )
                 await self.set_search_addr(found_addr)
                 new_short_addr = await self._assign_short_address(found_addr)
-                if new_short_addr is not None:
-                    self._add_device(new_short_addr, found_addr)
+                self._add_device(new_short_addr, found_addr)
 
         # short_addr is not in valid range
         elif isinstance(short_addr, int) and short_addr > MAX_SHORT_ADDRESS:
@@ -365,7 +369,6 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     # ещё не были найдены, потому что по результатам сканирования всех коротких адресов
                     # мы уже вычеркнули те короткие адреса, на которые кто-то отвечал
                     new_short_addr = await self._assign_short_address(found_addr)
-                    # TODO: что если не удалось запрограммировать новый короткий адрес?  # pylint: disable=fixme
                     self._add_device(new_short_addr, found_addr)
             else:
                 if found_addr == 0xFFFFFF:

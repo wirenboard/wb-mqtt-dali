@@ -113,6 +113,22 @@ def test_real_loss_flushed_when_forward_jump_exceeds_window(harness, caplog):
     assert "1 frame(s) missed" in warnings[0]
 
 
+def test_consecutive_run_after_gap_does_not_stall(harness, caplog):
+    """A single lost frame followed by a tight run of `ring_size - 1` frames
+    must trigger a flush on the next arrival, not buffer it. With a 4-slot
+    gateway ring the missing slot is overwritten by the time we see the
+    fourth ahead-of-expected frame, so further buffering would stall dispatch
+    until the next bus event (potentially many seconds on a quiet bus).
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(100, 102, 103, 104, 105)
+    assert harness.dispatched_counters() == [100, 102, 103, 104, 105]
+    warnings = _warning_messages(caplog)
+    assert len(warnings) == 1
+    assert "from 100 to 102" in warnings[0]
+    assert "1 frame(s) missed" in warnings[0]
+
+
 def test_forward_jump_beyond_window_warns_and_dispatches(harness, caplog):
     """A counter that jumps past `WINDOW` slots in one go is a real gap."""
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):

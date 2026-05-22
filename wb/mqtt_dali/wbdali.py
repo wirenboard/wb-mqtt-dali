@@ -50,8 +50,11 @@ WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 FRAME_COUNTER_MODULO = 1 << 16
 
 # Maximum number of out-of-order frames `BusMonitorFrameHandler` holds while
-# waiting for the gap to close.
-BUS_MONITOR_REORDER_WINDOW = 4
+# waiting for the gap to close. Bounded by `ring_size - 1` of the gateway's
+# 4-slot bus_monitor ring: once the 4th ahead-of-expected frame arrives, the
+# slot that would have held the missing earlier frame has been overwritten,
+# so it is a real gap rather than an in-flight reorder.
+BUS_MONITOR_REORDER_WINDOW = 3
 
 
 @dataclass

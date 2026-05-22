@@ -80,9 +80,10 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
     closes. Frames are dispatched to callbacks in strict counter order. A
     warning is emitted when a frame's counter jumps forward beyond the
     reorder window (= a real gap on the wire). A frame whose counter falls
-    behind expected by more than the window is treated as a gateway anomaly
-    (republished frame or oversized wb-mqtt-serial reorder) — it is dropped
-    with a warning rather than spliced out of order into the dispatch stream.
+    behind the expected one (already overtaken in the dispatch stream) is
+    treated as a gateway anomaly (republished frame or oversized
+    wb-mqtt-serial reorder) — it is dropped with a warning rather than
+    spliced out of order into the dispatch stream.
     """
 
     def __init__(
@@ -173,7 +174,10 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
         """
         if not self._buffer:
             return expected
-        sorted_items = sorted(self._buffer.items())
+        sorted_items = sorted(
+            self._buffer.items(),
+            key=lambda kv: (kv[0] - expected) % FRAME_COUNTER_MODULO,
+        )
         first_fc = sorted_items[0][0]
         missed = (first_fc - expected) % FRAME_COUNTER_MODULO
         if missed > 0:

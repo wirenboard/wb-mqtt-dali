@@ -164,6 +164,27 @@ def test_counter_wraparound_with_reorder(harness, caplog):
     assert _warning_messages(caplog) == []
 
 
+def test_forward_jump_flushes_buffered_frames_across_wraparound(harness, caplog):
+    """Forward jump beyond the window while the buffer straddles the 16-bit
+    wraparound: buffered frames must be dispatched in true counter order
+    (0xFFFF before 0x0000), not in numeric order, and the `missed` boundary
+    counters must be reported using modular order, not numeric.
+    """
+    # Seed expected=0xFFFE via the first frame, then buffer 0xFFFF/0x0000/0x0001
+    # (all within the reorder window ahead of 0xFFFE, with 0xFFFE itself
+    # missing). A frame far enough past the window triggers the flush.
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(0xFFFD, 0xFFFF, 0x0000, 0x0001, 0x0010)
+    # The crux of the fix: dispatch order is counter-modular (0xFFFF before
+    # 0x0000), not numeric (which would have placed 0x0000/0x0001 first).
+    assert harness.dispatched_counters() == [0xFFFD, 0xFFFF, 0x0000, 0x0001, 0x0010]
+    warnings = _warning_messages(caplog)
+    # Two real gaps: one inside the buffered run (missing 0xFFFE), one between
+    # the last buffered frame and the trigger.
+    assert any("from 65533 to 65535" in w and "1 frame(s) missed" in w for w in warnings)
+    assert any("from 1 to 16" in w and "14 frame(s) missed" in w for w in warnings)
+
+
 def test_retained_message_ignored(harness):
     """Retained MQTT messages must not be processed (would replay history)."""
     message = _MockMessage(_raw(100))

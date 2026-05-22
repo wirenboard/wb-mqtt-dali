@@ -33,16 +33,49 @@ async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
 async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
     parser = argparse.ArgumentParser(
         description="Wiren Board MQTT DALI Bridge E2E bus monitor test. "
-        "Expects that bus 1 and bus 2 are connected to each other. "
-        "Sends commands to bus2 and listens for them on bus1. "
-        "Checks missing and malformed frames on bus1."
+        "Sends commands continuously on one bus and counts what arrives at "
+        "another bus's bus_monitor. Two stand variants are supported: "
+        "single-gateway (bus 1 and bus 2 of the same gateway wired to each "
+        "other) and two-gateway (one bus of each gateway wired to each other). "
+        "Defaults reproduce the original single-gateway behaviour."
     )
     parser.add_argument(
         "--gateway",
         dest="gateway",
         type=str,
         default="wb-dali_1",
-        help="Gateway MQTT device (default: wb-dali_1)",
+        help=(
+            "Gateway MQTT device for single-gateway mode (default: wb-dali_1). "
+            "Used as the default for --send-gateway and --listen-gateway."
+        ),
+    )
+    parser.add_argument(
+        "--send-gateway",
+        dest="send_gateway",
+        type=str,
+        default=None,
+        help="Gateway that sends commands (default: --gateway).",
+    )
+    parser.add_argument(
+        "--send-bus",
+        dest="send_bus",
+        type=int,
+        default=2,
+        help="Bus number on the sending gateway (default: 2).",
+    )
+    parser.add_argument(
+        "--listen-gateway",
+        dest="listen_gateway",
+        type=str,
+        default=None,
+        help="Gateway whose bus_monitor we count (default: --gateway).",
+    )
+    parser.add_argument(
+        "--listen-bus",
+        dest="listen_bus",
+        type=int,
+        default=1,
+        help="Bus number on the listening gateway (default: 1).",
     )
     parser.add_argument(
         "-d",
@@ -55,6 +88,10 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
     )
 
     args = parser.parse_args(argv[1:])
+    send_gateway = args.send_gateway or args.gateway
+    listen_gateway = args.listen_gateway or args.gateway
+    if send_gateway == listen_gateway and args.send_bus == args.listen_bus:
+        parser.error("send and listen targets must differ (same gateway+bus is meaningless)")
 
     logging.basicConfig(level=args.log_level)
     logging.getLogger("mqtt_client").setLevel(logging.INFO)
@@ -80,22 +117,29 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
 
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-        driver_bus1 = WBDALIDriverNew(
-            WBDALIDriverNewConfig(device_name=args.gateway, bus=1),
+        logging.info(
+            "Sender: %s bus %d. Listener (bus_monitor counted): %s bus %d.",
+            send_gateway,
+            args.send_bus,
+            listen_gateway,
+            args.listen_bus,
+        )
+        listener = WBDALIDriverNew(
+            WBDALIDriverNewConfig(device_name=listen_gateway, bus=args.listen_bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
         )
-        await driver_bus1.initialize()
-        driver_bus2 = WBDALIDriverNew(
-            WBDALIDriverNewConfig(device_name=args.gateway, bus=2),
+        await listener.initialize()
+        sender = WBDALIDriverNew(
+            WBDALIDriverNewConfig(device_name=send_gateway, bus=args.send_bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
         )
-        await driver_bus2.initialize()
+        await sender.initialize()
 
         cmds = [QueryActualLevel(GearShort(i)) for i in range(1, SEND_BATCH_SIZE)]
 
-        driver_bus1.bus_traffic.register(bus_monitor_callback)
+        listener.bus_traffic.register(bus_monitor_callback)
 
         try:
             cancel_event = asyncio.Event()
@@ -107,13 +151,13 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
             loop.add_signal_handler(signal.SIGINT, signal_handler)
             loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
-            current_task = asyncio.create_task(driver_bus2.send_commands(cmds))
+            current_task = asyncio.create_task(sender.send_commands(cmds))
             total_frames += len(cmds)
             next_task = None
             try:
                 while not cancel_event.is_set():
                     if not cancel_event.is_set():
-                        next_task = asyncio.create_task(driver_bus2.send_commands(cmds))
+                        next_task = asyncio.create_task(sender.send_commands(cmds))
                         total_frames += len(cmds)
                     else:
                         next_task = None
@@ -123,8 +167,8 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
                 if next_task is not None and not next_task.done():
                     await next_task
         finally:
-            await driver_bus2.deinitialize()
-            await driver_bus1.deinitialize()
+            await sender.deinitialize()
+            await listener.deinitialize()
             dispatcher_task.cancel()
             await dispatcher_task
             print(

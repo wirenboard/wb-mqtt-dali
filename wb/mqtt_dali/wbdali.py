@@ -49,6 +49,10 @@ WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
 FRAME_COUNTER_MODULO = 1 << 16
 
+# Maximum number of out-of-order frames `BusMonitorFrameHandler` holds while
+# waiting for the gap to close.
+BUS_MONITOR_REORDER_WINDOW = 4
+
 
 @dataclass
 class WBDALIConfig:
@@ -64,15 +68,31 @@ class WBDALIConfig:
     queue_modbus_bus_offset: int = 1000
 
 
-class BusMonitorFrameHandler:
+class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
+    """Decode and reorder sporadic-frame bus_monitor publications.
+
+    wb-mqtt-serial reads the gateway's 4-slot bus_monitor ring and publishes
+    each frame on `bus_<N>_monitor_sporadic_frame_{1..4}`. Reads do not always
+    happen in counter order — a frame written to the ring later can be read
+    (and published) earlier than its predecessor. We keep an ordered buffer
+    of up to `BUS_MONITOR_REORDER_WINDOW` frames whose `frame_counter` is
+    ahead of what we expect next, and dispatch them as soon as the gap
+    closes. Frames are dispatched to callbacks in strict counter order. A
+    warning is emitted when a frame's counter jumps forward beyond the
+    reorder window (= a real gap on the wire). A frame whose counter falls
+    behind expected by more than the window is treated as a gateway anomaly
+    (republished frame or oversized wb-mqtt-serial reorder) — it is dropped
+    with a warning rather than spliced out of order into the dispatch stream.
+    """
+
     def __init__(
         self,
         bus_traffic: BusTrafficCallbacks,
         logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper],
     ) -> None:
-        self._last_frame_counter: Optional[int] = None
-        self._out_of_order_frame: Optional[int] = None
+        self._next_expected_fc: Optional[int] = None
+        self._buffer: dict[int, int] = {}
         self._logger = logger
         self._bus_traffic = bus_traffic
         self._dev_inst_map = dev_inst_map
@@ -93,55 +113,81 @@ class BusMonitorFrameHandler:
             )
             return
 
-        frame_counter = (raw_value >> 48) & 0xFFFF
+        fc = (raw_value >> 48) & 0xFFFF
 
-        if self._last_frame_counter is None:
-            self._last_frame_counter = frame_counter
+        if self._next_expected_fc is None:
+            self._next_expected_fc = (fc + 1) % FRAME_COUNTER_MODULO
             self._bus_traffic_invoke(raw_value)
             return
 
-        delta = self.get_frame_counter_delta(self._last_frame_counter, frame_counter)
-        if delta == 2 and self._out_of_order_frame is None:
-            # Allow one backward jump without logging a warning, to handle the case
-            # when the gateway queue jumps from 4th to 1st item
-            # N -> N+2 -> N+1 -> N+3 -> N+4
-            self._out_of_order_frame = raw_value
-            self._last_frame_counter = frame_counter
+        # Modular forward distance from expected to received: 0 = right on
+        # time; small positive = ahead by a few slots (out-of-order ahead);
+        # large positive (near FRAME_COUNTER_MODULO) = arrived behind expected
+        # (modular wrap), i.e. a late frame we have already given up on.
+        distance = (fc - self._next_expected_fc) % FRAME_COUNTER_MODULO
+
+        if distance == 0:
+            self._bus_traffic_invoke(raw_value)
+            self._next_expected_fc = self._drain_buffer((fc + 1) % FRAME_COUNTER_MODULO)
             return
 
-        if delta == -1 and self._out_of_order_frame is not None:
-            try:
-                self._bus_traffic_invoke(raw_value)
-                self._bus_traffic_invoke(self._out_of_order_frame)
-                return
-            finally:
-                self._out_of_order_frame = None
+        if distance <= BUS_MONITOR_REORDER_WINDOW:
+            # Future frame within the reorder window
+            self._buffer[fc] = raw_value
+            return
 
-        if delta != 1:
+        if distance < FRAME_COUNTER_MODULO // 2:
+            # Forward jump beyond the reorder window — earlier frames are gone
+            advanced_expected = self._flush_buffer_after_gap(self._next_expected_fc)
+            if fc != advanced_expected:
+                self._logger.warning(
+                    "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
+                    (advanced_expected - 1) % FRAME_COUNTER_MODULO,
+                    fc,
+                    (fc - advanced_expected) % FRAME_COUNTER_MODULO,
+                )
+            self._bus_traffic_invoke(raw_value)
+            self._next_expected_fc = (fc + 1) % FRAME_COUNTER_MODULO
+            return
+
+        # Backward jump beyond the reorder window — the gateway misbehaved
+        self._logger.warning(
+            "Bus monitor frame counter went backwards: fc=%d, expected=%d — dropping",
+            fc,
+            self._next_expected_fc,
+        )
+
+    # --- Private ---
+
+    def _drain_buffer(self, expected: int) -> int:
+        while expected in self._buffer:
+            raw = self._buffer.pop(expected)
+            self._bus_traffic_invoke(raw)
+            expected = (expected + 1) % FRAME_COUNTER_MODULO
+        return expected
+
+    def _flush_buffer_after_gap(self, expected: int) -> int:
+        """Forward jump beyond the window — concede the gap, dispatch all
+        buffered frames in counter order, and return the new expected counter
+        past them.
+        """
+        if not self._buffer:
+            return expected
+        sorted_items = sorted(self._buffer.items())
+        first_fc = sorted_items[0][0]
+        missed = (first_fc - expected) % FRAME_COUNTER_MODULO
+        if missed > 0:
             self._logger.warning(
-                "Bus monitor frame counter jump from %d to %d, possible missed frames",
-                self._last_frame_counter,
-                frame_counter,
+                "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
+                (expected - 1) % FRAME_COUNTER_MODULO,
+                first_fc,
+                missed,
             )
-
-        if self._out_of_order_frame is not None:
-            try:
-                self._bus_traffic_invoke(self._out_of_order_frame)
-            finally:
-                self._out_of_order_frame = None
-
-        self._last_frame_counter = frame_counter
-        self._bus_traffic_invoke(raw_value)
-
-    def get_frame_counter_delta(self, start: int, end: int) -> int:
-        # It is ok to have a backward jump to one frame,
-        # that can happen when the gateway queue jumps from 4th to 1st item.
-        # Jumps for more than one frame are not expected and likely indicate missed frames
-        if (start == 0 and end == FRAME_COUNTER_MODULO - 1) or (start - end == 1):
-            return -1
-        if end >= start:
-            return end - start
-        return end + FRAME_COUNTER_MODULO - start
+        for _, buf_raw in sorted_items:
+            self._bus_traffic_invoke(buf_raw)
+        last_fc = sorted_items[-1][0]
+        self._buffer.clear()
+        return (last_fc + 1) % FRAME_COUNTER_MODULO
 
     def _bus_traffic_invoke(self, raw_value: int) -> None:
         frame_length = (raw_value >> 32) & 0xFF

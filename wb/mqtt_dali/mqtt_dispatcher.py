@@ -33,10 +33,10 @@ class MQTTDispatcher:
                 self._matcher[topic] = callbacks
                 try:
                     await self.client.subscribe(topic)
-                except Exception as e:
+                except Exception:
                     del self._subscriptions[topic]
                     del self._matcher[topic]
-                    raise e
+                    raise
             else:
                 self._subscriptions[topic].add(callback)
                 replay = self._retained_cache.get(topic)

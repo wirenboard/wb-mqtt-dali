@@ -4,6 +4,7 @@ from typing import Callable, Dict, Optional, Set
 
 import asyncio_mqtt as aiomqtt
 import paho.mqtt.client as mqtt
+from paho.mqtt.matcher import MQTTMatcher
 
 MessageCallback = Callable[[mqtt.MQTTMessage], None]
 
@@ -12,6 +13,10 @@ class MQTTDispatcher:
     def __init__(self, client: aiomqtt.Client):
         self.client = client
         self._subscriptions: Dict[str, Set[MessageCallback]] = {}
+        # Trie of subscription patterns -> the same callback set stored in
+        # `_subscriptions`. Used by `_dispatch_message` to look up matches in
+        # O(depth) instead of scanning every subscription.
+        self._matcher: MQTTMatcher = MQTTMatcher()
         # Last retained message observed per exact topic, replayed to late subscribers.
         # The broker only delivers retained on the first SUBSCRIBE; without this cache
         # additional callbacks on the same topic miss the initial state.
@@ -23,12 +28,14 @@ class MQTTDispatcher:
         replay: Optional[mqtt.MQTTMessage] = None
         async with self._lock:
             if topic not in self._subscriptions:
-                self._subscriptions[topic] = set()
-                self._subscriptions[topic].add(callback)
+                callbacks: Set[MessageCallback] = {callback}
+                self._subscriptions[topic] = callbacks
+                self._matcher[topic] = callbacks
                 try:
                     await self.client.subscribe(topic)
                 except Exception as e:
                     del self._subscriptions[topic]
+                    del self._matcher[topic]
                     raise e
             else:
                 self._subscriptions[topic].add(callback)
@@ -46,6 +53,7 @@ class MQTTDispatcher:
 
             if callback is None:
                 del self._subscriptions[topic]
+                del self._matcher[topic]
                 self._retained_cache.pop(topic, None)
                 await self.client.unsubscribe(topic)
             else:
@@ -53,6 +61,7 @@ class MQTTDispatcher:
 
                 if not self._subscriptions[topic]:
                     del self._subscriptions[topic]
+                    del self._matcher[topic]
                     self._retained_cache.pop(topic, None)
                     await self.client.unsubscribe(topic)
 
@@ -63,6 +72,7 @@ class MQTTDispatcher:
                 await self.client.unsubscribe(topic)
 
             self._subscriptions.clear()
+            self._matcher = MQTTMatcher()
             self._retained_cache.clear()
 
     async def run(self) -> None:
@@ -84,6 +94,7 @@ class MQTTDispatcher:
         finally:
             async with self._lock:
                 self._subscriptions.clear()
+                self._matcher = MQTTMatcher()
                 self._retained_cache.clear()
                 self._running = False
 
@@ -96,10 +107,9 @@ class MQTTDispatcher:
             else:
                 self._retained_cache.pop(topic, None)
 
-        callbacks = set()
-        for callback_topic, cbs in self._subscriptions.items():
-            if mqtt.topic_matches_sub(callback_topic, topic):
-                callbacks.update(cbs)
+        callbacks: Set[MessageCallback] = set()
+        for cbs in self._matcher.iter_match(topic):
+            callbacks.update(cbs)
 
         for callback in callbacks:
             try:

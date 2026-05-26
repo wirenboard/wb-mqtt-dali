@@ -173,7 +173,12 @@ class Type51EnergyParam(SettingsParamBase):
         if group_and_broadcast:
             return {}
 
-        ro = {"wb": {"read_only": True}}
+        options = {
+            "wb": {
+                "read_only": True,
+            },
+            "grid_columns": 6,
+        }
         inner_properties: dict = {}
         translations_ru: dict = {self.name.en: self.name.ru}
 
@@ -182,13 +187,13 @@ class Type51EnergyParam(SettingsParamBase):
         inner_properties["active_energy"] = {
             "type": "number",
             "title": "Active energy, kWh",
-            "options": ro,
+            "options": options,
             "propertyOrder": 1,
         }
         inner_properties["active_power"] = {
             "type": "integer",
             "title": "Active power, W",
-            "options": ro,
+            "options": options,
             "propertyOrder": 2,
         }
         translations_ru["Active energy, kWh"] = "Активная энергия, кВт·ч"
@@ -198,13 +203,13 @@ class Type51EnergyParam(SettingsParamBase):
             inner_properties["apparent_energy"] = {
                 "type": "number",
                 "title": "Apparent energy, kVAh",
-                "options": ro,
+                "options": options,
                 "propertyOrder": 3,
             }
             inner_properties["apparent_power"] = {
                 "type": "integer",
                 "title": "Apparent power, VA",
-                "options": ro,
+                "options": options,
                 "propertyOrder": 4,
             }
             translations_ru["Apparent energy, kVAh"] = "Кажущаяся энергия, кВА·ч"
@@ -214,13 +219,13 @@ class Type51EnergyParam(SettingsParamBase):
             inner_properties["loadside_energy"] = {
                 "type": "number",
                 "title": "Load side energy, kWh",
-                "options": ro,
+                "options": options,
                 "propertyOrder": 5,
             }
             inner_properties["loadside_power"] = {
                 "type": "integer",
                 "title": "Load side power, W",
-                "options": ro,
+                "options": options,
                 "propertyOrder": 6,
             }
             translations_ru["Load side energy, kWh"] = "Энергия на нагрузке, кВт·ч"
@@ -233,7 +238,7 @@ class Type51EnergyParam(SettingsParamBase):
                     "title": self.name.en,
                     "format": "card",
                     "propertyOrder": PropertyStartOrder.DT51.value,
-                    "options": ro,
+                    "options": {"wb": {"read_only": True}},
                     "properties": inner_properties,
                 },
             },

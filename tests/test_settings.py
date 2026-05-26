@@ -8,6 +8,7 @@ from wb.mqtt_dali.settings import (
     SettingsParamGroup,
     SettingsParamName,
 )
+from wb.mqtt_dali.wbdali import FramePriority
 
 # pylint: disable=redefined-outer-name
 
@@ -51,7 +52,9 @@ async def test_read(number_settings_param):
         patch("wb.mqtt_dali.settings.query_int", mock_query_int),
     ):
         result = await number_settings_param.read(mock_driver, mock_address)
-        mock_query_int.assert_called_once_with(mock_driver, mock_commands_list, None)
+        mock_query_int.assert_called_once_with(
+            mock_driver, mock_commands_list, None, FramePriority.CONFIGURATION
+        )
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100
 
@@ -78,6 +81,7 @@ async def test_write(number_settings_param):
         mock_driver.send_commands.assert_called_once_with(
             [mock_write_command, mock_read_command],
             BusTrafficSource.WB,
+            FramePriority.CONFIGURATION,
         )
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100

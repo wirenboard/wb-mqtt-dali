@@ -102,7 +102,8 @@ async def test_lunatone_emulator_routes_frame_to_correct_line():
 
     captured = []
 
-    async def fake_send_with_retry(driver, _cmd, _logger, _source):
+    async def fake_send_with_retry(driver, _cmd, _logger, _source, priority=None):
+        del priority
         captured.append((driver, _cmd))
         return MagicMock(raw_value=None)
 

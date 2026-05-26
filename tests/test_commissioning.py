@@ -213,7 +213,7 @@ class FakeDALIBus:
         self.search_addr = [None, None, None]
 
     async def send(
-        self, cmd, source=BusTrafficSource.WB
+        self, cmd, source=BusTrafficSource.WB, priority=None
     ):  # pylint: disable=R0911 disable=R0912 disable=R0915 disable=unused-argument
         # Handle QueryControlGearPresent
         if isinstance(cmd, QueryControlGearPresent):
@@ -341,10 +341,12 @@ class FakeDALIBus:
 
         return MockResponse(value=None)
 
-    async def send_commands(self, cmds, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+    async def send_commands(
+        self, cmds, source=BusTrafficSource.WB, priority=None
+    ):  # pylint: disable=unused-argument
         responses = []
         for cmd in cmds:
-            resp = await self.send(cmd, source=source)
+            resp = await self.send(cmd, source, priority)
             responses.append(resp)
         return responses
 
@@ -486,7 +488,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send_with_unaddressed(
-                cmd, source=BusTrafficSource.WB
+                cmd, source=BusTrafficSource.WB, priority=None
             ):  # pylint: disable=R0911 disable=unused-argument
                 sent_commands.append(cmd)
                 if isinstance(cmd, Compare):
@@ -516,7 +518,7 @@ class TestCommissioning(unittest.TestCase):
                 if isinstance(cmd, VerifyShortAddress):
                     return MockResponse(value=True)
 
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = mock_send_with_unaddressed
 
@@ -581,9 +583,11 @@ class TestCommissioning(unittest.TestCase):
             sent_commands = []
             original_send = fake_bus.send
 
-            async def track_commands(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+            async def track_commands(
+                cmd, source=BusTrafficSource.WB, priority=None
+            ):  # pylint: disable=unused-argument
                 sent_commands.append(cmd)
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = track_commands
 
@@ -659,9 +663,11 @@ class TestCommissioning(unittest.TestCase):
             sent_commands = []
             original_send = fake_bus.send
 
-            async def track_commands(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+            async def track_commands(
+                cmd, source=BusTrafficSource.WB, priority=None
+            ):  # pylint: disable=unused-argument
                 sent_commands.append(cmd)
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = track_commands
 
@@ -881,7 +887,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_boundary_send(
-                cmd, source=BusTrafficSource.WB
+                cmd, source=BusTrafficSource.WB, priority=None
             ):  # pylint: disable=R0911 disable=unused-argument
                 if isinstance(cmd, Compare):
                     if None not in fake_bus.search_addr:
@@ -920,7 +926,7 @@ class TestCommissioning(unittest.TestCase):
                 if isinstance(cmd, VerifyShortAddress):
                     return MockResponse(value=True)
 
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = mock_boundary_send
 
@@ -1010,10 +1016,12 @@ class TestCommissioning(unittest.TestCase):
             set_search_calls = []
             original_send = fake_bus.send
 
-            async def track_set_search(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+            async def track_set_search(
+                cmd, source=BusTrafficSource.WB, priority=None
+            ):  # pylint: disable=unused-argument
                 if isinstance(cmd, (SetSearchAddrH, SetSearchAddrM, SetSearchAddrL)):
                     set_search_calls.append(type(cmd).__name__)
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = track_set_search
 
@@ -1048,12 +1056,14 @@ class TestCommissioning(unittest.TestCase):
             fake_bus = FakeDALIBus(devices={0: 0x123456})
             original_send = fake_bus.send
 
-            async def mock_send(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+            async def mock_send(
+                cmd, source=BusTrafficSource.WB, priority=None
+            ):  # pylint: disable=unused-argument
                 if isinstance(cmd, Withdraw):
                     # Simulate broken bus behavior: WITHDRAW has no effect,
                     # so the same random address is discovered repeatedly.
                     return MockResponse(value=None)
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = mock_send
 
@@ -1183,7 +1193,9 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
 
             original_send = fake_bus.send
 
-            async def mock_send(cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+            async def mock_send(
+                cmd, source=BusTrafficSource.WB, priority=None
+            ):  # pylint: disable=unused-argument
                 if isinstance(cmd, Compare):
                     if None in fake_bus.search_addr:
                         return MockResponse(value=False)
@@ -1194,7 +1206,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
                     )
                     if extra_random not in fake_bus.withdrawn and extra_random <= search:
                         return MockResponse(value=True)
-                    return await original_send(cmd, source=source)
+                    return await original_send(cmd, source, priority)
                 if isinstance(cmd, QueryShortAddress):
                     if None not in fake_bus.search_addr:
                         search = (
@@ -1206,8 +1218,8 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
                             raw_val = Mock()
                             raw_val.error = False
                             return MockResponse(value="MASK", raw_value=raw_val)
-                    return await original_send(cmd, source=source)
-                return await original_send(cmd, source=source)
+                    return await original_send(cmd, source, priority)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = mock_send
 
@@ -1239,7 +1251,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send(
-                cmd, source=BusTrafficSource.WB
+                cmd, source=BusTrafficSource.WB, priority=None
             ):  # pylint: disable=R0911 disable=unused-argument
                 # Phantom unaddressed device: Compare/QueryShortAddress need to
                 # see it at `test_random`; VERIFY and follow-up QUERY must both
@@ -1269,7 +1281,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
                 if isinstance(cmd, ProgramShortAddress):
                     # No-op: device EEPROM doesn't take the write.
                     return MockResponse(value=None)
-                return await original_send(cmd, source=source)
+                return await original_send(cmd, source, priority)
 
             fake_bus.send = mock_send
 

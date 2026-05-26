@@ -28,7 +28,7 @@ from .common_dali_device import (
 from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK_2BYTES,
     is_broadcast_or_group_address,
@@ -250,7 +250,7 @@ async def read_colour_temperature_limits_mirek(
         QueryColourValue(short_address),
         QueryContentDTR0(short_address),
     ]
-    resp = await send_commands_with_retry(driver, cmds, logger)
+    resp = await send_commands_with_retry(driver, cmds, logger, priority=FramePriority.CONFIGURATION)
     warmest = MAX_TC_MIREK
     msb_item = resp[2]
     lsb_item = resp[3]
@@ -337,7 +337,7 @@ class TcLimitsSettings(SettingsParamBase):
                 DTR2(selector),
                 StoreColourTemperatureTcLimit(short_address),
             ]
-            await send_commands_with_retry(driver, cmds, logger)
+            await send_commands_with_retry(driver, cmds, logger, priority=FramePriority.CONFIGURATION)
 
         if not is_for_single_device:
             return {}

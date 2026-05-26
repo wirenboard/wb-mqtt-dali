@@ -232,7 +232,8 @@ async def test_tc_limits_write_single_field_sends_correct_commands():
     driver = AsyncMock()
     reread_resp = _make_reread_response(400, 150, 500, 50)
 
-    async def mock_send_commands(cmds, _source=None):
+    async def mock_send_commands(cmds, _source=None, priority=None):
+        del priority
         if len(cmds) == 4:
             return [MagicMock() for _ in cmds]
         return reread_resp
@@ -279,7 +280,8 @@ async def test_tc_limits_write_physical_before_user():
     reread_resp = _make_reread_response(420, 80, 520, 40)
     sent_selectors = []
 
-    async def mock_send_commands(cmds, _source=None):
+    async def mock_send_commands(cmds, _source=None, priority=None):
+        del priority
         if len(cmds) == 4 and isinstance(cmds[3], StoreColourTemperatureTcLimit):
             sent_selectors.append(cmds[2].param)
             return [MagicMock() for _ in cmds]

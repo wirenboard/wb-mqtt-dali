@@ -21,6 +21,7 @@ from .send_command import (
     list_commands,
     parse_expression,
 )
+from .wbdali import FramePriority
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
 from .wbdali_utils import send_commands_with_retry
@@ -238,7 +239,10 @@ async def send_command_service(  # pylint: disable=too-many-locals, too-many-bra
             # is checked upstream, so the first batch is always populated.
             first_batch = _next_batch(commands, total, sent)
             sent += len(first_batch)
-            current_task = asyncio.create_task(send_commands_with_retry(driver, first_batch, logger))
+            priority = FramePriority(args.priority)
+            current_task = asyncio.create_task(
+                send_commands_with_retry(driver, first_batch, logger, priority=priority)
+            )
             next_task = None
             try:
                 while True:
@@ -250,7 +254,9 @@ async def send_command_service(  # pylint: disable=too-many-locals, too-many-bra
                     next_batch = [] if cancel_event.is_set() else _next_batch(commands, total, sent)
                     if next_batch:
                         sent += len(next_batch)
-                        next_task = asyncio.create_task(send_commands_with_retry(driver, next_batch, logger))
+                        next_task = asyncio.create_task(
+                            send_commands_with_retry(driver, next_batch, logger, priority=priority)
+                        )
                     else:
                         next_task = None
 
@@ -387,6 +393,20 @@ async def main(argv):  # pylint: disable=too-many-return-statements
             "Transport errors on individual expressions are printed and the CLI "
             "continues — useful for load testing. The Bus/SendCommand RPC stops "
             "the batch on transport error; the CLI deliberately does not."
+        ),
+    )
+
+    parser.add_argument(
+        "--priority",
+        dest="priority",
+        type=int,
+        choices=[p.value for p in FramePriority],
+        default=FramePriority.USER_ACTION.value,
+        help=(
+            "DALI forward-frame priority for --send-command, 1..5 "
+            "(IEC 62386-103:2022 §9.14.1: 1=TRANSACTION_CONTINUATION, "
+            "2=USER_ACTION, 3=CONFIGURATION, 4=AUTOMATIC, 5=PERIODIC_QUERY). "
+            f"Default: {FramePriority.USER_ACTION.value} (USER_ACTION)."
         ),
     )
 

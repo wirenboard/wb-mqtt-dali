@@ -15,7 +15,7 @@ from dali.gear.emergency import (
 from .common_dali_device import PropertyStartOrder
 from .dali_parameters import NumberGearParam, TypeParameters
 from .settings import SettingsParamName
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import query_int, query_response
 
 
@@ -35,11 +35,21 @@ class EmergencyLevelParam(NumberGearParam):
     ) -> dict:
         res = await super().read(driver, short_address, logger)
         try:
-            self.minimum = await query_int(driver, QueryEmergencyMinLevel(short_address), logger=logger)
+            self.minimum = await query_int(
+                driver,
+                QueryEmergencyMinLevel(short_address),
+                logger,
+                FramePriority.CONFIGURATION,
+            )
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency min level: {e}") from e
         try:
-            self.maximum = await query_int(driver, QueryEmergencyMaxLevel(short_address), logger=logger)
+            self.maximum = await query_int(
+                driver,
+                QueryEmergencyMaxLevel(short_address),
+                logger,
+                FramePriority.CONFIGURATION,
+            )
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency max level: {e}") from e
         return res
@@ -53,7 +63,12 @@ class Type1Parameters(TypeParameters):
         logger: Optional[logging.Logger] = None,
     ) -> None:
         try:
-            features = await query_response(driver, QueryEmergencyFeatures(short_address), logger)
+            features = await query_response(
+                driver,
+                QueryEmergencyFeatures(short_address),
+                logger,
+                FramePriority.CONFIGURATION,
+            )
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read emergency features: {e}") from e
         if getattr(features, "adjustable_emergency_level") is True:

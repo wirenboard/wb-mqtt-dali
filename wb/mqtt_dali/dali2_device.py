@@ -78,7 +78,7 @@ from .settings import (
     SettingsParamName,
 )
 from .utils import add_enum, add_translations
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     is_broadcast_or_group_address,
     query_response,
@@ -111,7 +111,12 @@ async def _query_feature_types(
 ) -> list[int]:
     try:
         first_value = (
-            await query_response(driver, QueryFeatureType(short_address, scope.query_address), logger)
+            await query_response(
+                driver,
+                QueryFeatureType(short_address, scope.query_address),
+                logger,
+                FramePriority.CONFIGURATION,
+            )
         ).raw_value.as_integer
     except RuntimeError:
         return []
@@ -131,7 +136,12 @@ async def _query_feature_types(
     for _ in range(_FEATURE_TYPE_ITERATION_LIMIT):
         try:
             value = (
-                await query_response(driver, QueryNextFeatureType(short_address, scope.query_address), logger)
+                await query_response(
+                    driver,
+                    QueryNextFeatureType(short_address, scope.query_address),
+                    logger,
+                    FramePriority.CONFIGURATION,
+                )
             ).raw_value.as_integer
         except RuntimeError:
             break
@@ -157,7 +167,10 @@ async def _query_feedback_capability(
     try:
         return (
             await query_response(
-                driver, feedback.QueryFeedbackCapability(short_address, feature_address), logger
+                driver,
+                feedback.QueryFeedbackCapability(short_address, feature_address),
+                logger,
+                FramePriority.CONFIGURATION,
             )
         ).raw_value.as_integer
     except RuntimeError:
@@ -581,11 +594,13 @@ class DeviceGroupsParam(SettingsParamBase):
             return {}
 
         if not is_for_single_device:
-            await send_commands_with_retry(driver, commands, logger)
+            await send_commands_with_retry(driver, commands, logger, priority=FramePriority.CONFIGURATION)
             return {}
 
         query_commands = self._build_query_commands(short_address)
-        responses = await query_responses(driver, commands + query_commands, logger)
+        responses = await query_responses(
+            driver, commands + query_commands, logger, FramePriority.CONFIGURATION
+        )
         updated_groups = self._parse_group_responses(responses[-len(query_commands) :])
         self._groups = updated_groups
         self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
@@ -619,6 +634,7 @@ class DeviceGroupsParam(SettingsParamBase):
             driver,
             self._build_query_commands(short_address),
             logger,
+            priority=FramePriority.CONFIGURATION,
         )
         return self._parse_group_responses(responses)
 
@@ -724,12 +740,14 @@ class Dali2Device(DaliDeviceBase):
             driver,
             QueryNumberOfInstances(device=addr),
             self.logger,
+            FramePriority.CONFIGURATION,
         )
         num_instances = num_instances_rsp.value
         instance_types = await query_responses_retry_only_failed(
             driver,
             [QueryInstanceType(device=addr, instance=InstanceNumber(i)) for i in range(num_instances)],
             self.logger,
+            priority=FramePriority.CONFIGURATION,
         )
         for i, instance_type in enumerate(instance_types):
             self.add_instance(i, instance_type.value)

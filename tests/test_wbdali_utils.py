@@ -48,13 +48,15 @@ class FakeDriver:
     last_send_commands: Optional[list[FakeCommand]] = None
     send_commands_history: list[list[FakeCommand]] = field(default_factory=list)
 
-    async def send(self, cmd, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+    # pylint: disable=unused-argument
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
         self.send_calls += 1
         self.last_send_cmd = cmd
         result = self.send_results[self.send_calls - 1]
         return result
 
-    async def send_commands(self, commands, source=BusTrafficSource.WB):  # pylint: disable=unused-argument
+    # pylint: disable=unused-argument
+    async def send_commands(self, commands, source=BusTrafficSource.WB, priority=None):
         self.send_commands_calls += 1
         self.last_send_commands = commands
         self.send_commands_history.append(list(commands))

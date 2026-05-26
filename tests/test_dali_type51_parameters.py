@@ -69,7 +69,8 @@ def _make_run_sequence_dispatcher(per_bank):
     listed raises MemoryLocationNotImplemented.
     """
 
-    async def _dispatch(seq):
+    async def _dispatch(seq, priority=None):
+        del priority
         # read_memory_bank is a generator we don't drive — inspect its closure for the target bank.
         # Contract: works only because read_memory_bank is a sync generator with a local named `bank`.
         # If it becomes async or the local is renamed, this lookup returns None and bank-202 tests
@@ -239,21 +240,26 @@ def _ok_int_response(value: int):
 
 
 async def _initialize_dt51_device(scale_byte: Optional[int]) -> DaliDevice:
-    async def fake_run_sequence(seq):
+    async def fake_run_sequence(seq, priority=None):
+        del priority
         name = seq.gi_code.co_name
         if name == "query_device_types_sequence":
             seq.close()
             return [51]
-        if name == "_read_active_scale_sequence":
-            seq.close()
-            if scale_byte is None:
-                raise MemoryLocationNotImplemented("scale not implemented")
-            return scale_byte
         seq.close()
         raise AssertionError(f"unexpected run_sequence target: {name}")
 
-    async def fake_send_commands(cmds, source=None):
-        del source
+    async def fake_send_commands(cmds, source=None, priority=None):
+        del source, priority
+        # _read_active_scale issues [DTR1, DTR0, ReadMemoryLocation]; the last
+        # response carries the scale byte (or signals "not implemented" with raw_value=None).
+        is_scale_read = len(cmds) == 3 and isinstance(cmds[-1], ReadMemoryLocation)
+        if is_scale_read:
+            if scale_byte is None:
+                resp = MagicMock()
+                resp.raw_value = None
+                return [_ok_int_response(0), _ok_int_response(0), resp]
+            return [_ok_int_response(0), _ok_int_response(0), _ok_int_response(scale_byte)]
         return [_ok_int_response(0) for _ in cmds]
 
     driver = AsyncMock()
@@ -300,7 +306,8 @@ async def test_type51_chunked_poll_assembles_value():
     energy_bytes = [0x00, 0x00, 0x00, 0x00, 0x01, 0x2C]  # 300 Wh
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         idx = (len(sent_calls) - 1) * 2
         return [
@@ -341,7 +348,8 @@ async def test_type51_chunked_poll_publishes_kwh_three_decimals(scale_byte, ener
     dev = await _make_initialized_device_with_type51(scale_byte=scale_byte)
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         idx = (len(sent_calls) - 1) * 2
         return [
@@ -371,7 +379,8 @@ async def test_type51_chunked_poll_each_chunk_writes_dtr():
     energy_bytes = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         idx = (len(sent_calls) - 1) * 2
         return [
@@ -404,7 +413,8 @@ async def test_type51_chunked_poll_failure_publishes_error():
     energy_bytes = [0x10, 0x20]
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         if len(sent_calls) == 1:
             return [
@@ -432,7 +442,8 @@ async def test_type51_chunked_poll_restarts_after_failure():
     energy_bytes_attempt_2 = [0x00, 0x00, 0x00, 0x00, 0x00, 0x09]  # 9 Wh
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         if len(sent_calls) == 1:
             return [MagicMock(), MagicMock(), _ok_byte_response(0x99), _ok_byte_response(0x88)]
@@ -474,7 +485,8 @@ async def test_type51_chunked_poll_no_publish_on_partial():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         return [MagicMock(), MagicMock(), _ok_byte_response(0xAB), _ok_byte_response(0xCD)]
 
@@ -492,8 +504,8 @@ async def test_type51_chunked_poll_no_publish_on_partial():
 async def test_type51_refresh_paced_120s_after_success():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
 
-    async def fake_send(cmds):
-        del cmds
+    async def fake_send(cmds, priority=None):
+        del cmds, priority
         return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
 
     driver = AsyncMock()
@@ -528,7 +540,8 @@ async def test_type51_refresh_paced_120s_after_failure():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
     sent_calls = []
 
-    async def fake_send(cmds):
+    async def fake_send(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         # First chunk succeeds, second chunk fails — so cycle-start and cycle-end differ.
         if len(sent_calls) == 1:
@@ -574,8 +587,8 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     control_ids = [c.id for c in dev.get_mqtt_controls()]
     assert "active_energy" in control_ids
 
-    async def fake_send_failing(cmds):
-        del cmds
+    async def fake_send_failing(cmds, priority=None):
+        del cmds, priority
         return [MagicMock(), MagicMock(), _bad_response(), _bad_response()]
 
     driver = AsyncMock()
@@ -587,7 +600,8 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
 
     sent_calls = []
 
-    async def fake_send_ok(cmds):
+    async def fake_send_ok(cmds, priority=None):
+        del priority
         sent_calls.append(list(cmds))
         if len(sent_calls) == 1:
             return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]

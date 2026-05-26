@@ -26,7 +26,7 @@ from dali.gear.general import (
 from .common_dali_device import PropertyStartOrder
 from .dali_parameters import NumberGearParam
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
     is_broadcast_or_group_address,
@@ -107,7 +107,9 @@ class FadeTimeFadeRateParam(SettingsParamBase):
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        value = await query_response(driver, QueryFadeTimeFadeRate(short_address), logger)
+        value = await query_response(
+            driver, QueryFadeTimeFadeRate(short_address), logger, FramePriority.CONFIGURATION
+        )
         self._fade_time = value.fade_time
         self._fade_rate = value.fade_rate
         return {
@@ -145,7 +147,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
             commands.append(SetFadeRate(short_address))
         if is_for_single_device:
             commands.append(QueryFadeTimeFadeRate(short_address))
-        responses = await query_responses(driver, commands, logger)
+        responses = await query_responses(driver, commands, logger, FramePriority.CONFIGURATION)
 
         if not is_for_single_device:
             return {}
@@ -247,7 +249,9 @@ class GroupsParam(SettingsParamBase):
     ) -> dict:
         groups = []
         commands = [QueryGroupsZeroToSeven(short_address), QueryGroupsEightToFifteen(short_address)]
-        responses = await query_responses_retry_only_failed(driver, commands, logger)
+        responses = await query_responses_retry_only_failed(
+            driver, commands, logger, priority=FramePriority.CONFIGURATION
+        )
         for response in responses:
             groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
         self._groups = groups
@@ -279,11 +283,13 @@ class GroupsParam(SettingsParamBase):
         if not commands:
             return {}
         if not is_for_single_device:
-            await send_commands_with_retry(driver, commands, logger)
+            await send_commands_with_retry(driver, commands, logger, priority=FramePriority.CONFIGURATION)
             return {}
         commands.append(QueryGroupsZeroToSeven(short_address))
         commands.append(QueryGroupsEightToFifteen(short_address))
-        responses = await query_responses_retry_from_first_failed(driver, commands, logger=logger)
+        responses = await query_responses_retry_from_first_failed(
+            driver, commands, logger=logger, priority=FramePriority.CONFIGURATION
+        )
         groups = []
         for response in responses[-2:]:
             groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
@@ -322,7 +328,9 @@ class ScenesParam(SettingsParamBase):
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
         commands = [QuerySceneLevel(short_address, scene_number) for scene_number in range(SCENES_TOTAL)]
-        responses = await query_responses_retry_only_failed(driver, commands, logger)
+        responses = await query_responses_retry_only_failed(
+            driver, commands, logger, priority=FramePriority.CONFIGURATION
+        )
         res = []
         for response in responses:
             res.append(response.raw_value.as_integer)
@@ -360,7 +368,9 @@ class ScenesParam(SettingsParamBase):
                 modified_scene_indexes.append(i)
         if not commands:
             return {}
-        responses = await query_responses_retry_from_first_failed(driver, commands, 3, logger)
+        responses = await query_responses_retry_from_first_failed(
+            driver, commands, 3, logger, priority=FramePriority.CONFIGURATION
+        )
         for idx, scene_index in enumerate(modified_scene_indexes):
             response = responses[idx * 3 + 2]
             self._scenes[scene_index] = response.raw_value.as_integer
@@ -376,7 +386,7 @@ class ScenesParam(SettingsParamBase):
         commands = []
         for i in range(SCENES_TOTAL):
             commands.extend([DTR0(values_to_set[i]), SetScene(short_address, i)])
-        await send_commands_with_retry(driver, commands, logger)
+        await send_commands_with_retry(driver, commands, logger, priority=FramePriority.CONFIGURATION)
         return {}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
@@ -463,7 +473,7 @@ class GroupScenesSettings(SettingsParamBase):
         if index is None:
             raise ValueError("Scene index is required")
         commands = [DTR0(value_to_set), SetScene(short_address, index)]
-        await send_commands_with_retry(driver, commands, logger)
+        await send_commands_with_retry(driver, commands, logger, priority=FramePriority.CONFIGURATION)
         return {}
 
     def has_changes(self, new_params: dict) -> bool:

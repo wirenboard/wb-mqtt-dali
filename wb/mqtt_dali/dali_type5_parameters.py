@@ -12,7 +12,7 @@ from dali.gear.converter import (
 
 from .dali_dimming_curve import DimmingCurveState
 from .dali_parameters import DimmingCurveParam, TypeParameters
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import query_response
 
 
@@ -34,7 +34,12 @@ class Type5Parameters(TypeParameters):
         logger: Optional[logging.Logger] = None,
     ) -> None:
         try:
-            features = await query_response(driver, QueryConverterFeatures(short_address), logger=logger)
+            features = await query_response(
+                driver,
+                QueryConverterFeatures(short_address),
+                logger,
+                FramePriority.CONFIGURATION,
+            )
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read converter features: {e}") from e
         if getattr(features, "nonlogarithmic_dimming_curve_supported") is True:

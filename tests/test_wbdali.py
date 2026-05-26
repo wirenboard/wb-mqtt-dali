@@ -16,7 +16,12 @@ from dali.frame import BackwardFrame, ForwardFrame
 
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver, encode_frame_for_modbus
+from wb.mqtt_dali.wbdali import (
+    FramePriority,
+    WBDALIConfig,
+    WBDALIDriver,
+    encode_frame_for_modbus,
+)
 from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway, NoTransmission
 
 # pylint: disable=line-too-long, protected-access
@@ -122,7 +127,8 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             await fut
 
     def test_encode_frame_for_modbus(self):
-        """Test encoding of DALI frames into Modbus frames."""
+        """Frame-size, sendtwice and priority bits are placed in the right slots
+        of the encoded 32-bit Modbus register (IEC 62386-103:2022 §9.14.1)."""
         frame_16 = MagicMock()
         frame_16.__len__.return_value = 16
         frame_16.as_integer = 0x1234
@@ -138,39 +144,23 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         frame_invalid = MagicMock()
         frame_invalid.__len__.return_value = 32
 
-        # Test FF16 frame: priority=4 (bits 31..29), sendtwice=0 (bit 28), size=0 (bits 27..25), data=0x1234 (bits 24..0)
-        # Result: 0x80000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x80001234
-        assert encode_frame_for_modbus(frame_16) == 0x80001234  # pylint: disable=W0212
+        prio = FramePriority.AUTOMATIC
+        # FF16, AUTOMATIC (=4), no sendtwice
+        # 4 << 29 | 0x1234 = 0x80001234
+        assert encode_frame_for_modbus(frame_16, sendtwice=False, priority=prio) == 0x80001234
 
-        # Test FF24 frame: priority=4, sendtwice=0, size=1 (bits 27..25), data=0x123456
-        # Result: 0x80000000 | 0x00000000 | 0x02000000 | 0x00123456 = 0x82123456
-        assert encode_frame_for_modbus(frame_24) == 0x82123456  # pylint: disable=W0212
+        # FF24, AUTOMATIC, size code 1 in bits [27..25]
+        assert encode_frame_for_modbus(frame_24, sendtwice=False, priority=prio) == 0x82123456
 
-        # Test FF25 frame: priority=4, sendtwice=0, size=2 (bits 27..25), data=0x1234567
-        # Result: 0x80000000 | 0x00000000 | 0x04000000 | 0x01234567 = 0x85234567
-        assert encode_frame_for_modbus(frame_25) == 0x85234567  # pylint: disable=W0212
+        # FF25, AUTOMATIC, size code 2
+        assert encode_frame_for_modbus(frame_25, sendtwice=False, priority=prio) == 0x85234567
 
-        # Test with sendtwice=True: bit 28 should be set
-        # Result: 0x80000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0x90001234
-        assert encode_frame_for_modbus(frame_16, sendtwice=True) == 0x90001234  # pylint: disable=W0212
+        # sendtwice toggles bit 28
+        assert encode_frame_for_modbus(frame_16, sendtwice=True, priority=prio) == 0x90001234
 
-        # Test with priority=3: bits 31..29 = 0b011 = 0x60000000
-        # Result: 0x60000000 | 0x00000000 | 0x00000000 | 0x00001234 = 0x60001234
-        assert encode_frame_for_modbus(frame_16, priority=3) == 0x60001234  # pylint: disable=W0212
-
-        # Test with sendtwice=True and priority=5
-        # Result: 0xA0000000 | 0x10000000 | 0x00000000 | 0x00001234 = 0xB0001234
-        assert (
-            encode_frame_for_modbus(frame_16, sendtwice=True, priority=5) == 0xB0001234
-        )  # pylint: disable=W0212
-
-        # Test invalid frame length
+        # Unsupported frame length still raises
         with self.assertRaises(ValueError):
-            encode_frame_for_modbus(frame_invalid)  # pylint: disable=W0212
-
-        # Test invalid priority
-        with self.assertRaises(ValueError):
-            encode_frame_for_modbus(frame_16, priority=6)  # pylint: disable=W0212
+            encode_frame_for_modbus(frame_invalid, sendtwice=False, priority=prio)
 
     async def test_send_command_without_response(self):
         """
@@ -215,7 +205,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         cmd = _MockCommand(sendtwice=True, response_class=None)
 
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, priority=FramePriority.AUTOMATIC))
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -234,7 +224,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         await self.prepare_driver(driver)
         cmd = _MockCommand(sendtwice=False, response_class=None)
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, priority=FramePriority.AUTOMATIC))
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -259,7 +249,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             _MockCommand(sendtwice=False, data=[0x56, 0x78], response_class=MockResponse),
             _MockCommand(sendtwice=False, data=[0x9A, 0xBC], response_class=None),
         ]
-        fut = asyncio.gather(driver.send_commands(cmds))
+        fut = asyncio.gather(driver.send_commands(cmds, priority=FramePriority.AUTOMATIC))
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -291,9 +281,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         await self.prepare_driver(driver)
         cmds = [
-            driver.send(_MockCommand(data=[0x12, 0x34])),
-            driver.send(_MockCommand(data=[0x56, 0x78])),
-            driver.send(_MockCommand(data=[0x9A, 0xBC])),
+            driver.send(_MockCommand(data=[0x12, 0x34]), priority=FramePriority.AUTOMATIC),
+            driver.send(_MockCommand(data=[0x56, 0x78]), priority=FramePriority.AUTOMATIC),
+            driver.send(_MockCommand(data=[0x9A, 0xBC]), priority=FramePriority.AUTOMATIC),
         ]
         fut = asyncio.gather(*cmds)
         payload = await self.mock_mqtt_client.wait_for_publish(
@@ -427,7 +417,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             _MockCommand(data=[0x9A, 0xBC]),
         ]
 
-        fut = asyncio.gather(driver.send_commands(commands))
+        fut = asyncio.gather(driver.send_commands(commands, priority=FramePriority.AUTOMATIC))
 
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"

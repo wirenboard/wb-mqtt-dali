@@ -512,7 +512,8 @@ class TestSendCommandRpcHandler:
     async def test_bus_not_initialized(self):
         """ApplicationController in non-READY state surfaces RuntimeError via send_command_batch."""
 
-        async def bad_batch(_commands):
+        async def bad_batch(_commands, priority=None):
+            del priority
             raise RuntimeError("ApplicationController must be initialized")
 
         bus = SimpleNamespace(uid="gw1_bus_1", send_command_batch=bad_batch)
@@ -526,7 +527,8 @@ class TestSendCommandRpcHandler:
         """External quiescent mode rejects the task at dequeue via the
         polling-loop contract (RPC handler surfaces the RuntimeError)."""
 
-        async def quiescent_batch(_commands):
+        async def quiescent_batch(_commands, priority=None):
+            del priority
             raise RuntimeError("Cannot execute tasks while in quiescent mode")
 
         bus = SimpleNamespace(uid="gw1_bus_1", send_command_batch=quiescent_batch)

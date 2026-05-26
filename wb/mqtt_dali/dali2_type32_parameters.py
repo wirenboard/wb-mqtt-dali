@@ -25,7 +25,7 @@ from .device.feedback import (
 )
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import add_enum
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     is_broadcast_or_group_address,
     query_int,
@@ -244,7 +244,10 @@ class FeedbackTimingParam(SettingsParamBase):
     ) -> dict:
         try:
             byte_value = await query_int(
-                driver, QueryFeedbackTiming(short_address, self._feature_address), logger
+                driver,
+                QueryFeedbackTiming(short_address, self._feature_address),
+                logger,
+                FramePriority.CONFIGURATION,
             )
         except RuntimeError:
             byte_value = pack_feedback_timing(
@@ -275,11 +278,11 @@ class FeedbackTimingParam(SettingsParamBase):
         ]
         if not is_for_single_device:
             for cmd in commands:
-                await send_with_retry(driver, cmd, logger)
+                await send_with_retry(driver, cmd, logger, priority=FramePriority.CONFIGURATION)
             return {}
         # Read back to record the stored value, not the requested one.
         commands.append(QueryFeedbackTiming(short_address, self._feature_address))
-        responses = await query_responses(driver, commands, logger)
+        responses = await query_responses(driver, commands, logger, FramePriority.CONFIGURATION)
         stored = responses[-1].raw_value.as_integer
         self.value = self._card_from_byte(stored)
         return {self.property_name: dict(self.value)}

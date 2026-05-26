@@ -11,9 +11,15 @@ from typing import Any, List, Optional, Sequence, Union
 
 import paho.mqtt.client as mqtt
 from dali.command import Command, Response, from_frame
+from dali.device.general import DTR0 as DeviceDTR0
+from dali.device.general import DTR1 as DeviceDTR1
+from dali.device.general import DTR2 as DeviceDTR2
 from dali.device.general import _Event
 from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame, Frame
+from dali.gear.general import DTR0 as GearDTR0
+from dali.gear.general import DTR1 as GearDTR1
+from dali.gear.general import DTR2 as GearDTR2
 from dali.gear.general import EnableDeviceType
 from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
@@ -38,6 +44,27 @@ class GatewayMetaErrorPayload(Enum):
 
     OK = ""
     UNREACHABLE = "r"
+
+
+class FramePriority(Enum):
+    """DALI forward-frame priority per IEC 62386-103:2022 §9.14.1.
+
+    Selects the multi-master arbitration class for an outgoing forward frame.
+    Lower values win arbitration.
+
+    The same numeric priorities are also used for input-device
+    "eventPriority": pushbutton defaults to 3 (IEC 62386-301:2017 §9.4.1),
+    other instance types default to 4 (IEC 62386-103:2022 §9.14.2).
+
+    The value is the on-wire priority code embedded in the encoded Modbus
+    register (bits [31..29]).
+    """
+
+    TRANSACTION_CONTINUATION = 1
+    USER_ACTION = 2
+    CONFIGURATION = 3
+    AUTOMATIC = 4
+    PERIODIC_QUERY = 5
 
 
 # pylint: disable=duplicate-code
@@ -234,6 +261,7 @@ class SendQueueItem:
     future: asyncio.Future[Response]
     command: Command
     source: BusTrafficSource
+    priority: FramePriority
 
 
 @dataclass
@@ -246,7 +274,7 @@ class WaitResponseItem:
         self.timeout_handler.cancel()
 
 
-def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority: int = 4) -> int:
+def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FramePriority) -> int:
     """Encode DALI frame for Modbus transmission.
 
     Format:
@@ -258,7 +286,7 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority
     Args:
         dali_frame: DALI frame to encode
         sendtwice: Whether to send the frame twice
-        priority: Send priority (0=no send, 1-5=priority level)
+        priority: Send priority
 
     Returns:
         Encoded 32-bit value for Modbus register
@@ -285,10 +313,8 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool = False, priority
     if sendtwice:
         result |= 1 << 28
 
-    # Bits [31..29] - priority (0-5)
-    if priority < 0 or priority > 5:
-        raise ValueError(f"Priority must be 0-5, got {priority}")
-    result |= (priority & 0x7) << 29
+    # Bits [31..29] - priority
+    result |= (priority.value & 0x7) << 29
 
     return result
 
@@ -342,6 +368,21 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._meta_error_topic = f"/devices/{self.config.device_name}/meta/error"
         self._gateway_unavailable = False
         self._pending_resync = False
+
+        self._response_timeout = WAIT_DALI_RESPONSE_TIMEOUT_S
+
+    @property
+    def response_timeout(self) -> float:
+        """Per-command timeout for waiting on a DALI response from the gateway, in seconds.
+
+        Applied when the command is dispatched in `_send_to_gateway`: items
+        already in-flight keep the timeout they were scheduled with.
+        """
+        return self._response_timeout
+
+    @response_timeout.setter
+    def response_timeout(self, timeout: float) -> None:
+        self._response_timeout = timeout
 
     @property
     def rpc_client_id(self) -> str:
@@ -696,13 +737,21 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             resp_waiter.sequence_id,
         )
 
-    async def run_sequence(self, seq, progress=None) -> Any:
-        """
-        Run a command sequence.
-        Implements the same API as the 'hid' drivers.
+    async def run_sequence(
+        self,
+        seq,
+        priority: FramePriority = FramePriority.USER_ACTION,
+        progress=None,
+    ) -> Any:
+        """Run a generator-based DALI command sequence.
+
+        All forward frames yielded by the sequence are sent with the given
+        ``priority`` (IEC 62386-103:2022 §9.14.1).
 
         :param seq: A "generator" function to use as a sequence. These are
         available in various places in the python-dali library.
+        :param priority: Forward-frame arbitration priority applied to every
+        frame emitted by the sequence.
         :param progress: A function to call with progress updates, used by
         some sequences to provide status information. The function must
         accept a single argument. A suitable example is `progress=print` to
@@ -734,49 +783,64 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                             progress(cmd)
                     elif isinstance(cmd, list):
                         response = await self._send_commands_internal(
-                            cmd, BusTrafficSource.WB, lock_queue=False
+                            cmd, BusTrafficSource.WB, priority, lock_queue=False
                         )
                     else:
                         response = (
-                            await self._send_commands_internal([cmd], BusTrafficSource.WB, lock_queue=False)
+                            await self._send_commands_internal(
+                                [cmd], BusTrafficSource.WB, priority, lock_queue=False
+                            )
                         )[0]
         finally:
             seq.close()
 
-    async def send(self, cmd: Command, source: BusTrafficSource = BusTrafficSource.WB) -> Response:
-        """
-        Send a DALI command to the bus and optionally wait for a response.
+    async def send(
+        self,
+        cmd: Command,
+        source: BusTrafficSource = BusTrafficSource.WB,
+        priority: FramePriority = FramePriority.USER_ACTION,
+    ) -> Response:
+        """Send a single DALI command and optionally wait for a response.
         Args:
-            cmd (Command): The DALI command to send. Must contain a valid frame and
-                optional response handler.
-            source (str): The source identifier for logging and tracking purposes.
+            cmd: The DALI command to send.
+            source: Source identifier for bus-traffic logging.
+            priority: Forward-frame arbitration priority.
         Returns:
-            Response: The response from the DALI device if cmd.response is set,
-                otherwise Response(None).
-                Internal transmission errors are returned as WbGatewayTransmissionError or its subclasses.
+            Response from the DALI device when ``cmd.response`` is set,
+            otherwise ``Response(None)``. Internal transmission errors are
+            returned as ``WbGatewayTransmissionError`` or its subclasses.
         """
 
-        return (await self.send_commands([cmd], source=source))[0]
+        return (await self.send_commands([cmd], source, priority))[0]
 
     async def send_commands(
-        self, commands: Sequence[Command], source: BusTrafficSource = BusTrafficSource.WB
+        self,
+        commands: Sequence[Command],
+        source: BusTrafficSource = BusTrafficSource.WB,
+        priority: FramePriority = FramePriority.USER_ACTION,
     ) -> List[Response]:
-        """
-        Send a sequence of DALI commands to the bus and optionally wait for responses.
-        Send order is preserved, but commands are sent in batches
-        and can't be interleaved with other send() calls.
-        If sending multiple commands is desired, but order is not important,
-        consider using asyncio.gather with individual send() calls instead.
+        """Send a sequence of DALI commands as one ordered batch.
+
+        Order is preserved within the batch and the batch is not interleaved
+        with other ``send``/``send_commands`` calls. ``priority`` selects
+        forward-frame arbitration per IEC 62386-103:2022 §9.14.1 and is
+        applied to the leading frame; subsequent frames may be auto-promoted
+        to ``TRANSACTION_CONTINUATION`` when they form a protocol-level
+        transaction (DTR set followed by a consumer, EnableDeviceType prefix followed by
+        a DT command, etc.).
+
         Args:
-            commands (list[Command]): The list of DALI commands to send.
-            source (str): The source identifier for logging and tracking purposes.
+            commands: DALI commands to send.
+            source: Source identifier for bus-traffic logging.
+            priority: Forward-frame arbitration priority for the first frame.
         Returns:
-            list[Response]: The list of responses from the DALI devices
-                if commands have responses set, otherwise Response(None).
-                Internal transmission errors are returned as WbGatewayTransmissionError or its subclasses.
+            List of responses aligned with ``commands``: response objects
+            when the command has ``response`` set, otherwise
+            ``Response(None)``. Internal transmission errors are returned
+            as ``WbGatewayTransmissionError`` or its subclasses.
         """
 
-        return await self._send_commands_internal(commands, source, lock_queue=True)
+        return await self._send_commands_internal(commands, source, priority, lock_queue=True)
 
     async def _queue_sender(
         self,
@@ -863,14 +927,14 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         )
 
                 timeout_handler = asyncio.get_running_loop().call_later(
-                    WAIT_DALI_RESPONSE_TIMEOUT_S,
+                    self._response_timeout,
                     timeout_callback,
                 )
                 self._waiting_for_responses[current_index] = WaitResponseItem(
                     item, timeout_handler, self._send_queue_item_index
                 )
 
-                result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice)
+                result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice, item.priority)
                 regs_32bit.append(result)
                 self._send_queue_item_index += 1
 
@@ -888,7 +952,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             )
 
     async def _send_commands_internal(
-        self, commands: Sequence[Command], source: BusTrafficSource, lock_queue: bool
+        self,
+        commands: Sequence[Command],
+        source: BusTrafficSource,
+        priority: FramePriority,
+        lock_queue: bool,
     ) -> list[Response]:
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug("send: %s", ", ".join(str(cmd) for cmd in commands))
@@ -904,14 +972,15 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             if cmd.devicetype != 0:
                 commands_to_send.append(EnableDeviceType(cmd.devicetype))
             commands_to_send.append(cmd)
+        priorities = _compute_frame_priorities(commands_to_send, priority)
         response_futures: list[asyncio.Future] = []
         if lock_queue:
             await self._send_queue_lock.acquire()
         try:
-            for cmd in commands_to_send:
+            for cmd, frame_priority in zip(commands_to_send, priorities):
                 fut = asyncio.get_running_loop().create_future()
                 response_futures.append(fut)
-                await self._send_queue.put(SendQueueItem(fut, cmd, source))
+                await self._send_queue.put(SendQueueItem(fut, cmd, source, frame_priority))
         finally:
             if lock_queue:
                 self._send_queue_lock.release()
@@ -927,3 +996,46 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             i += 1
 
         return filtered_responses
+
+
+def _is_dtr_set(cmd: Command) -> bool:
+    return isinstance(cmd, (GearDTR0, GearDTR1, GearDTR2, DeviceDTR0, DeviceDTR1, DeviceDTR2))
+
+
+def _uses_dtr(cmd: Command) -> bool:
+    return (
+        getattr(cmd, "uses_dtr0", False)
+        or getattr(cmd, "uses_dtr1", False)
+        or getattr(cmd, "uses_dtr2", False)
+    )
+
+
+def _compute_frame_priorities(
+    commands: Sequence[Command], caller_priority: FramePriority
+) -> list[FramePriority]:
+    """Apply IEC 62386-103:2022 §9.14.1 transaction-continuation auto-promotion.
+
+    The first frame keeps the caller's priority. A subsequent frame is promoted
+    to ``TRANSACTION_CONTINUATION`` when it forms a protocol-level transaction
+    with the previous one:
+
+    - the previous frame is a ``DTR0`` / ``DTR1`` / ``DTR2`` set, **or**
+    - the previous frame is an ``EnableDeviceType`` prefix, **or**
+    - the current frame is a DTR consumer (``uses_dtr*``) — but not a DTR set
+      itself: a fresh DTR set starts a new segment, not continues one.
+    """
+    if not commands:
+        return []
+    result = [caller_priority]
+    for i in range(1, len(commands)):
+        prev = commands[i - 1]
+        curr = commands[i]
+        if (
+            _is_dtr_set(prev)
+            or isinstance(prev, EnableDeviceType)
+            or (_uses_dtr(curr) and not _is_dtr_set(curr))
+        ):
+            result.append(FramePriority.TRANSACTION_CONTINUATION)
+        else:
+            result.append(caller_priority)
+    return result

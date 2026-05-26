@@ -173,6 +173,10 @@ class CommissioningState:
         self.status = CommissioningStatus.READ_DEVICE_INFO
         self.progress = 81
 
+    def report_read_progress(self, done: int, total: int) -> None:
+        # Maps device-init progress onto the 81..99 band; mark_completed() owns 100.
+        self.progress = 81 + 18 * done // total
+
     def snapshot(self) -> "CommissioningState":
         return CommissioningState(
             status=self.status,
@@ -202,6 +206,13 @@ MIN_POLLING_INTERVAL = 1.0
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _count_devices_to_init(result: Optional[CommissioningResult]) -> int:
+    """Count entries that will hit `_try_init_new_device` for one bus's commissioning result."""
+    if result is None:
+        return 0
+    return len(result.new) + len(result.changed)
 
 
 @dataclass
@@ -800,11 +811,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self,
         res_dali: Optional[CommissioningResult],
         res_dali2: Optional[CommissioningResult],
+        on_device_initialized: Optional[Callable[[], None]] = None,
     ) -> None:
         if res_dali is not None:
-            await self._update_dali_devices(res_dali)
+            await self._update_dali_devices(res_dali, on_device_initialized)
         if res_dali2 is not None:
-            await self._update_dali2_devices(res_dali2)
+            await self._update_dali2_devices(res_dali2, on_device_initialized)
 
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
@@ -950,7 +962,20 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         try:
             self._commissioning_state.mark_reading_info()
             self._publish_commissioning_state()
-            await self._apply_commissioning_results(res_dali, res_dali2)
+
+            total = _count_devices_to_init(res_dali) + _count_devices_to_init(res_dali2)
+            if total > 0:
+                done = 0
+
+                def _report() -> None:
+                    nonlocal done
+                    done += 1
+                    self._commissioning_state.report_read_progress(done, total)
+                    self._publish_commissioning_state()
+
+                await self._apply_commissioning_results(res_dali, res_dali2, on_device_initialized=_report)
+            else:
+                await self._apply_commissioning_results(res_dali, res_dali2)
         except asyncio.CancelledError as exc:
             self._commissioning_state.mark_cancelled()
             self._publish_commissioning_state()
@@ -1027,7 +1052,11 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             for addr, name in zip(all_addresses, all_names)
         ]
 
-    async def _update_dali_devices(self, commissioning_result: CommissioningResult) -> None:
+    async def _update_dali_devices(
+        self,
+        commissioning_result: CommissioningResult,
+        on_device_initialized: Optional[Callable[[], None]] = None,
+    ) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
 
         created_devices = await self._build_commissioned_devices(
@@ -1048,13 +1077,19 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         for device in created_devices:
             device.set_logger(self.logger)
             await self._try_init_new_device(device)
+            if on_device_initialized is not None:
+                on_device_initialized()
 
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
         await self._refresh_group_virtual_devices()
         await self._refresh_broadcast_device()
 
-    async def _update_dali2_devices(self, commissioning_result: CommissioningResult) -> None:
+    async def _update_dali2_devices(
+        self,
+        commissioning_result: CommissioningResult,
+        on_device_initialized: Optional[Callable[[], None]] = None,
+    ) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
 
         created_devices = await self._build_commissioned_devices(
@@ -1076,6 +1111,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         for device in created_devices:
             device.set_logger(self.logger)
             await self._try_init_new_device(device)
+            if on_device_initialized is not None:
+                on_device_initialized()
 
         self.dali2_devices = new_dali2_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)

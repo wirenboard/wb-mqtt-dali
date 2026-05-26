@@ -245,9 +245,9 @@ async def main(argv) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Two gateways share bus 1 with one DALI 1 device. The long-timeout driver "
-            f"fires a batch of QueryActualLevel at priority {LONG_DRIVER_PRIORITY.value}; the hammer driver keeps "
-            f"the bus busy with priority {HAMMER_DRIVER_PRIORITY.value} QueryStatus in a double-buffered loop after the "
-            f"long driver has received {TRIGGER_AFTER} responses."
+            f"fires a batch of QueryActualLevel at priority {LONG_DRIVER_PRIORITY.value}; "
+            f"the hammer driver keeps the bus busy with priority {HAMMER_DRIVER_PRIORITY.value} "
+            f"QueryStatus after the long driver has received {TRIGGER_AFTER} responses."
         )
     )
     parser.add_argument(

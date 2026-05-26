@@ -341,7 +341,9 @@ async def read_bank_as_dict(
     callers pass e.g. ``"DT50 memory bank"`` to preserve their existing message.
     """
     try:
-        data = await driver.run_sequence(read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION)
+        data = await driver.run_sequence(
+            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION
+        )
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
         raise RuntimeError(f"Failed to read {label}: {e}") from e

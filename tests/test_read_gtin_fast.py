@@ -23,11 +23,11 @@ def _empty_response():
 
 
 class _SequenceDriver:
-    """Replays the ``run_sequence`` contract against a scripted bank-to-bytes map.
+    """Replays the ``send_commands`` contract against a scripted bank-to-bytes map.
 
-    Records every command yielded by the sequence so tests can assert on the
-    exact DALI traffic. Feeds back successful responses for ``ReadMemoryLocation``
-    and empty responses for everything else.
+    Records every command in the batches so tests can assert on the exact DALI
+    traffic. Decodes the bank from the DTR1 in the batch and feeds back the
+    matching scripted bytes for the ``ReadMemoryLocation`` slots.
     """
 
     # pylint: disable=too-few-public-methods
@@ -38,43 +38,31 @@ class _SequenceDriver:
         self._bank_bytes = bank_bytes
         self._raise = set(raise_not_implemented_for)
         self.commands: list = []
-        self.current_bank = None
 
-    def _handle_batch(self, cmd_list):
+    async def send_commands(self, cmds, source=None, priority=None):
+        del source, priority
+        cmd_list = list(cmds)
         self.commands.extend(cmd_list)
-        if not cmd_list or not isinstance(cmd_list[0], ReadMemoryLocation):
-            return [SimpleNamespace(raw_value=None) for _ in cmd_list]
-        if self.current_bank in self._raise:
-            raise MemoryLocationNotImplemented(f"bank {self.current_bank} not implemented")
-        bytes_ = self._bank_bytes.get(self.current_bank)
-        if bytes_ is None:
-            return [_empty_response() for _ in cmd_list]
-        # Per-byte: ``None`` entries map to a no-response; ints map to OK responses.
-        return [_empty_response() if b is None else _ok_response(b) for b in bytes_]
-
-    def _handle_single(self, cmd):
-        self.commands.append(cmd)
-        if isinstance(cmd, DTR1):
-            self.current_bank = cmd.frame.as_integer & 0xFF
-        return SimpleNamespace(raw_value=None)
-
-    async def run_sequence(self, seq, progress=None):
-        del progress
-        response = None
-        started = False
-        try:
-            while True:
-                try:
-                    cmd = next(seq) if not started else seq.send(response)
-                    started = True
-                except StopIteration as stop:
-                    return stop.value
-                if isinstance(cmd, list):
-                    response = self._handle_batch(cmd)
+        bank = None
+        for cmd in cmd_list:
+            if isinstance(cmd, DTR1):
+                bank = cmd.frame.as_integer & 0xFF
+        if bank in self._raise:
+            raise MemoryLocationNotImplemented(f"bank {bank} not implemented")
+        bytes_ = self._bank_bytes.get(bank)
+        responses = []
+        read_idx = 0
+        for cmd in cmd_list:
+            if isinstance(cmd, ReadMemoryLocation):
+                if bytes_ is None:
+                    responses.append(_empty_response())
                 else:
-                    response = self._handle_single(cmd)
-        finally:
-            seq.close()
+                    byte = bytes_[read_idx] if read_idx < len(bytes_) else None
+                    responses.append(_empty_response() if byte is None else _ok_response(byte))
+                read_idx += 1
+            else:
+                responses.append(_empty_response())
+        return responses
 
 
 def _bytes_for_gtin(gtin: int) -> list:

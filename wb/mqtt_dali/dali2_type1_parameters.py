@@ -19,7 +19,7 @@ from dali.device.pushbutton import (
 
 from .dali2_parameters import InstanceParam
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import is_broadcast_or_group_address, query_int, query_responses
 
 
@@ -115,6 +115,7 @@ class EventFilterParam(SettingsParamBase):
             driver,
             QueryEventFilterZeroToSeven(short_address, self._instance_number),
             logger,
+            FramePriority.CONFIGURATION,
         )
         mask = raw & 0xFF
         self.value = mask
@@ -139,7 +140,7 @@ class EventFilterParam(SettingsParamBase):
             SetEventFilter(short_address, self._instance_number),
             QueryEventFilterZeroToSeven(short_address, self._instance_number),
         ]
-        responses = await query_responses(driver, commands, logger)
+        responses = await query_responses(driver, commands, logger, FramePriority.CONFIGURATION)
         actual_mask = responses[-1].raw_value.as_integer & 0xFF
         self.value = actual_mask
         return {self.PROPERTY_NAME: self._mask_to_dict(actual_mask)}

@@ -12,6 +12,7 @@ from wb.mqtt_dali.common_dali_device import (
 )
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.device_publisher import ControlInfo
+from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
 # pylint: disable=invalid-name
@@ -460,7 +461,7 @@ async def test_run_single_query_returns_error_when_response_is_none():
 
     res = await control._run_single_query(driver, GearShort(1))
 
-    driver.send_commands.assert_awaited_once_with(["Q1"], BusTrafficSource.WB)
+    driver.send_commands.assert_awaited_once_with(["Q1"], BusTrafficSource.WB, FramePriority.PERIODIC_QUERY)
     assert len(res) == 1
     assert res[0].control_id == "c1"
     assert res[0].value == ""
@@ -620,7 +621,8 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     responses_per_call = {"Q1": [r1], "Q2": [r2], "Q3": [None]}
     issued_queries: list[str] = []
 
-    async def fake_send(cmds, _src=BusTrafficSource.WB):
+    async def fake_send(cmds, _src=BusTrafficSource.WB, priority=None):
+        del priority
         assert len(cmds) == 1
         issued_queries.append(cmds[0])
         return responses_per_call[cmds[0]]

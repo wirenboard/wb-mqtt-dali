@@ -25,7 +25,7 @@ from .gear.switching_function import (
     SwitchingFunctionSwitchStatusResponse,
 )
 from .settings import SettingsParamName
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import query_response
 
 
@@ -107,7 +107,9 @@ class Type7Parameters(TypeParameters):
         logger: Optional[logging.Logger] = None,
     ) -> None:
         try:
-            features = await query_response(driver, QueryFeatures(short_address), logger)
+            features = await query_response(
+                driver, QueryFeatures(short_address), logger, FramePriority.CONFIGURATION
+            )
         except RuntimeError as e:
             raise RuntimeError(f"Failed to read switching function features: {e}") from e
         res = []

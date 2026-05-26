@@ -30,7 +30,7 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .settings import SettingsParamBase, SettingsParamName
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbmqtt import ControlMeta, TranslatedTitle
 
 # Bank 202 / 203 / 204 layout per IEC 62386-252:2023.
@@ -241,16 +241,19 @@ class Type51EnergyParam(SettingsParamBase):
         }
 
 
-def _read_active_scale_sequence(short_address: Address, compat: DaliCommandsCompatibilityLayer):
-    """Read the active-energy ROM scale factor (bank 202, addr 0x04).
-
-    Yielded as a small ``run_sequence`` for the initialize-time scale probe.
-    Not subject to the per-tick 3-4-command polling budget.
-    """
-    yield compat.DTR1(BANK_202.address)
-    yield compat.DTR0(_ENERGY_SCALE_ADDR)
-    responses = yield [compat.ReadMemoryLocation(short_address)]
-    response = responses[0]
+async def _read_active_scale(
+    driver: WBDALIDriver, short_address: Address, compat: DaliCommandsCompatibilityLayer
+) -> int:
+    """Read the active-energy ROM scale factor (bank 202, addr 0x04)."""
+    responses = await driver.send_commands(
+        [
+            compat.DTR1(BANK_202.address),
+            compat.DTR0(_ENERGY_SCALE_ADDR),
+            compat.ReadMemoryLocation(short_address),
+        ],
+        priority=FramePriority.CONFIGURATION,
+    )
+    response = responses[-1]
     if response.raw_value is None:
         raise MemoryLocationNotImplemented(
             f"Scale factor not implemented at bank 202 addr {_ENERGY_SCALE_ADDR}"
@@ -327,9 +330,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         # Cache the ROM scale byte at init time so chunked cycles can decode
         # without re-reading it; in-cycle fallback covers init-time failures.
         try:
-            self._scale_byte = await driver.run_sequence(
-                _read_active_scale_sequence(short_address, self._compat)
-            )
+            self._scale_byte = await _read_active_scale(driver, short_address, self._compat)
         except Exception as e:  # pylint: disable=broad-exception-caught
             if logger is not None:
                 logger.info("DT51 scale factor not available yet for %s: %s", short_address, e)
@@ -408,7 +409,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
             self._compat.ReadMemoryLocation(address),
         ]
         try:
-            responses = await driver.send_commands(cmds)
+            responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
         except Exception:  # pylint: disable=broad-exception-caught
             return self._fail_cycle(tick_now)
         scale_resp = responses[2]
@@ -432,7 +433,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
             self._compat.ReadMemoryLocation(address),
         ]
         try:
-            responses = await driver.send_commands(cmds)
+            responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
         except Exception:  # pylint: disable=broad-exception-caught
             return self._fail_cycle(tick_now)
 

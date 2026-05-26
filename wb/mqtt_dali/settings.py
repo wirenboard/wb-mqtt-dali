@@ -7,7 +7,7 @@ from dali.address import Address
 from dali.command import Command
 
 from .utils import merge_json_schema_properties, merge_translations
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     is_broadcast_or_group_address,
     query_int,
@@ -90,7 +90,9 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        response = await query_response(driver, self._query_factory(short_address), logger)
+        response = await query_response(
+            driver, self._query_factory(short_address), logger, FramePriority.CONFIGURATION
+        )
         if response.value is None:
             raise RuntimeError(f"Failed to read {self.property_name} state")
         self.value = bool(response.value)
@@ -112,7 +114,9 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
             return {}
 
         command_factory = self._enable_factory if bool(value_to_set) else self._disable_factory
-        await send_with_retry(driver, command_factory(short_address), logger)
+        await send_with_retry(
+            driver, command_factory(short_address), logger, priority=FramePriority.CONFIGURATION
+        )
         if not is_for_single_device:
             return {}
         return await self.read(driver, short_address, logger)
@@ -166,7 +170,15 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        self.value = await query_int(driver, self.get_read_command(short_address), logger) * self.multiplier
+        self.value = (
+            await query_int(
+                driver,
+                self.get_read_command(short_address),
+                logger,
+                FramePriority.CONFIGURATION,
+            )
+            * self.multiplier
+        )
         return {self.property_name: self.value}
 
     async def write(
@@ -186,7 +198,7 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         commands = self.get_write_commands(short_address, raw)
         if is_for_single_device:
             commands.append(self.get_read_command(short_address))
-        responses = await query_responses(driver, commands, logger)
+        responses = await query_responses(driver, commands, logger, FramePriority.CONFIGURATION)
         if not is_for_single_device:
             return {}
         res = responses[-1]

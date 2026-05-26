@@ -21,7 +21,7 @@ from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schemas
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     check_query_response,
     is_transmission_error_response,
@@ -133,7 +133,7 @@ class MqttControlBase:
         try:
             # pylint: disable-next=assignment-from-no-return
             query = self.get_query(address)
-            responses = await send_commands_with_retry(driver, [query])
+            responses = await send_commands_with_retry(driver, [query], priority=FramePriority.PERIODIC_QUERY)
             response = responses[0]
             try:
                 check_query_response(response)
@@ -332,7 +332,6 @@ async def read_bank_as_dict(
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-    *,
     error_label: Optional[str] = None,
 ) -> dict[str, Any]:
     """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
@@ -342,7 +341,7 @@ async def read_bank_as_dict(
     callers pass e.g. ``"DT50 memory bank"`` to preserve their existing message.
     """
     try:
-        data = await driver.run_sequence(read_memory_bank(bank, short_address, compat))
+        data = await driver.run_sequence(read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION)
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
         raise RuntimeError(f"Failed to read {label}: {e}") from e
@@ -389,49 +388,6 @@ _GTIN_START_ADDRESS = 0x03
 _GTIN_LENGTH = 6
 
 
-def _read_gtin_raw_sequence(
-    bank_address: int,
-    short_address: Address,
-    compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-):
-    """Yield the minimal command sequence required to fetch the 6 GTIN bytes.
-
-    Selects the target memory bank via DTR1, positions DTR0 at the GTIN start
-    offset (0x03) and issues all six ``ReadMemoryLocation`` commands as a single
-    batch so the driver pipelines them. Returns the list of 6 raw byte values.
-
-    Uses the same 3-attempt retry budget as ``read_memory_bank``, but retries
-    simpler: on failure the whole batch is re-issued (DTR0 + 6 reads) instead
-    of resuming from the first unread offset — acceptable because the GTIN
-    read is only 6 bytes and rarely fails more than once.
-    """
-    yield from request_with_retry_sequence(compat.DTR1(bank_address))
-
-    last_error = "unknown error"
-    for _ in range(3):
-        yield from request_with_retry_sequence(compat.DTR0(_GTIN_START_ADDRESS))
-        responses = yield [compat.ReadMemoryLocation(short_address) for _ in range(_GTIN_LENGTH)]
-
-        raw_bytes = []
-        failed = False
-        for response in responses:
-            try:
-                check_query_response(response)
-                raw_bytes.append(response.raw_value.as_integer)
-            except RuntimeError as e:
-                last_error = str(e)
-                failed = True
-                break
-
-        if not failed:
-            return raw_bytes
-
-    raise RuntimeError(
-        f"Failed to read GTIN from memory bank {bank_address} for {short_address} "
-        f"after 3 attempts; last error: {last_error}"
-    )
-
-
 async def _read_gtin_from_bank(
     driver: WBDALIDriver,
     bank_address: int,
@@ -441,11 +397,30 @@ async def _read_gtin_from_bank(
 ) -> Optional[int]:
     """Read the 6 GTIN bytes from a single memory bank and decode them.
 
+    Selects the bank via DTR1, positions DTR0 at the GTIN start offset (0x03)
+    and issues all six ``ReadMemoryLocation`` commands in one batch so
+    auto-promotion ties the DTR setup to the reads in a single transaction.
+
     Returns the decoded GTIN integer, or ``None`` if the bank is not programmed
     (all bytes 0xFF). Raises ``MemoryLocationNotImplemented`` if the bank /
     location is absent on the device.
     """
-    raw_bytes = await driver.run_sequence(_read_gtin_raw_sequence(bank_address, short_address, compat))
+    commands = [
+        compat.DTR1(bank_address),
+        compat.DTR0(_GTIN_START_ADDRESS),
+        *[compat.ReadMemoryLocation(short_address) for _ in range(_GTIN_LENGTH)],
+    ]
+    responses = await send_commands_with_retry(driver, commands, priority=FramePriority.CONFIGURATION)
+    read_responses = responses[2:]
+    raw_bytes: list[int] = []
+    for response in read_responses:
+        try:
+            check_query_response(response)
+            raw_bytes.append(response.raw_value.as_integer)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Failed to read GTIN from memory bank {bank_address} for {short_address}: {e}"
+            ) from e
     padded = [None] * _GTIN_START_ADDRESS + raw_bytes
     decoded = gtin_value_cls.from_list(padded)
     if _is_empty_memory_int(decoded):
@@ -553,6 +528,7 @@ class GeneralMemoryParams(SettingsParamBase):
                     driver,
                     self._compat.QueryVersionNumber(short_address),
                     logger,
+                    FramePriority.CONFIGURATION,
                 )
                 if v.value == 1:
                     bank0 = info.BANK_0_legacy
@@ -561,14 +537,22 @@ class GeneralMemoryParams(SettingsParamBase):
             except RuntimeError:
                 bank0 = info.BANK_0_legacy
             self._update_info(
-                res, await driver.run_sequence(read_memory_bank(bank0, short_address, self._compat))
+                res,
+                await driver.run_sequence(
+                    read_memory_bank(bank0, short_address, self._compat),
+                    FramePriority.CONFIGURATION,
+                ),
             )
         except MemoryLocationNotImplemented:
             # Some devices do not implement this general information memory bank
             pass
         try:
             self._update_info(
-                res, await driver.run_sequence(read_memory_bank(oem.BANK_1, short_address, self._compat))
+                res,
+                await driver.run_sequence(
+                    read_memory_bank(oem.BANK_1, short_address, self._compat),
+                    FramePriority.CONFIGURATION,
+                ),
             )
         except MemoryLocationNotImplemented:
             # OEM memory bank may be absent on some devices
@@ -935,6 +919,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                 driver,
                 self._compat.setShortAddressCommands(self.address.short, new_short_address),
                 self.logger,
+                priority=FramePriority.CONFIGURATION,
             )
             self.address.short = new_short_address
 

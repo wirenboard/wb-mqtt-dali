@@ -40,7 +40,7 @@ from .dali_type8_common import ColourComponent
 from .dali_type8_tc import TcLimitsSettings, Type8TcLimits
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
     check_query_response,
@@ -271,7 +271,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
             return {}
         cmds = new_state.colour.get_write_commands(short_address)
         cmds.extend([DTR0(new_state.level), self._setup_command_class(short_address)])
-        await send_commands_with_retry(driver, cmds, logger)
+        await send_commands_with_retry(driver, cmds, logger, priority=FramePriority.CONFIGURATION)
         if is_for_single_device and self._read_after_save:
             return await self._read_impl(driver, short_address)
         self.value = new_state
@@ -329,7 +329,8 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
                 self._query_command_class(short_address),
                 self._colour_tags,
                 self._default_colour_type,
-            )
+            ),
+            FramePriority.CONFIGURATION,
         )
         if resp is None:
             raise RuntimeError(f"Error reading {self.name.en}")
@@ -765,7 +766,7 @@ class Type8Parameters(TypeParameters):
         responses = None
         for _ in range(MAX_COLOUR_SUBBATCH_RETRIES):
             try:
-                responses = await driver.send_commands(cmds)
+                responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
             except Exception:  # pylint: disable=broad-exception-caught
                 continue
             if all(is_valid_colour_query_response(c, r) for c, r in zip(cmds, responses)):
@@ -816,7 +817,9 @@ class Type8Parameters(TypeParameters):
         short_address: Address,
         logger: Optional[logging.Logger] = None,
     ) -> ColourType:
-        res = await query_response(driver, QueryColourStatus(short_address), logger)
+        res = await query_response(
+            driver, QueryColourStatus(short_address), logger, FramePriority.CONFIGURATION
+        )
         if getattr(res, "colour_type_xy_active") is True:
             return ColourType.XY
         if getattr(res, "colour_type_colour_temperature_Tc_active") is True:

@@ -141,7 +141,8 @@ async def test_polling_tick_budget_capped_at_three_commands():
 
     sent_per_call = []
 
-    async def fake_send(cmds, _source):
+    async def fake_send(cmds, _source=None, priority=None):
+        del priority
         sent_per_call.append(list(cmds))
         return [_ok_response() for _ in cmds]
 
@@ -218,7 +219,8 @@ async def test_dt8_colour_step_consumes_whole_tick():
     scheduler = PollScheduler()
     scheduler.set_devices([dev_a, dev_b])
 
-    async def opening_batch_send(cmds, _src=None):
+    async def opening_batch_send(cmds, _src=None, priority=None):
+        del priority
         # Last response carries the active colour type (RGBWAF = 0x80).
         responses = [_ok_response() for _ in cmds]
         responses[-1].raw_value.as_integer = ColourType.RGBWAF.value
@@ -272,7 +274,8 @@ async def test_overdue_deadline_after_quiescent_does_not_burst_catch_up():
 
     sent_per_call = []
 
-    async def fake_send(cmds, _source):
+    async def fake_send(cmds, _source=None, priority=None):
+        del priority
         sent_per_call.append(list(cmds))
         return [_ok_response() for _ in cmds]
 

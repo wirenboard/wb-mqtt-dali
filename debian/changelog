@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.16.0) stable; urgency=medium
+
+  * Add support for frame priorities.
+  * Use appropriate priorities for internal commands.
+  * Add command line option for setting priority of CLI commands.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 26 May 2026 13:35:30 +0500
+
 wb-mqtt-dali (1.15.3) stable; urgency=medium
 
   * Decrease CPU load

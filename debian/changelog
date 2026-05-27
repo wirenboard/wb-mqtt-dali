@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.16.2) stable; urgency=medium
+
+  * Report fine-grained commissioning progress while reading mandatory
+    device parameters after the bus scan (was previously frozen at 81%).
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 26 May 2026 17:00:00 +0500
+
 wb-mqtt-dali (1.16.1) stable; urgency=medium
 
   * Fix DT51 parameters layout in homeui

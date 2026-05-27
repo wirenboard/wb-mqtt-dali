@@ -756,6 +756,210 @@ class TestCommissioningTaskTerminalBranches:
         assert "StopQuiescentMode" in stop_calls
 
 
+class TestReadDeviceInfoProgress:
+    """Per-device progress reporting on the READ_DEVICE_INFO stage (81..99)."""
+
+    @staticmethod
+    def _make_commissioning_factory(res_dali, res_dali2):
+        def _make_commissioning(_driver, _old_devices, dali2, _progress_cb):
+            async def _fake_smart_extend():
+                return res_dali2 if dali2 else res_dali
+
+            return SimpleNamespace(smart_extend=_fake_smart_extend)
+
+        return _make_commissioning
+
+    @pytest.mark.asyncio
+    async def test_read_progress_advances_per_device(self):
+        # pylint: disable=protected-access
+        """N>=2 new DALI 1 devices produce N monotonic READ_DEVICE_INFO snapshots in [81, 99],
+        followed by a final COMPLETED snapshot with progress=100.
+        """
+        controller = _make_commissioning_controller()
+
+        snapshots: list[tuple[CommissioningStatus, int]] = []
+
+        def _cb(state):
+            snapshots.append((state.status, state.progress))
+
+        controller._commissioning_state_cb = _cb
+
+        new_addresses = [DaliDeviceAddress(short=i, random=i) for i in range(3)]
+        res_dali = CommissioningResult(new=new_addresses)
+        res_dali2 = CommissioningResult()
+
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=None),
+        ), patch("wb.mqtt_dali.application_controller.Commissioning") as mock_cls, patch(
+            "wb.mqtt_dali.application_controller.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "wb.mqtt_dali.application_controller.read_product_name",
+            new=AsyncMock(return_value=None),
+        ):
+            mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)
+            await controller._commissioning_task()
+
+        read_progress = [p for status, p in snapshots if status == CommissioningStatus.READ_DEVICE_INFO]
+        # mark_reading_info publishes 81, then one snapshot per device.
+        assert read_progress[0] == 81
+        per_device = read_progress[1:]
+        assert len(per_device) == 3
+        # Monotonic, bounded by [81, 99], ends at 99.
+        assert all(81 <= p <= 99 for p in per_device)
+        assert per_device == sorted(per_device)
+        assert per_device[-1] == 99
+        # Final snapshot is COMPLETED at 100.
+        assert snapshots[-1] == (CommissioningStatus.COMPLETED, 100)
+
+    @pytest.mark.asyncio
+    async def test_read_progress_no_changes(self):
+        # pylint: disable=protected-access
+        """When both buses report only unchanged devices, no intermediate READ_DEVICE_INFO
+        snapshots are emitted — progress jumps 81 → 100 with nothing in between.
+        """
+        controller = _make_commissioning_controller()
+
+        snapshots: list[tuple[CommissioningStatus, int]] = []
+
+        def _cb(state):
+            snapshots.append((state.status, state.progress))
+
+        controller._commissioning_state_cb = _cb
+
+        res_dali = CommissioningResult(unchanged=[DaliDeviceAddress(short=0, random=1)])
+        res_dali2 = CommissioningResult(unchanged=[DaliDeviceAddress(short=1, random=2)])
+
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=None),
+        ), patch("wb.mqtt_dali.application_controller.Commissioning") as mock_cls, patch(
+            "wb.mqtt_dali.application_controller.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "wb.mqtt_dali.application_controller.read_product_name",
+            new=AsyncMock(return_value=None),
+        ):
+            mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)
+            await controller._commissioning_task()
+
+        read_progress = [p for status, p in snapshots if status == CommissioningStatus.READ_DEVICE_INFO]
+        # Only the mark_reading_info() entry snapshot — no per-device snapshots.
+        assert read_progress == [81]
+        assert snapshots[-1] == (CommissioningStatus.COMPLETED, 100)
+
+    @pytest.mark.asyncio
+    async def test_read_progress_counts_failed_init(self):
+        # pylint: disable=protected-access
+        """The read-progress counter advances once per device even when
+        ``try_initialize_device`` returns False for some of them: the for-loop in
+        ``_update_dali_devices`` calls the progress callback after every
+        ``_try_init_new_device`` call regardless of its outcome. Progress reaches
+        99 by the end of the stage and the run terminates COMPLETED.
+        """
+        controller = _make_commissioning_controller()
+        # Use the real wrapper so the for-loop in _update_dali_devices actually
+        # iterates and calls our progress callback after each device.
+        del controller._try_init_new_device
+
+        snapshots: list[tuple[CommissioningStatus, int]] = []
+
+        def _cb(state):
+            snapshots.append((state.status, state.progress))
+
+        controller._commissioning_state_cb = _cb
+
+        new_addresses = [DaliDeviceAddress(short=i, random=i) for i in range(3)]
+        res_dali = CommissioningResult(new=new_addresses)
+        res_dali2 = CommissioningResult()
+
+        # Middle device's init returns False; we don't model the underlying
+        # exception — the production wrapper turns the exception into a False
+        # return, and that's the only contract the progress loop cares about.
+        try_init = AsyncMock(side_effect=[True, False, True])
+
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=None),
+        ), patch("wb.mqtt_dali.application_controller.Commissioning") as mock_cls, patch(
+            "wb.mqtt_dali.application_controller.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "wb.mqtt_dali.application_controller.read_product_name",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "wb.mqtt_dali.application_controller.try_initialize_device",
+            new=try_init,
+        ):
+            mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)
+            await controller._commissioning_task()
+
+        # All three devices reached try_initialize_device regardless of the
+        # middle one's False return — proving the progress loop did not abort
+        # on a failed init.
+        assert try_init.await_count == 3
+        read_progress = [p for status, p in snapshots if status == CommissioningStatus.READ_DEVICE_INFO]
+        per_device = read_progress[1:]
+        assert len(per_device) == 3
+        assert per_device[-1] == 99
+        assert snapshots[-1] == (CommissioningStatus.COMPLETED, 100)
+
+    @pytest.mark.asyncio
+    async def test_read_progress_counts_both_buses(self):
+        # pylint: disable=protected-access
+        """Devices from DALI 1 and DALI 2 commissioning results both contribute to the
+        total; the last READ_DEVICE_INFO snapshot before COMPLETED is at progress=99.
+        """
+        controller = _make_commissioning_controller()
+
+        snapshots: list[tuple[CommissioningStatus, int]] = []
+
+        def _cb(state):
+            snapshots.append((state.status, state.progress))
+
+        controller._commissioning_state_cb = _cb
+
+        # DALI-1: 2 new + 1 changed; DALI-2: 1 new + 1 changed -> total = 5.
+        controller.dali_devices = cast(
+            Any,
+            [SimpleNamespace(address=DaliDeviceAddress(short=10, random=0xAA), mqtt_id="gw_bus_1_10")],
+        )
+        controller.dali2_devices = cast(
+            Any,
+            [SimpleNamespace(address=DaliDeviceAddress(short=20, random=0xBB), mqtt_id="gw_bus_1_d2_20")],
+        )
+        res_dali = CommissioningResult(
+            new=[DaliDeviceAddress(short=1, random=1), DaliDeviceAddress(short=2, random=2)],
+            changed=[ChangedDevice(new=DaliDeviceAddress(short=10, random=0xCC), old_short=10)],
+        )
+        res_dali2 = CommissioningResult(
+            new=[DaliDeviceAddress(short=21, random=0x21)],
+            changed=[ChangedDevice(new=DaliDeviceAddress(short=20, random=0xDD), old_short=20)],
+        )
+
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=None),
+        ), patch("wb.mqtt_dali.application_controller.Commissioning") as mock_cls, patch(
+            "wb.mqtt_dali.application_controller.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "wb.mqtt_dali.application_controller.read_product_name",
+            new=AsyncMock(return_value=None),
+        ):
+            mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)
+            await controller._commissioning_task()
+
+        # 5 _try_init_new_device calls total across both buses.
+        assert controller._try_init_new_device.await_count == 5
+        read_progress = [p for status, p in snapshots if status == CommissioningStatus.READ_DEVICE_INFO]
+        per_device = read_progress[1:]
+        assert len(per_device) == 5
+        assert per_device[-1] == 99
+        assert snapshots[-1] == (CommissioningStatus.COMPLETED, 100)
+
+
 class TestFinishedAtLifecycle:
     def test_queued_after_completed_clears_finished_at(self):
         state = CommissioningState()

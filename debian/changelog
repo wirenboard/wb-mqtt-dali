@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.16.3) stable; urgency=medium
+
+  * Add e2e test for event handling latency.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 28 May 2026 11:28:49 +0500
+
 wb-mqtt-dali (1.16.2) stable; urgency=medium
 
   * Report fine-grained commissioning progress while reading mandatory

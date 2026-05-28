@@ -24,7 +24,6 @@ from unittest.mock import MagicMock
 
 import paho.mqtt.client as mqtt
 import pytest
-import pytest_asyncio
 from dali.address import GearGroup, GearShort
 from dali.command import Command
 from dali.frame import ForwardFrame
@@ -44,6 +43,7 @@ from dali.gear.general import (
     SetScene,
 )
 from dali.memory import info
+from pytest_asyncio import fixture as pytest_asyncio_fixture
 
 from tests.test_commissioning import FakeDALIBus
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
@@ -158,7 +158,7 @@ def _simulate_reply_with_response(
     dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio_fixture
 async def initialized_driver():
     mqtt_client = _MockMqttClient()
     dispatcher = MQTTDispatcher(mqtt_client)

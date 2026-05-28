@@ -102,7 +102,7 @@ class MqttControlBase:
         poll_interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
         return now - self.last_poll_time >= poll_interval
 
-    def next_poll_step(  # pylint: disable=too-many-arguments
+    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         driver: "WBDALIDriver",
         address: Address,
@@ -153,7 +153,7 @@ class MqttControlBase:
 
 
 class MqttControl(MqttControlBase):
-    def __init__(  # pylint: disable=too-many-arguments
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         control_info: ControlInfo,
         query_builder: Optional[Callable[[Address], object]] = None,
@@ -228,7 +228,7 @@ class Pollable(Protocol):
     def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
         """Whether the pollable is eligible for the next round."""
 
-    def next_poll_step(  # pylint: disable=too-many-arguments
+    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         driver: Any,
         address: Address,

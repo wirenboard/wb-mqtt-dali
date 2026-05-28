@@ -186,7 +186,7 @@ async def _cancel_background_tasks(*tasks: asyncio.Task) -> None:
             pass
 
 
-async def _capture_one_batch(  # pylint: disable=too-many-arguments
+async def _capture_one_batch(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     driver: WBDALIDriver,
     mqtt_client: _MockMqttClient,
     dispatcher: MQTTDispatcher,
@@ -738,7 +738,7 @@ async def _keep_replying_no_response(dispatcher: MQTTDispatcher, config: WBDALIC
         slot += 1
 
 
-async def _pump_publishes_and_reply_scripted(  # pylint: disable=too-many-arguments
+async def _pump_publishes_and_reply_scripted(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     mqtt_client: _MockMqttClient,
     dispatcher: MQTTDispatcher,
     driver: WBDALIDriver,

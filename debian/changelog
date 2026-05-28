@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.16.5) stable; urgency=medium
+
+  * Fix pylint
+
+ -- Nikolay Korotkiy <nikolay.korotkiy@wirenboard.com>  Thu, 28 May 2026 17:19:00 +0400
+
 wb-mqtt-dali (1.16.4) stable; urgency=medium
 
   * Add e2e test for parallel execution of bus scan on 3 buses 

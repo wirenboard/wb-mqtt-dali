@@ -5,23 +5,21 @@
 # Two gateways are physically wired in parallel on bus 1, with one DALI 1
 # gear (an arc-power device) on the bus. The test brings up one
 # `WBDALIDriver` per gateway directly over MQTT-RPC to wb-mqtt-serial; the
-# `wb-mqtt-dali` daemon should be stopped for the run so its own pollers
-# don't add a third party to bus arbitration.
+# `wb-mqtt-dali` daemon is stopped at startup so its own pollers don't add
+# a third party to bus arbitration, and started again on exit.
 #
 # Scenario:
 #   1. Set the device's arc-power level via the hammer driver so
 #      QueryActualLevel returns a deterministic byte.
 #   2. On the long driver: extend `response_timeout` to a large value and
-#      fire off a batch of QueryActualLevel commands at priority 4
-#      (AUTOMATIC). Do not await.
+#      submit LONG_BURST QueryActualLevel commands at the long driver's
+#      priority via a single `send_commands` call. Do not await — the
+#      driver pipelines internally.
 #   3. Wait until the long driver has received TRIGGER_AFTER responses —
-#      at this point the prio-4 batch is uncontested.
-#   4. Only then start the hammer driver in a double-buffered prefetch
-#      loop (one batch in flight, one already queued — same pattern as
-#      `send_command_service` in `wb/mqtt_dali/main.py`), keep sending
-#      QueryStatus batches at priority 3 (CONFIGURATION) for
-#      HAMMER_DURATION seconds. The hammer's queue never drains.
-#   5. After the hammer stops, await the long driver's remaining responses.
+#      at this point the long batch is uncontested.
+#   4. Only then submit HAMMER_BURST QueryStatus commands at the hammer
+#      driver's priority via the hammer driver's `send_commands`.
+#   5. Await both; print the merged sequence on exit.
 #
 # Each driver registers a `bus_traffic` callback that records every
 # WB-source response with timestamp, gateway label, gateway sequence_id and
@@ -47,9 +45,8 @@ EXIT_SUCCESS = 0
 DALI_BUS = 1
 
 LEVEL = 128
-LONG_BURST = 16
-HAMMER_BATCH = 8
-HAMMER_DURATION = 15.0
+LONG_BURST = 40
+HAMMER_BURST = 40
 LONG_RESPONSE_TIMEOUT = 20.0
 TRIGGER_AFTER = 2
 
@@ -73,6 +70,23 @@ async def dispatcher_task(mqtt_dispatcher: MQTTDispatcher) -> None:
         pass
 
 
+async def run_cmd(cmd: str) -> None:
+    proc = await asyncio.create_subprocess_shell(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+    stdout = stdout.decode("utf-8", errors="replace").rstrip()
+    stderr = stderr.decode("utf-8", errors="replace").rstrip()
+
+    print(f'Command: "{cmd}" exit code: {proc.returncode}')
+    if stdout:
+        print("STDOUT:")
+        print(stdout)
+    if stderr:
+        print("STDERR:")
+        print(stderr)
+
+
 def make_traffic_recorder(events: List[TrafficEvent], driver_name: str):
     """Build a `bus_traffic` callback that appends one `TrafficEvent` per
     WB-source response. BUS-source frames (bus_monitor sporadics) are
@@ -94,32 +108,6 @@ def make_traffic_recorder(events: List[TrafficEvent], driver_name: str):
         )
 
     return callback
-
-
-async def hammer_loop(driver: WBDALIDriver, short_address: int, deadline: float) -> None:
-    """Keep the hammer gateway's send queue full until `deadline`.
-
-    Mirrors the double-buffered prefetch in `send_command_service`
-    (`wb/mqtt_dali/main.py`): one batch is awaited while the next is
-    already in flight, so the gateway never sees an idle moment between
-    batches. The hammer keeps issuing prio-3 frames so the long driver's
-    prio-4 frames keep losing arbitration on the wire.
-    """
-    loop = asyncio.get_running_loop()
-    cmd_batch = [QueryStatus(GearShort(short_address)) for _ in range(HAMMER_BATCH)]
-
-    def launch() -> asyncio.Task:
-        return asyncio.create_task(
-            driver.send_commands(cmd_batch, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY)
-        )
-
-    current = launch()
-    while True:
-        next_task = launch() if loop.time() < deadline else None
-        await current
-        if next_task is None:
-            return
-        current = next_task
 
 
 def print_results(events: List[TrafficEvent], t0: float) -> None:
@@ -211,22 +199,20 @@ async def run_test(  # pylint: disable=too-many-locals
 
                 await asyncio.wait_for(trigger_event.wait(), timeout=5.0)
                 logging.info(
-                    "%d long response(s) received at t=%.3f s; starting hammer loop "
-                    "(%.1f s of QueryStatus batches size=%d @ prio %d)",
+                    "%d long response(s) received at t=%.3f s; launching hammer batch "
+                    "(%d x QueryStatus @ prio %d)",
                     TRIGGER_AFTER,
                     loop.time() - t0,
-                    HAMMER_DURATION,
-                    HAMMER_BATCH,
+                    HAMMER_BURST,
                     HAMMER_DRIVER_PRIORITY.value,
                 )
-                hammer_deadline = loop.time() + HAMMER_DURATION
-                await hammer_loop(driver_hammer, short_address, hammer_deadline)
-
-                logging.info(
-                    "Hammer stopped at t=%.3f s; awaiting long batch (timeout up to %.1f s/cmd)",
-                    loop.time() - t0,
-                    LONG_RESPONSE_TIMEOUT,
+                hammer_cmds = [QueryStatus(addr) for _ in range(HAMMER_BURST)]
+                hammer_task = asyncio.create_task(
+                    driver_hammer.send_commands(hammer_cmds, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY)
                 )
+
+                await hammer_task
+                logging.info("Hammer batch completed at t=%.3f s", loop.time() - t0)
                 await long_task
                 logging.info("Long batch completed at t=%.3f s", loop.time() - t0)
             finally:
@@ -262,18 +248,24 @@ async def main(argv) -> int:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
-    client = make_mqtt_client(DEFAULT_BROKER_URL)
-    mqtt_dispatcher = MQTTDispatcher(client)
-    async with client:
-        dispatcher = asyncio.create_task(dispatcher_task(mqtt_dispatcher))
-        try:
-            await run_test(mqtt_dispatcher, args.long_gateway, args.hammer_gateway, args.short_address)
-        finally:
-            dispatcher.cancel()
+    logging.info("Stopping wb-mqtt-dali service so it doesn't contend on the bus...")
+    await run_cmd("systemctl stop wb-mqtt-dali")
+    try:
+        client = make_mqtt_client(DEFAULT_BROKER_URL)
+        mqtt_dispatcher = MQTTDispatcher(client)
+        async with client:
+            dispatcher = asyncio.create_task(dispatcher_task(mqtt_dispatcher))
             try:
-                await dispatcher
-            except asyncio.CancelledError:
-                pass
+                await run_test(mqtt_dispatcher, args.long_gateway, args.hammer_gateway, args.short_address)
+            finally:
+                dispatcher.cancel()
+                try:
+                    await dispatcher
+                except asyncio.CancelledError:
+                    pass
+    finally:
+        logging.info("Starting wb-mqtt-dali service back up...")
+        await run_cmd("systemctl start wb-mqtt-dali")
     return EXIT_SUCCESS
 
 

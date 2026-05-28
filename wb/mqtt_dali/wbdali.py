@@ -842,9 +842,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         return await self._send_commands_internal(commands, source, priority, lock_queue=True)
 
-    async def _queue_sender(
-        self,
-    ) -> None:  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
+    # pylint: disable-next=too-many-return-statements, too-many-branches, too-many-statements
+    async def _queue_sender(self) -> None:
         batch: list[SendQueueItem] = []
         timeout = None
         while True:
@@ -893,6 +892,13 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         self._next_queue_index = 0
 
             except Exception as e:  # pylint: disable=broad-exception-caught
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    # No running loop => we're being torn down by GC (coroutine.close()
+                    # surfaced a RuntimeError from asyncio internals).
+                    # Exit instead of hot-looping.
+                    return
                 self.logger.error("Error processing queue item: %s", e)
                 if item is not None and not item.future.done():
                     item.future.set_result(WbGatewayTransmissionError())

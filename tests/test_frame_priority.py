@@ -14,6 +14,8 @@ Priority bit layout (encoded register, bits [31..29]):
   PERIODIC_QUERY           = 5 -> 0xA0000000
 """
 
+# pylint: disable=redefined-outer-name
+
 import asyncio
 import json
 import logging
@@ -22,6 +24,7 @@ from unittest.mock import MagicMock
 
 import paho.mqtt.client as mqtt
 import pytest
+import pytest_asyncio
 from dali.address import GearGroup, GearShort
 from dali.command import Command
 from dali.frame import ForwardFrame
@@ -56,6 +59,9 @@ from wb.mqtt_dali.wbdali_utils import send_commands_with_retry
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
 _RPC_LOAD_TOPIC = "/rpc/v1/wb-mqtt-serial/port/Load/{client_id}"
+
+_TEST_LOGGER = logging.getLogger("test_frame_priority")
+_TEST_LOGGER.setLevel(logging.CRITICAL + 1)
 
 
 class _MockMqttClient:
@@ -152,13 +158,17 @@ def _simulate_reply_with_response(
     dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
 
-async def _new_initialized_driver() -> tuple[WBDALIDriver, _MockMqttClient, MQTTDispatcher]:
+@pytest_asyncio.fixture
+async def initialized_driver():
     mqtt_client = _MockMqttClient()
     dispatcher = MQTTDispatcher(mqtt_client)
-    driver = WBDALIDriver(WBDALIConfig(), dispatcher, MagicMock(spec=logging.Logger))
+    driver = WBDALIDriver(WBDALIConfig(), dispatcher, _TEST_LOGGER)
     await driver.initialize()
     await mqtt_client.clear_publishes()
-    return driver, mqtt_client, dispatcher
+    try:
+        yield driver, mqtt_client, dispatcher
+    finally:
+        await driver.deinitialize()
 
 
 async def _cancel_background_tasks(*tasks: asyncio.Task) -> None:
@@ -205,9 +215,11 @@ async def _capture_one_batch(  # pylint: disable=too-many-arguments
         (FramePriority.PERIODIC_QUERY, 5),
     ],
 )
-async def test_send_commands_priority_propagates_to_payload(priority, expected_priority_bits):
+async def test_send_commands_priority_propagates_to_payload(
+    initialized_driver, priority, expected_priority_bits
+):
     """Each FramePriority value reaches the encoded Modbus payload unchanged for a single-frame send."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver, mqtt_client, dispatcher, driver.send(_MockCommand(), priority=priority), 1
     )
@@ -219,11 +231,11 @@ async def test_send_commands_priority_propagates_to_payload(priority, expected_p
 
 
 @pytest.mark.asyncio
-async def test_mqtt_level_write_uses_user_action_priority():
+async def test_mqtt_level_write_uses_user_action_priority(initialized_driver):
     """A control-topic-style DAPC write executed via ``send_commands_with_retry``
     (the path taken by ``CommonDaliDevice.execute_control``) lands on the wire
     with USER_ACTION priority."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -236,13 +248,13 @@ async def test_mqtt_level_write_uses_user_action_priority():
 
 
 @pytest.mark.asyncio
-async def test_polling_loop_uses_periodic_query_priority():
+async def test_polling_loop_uses_periodic_query_priority(initialized_driver):
     """An ``MqttControl`` polled through its public ``next_poll_step`` factory
     (the entry-point that ``PollScheduler.poll`` invokes inside
     ``_polling_loop``) sends its query at PERIODIC_QUERY priority. We exercise
     the returned ``poll_coroutine`` so the assertion covers the actual on-wire
     frame produced by the polling code path, not a stub."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     control = MqttControl(
         control_info=ControlInfo(id="level", meta=ControlMeta(control_type="value", read_only=True)),
         query_builder=QueryActualLevel,
@@ -264,13 +276,13 @@ async def test_polling_loop_uses_periodic_query_priority():
 
 
 @pytest.mark.asyncio
-async def test_parameter_write_uses_configuration_priority():
+async def test_parameter_write_uses_configuration_priority(initialized_driver):
     """A parameter handler ``write`` (here: ``FadeTimeFadeRateParam`` on a single
     device, which sends DTR0+SetFadeTime+DTR0+SetFadeRate+QueryFadeTimeFadeRate)
     starts with CONFIGURATION priority on the leading DTR0; subsequent frames
     are auto-promoted to TRANSACTION_CONTINUATION by the DTR/EDT rules in
     ``_send_commands_internal``."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     param = FadeTimeFadeRateParam()
     observed: list[int] = []
     publisher_task = asyncio.create_task(_collect_priorities(mqtt_client, driver, observed))
@@ -289,12 +301,12 @@ async def test_parameter_write_uses_configuration_priority():
 
 
 @pytest.mark.asyncio
-async def test_parameter_read_in_ui_flow_uses_configuration_priority():
+async def test_parameter_read_in_ui_flow_uses_configuration_priority(initialized_driver):
     """``FadeTimeFadeRateParam.read`` — exercised end-to-end against the real
     driver — emits a single ``QueryFadeTimeFadeRate`` at CONFIGURATION priority.
     Asserts on the wire frame produced by the parameter handler itself, not on
     the underlying retry helper."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     param = FadeTimeFadeRateParam()
     frames = await _capture_one_batch(
         driver,
@@ -309,13 +321,13 @@ async def test_parameter_read_in_ui_flow_uses_configuration_priority():
 
 
 @pytest.mark.asyncio
-async def test_apply_group_parameters_uses_configuration_priority():
+async def test_apply_group_parameters_uses_configuration_priority(initialized_driver):
     """``handler.write`` on a group address (the layer exercised by
     ``ApplicationController._apply_group_parameters_task``) starts with
     CONFIGURATION on the first frame. The dtr-led frames that follow
     auto-promote — but the *intent* priority of the batch is CONFIGURATION,
     asserted on the leading DTR0."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     param = FadeTimeFadeRateParam()
     observed: list[int] = []
     publisher_task = asyncio.create_task(_collect_priorities(mqtt_client, driver, observed))
@@ -329,13 +341,13 @@ async def test_apply_group_parameters_uses_configuration_priority():
 
 
 @pytest.mark.asyncio
-async def test_commissioning_uses_user_action_priority():
+async def test_commissioning_uses_user_action_priority(initialized_driver):
     """Every leading frame in commissioning batches carries USER_ACTION priority.
     Exercises ``check_presence`` — the public commissioning entry-point that
     sends ``[Terminate, Initialise, SetSearchAddr×3, Compare]`` followed by a
     trailing ``Terminate`` in finally. None of these declare DTR/EDT structure,
     so every frame is a leading frame and must be USER_ACTION."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     observed: list[int] = []
     publisher_task = asyncio.create_task(_collect_priorities(mqtt_client, driver, observed))
     replier_task = asyncio.create_task(_keep_replying_no_response(dispatcher, driver.config))
@@ -379,10 +391,10 @@ async def test_commissioning_smart_extend_uses_user_action_priority():
 
 
 @pytest.mark.asyncio
-async def test_first_frame_always_caller_priority():
+async def test_first_frame_always_caller_priority(initialized_driver):
     """Even when the batch starts with DTR0 (a DTR-set), frame 0 keeps the
     caller's priority — auto-promotion only applies from frame 1 onward."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -395,10 +407,10 @@ async def test_first_frame_always_caller_priority():
 
 
 @pytest.mark.asyncio
-async def test_dtr_chain_promotes_after_first():
+async def test_dtr_chain_promotes_after_first(initialized_driver):
     """``[DTR0, DTR1, DTR2]`` @ CONFIG produces priorities 3, 1, 1 — each DTR
     after the first is preceded by another DTR set, so it auto-promotes."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -414,9 +426,9 @@ async def test_dtr_chain_promotes_after_first():
 
 
 @pytest.mark.asyncio
-async def test_dtr_consumer_after_dtr_set_promoted():
+async def test_dtr_consumer_after_dtr_set_promoted(initialized_driver):
     """``[DTR0, SetFadeTime]`` @ CONFIG produces 3, 1 — SetFadeTime follows a DTR set."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -431,13 +443,13 @@ async def test_dtr_consumer_after_dtr_set_promoted():
 
 
 @pytest.mark.asyncio
-async def test_uses_dtr_promoted_regardless_of_prev():
+async def test_uses_dtr_promoted_regardless_of_prev(initialized_driver):
     """``[QueryColourValue, QueryContentDTR0]`` @ CONFIG → with EDT auto-prefix:
     ``[EDT(8), QueryColourValue, QueryContentDTR0]``. QueryContentDTR0 has
     ``uses_dtr0=True`` so it auto-promotes even though the previous frame
     (QueryColourValue) is neither a DTR set nor EDT — covers the
     ``commands[i].uses_dtr*`` arm. Mirrors ``dali_type8_tc.py:253``."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -459,11 +471,11 @@ async def test_uses_dtr_promoted_regardless_of_prev():
 
 
 @pytest.mark.asyncio
-async def test_dt_cmd_after_auto_edt_promoted():
+async def test_dt_cmd_after_auto_edt_promoted(initialized_driver):
     """A DT-typed command sent solo with USER_ACTION → EDT auto-inserted as
     frame 0 at USER_ACTION; the DT command becomes frame 1 and auto-promotes
     because it follows EnableDeviceType."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -479,12 +491,12 @@ async def test_dt_cmd_after_auto_edt_promoted():
 
 
 @pytest.mark.asyncio
-async def test_dtr_chain_with_edt_all_continuations():
+async def test_dtr_chain_with_edt_all_continuations(initialized_driver):
     """``[DTR0, DTR1, DTR2, StoreColourTemperatureTcLimit]`` @ CONFIG.
     StoreColourTemperatureTcLimit is a DT8 command so EDT(8) is auto-inserted
     before it. Expected priorities: 3, 1, 1, 1, 1 (one frame per command plus
     the EDT prefix). Mirrors ``dali_type8_tc.py:340``."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -505,10 +517,10 @@ async def test_dtr_chain_with_edt_all_continuations():
 
 
 @pytest.mark.asyncio
-async def test_read_memory_location_chain_promoted():
+async def test_read_memory_location_chain_promoted(initialized_driver):
     """``[DTR1, DTR0, RML, RML]`` @ PERIODIC_QUERY → 5, 1, 1, 1 — covers the
     DT51 active-energy polling pattern in ``dali_type51_parameters.py``."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -534,10 +546,10 @@ async def test_read_memory_location_chain_promoted():
 
 
 @pytest.mark.asyncio
-async def test_unrelated_commands_not_promoted():
+async def test_unrelated_commands_not_promoted(initialized_driver):
     """``[GoToLastActiveLevel, Off]`` @ USER_ACTION → 2, 2. An RPC batch of
     plain control commands is not a transaction; no auto-promotion."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -552,13 +564,13 @@ async def test_unrelated_commands_not_promoted():
 
 
 @pytest.mark.asyncio
-async def test_multi_segment_dtr_partial_promotion():
+async def test_multi_segment_dtr_partial_promotion(initialized_driver):
     """``[DTR0(s0), SetScene(0), DTR0(s1), SetScene(1)]`` @ CONFIG → 3, 1, 3, 1.
     Documents the gap between segments in Scenes-write
     (``dali_common_parameters.py:389``): SetScene does not declare
     ``uses_dtr0`` so the second DTR0 is treated as the start of a fresh
     segment rather than a continuation of the previous one."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
         driver,
         mqtt_client,
@@ -586,14 +598,14 @@ async def test_multi_segment_dtr_partial_promotion():
 
 
 @pytest.mark.asyncio
-async def test_run_sequence_query_device_types_caller_prio():
+async def test_run_sequence_query_device_types_caller_prio(initialized_driver):
     """``query_device_types_sequence`` issues one ``QueryDeviceType`` followed by
     a chain of ``QueryNextDeviceType`` driven by per-yield responses. Each yield
     is a separate ``_send_commands_internal`` call, so every frame is i=0 in its
     own call — caller's USER_ACTION priority, no cross-yield promotion.
     Scripted response chain: first byte 255 (=> enter the loop), then a real
     type code (5), then 254 (=> terminate), producing 3 outgoing frames."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     script = [(0x01, 255), (0x01, 5), (0x01, 254)]
     observed: list[int] = []
     pump_task = asyncio.create_task(
@@ -608,14 +620,14 @@ async def test_run_sequence_query_device_types_caller_prio():
 
 
 @pytest.mark.asyncio
-async def test_run_sequence_read_memory_bank_caller_prio():
+async def test_run_sequence_read_memory_bank_caller_prio(initialized_driver):
     """``read_memory_bank`` runs ``LastAddress.read`` (3 single-frame yields:
     DTR1, DTR0, ReadMemoryLocation) and then 2 more yields (DTR0 + a list of
     ReadMemoryLocation). Each yield is its own ``_send_commands_internal``
     call — the leading frame of every batch is caller's CONFIGURATION priority.
     Scripted to make ``LastAddress.read`` return 3 (so bank 0 has 2 readable
     locations 2..3), then two RML data bytes back-to-back."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     script = [
         (0x02, 0),  # DTR1 (LastAddress.read)
         (0x02, 0),  # DTR0 (LastAddress.read)
@@ -642,14 +654,14 @@ async def test_run_sequence_read_memory_bank_caller_prio():
 
 
 @pytest.mark.asyncio
-async def test_run_sequence_query_colour_with_level_caller_prio():
+async def test_run_sequence_query_colour_with_level_caller_prio(initialized_driver):
     """``query_colour_with_level`` first batch is ``[QueryActualLevel, DTR0,
     QueryColourValue]``. The driver auto-inserts ``EnableDeviceType(8)`` before
     the DT8 ``QueryColourValue``, so 4 frames go on the wire. Replying with
     MASK (255) as the colour-type makes the sequence early-return after one
     batch — exactly one yield, so only one ``_send_commands_internal`` call.
     Asserts the leading frame carries the caller's CONFIGURATION priority."""
-    driver, mqtt_client, dispatcher = await _new_initialized_driver()
+    driver, mqtt_client, dispatcher = initialized_driver
     script = [
         (0x01, 50),  # QueryActualLevel -> level=50
         (0x01, 0),  # DTR0

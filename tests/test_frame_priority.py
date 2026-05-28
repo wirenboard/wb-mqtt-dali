@@ -43,7 +43,11 @@ from dali.gear.general import (
     SetScene,
 )
 from dali.memory import info
-from pytest_asyncio import fixture as pytest_asyncio_fixture
+
+try:
+    from pytest_asyncio import fixture as pytest_asyncio_fixture
+except ImportError:  # pytest-asyncio < 0.17 (system Debian bullseye)
+    pytest_asyncio_fixture = pytest.fixture
 
 from tests.test_commissioning import FakeDALIBus
 from wb.mqtt_dali.bus_traffic import BusTrafficSource

@@ -1,4 +1,4 @@
-wb-mqtt-dali (1.16.5) stable; urgency=medium
+wb-mqtt-dali (1.16.6) stable; urgency=medium
 
   * Add e2e test for event handling latency.
 

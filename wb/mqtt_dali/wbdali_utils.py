@@ -268,7 +268,7 @@ def check_command_failed(cmd: Command, resp: Optional[Response]) -> Optional[str
     return None
 
 
-async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-locals,too-many-arguments
+async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
     driver: WBDALIDriver,
     commands: Sequence[Command],
     batch_size: int = 1,

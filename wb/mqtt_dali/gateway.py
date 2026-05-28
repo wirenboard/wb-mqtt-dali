@@ -213,7 +213,7 @@ def bus_to_json(bus: ApplicationController) -> dict:
 
 
 class Gateway:  # pylint: disable=too-many-instance-attributes
-    # pylint: disable=too-many-locals, too-many-branches, too-many-arguments
+    # pylint: disable=too-many-locals, too-many-branches, too-many-arguments, too-many-positional-arguments
     def __init__(
         self,
         config: dict,

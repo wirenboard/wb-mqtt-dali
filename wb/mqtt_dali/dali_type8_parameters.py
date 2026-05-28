@@ -668,7 +668,7 @@ class Type8Parameters(TypeParameters):
             return 3
         return 2 if self._read_progress.colour_type == ColourType.RGBWAF else 3
 
-    def next_poll_step(  # pylint: disable=too-many-arguments
+    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         driver: WBDALIDriver,
         address: Address,

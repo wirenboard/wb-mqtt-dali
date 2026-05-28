@@ -364,7 +364,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         """
         return self._read_progress is not None
 
-    def next_poll_step(  # pylint: disable=too-many-arguments
+    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         driver: WBDALIDriver,
         address: Address,

@@ -1,8 +1,59 @@
 from wb.mqtt_dali.utils import (
+    deep_merge_dicts,
     merge_json_schema_properties,
     merge_json_schemas,
     merge_translations,
 )
+
+
+class TestDeepMergeDicts:
+    def test_nested_dicts_merge_keeping_unmentioned_dst_keys(self):
+        dst = {"instance0": {"event_priority": 4, "event_scheme": 1, "addr": 2}}
+        src = {"instance0": {"event_priority": 5}}
+        deep_merge_dicts(dst, src)
+        assert dst["instance0"] == {"event_priority": 5, "event_scheme": 1, "addr": 2}
+
+    def test_empty_nested_src_does_not_wipe_dst(self):
+        dst = {"instance1": {"event_priority": 4, "event_scheme": 1}}
+        src = {"instance1": {}}
+        deep_merge_dicts(dst, src)
+        assert dst["instance1"] == {"event_priority": 4, "event_scheme": 1}
+
+    def test_scalar_in_src_replaces_dst_value(self):
+        dst = {"shared": "from_h1"}
+        src = {"shared": "from_h2"}
+        deep_merge_dicts(dst, src)
+        assert dst["shared"] == "from_h2"
+
+    def test_partial_nested_delta_preserves_sibling_keys(self):
+        dst = {
+            "instance0": {"event_priority": 4, "event_scheme": 1},
+            "instance1": {"event_priority": 4, "event_scheme": 1},
+            "instance2": {"event_priority": 4, "event_scheme": 1},
+        }
+        src = {"instance0": {"event_priority": 5}, "instance1": {}, "instance2": {}}
+        deep_merge_dicts(dst, src)
+        assert dst["instance0"] == {"event_priority": 5, "event_scheme": 1}
+        assert dst["instance1"] == {"event_priority": 4, "event_scheme": 1}
+        assert dst["instance2"] == {"event_priority": 4, "event_scheme": 1}
+
+    def test_list_is_replaced_wholesale(self):
+        dst = {"scenes": [1, 2, 3]}
+        src = {"scenes": [9]}
+        deep_merge_dicts(dst, src)
+        assert dst["scenes"] == [9]
+
+    def test_dict_in_src_replaces_non_dict_in_dst(self):
+        dst = {"feedback": None}
+        src = {"feedback": {"event_priority": 4}}
+        deep_merge_dicts(dst, src)
+        assert dst["feedback"] == {"event_priority": 4}
+
+    def test_new_key_is_added(self):
+        dst = {"a": 1}
+        src = {"b": 2}
+        deep_merge_dicts(dst, src)
+        assert dst == {"a": 1, "b": 2}
 
 
 class TestMergeTranslations:

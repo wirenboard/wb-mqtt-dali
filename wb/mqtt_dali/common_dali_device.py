@@ -20,7 +20,7 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
-from .utils import merge_json_schemas
+from .utils import deep_merge_dicts, merge_json_schemas
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     check_query_response,
@@ -747,7 +747,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                     needs_refresh = True
             except Exception as e:
                 raise RuntimeError(f'Error writing "{param_handler.name.en}": {e}') from e
-        self.params.update(updated_parameters)
+        deep_merge_dicts(self.params, updated_parameters)
         if needs_refresh:
             self.rebuild_mqtt_controls()
         await self._apply_common_parameters(driver, new_values)

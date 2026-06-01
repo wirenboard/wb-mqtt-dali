@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.16.7) stable; urgency=medium
+
+  * Fix device parameters being wiped from cache after SetDevice.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 01 Jun 2026 14:03:28 +0500
+
 wb-mqtt-dali (1.16.6) stable; urgency=medium
 
   * Add e2e test for event handling latency.

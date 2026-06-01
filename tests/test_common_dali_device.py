@@ -737,6 +737,61 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     d._apply_common_parameters.assert_awaited_once_with(driver, new_values)
 
 
+def _make_instance_group_handler(property_name, sparse_delta):
+    """Mock SettingsParamGroup handler reproducing its real write() return shape:
+    {property_name: {changed fields}} for the touched instance, or {property_name: {}}
+    for a present-but-unchanged instance (see settings.py SettingsParamGroup.write)."""
+    handler = MagicMock()
+    handler.write = AsyncMock(return_value={property_name: dict(sparse_delta)})
+    handler.requires_mqtt_controls_refresh = False
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_apply_parameters_sparse_instance_delta_keeps_other_instances():
+    """Regression for the save-priority bug. A full DALI-2 config with several
+    instances sits in device.params. apply_parameters receives the write deltas
+    SettingsParamGroup.write actually emits: a sparse {"event_priority": 5} for the
+    changed instance0, and empty {} groups for present-but-unchanged siblings. The
+    handlers are installed through the public initialize() path. apply_parameters'
+    deep-merge must keep the sibling instances and instance0's unmentioned fields
+    intact, instead of the old shallow update wiping them to {} / 2 fields."""
+    handlers = [
+        _make_instance_group_handler("instance0", {"event_priority": 5}),
+        _make_instance_group_handler("instance1", {}),
+        _make_instance_group_handler("instance2", {}),
+    ]
+
+    d = _make_device(extra_param_handlers=handlers)
+    driver = AsyncMock()
+
+    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as MockGMP:
+        gmp = _make_mock_param_handler(read_return={})
+        gmp.write = AsyncMock(return_value={})
+        gmp.requires_mqtt_controls_refresh = False
+        MockGMP.return_value = gmp
+        await d.initialize(driver)
+
+    # Full cached config, as load_info would have produced.
+    full_params = {f"instance{i}": {"event_priority": 3, "event_scheme": 1, "active": True} for i in range(3)}
+    d.params = {k: dict(v) for k, v in full_params.items()}
+    d.schema = {"type": "object"}
+
+    # Front-end always sends the full config; only instance0.event_priority changed.
+    new_values = {k: dict(v) for k, v in full_params.items()}
+    new_values["instance0"]["event_priority"] = 5
+
+    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
+        await d.apply_parameters(driver, new_values)
+
+    assert d.params["instance0"]["event_priority"] == 5
+    # Unmentioned sibling field of instance0 survives.
+    assert d.params["instance0"]["active"] is True
+    # Present-but-unchanged instances are fully preserved (not wiped to {}).
+    assert d.params["instance1"] == {"event_priority": 3, "event_scheme": 1, "active": True}
+    assert d.params["instance2"] == {"event_priority": 3, "event_scheme": 1, "active": True}
+
+
 @pytest.mark.asyncio
 async def test_apply_parameters_calls_apply_common_even_with_no_handlers():
     # pylint: disable=protected-access

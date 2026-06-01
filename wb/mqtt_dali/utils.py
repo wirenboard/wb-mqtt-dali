@@ -1,3 +1,13 @@
+def deep_merge_dicts(dst: dict, src: dict) -> None:
+    """Recursively merge nested dicts into ``dst`` in place; everything else (lists, scalars,
+    dict-vs-non-dict conflicts) is replaced by the value from ``src``."""
+    for key, value in src.items():
+        if isinstance(value, dict) and isinstance(dst.get(key), dict):
+            deep_merge_dicts(dst[key], value)
+        else:
+            dst[key] = value
+
+
 def merge_json_schemas(dst: dict, src: dict) -> None:
     merge_json_schema_properties(dst, src)
     merge_translations(dst, src)

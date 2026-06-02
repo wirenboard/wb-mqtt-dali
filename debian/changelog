@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.16.8) stable; urgency=medium
+
+  * Use quiescent mode when reading devices info after bus scan
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 02 Jun 2026 14:00:09 +0500
+
 wb-mqtt-dali (1.16.7) stable; urgency=medium
 
   * Fix device parameters being wiped from cache after SetDevice.

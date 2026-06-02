@@ -916,12 +916,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_group_virtual_devices()
             await self._refresh_broadcast_device()
 
-    async def _commissioning_task(self):  # pylint: disable=too-many-statements
+    async def _commissioning_task(self):
         start_time = default_timer()
 
-        res_dali: Optional[CommissioningResult] = None
-        res_dali2: Optional[CommissioningResult] = None
-        error = ""
         try:
             await asyncio.sleep(1)
             await send_with_retry(self._dev, StartQuiescentMode(DeviceBroadcast()), self.logger)
@@ -938,10 +935,11 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 self._commissioning_state.mark_dali2()
                 obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], True, _cb)
                 res_dali2 = await obj.smart_extend()
+                self.logger.debug("Commissioning completed in %.2f seconds", default_timer() - start_time)
+
+                await self._read_devices_info(res_dali, res_dali2)
             finally:
                 await send_with_retry(self._dev, StopQuiescentMode(DeviceBroadcast()), self.logger)
-            end_time = default_timer()
-            self.logger.debug("Commissioning completed in %.2f seconds", end_time - start_time)
         except asyncio.CancelledError as exc:
             self._commissioning_state.mark_cancelled()
             self._publish_commissioning_state()
@@ -949,16 +947,18 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         except Exception as exc:  # pylint: disable=broad-exception-caught
             error = str(exc) or type(exc).__name__
             self.logger.error("Commissioning failed: %s", error)
-            if res_dali is None and res_dali2 is None:
-                device_summary = [
-                    CommissioningDeviceSummary(d.uid, d.name, sorted(d.groups))
-                    for d in (self.dali_devices + self.dali2_devices)
-                ]
-                self._commissioning_state.mark_failed(error, device_summary)
-                self._publish_commissioning_state()
-                # If both commissioning processes failed, there's no point in trying to apply results
-                raise
+            self._commissioning_state.mark_failed(error, self._build_commissioning_summary())
+            self._publish_commissioning_state()
+            raise
 
+        self._commissioning_state.mark_completed(self._build_commissioning_summary())
+        self._publish_commissioning_state()
+
+    async def _read_devices_info(
+        self,
+        res_dali: CommissioningResult,
+        res_dali2: CommissioningResult,
+    ) -> None:
         try:
             self._commissioning_state.mark_reading_info()
             self._publish_commissioning_state()
@@ -976,23 +976,15 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 await self._apply_commissioning_results(res_dali, res_dali2, on_device_initialized=_report)
             else:
                 await self._apply_commissioning_results(res_dali, res_dali2)
-        except asyncio.CancelledError as exc:
-            self._commissioning_state.mark_cancelled()
-            self._publish_commissioning_state()
-            raise exc
         except Exception as exc:  # pylint: disable=broad-exception-caught
             error = str(exc) or type(exc).__name__
             self.logger.error("Reading info after commissioning failed: %s", error)
 
-        device_summary = [
+    def _build_commissioning_summary(self) -> list[CommissioningDeviceSummary]:
+        return [
             CommissioningDeviceSummary(d.uid, d.name, sorted(d.groups))
             for d in (self.dali_devices + self.dali2_devices)
         ]
-        if error:
-            self._commissioning_state.mark_failed(error, device_summary)
-        else:
-            self._commissioning_state.mark_completed(device_summary)
-        self._publish_commissioning_state()
 
     async def _resolve_initial_names(
         self,

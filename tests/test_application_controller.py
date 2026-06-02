@@ -647,7 +647,7 @@ class TestCommissioningTaskTerminalBranches:
         assert controller.dali_devices == original_dali
 
     @pytest.mark.asyncio
-    async def test_failure_after_dali1_applies_partial_and_marks_failed(self):
+    async def test_failure_after_dali1_aborts_without_applying_and_marks_failed(self):
         # pylint: disable=protected-access
         controller = _make_commissioning_controller()
         controller.dali_devices = cast(
@@ -684,19 +684,54 @@ class TestCommissioningTaskTerminalBranches:
             new=AsyncMock(return_value=None),
         ):
             mock_cls.side_effect = _make_commissioning
-            await controller._commissioning_task()
+            with pytest.raises(RuntimeError):
+                await controller._commissioning_task()
 
         assert controller._commissioning_state.status == CommissioningStatus.FAILED
         assert controller._commissioning_state.error == "DALI-2 phase failed"
         assert controller._commissioning_state.finished_at is not None
-        # Only DALI1-phase devices remain on FAILED.
+        # devices summary on FAILED reflects the untouched device list.
         assert controller._commissioning_state.devices == [dali1_device]
-        # Partial result (DALI1) was applied.
+        # Atomic: a sub-scan failure aborts before any result (including the
+        # successful DALI1 scan) is applied.
+        controller._apply_commissioning_results.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_apply_failure_after_scan_still_completes(self):
+        """Both scans succeed, then applying the results raises. Reading device info is
+        best-effort: state was already being mutated, so the run must still finish
+        COMPLETED (reporting FAILED would leave the frontend showing the pre-scan tree),
+        the error is swallowed (logged, not re-raised), and no exception escapes.
+        """
+        # pylint: disable=protected-access
+        controller = _make_commissioning_controller()
+        controller.dali_devices = cast(
+            Any,
+            [SimpleNamespace(uid="1", name="0x1", groups=[], address=DaliDeviceAddress(short=1, random=0x1))],
+        )
+
+        controller._apply_commissioning_results = AsyncMock(side_effect=RuntimeError("publish failed"))
+
+        def _make_commissioning(_driver, _old_devices, _dali2, _progress_cb):
+            async def _fake_smart_extend():
+                return CommissioningResult()
+
+            return SimpleNamespace(smart_extend=_fake_smart_extend)
+
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=None),
+        ), patch("wb.mqtt_dali.application_controller.Commissioning") as mock_cls, patch(
+            "wb.mqtt_dali.application_controller.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ):
+            mock_cls.side_effect = _make_commissioning
+            await controller._commissioning_task()
+
+        assert controller._commissioning_state.status == CommissioningStatus.COMPLETED
+        assert controller._commissioning_state.progress == 100
+        assert controller._commissioning_state.error is None
         controller._apply_commissioning_results.assert_awaited_once()
-        applied_args = controller._apply_commissioning_results.await_args
-        assert applied_args is not None
-        assert applied_args.args[0] is not None  # res_dali
-        assert applied_args.args[1] is None  # res_dali2
 
     @pytest.mark.asyncio
     async def test_cancel_sets_cancelled_and_reraises(self):

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.16.8) stable; urgency=medium
+
+  * Roll back cleanly when bus start-up fails after driver initialization, instead of leaking the driver and getting stuck.
+
+ -- KraPete <petr.krasnoshchekov@wirenboard.com>  Wed, 03 Jun 2026 18:38:12 +0500
+
 wb-mqtt-dali (1.16.7) stable; urgency=medium
 
   * Fix device parameters being wiped from cache after SetDevice.

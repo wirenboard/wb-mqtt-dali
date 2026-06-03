@@ -178,7 +178,7 @@ async def emulate(  # pylint: disable=too-many-locals, too-many-branches, too-ma
                         # priority = message["data"]["mode"]["priority"]
                         wait_for_answer = message["data"]["mode"]["waitForAnswer"]
                     except KeyError as e:
-                        raise KeyError(f"Missing {e} for DALI frame: {message}") from e
+                        raise LunatoneIotProtocolError(f"Missing {e} for DALI frame: {message}") from e
                     logger.debug(
                         "WS << daliFrame (bits=%s line=%s sendTwice=%s waitForAnswer=%s) %s",
                         bits,

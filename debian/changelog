@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.16.8) stable; urgency=medium
+
+  * Return a syntax-error result instead of closing the connection on a malformed Lunatone IoT DALI frame.
+
+ -- KraPete <petr.krasnoshchekov@wirenboard.com>  Wed, 03 Jun 2026 18:38:12 +0500
+
 wb-mqtt-dali (1.16.7) stable; urgency=medium
 
   * Fix device parameters being wiped from cache after SetDevice.

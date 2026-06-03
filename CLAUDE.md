@@ -40,12 +40,12 @@ file. Edit those rules there, not in this file.
 
 ## Task Workflow
 
-Non-trivial changes follow plan → implement → review, with artifacts in `doc/`:
+Non-trivial changes follow plan → implement → review:
 
-- **Plan** — `doc/<topic>_plan.md`. Written before implementation; intended approach and scope.
-- **Review** — `doc/<topic>_review.md`. Written after implementation by the code-reviewer agent; findings against plan and diff.
+- **Plan** — `docs/<topic>_plan.md`. Written before implementation; intended approach and scope.
+- **Review** — the `code-review-orchestrator` skill, run after implementation. Produces one in-chat report with a merge verdict; writes no file.
 
-`<topic>` is a short snake_case slug. Agents that take a plan/review as input read the matching file from `doc/` first.
+`<topic>` is a short snake_case slug. Agents that take a plan as input read the matching `docs/<topic>_plan.md` first.
 
 ## Architecture
 

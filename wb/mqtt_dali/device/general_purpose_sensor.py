@@ -40,11 +40,12 @@ class MeasurementEvent(general._Event):  # pylint: disable=protected-access
 
         self._event_info = set_data
 
-        set_frame[8:0] = set_data
+        set_frame[9:0] = set_data
 
     @property
     def measurement(self) -> int:
-        return self._event_info
+        # Strip the type discriminator (bit 9); only the lower 9 bits are the value.
+        return self._event_info & 0x1FF
 
 
 ###############################################################################

@@ -3,16 +3,19 @@ name: code-review-orchestrator
 description: >-
   Orchestrate a multi-aspect code review by spawning one specialized subagent per
   review dimension — security, stability, conventions/structure conformance,
-  documentation conformance, regressions, test coverage of new code, simplification
-  (over-complex/verbose code and heavyweight deps used trivially), and an architect that
-  proposes structural improvements as options with pros/cons — then act as a coordinator
-  that deduplicates, re-categorizes, filters noise, surfaces valid architecture options
-  to the user, and assembles one structured review with severity ratings and a merge
-  verdict. Use whenever the user asks to review a diff, PR, MR, branch, or changes;
-  mentions "code review", "review my changes", "review this PR/branch", "is this safe to
-  merge", "did I break anything", "can this be simplified", "is this over-engineered", or
-  wants a thorough multi-angle review. Use it even when the user only says "take a look
-  at my changes" if the intent is review rather than feature work.
+  project-rules conformance (the repo's documented rules, if any), documentation
+  conformance, regressions, test coverage of new code, simplification
+  (over-complex/verbose code and heavyweight deps used trivially), plan-compliance
+  (against the change's plan, if one exists), and an architect that proposes structural
+  improvements as options with pros/cons — then act as a coordinator that deduplicates,
+  re-categorizes, filters noise, surfaces valid architecture options to the user, and
+  assembles one structured review with severity ratings and a merge verdict. Use
+  whenever the user asks to review a diff, PR, MR, branch, or changes; mentions "code
+  review", "review my changes", "review this PR/branch", "is this safe to merge", "did I
+  break anything", "can this be simplified", "is this over-engineered", or wants a
+  thorough multi-angle review. Use it even when the user only says "take a look at my
+  changes" if the intent is review rather than feature work. Run
+  `code-review-orchestrator help` to print usage instead of reviewing.
 ---
 
 # Code Review Orchestrator
@@ -37,12 +40,49 @@ Two design commitments make the output usable:
 The design follows a coordinator/sub-reviewer split: sub-reviewers find candidate
 issues; the coordinator decides what is real, where it belongs, and how serious it is.
 The bias is toward **signal over noise** and toward **approval** — a clean change with
-one minor nit should still pass.
+one minor nit should still pass. **The one hard exception is plan-compliance** (see
+below).
+
+## Usage / Help
+
+If the user invokes this as `code-review-orchestrator help` (or asks "how do I use
+code-review-orchestrator"), **print the summary below and stop — do not run a review.**
+
+```
+code-review-orchestrator — project-aware multi-aspect code review (read-only).
+
+WITH A PLAN (docs/<topic>_plan.md exists)
+  - A plan-compliance reviewer runs and enforces 100% match.
+  - ANY deviation is a BLOCKER (critical) and the verdict cannot be Approve:
+      * a plan item not implemented
+      * a plan item only partially implemented
+      * a change in the diff the plan does not call for (out-of-scope)
+  - The only way to clear a deviation is to update docs/<topic>_plan.md to match
+    reality and re-run the review — the skill never forgives a deviation on its own.
+
+WITHOUT A PLAN
+  - The plan-compliance reviewer does not run; nothing blocks on that axis.
+
+PROJECT RULES
+  - If project-rules.md (repo root) exists, the project-rules reviewer checks the diff
+    against it. If it is absent, that reviewer is skipped.
+
+OUTPUT
+  - One consolidated review in chat: verdict, Critical/Warnings/Suggestions, test
+    coverage, plan compliance, out-of-scope changes, and architecture proposals.
+
+SCOPE / COST
+  - The change is classified Trivial / Lite / Full to size the reviewer set; big or
+    sensitive diffs run all aspects. Read-only — never edits, never runs the verify
+    pipeline.
+```
 
 ## The review aspects
 
 | Aspect | Brief | What it owns |
 | --- | --- | --- |
+| Plan-compliance | `references/plan-compliance.md` | Diff vs `docs/<topic>_plan.md` — **every deviation is a blocker** (only if a plan exists) |
+| Project-rules | `references/project-rules.md` | The repo's explicit rules from `project-rules.md` — renames, tests, private access, enums, structures, method ordering, dead code, encapsulation (only if `project-rules.md` exists) |
 | Security | `references/security.md` | Exploitable/dangerous issues + secret & credential detection |
 | Stability | `references/stability.md` | Crashes, data loss, leaks, concurrency/races, correctness, performance, observability |
 | Conventions | `references/conventions.md` | Conformance to the project's structure, patterns, and practices |
@@ -56,10 +96,10 @@ All reviewers share the rules in `references/shared-reviewer-rules.md` (severity
 definitions, the structured output format, and global "do not flag" rules). Every
 sub-reviewer prompt MUST include the shared rules plus its own aspect brief.
 
-**The architect is special.** Its brief overrides two of the shared rules: it may look
-beyond the diff at the surrounding module, and it returns `<proposal>` blocks (options
-with pros/cons) instead of `<finding>` blocks. Treat its output differently in the judge
-pass and the report (see below).
+**Two reviewers are special.** The architect returns `<proposal>` blocks (options with
+pros/cons), may read beyond the diff, and does not block the verdict. Plan-compliance
+issues `<finding>` blocks but its deviations are **always critical and always block** —
+the coordinator never softens them.
 
 ## Workflow
 
@@ -74,20 +114,21 @@ Figure out exactly what changed. Do not review the whole repository.
    git diff --merge-base <base>             # full patch
    git diff --merge-base <base> --name-only # file list
    ```
-   If there is no git context (e.g. the user pasted a diff or pointed at files),
-   review what was provided and say so in the verdict.
-2. Filter out noise before reviewing: lockfiles (`package-lock.json`, `yarn.lock`,
+2. Look for the change's plan. If a `docs/<topic>_plan.md` for this change exists, read
+   it — plan-compliance runs against it. If there is no plan, skip plan-compliance.
+3. Filter out noise before reviewing: lockfiles (`package-lock.json`, `yarn.lock`,
    `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `poetry.lock`, etc.), vendored deps,
    minified/bundled assets (`*.min.js`, `*.bundle.js`, `*.map`), and generated files
    (first lines contain markers like `@generated` / `DO NOT EDIT`). **Exception:** keep
    database migrations even if marked generated — they contain real schema changes.
-3. Detect the stack (languages, frameworks, test runner, build tool) and load project
-   conventions if present: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING*`, `docs/`,
-   linter/formatter configs, and the test directory layout. Pass relevant pieces to
-   the reviewers that need them (conventions, documentation, test coverage).
-4. Write a short shared-context note (changed files, base, stack, where the conventions
-   and docs live, anything the user flagged as important) so reviewers don't each
-   re-derive it.
+4. Detect the stack (languages, frameworks, test runner, build tool) and load project
+   conventions if present: `CLAUDE.md`, `project-rules.md`, `AGENTS.md`, `CONTRIBUTING*`,
+   `docs/`, linter/formatter configs, and the test directory layout. Pass relevant pieces
+   to the reviewers that need them (conventions, project-rules, documentation, test
+   coverage).
+5. Write a short shared-context note (changed files, base, stack, the plan path if any,
+   where the conventions and docs live, anything the user flagged as important) so
+   reviewers don't each re-derive it.
 
 ### Step 2 — Classify the diff into a risk tier
 
@@ -100,10 +141,14 @@ whether any changed path is security-sensitive or a system/critical path.
 | --- | --- | --- | --- |
 | **Trivial** | ≤10 changed lines **and** ≤20 files, no sensitive paths | 2 | A single generalized pass (stability + conventions inline, no subagents needed) |
 | **Lite** | ≤100 changed lines, ≤20 files, no sensitive paths | 4 | Stability, conventions, test coverage, simplification |
-| **Full** | >100 lines **or** >50 files **or** *any* security-sensitive or system/critical path | 7+ (all 8) | Everything, incl. security and architecture |
+| **Full** | >100 lines **or** >50 files **or** *any* security-sensitive or system/critical path | all | Everything, incl. security and architecture |
 
 Definitions and rules:
 
+- **Plan-compliance is added on top of any tier whenever a plan exists** — it is never
+  skipped for cost. A deviation must never slip through because the diff looked small.
+- **Project-rules runs only if `project-rules.md` exists.** If it's absent, skip that
+  reviewer; the conventions reviewer still covers structural fit.
 - **Security-sensitive / system / critical paths** always force **Full**, regardless of
   size: anything under `auth/`, `crypto/`, `security/`, payments/billing, session or
   token handling, access control, input parsing at trust boundaries, infra/deploy
@@ -127,7 +172,7 @@ concurrently. Each subagent prompt is assembled as:
 <the aspect brief, e.g. references/security.md contents>
 
 ## Shared context
-<base, changed files, stack, conventions/docs locations, user notes>
+<base, changed files, stack, plan path (if any), conventions/docs locations, user notes>
 
 ## Your task
 Review the changed code for your assigned aspect. Read whatever source files you need
@@ -147,6 +192,9 @@ user.
 above — it may read the surrounding module (not just the diff) and returns `<proposal>`
 blocks instead of `<finding>` blocks. Spawn it the same way; just don't expect the
 `<finding>` format from it.
+
+**Plan-compliance:** its brief additionally emits a `<plan-item …>` checklist after its
+findings — collect it for the report.
 
 If subagents are unavailable (e.g. plain Claude.ai), run the aspects sequentially in
 this one context instead — same briefs, same output format, one aspect at a time — then
@@ -171,10 +219,14 @@ and the reason the output stays clean. Do it in order:
 4. **Re-rate severity** against the definitions in the shared rules. A reviewer's
    `critical` that turns out to need unlikely preconditions becomes a `warning` or is
    dropped.
-5. **Check coverage of new code explicitly.** New or changed logic without
+5. **Plan-compliance is exempt from softening.** Verify each deviation is *real* (the
+   item truly isn't implemented / the hunk truly isn't in the plan), but do **not**
+   downgrade a real deviation — it stays `critical` and blocks. Collect the
+   `<plan-item …>` checklist for the report.
+6. **Check coverage of new code explicitly.** New or changed logic without
    corresponding tests is a finding even if every other aspect is clean — this is a
    first-class requirement, not a nice-to-have.
-6. **Handle architect proposals separately.** Architecture comes as `<proposal>` blocks,
+7. **Handle architect proposals separately.** Architecture comes as `<proposal>` blocks,
    not findings. For each one: verify it's real and worthwhile by reading the code —
    drop speculative generality, over-engineering, and big risky rewrites that a small
    change doesn't justify. **Keep the valid ones with all their options and tradeoffs
@@ -204,7 +256,8 @@ suggested fix.
 <one or two sentences explaining the verdict>
 
 ### Critical
-<findings that will cause an outage/data loss or are exploitable — or "None">
+<findings that will cause an outage/data loss or are exploitable, AND every
+plan-compliance deviation — or "None">
 
 ### Warnings
 <concrete risks or measurable regressions — or "None">
@@ -215,6 +268,16 @@ suggested fix.
 ### Test coverage
 <new/changed logic and whether it's tested; list specifically what lacks tests — or
 "All new logic is covered">
+
+### Plan compliance
+<the checklist; omit this section if there was no plan>
+- [x] Plan item — implemented, file X
+- [ ] Plan item — NOT implemented (BLOCKER)
+- [~] Plan item — partial (BLOCKER)
+
+### Out-of-scope changes
+<diff hunks not covered by the plan — each a BLOCKER when a plan exists; "None" otherwise.
+Omit if there was no plan.>
 
 ### Architecture & design (forward-looking, non-blocking)
 <validated architect proposals, options preserved — or "None">
@@ -239,17 +302,18 @@ Architecture proposal format (preserve the options — don't collapse to one ans
 
 ### Verdict rubric
 
-Bias toward approval. Use this mapping:
+Bias toward approval — **except plan-compliance, which is absolute.** Use this mapping:
 
 | Situation | Verdict |
 | --- | --- |
+| **Any plan-compliance deviation** (missing/partial/out-of-scope) | **Request changes** (or Block merge if it also causes a critical defect) — never Approve |
 | All reviewers LGTM, or only trivial suggestions | Approve |
 | Only suggestions, or warnings with no production risk | Approve with comments |
 | Multiple warnings forming a risk pattern, or new logic with no tests | Request changes |
 | Any critical issue, or a concrete production-safety / security risk | Block merge |
 
-State the verdict plainly. If a single warning sits in an otherwise clean change,
-that's still "Approve with comments", not a block.
+State the verdict plainly. If a single warning sits in an otherwise clean change (no
+plan deviations), that's still "Approve with comments", not a block.
 
 ## Notes
 

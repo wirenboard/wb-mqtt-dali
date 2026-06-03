@@ -9,7 +9,8 @@ docs yourself.
 
 - Docstrings / doc comments on changed functions, classes, modules.
 - README, `docs/`, and any architecture/usage docs that describe the changed behavior.
-- API contracts: OpenAPI/Swagger specs, GraphQL schemas, protobuf/IDL, type stubs.
+- API contracts: OpenAPI/Swagger specs, GraphQL schemas, protobuf/IDL, JSON-RPC method
+  signatures, MQTT topic/payload shapes, JSON Schema definitions, type stubs.
 - Inline comments that describe intent or invariants near the changed code.
 - `CHANGELOG`, migration guides, and config/option references when relevant.
 - `CLAUDE.md` / `AGENTS.md` when the change alters something they describe (e.g. test

@@ -30,9 +30,11 @@ This walked-the-path approach catches far more than a pattern scan.
   zero/negative edge cases in changed logic.
 - **Concurrency / races (call this out explicitly — it's a known blind spot):** data
   races, missing or wrong locks, deadlock potential, non-atomic read-modify-write,
-  check-then-act TOCTOU, unsafe shared mutable state, ordering assumptions across
-  async/await or goroutines/threads, missing synchronization on shared caches. Reason
-  about interleavings, not just the single-threaded reading.
+  check-then-act TOCTOU, unsafe shared mutable state (including state mutated across
+  `await` points), ordering assumptions across threads, goroutines, or `async`/`await`
+  coroutines, fire-and-forget tasks/coroutines never awaited or cancelled, missing
+  synchronization on shared caches. Reason about interleavings, not just the
+  single-threaded reading.
 - Resource leaks: files, sockets, DB connections, locks, goroutines/threads, timers,
   subscriptions, or event listeners not released on all paths (including error paths).
 - Missing timeouts, retries, or backoff on external calls; unbounded retries; retry

@@ -109,7 +109,8 @@ def query_device_types_sequence(addr: Address):
         return [r.raw_value.as_integer]
     if r.raw_value.as_integer == 254:
         return []
-    assert r.raw_value.as_integer == 255
+    if r.raw_value.as_integer != 255:
+        raise RuntimeError(f"Unexpected QueryDeviceType value: {r.raw_value.as_integer}")
     last_seen = 0
     result = []
     while True:

@@ -86,12 +86,12 @@ async def _teardown_children(gateway: Gateway, tasks: Iterable[asyncio.Task]) ->
             await task
         except (asyncio.CancelledError, aiomqtt.MqttError):
             pass
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.error("Error while awaiting service child task during teardown: %s", e)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logging.exception("Error while awaiting service child task during teardown")
     try:
         await gateway.stop()
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logging.error("Error while stopping gateway during teardown: %s", e)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logging.exception("Error while stopping gateway during teardown")
 
 
 async def _serve_connection(client, mqtt_dispatcher: MQTTDispatcher, gateway: Gateway, on_connected) -> bool:

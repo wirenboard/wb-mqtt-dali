@@ -90,6 +90,10 @@ class _FakeGateway:
         if behaviour == "init_fail":
             self._initializing = True
             raise aiomqtt.MqttError("broker lost while bus INITIALIZING")
+        # A successful start fully initializes the bus, so a later stop() no
+        # longer raises — mirroring a real reconnect recovering from a prior
+        # mid-start teardown.
+        self._initializing = False
         if self.start_calls >= 2:
             # The healthy reconnect (second start) has begun.
             self.reconnected.set()

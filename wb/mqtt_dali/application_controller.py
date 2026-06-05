@@ -514,9 +514,18 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 device.set_logger(self.logger)
                 self._init_scheduler.schedule(device.mqtt_id, current_time)
         except Exception:
+            # Roll back best-effort: a failing cleanup step must not mask the
+            # original startup error nor leave the controller stuck in
+            # INITIALIZING (which would block a later start() retry).
             self._init_scheduler.clear()
-            await self._device_publisher.cleanup()
-            await self._dev.deinitialize()
+            try:
+                await self._device_publisher.cleanup()
+            except Exception:  # pylint: disable=broad-exception-caught
+                self.logger.exception("Error cleaning up device publisher during start() rollback")
+            try:
+                await self._dev.deinitialize()
+            except Exception:  # pylint: disable=broad-exception-caught
+                self.logger.exception("Error deinitializing WBDALIDriver during start() rollback")
             self._devices_by_mqtt_id.pop(self._broadcast_device.mqtt_id, None)
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED

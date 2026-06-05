@@ -73,8 +73,12 @@ class BusTrafficCallbacks:
             self._drain_contiguous()
             return
         if sequence_id > self._last_item_sequence_id + self._gateway_queue_size:
-            # Gap is too large to wait out — flush buffered items in their sorted order
+            # Gap is too large to wait out — flush buffered items in their sorted
+            # order, skipping stale duplicates already past the cursor (as
+            # _drain_contiguous does) so they are not republished.
             for pending_item in self._waiting_for_publish:
+                if pending_item.frame_counter <= self._last_item_sequence_id:
+                    continue
                 self._dispatch(pending_item)
             self._waiting_for_publish.clear()
             self._dispatch(item)

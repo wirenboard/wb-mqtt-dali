@@ -223,6 +223,21 @@ class TestNotifyCommandOverflow:
         assert len(received) == 4
         assert [item.frame_counter for item in received] == [0, 2, 3, QUEUE_SIZE + 1]
 
+    def test_overflow_flush_skips_stale_duplicate(self):
+        """A stale duplicate buffered at or below the cursor must not be republished when a
+        later large gap forces an overflow flush; it is discarded, as in the normal drain.
+        The cursor is driven to 5, a stale seq=2 is buffered, then a gap past the reorder
+        window flushes the buffer — the stale 2 is dropped, not re-emitted.
+        """
+        callbacks = BusTrafficCallbacks(QUEUE_SIZE)
+        received = []
+        callbacks.register(received.append)
+        for seq in range(6):
+            callbacks.notify_command(REQUEST_FRAME, None, BusTrafficSource.WB, seq)
+        callbacks.notify_command(REQUEST_FRAME, None, BusTrafficSource.WB, 2)  # stale, buffered
+        callbacks.notify_command(REQUEST_FRAME, None, BusTrafficSource.WB, 5 + QUEUE_SIZE + 1)  # overflow
+        assert [item.frame_counter for item in received] == [0, 1, 2, 3, 4, 5, 5 + QUEUE_SIZE + 1]
+
     def test_after_overflow_ordering_continues_from_new_cursor(self):
         callbacks = BusTrafficCallbacks(QUEUE_SIZE)
         received = []

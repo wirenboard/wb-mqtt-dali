@@ -1389,6 +1389,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         # Guard against an unexpected failure while draining/resolving the
                         # batch: resolve every still-pending pulled-off future so no
                         # one-shot on-topic task hangs, then let the loop continue.
+                        self.logger.exception("Unexpected error while processing EXECUTE_CONTROL batch")
                         for control_task, _value_to_set in controls:
                             if not control_task.future.done():
                                 control_task.future.set_exception(e)

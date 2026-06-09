@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.17.6) stable; urgency=medium
+
+  * Always resolve pending control-write requests if an unexpected error occurs while processing a control batch.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 09 Jun 2026 16:54:32 +0500
+
 wb-mqtt-dali (1.17.5) stable; urgency=medium
 
   * Guard parsing of DALI reply payloads so malformed or empty replies fail fast instead of waiting for the command timeout.

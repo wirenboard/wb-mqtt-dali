@@ -1475,6 +1475,30 @@ class TestPollingLoopFallback:
 
         assert polls_after > polls_before
 
+    @pytest.mark.asyncio
+    async def test_execute_control_batch_failure_resolves_all_futures(self):
+        # pylint: disable=protected-access
+        """An unexpected error while dispatching the EXECUTE_CONTROL batch must
+        resolve every pulled-off future (with the exception) so no one-shot
+        on-topic write hangs, and the loop keeps running."""
+        controller = _make_polling_loop_controller(polling_interval=1.0)
+        controller._poll_step = AsyncMock(return_value=10.0)
+        device = MagicMock()
+        # Raise synchronously while building the gather call, escaping the
+        # gather(return_exceptions=True) net and hitting the recovery branch.
+        device.execute_control = MagicMock(side_effect=RuntimeError("boom"))
+
+        task1 = _make_execute_control_task(device, control_id="ctrl1")
+        task2 = _make_execute_control_task(device, control_id="ctrl2")
+        controller._tasks_queue.put_nowait(task1)
+        controller._tasks_queue.put_nowait(task2)
+
+        await _run_loop_briefly(controller, 0.05)
+
+        for task in (task1, task2):
+            assert task.future.done()
+            assert isinstance(task.future.exception(), RuntimeError)
+
 
 @pytest.mark.asyncio
 async def test_polling_loop_command_stream_does_not_starve_polling():

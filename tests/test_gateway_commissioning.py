@@ -138,8 +138,7 @@ async def test_commissioning_state_cb_skips_save_on_cancelled():
     """CANCELLED means scan did not happen; config must NOT be saved.
 
     The state callback still publishes to MQTT, but ``_save_configuration``
-    is intentionally skipped — see "Обработка терминальных состояний" in
-    doc/commissioning_progress_plan.md.
+    is intentionally skipped on terminal CANCELLED.
     """
     gw = _make_gateway_shell()
     cb = gw._make_commissioning_state_cb("bus")

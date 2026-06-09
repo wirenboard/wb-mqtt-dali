@@ -22,7 +22,11 @@ from wb.mqtt_dali.wbdali import (
     WBDALIDriver,
     encode_frame_for_modbus,
 )
-from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway, NoTransmission
+from wb.mqtt_dali.wbdali_error_response import (
+    NoResponseFromGateway,
+    NoTransmission,
+    WbGatewayTransmissionError,
+)
 
 # pylint: disable=line-too-long, protected-access
 
@@ -345,6 +349,77 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         result = (await fut)[0]
         self.assertIsNotNone(result)
         self.assertTrue(result.raw_value.error)
+
+    async def test_reply_empty_payload_does_not_hang(self):
+        """An empty payload on the reply topic resolves the pending command
+        immediately (as a transmission error) instead of waiting for the full
+        response timeout."""
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        await self.prepare_driver(driver)
+
+        cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
+        fut = asyncio.gather(driver.send(cmd))
+        await self.mock_mqtt_client.wait_for_publish(
+            topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
+        )
+
+        message = mqtt.MQTTMessage(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        )
+        message.payload = b""
+        self.mock_mqtt_dispatcher._dispatch_message(message)
+
+        result = (await asyncio.wait_for(fut, timeout=1.0))[0]
+        self.assertIsInstance(result, WbGatewayTransmissionError)
+
+    async def test_reply_retained_message_ignored(self):
+        """A retained reply message is dropped before parsing: the pending
+        command stays unresolved and is not failed by the retained payload."""
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        await self.prepare_driver(driver)
+        # The waiter is expected to fall through to its own timeout, so keep it
+        # short instead of waiting out the full default response_timeout.
+        driver.response_timeout = 0.2
+
+        cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
+        fut = asyncio.gather(driver.send(cmd))
+        await self.mock_mqtt_client.wait_for_publish(
+            topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
+        )
+
+        message = mqtt.MQTTMessage(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        )
+        message.payload = b""
+        message.retain = True
+        self.mock_mqtt_dispatcher._dispatch_message(message)
+
+        # Retained drop must not resolve the waiter; a real timeout eventually
+        # does. The outer wait_for guards against a hang if that regresses.
+        result = (await asyncio.wait_for(fut, timeout=1.0))[0]
+        self.assertIsInstance(result, NoResponseFromGateway)
+
+    async def test_reply_malformed_payload_logged_with_context(self):
+        """A non-numeric reply payload resolves the command as a transmission
+        error and logs the failure with the reply topic for context."""
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        await self.prepare_driver(driver)
+
+        cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
+        fut = asyncio.gather(driver.send(cmd))
+        await self.mock_mqtt_client.wait_for_publish(
+            topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
+        )
+
+        topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0"
+        message = mqtt.MQTTMessage(topic=topic.encode())
+        message.payload = b"not-a-number"
+        self.mock_mqtt_dispatcher._dispatch_message(message)
+
+        result = (await asyncio.wait_for(fut, timeout=1.0))[0]
+        self.assertIsInstance(result, WbGatewayTransmissionError)
+        logged_with_topic = any(topic in str(call_args) for call_args in driver.logger.error.call_args_list)
+        self.assertTrue(logged_with_topic)
 
     async def test_bus_traffic_callbacks(self):
         """Test that bus traffic callbacks are invoked correctly."""

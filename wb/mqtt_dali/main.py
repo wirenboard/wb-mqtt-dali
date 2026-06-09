@@ -5,8 +5,9 @@ import logging
 import os
 import signal
 import sys
+from typing import Iterable
 
-import asyncio_mqtt as aiomqtt
+import aiomqtt
 import jsonschema
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
@@ -77,7 +78,48 @@ def load_config(config_filepath: str) -> dict:
     return config
 
 
-async def default_service(args):
+async def _teardown_children(gateway: Gateway, tasks: Iterable[asyncio.Task]) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, aiomqtt.MqttError):
+            pass
+        except Exception:  # pylint: disable=broad-exception-caught
+            logging.exception("Error while awaiting service child task during teardown")
+    try:
+        await gateway.stop()
+    except Exception:  # pylint: disable=broad-exception-caught
+        logging.exception("Error while stopping gateway during teardown")
+
+
+async def _serve_connection(client, mqtt_dispatcher: MQTTDispatcher, gateway: Gateway, on_connected) -> bool:
+    """Run one broker session. Returns True to stop the reconnect loop
+    (graceful shutdown), False to reconnect. Propagates MqttError to the
+    caller after tearing the children down so the loop can back off.
+    `on_connected` is invoked once the session is established.
+    """
+    async with client:
+        on_connected()
+        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
+        gateway_task = asyncio.create_task(gateway.start())
+        cancel_task = asyncio.create_task(wait_for_cancel())
+        children = (gateway_task, dispatcher_task, cancel_task)
+        try:
+            await asyncio.gather(*children)
+        except asyncio.CancelledError:
+            return True
+        finally:
+            # Runs on graceful shutdown, on a gathered task raising MqttError,
+            # and on a broker drop surfacing from the client context exit — so
+            # no previous-session task or half-started gateway survives into the
+            # next reconnect iteration.
+            await _teardown_children(gateway, children)
+    return False
+
+
+async def default_service(args, client_factory=make_mqtt_client, gateway_factory=Gateway):
     try:
         config = load_config(args.config)
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -90,34 +132,24 @@ async def default_service(args):
 
     gtin_db = DaliDatabase(GTIN_DB_FILEPATH)
 
-    client = make_mqtt_client(args.broker_url)
+    client = client_factory(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
-    gateway = Gateway(config, mqtt_dispatcher, args.config, gtin_db)
-    is_first_connection = True
+    gateway = gateway_factory(config, mqtt_dispatcher, args.config, gtin_db)
+    # Single-element list so the on_connected closure can mutate it; True means
+    # the next MqttError is the first since a successful connect and gets logged.
+    is_first_connection = [True]
+
+    def _on_connected():
+        is_first_connection[0] = True
+
     while True:
         try:
-            async with client:
-                is_first_connection = True
-                dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-                gateway_task = asyncio.create_task(gateway.start())
-                task_group = asyncio.gather(
-                    dispatcher_task,
-                    gateway_task,
-                    wait_for_cancel(),
-                )
-                try:
-                    await task_group
-                except asyncio.CancelledError:
-                    await gateway.stop()
-                    dispatcher_task.cancel()
-                    await dispatcher_task
-                    break
-
+            if await _serve_connection(client, mqtt_dispatcher, gateway, _on_connected):
+                break
         except aiomqtt.MqttError as e:
-            await gateway.stop()
-            if is_first_connection:
-                is_first_connection = False
+            if is_first_connection[0]:
+                is_first_connection[0] = False
                 logging.error("%s. Reconnecting", str(e))
             await asyncio.sleep(1)
 

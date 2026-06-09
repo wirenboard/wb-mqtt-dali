@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import asyncio_mqtt as aiomqtt
+import aiomqtt
 
 from wb.mqtt_dali.main import default_service
 
@@ -23,7 +23,7 @@ class _FakeClient:
 
     Entering always succeeds (a connected session); exiting is a no-op. A broker
     drop is modelled by a child task raising MqttError rather than by the
-    context manager, mirroring how asyncio_mqtt surfaces a lost connection
+    context manager, mirroring how aiomqtt surfaces a lost connection
     through the gathered tasks. The same client instance is reused across
     reconnect iterations, as in production.
     """

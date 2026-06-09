@@ -8,13 +8,13 @@ Guidance for Claude Code in this repo.
 
 ## Environment Setup
 
-Use Python 3.9 — same as CI (Debian bullseye). Newer interpreters mask bugs that only hit on 3.9.
+Use Python 3.13.5 — matches the target platform.
 
 ```bash
 ./scripts/bootstrap-venv.sh
 ```
 
-The script builds a self-contained `.venv` with Python 3.9 bundled inside
+The script builds a self-contained `.venv` with Python 3.13.5 bundled inside
 (`.venv/python/`), so the same `.venv` works both on the host and inside the
 agent-vm (which bind-mount the project at the same absolute path but have
 different `$HOME`). It is idempotent — safe to rerun to sync dependencies.

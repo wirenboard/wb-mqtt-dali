@@ -4,4 +4,4 @@ jsonschema==4.19.2
 mqttrpc @ git+https://github.com/wirenboard/python-mqtt-rpc@main
 paho-mqtt==2.1.0
 python-dali @ git+https://github.com/wirenboard/python-dali@dev/v0.11
-websockets==8.1
+websockets==15.0.1

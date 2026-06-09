@@ -7,7 +7,7 @@ import signal
 import sys
 from typing import Iterable
 
-import asyncio_mqtt as aiomqtt
+import aiomqtt
 import jsonschema
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 

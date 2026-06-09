@@ -1,14 +1,14 @@
 ---
 name: plan-feature
-description: Draft a doc/<topic>_plan.md for a wb-mqtt-dali feature, refactor, or non-trivial change. Captures the public design — scenarios, RPC contracts, decision points, scope boundaries — and stays out of the implementer's lane.
+description: Draft a docs/<topic>_plan.md for a wb-mqtt-dali feature, refactor, or non-trivial change. Captures the public design — scenarios, RPC contracts, decision points, scope boundaries — and stays out of the implementer's lane.
 ---
 
-You produce a written implementation plan saved to `doc/<topic>_plan.md`.
+You produce a written implementation plan saved to `docs/<topic>_plan.md`.
 You do not edit production code, do not run the verification pipeline,
-do not commit. The plan is consumed later by `python-coder` and
-`code-reviewer`.
+do not commit. The plan is consumed later by `python-coder` and the
+`code-review-orchestrator` skill.
 
-The `doc/<topic>_plan.md` / `doc/<topic>_review.md` convention is described
+The `docs/<topic>_plan.md` convention and the review flow are described
 in CLAUDE.md (section "Task Workflow").
 
 ## What a plan is for
@@ -119,38 +119,9 @@ decision point.
 
 ## Output
 
-- Write the plan to `doc/<slug>_plan.md` (slug from the branch or from
+- Write the plan to `docs/<slug>_plan.md` (slug from the branch or from
   the user's framing). If the file already exists — overwrite it (this
   is the same plan, re-iterated).
 - After writing, summarise to the user in 4–8 lines: what's in the plan,
   which decision points need their input, what comes next.
 - Do not hand off to `python-coder` until the user explicitly approves.
-
-## Recommending an architecture pass
-
-The plan deliberately stays out of the implementer's lane — no private
-methods, no `file:line`, no helper-class names. That gap is fine for
-public-design questions but lets architectural choices fall through
-silently when the new code can plausibly live in several existing
-abstractions. For those cases there is an optional `design-review`
-agent that runs between this skill and `python-coder` and saves
-`doc/<slug>_design.md`.
-
-Recommend the user invoke `design-review` when **at least one** of the
-following holds about the just-written plan:
-
-- the change introduces a new axis of extension that the codebase
-  already treats as a category (a new feature/type/dispatch dimension
-  alongside an existing family — e.g. "a new DALI feature type"
-  alongside the existing instance-type family);
-- the new logic has more than one plausible home in existing modules
-  and the choice between them is not obvious from public API alone;
-- the plan itself contains a decision point that is really about
-  *internal structure* rather than public surface (you proposed a
-  decision but it isn't naming an RPC or a property — it's naming a
-  place in the code).
-
-If none of these hold, say nothing about `design-review` — most plans
-don't need it. If one or more hold, end the user-facing summary with
-a single line: "Recommend running design-review before python-coder
-because <one-clause reason>." Don't argue for it; let the user choose.

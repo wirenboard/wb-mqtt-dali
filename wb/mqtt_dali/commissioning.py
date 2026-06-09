@@ -472,106 +472,108 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     short,
                 )
 
-        # now add random_address from old_devices (state file) to the list of known random addresses
-        # important! We must start iteration with actually found random addresses and only move to the
-        # old ones from the state file after, because those in front will preserve their short addresses
-        # Remember, our goal is to always preserve current state if it's correct and consistent
-        _found_rand_addrs = {rand for (short, rand) in known_rand_addrs}
-        for short, rand in self.old_devices.items():
-            if rand not in _found_rand_addrs:
-                log.info(
-                    "Adding old device with short %d and random 0x%06x "
-                    "to the end of known random addresses list",
-                    short,
-                    rand,
-                )
-                known_rand_addrs.append((short, rand))
-                _found_rand_addrs.add(rand)
+        try:
+            # now add random_address from old_devices (state file) to the list of known random addresses
+            # important! We must start iteration with actually found random addresses and only move to the
+            # old ones from the state file after, because those in front will preserve their short addresses
+            # Remember, our goal is to always preserve current state if it's correct and consistent
+            _found_rand_addrs = {rand for (short, rand) in known_rand_addrs}
+            for short, rand in self.old_devices.items():
+                if rand not in _found_rand_addrs:
+                    log.info(
+                        "Adding old device with short %d and random 0x%06x "
+                        "to the end of known random addresses list",
+                        short,
+                        rand,
+                    )
+                    known_rand_addrs.append((short, rand))
+                    _found_rand_addrs.add(rand)
 
-        self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 75)
-        log.info("Querying and withdrawing known random addresses")
-        cmds = []
-        query_cmd_indicies = []
-        for short, rand_addr in known_rand_addrs:
-            # note: number of search cmds can be less than 3, if some of the parts is the same as before
-            cmds.extend(list(self._set_search_addr(rand_addr)))
-            query_cmd_indicies.append(len(cmds))
-            cmds.append(self._cmds.QueryShortAddress())
-            cmds.append(self._cmds.Withdraw())
+            self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 75)
+            log.info("Querying and withdrawing known random addresses")
+            cmds = []
+            query_cmd_indicies = []
+            for short, rand_addr in known_rand_addrs:
+                # note: number of search cmds can be less than 3, if some of the parts is the same as before
+                cmds.extend(list(self._set_search_addr(rand_addr)))
+                query_cmd_indicies.append(len(cmds))
+                cmds.append(self._cmds.QueryShortAddress())
+                cmds.append(self._cmds.Withdraw())
 
-        random_address_conflicts = set()
-        responses = await send_commands_with_retry(self.driver, cmds, logger=log)
-        for i, (short, rand_addr) in enumerate(known_rand_addrs):
-            resp = responses[query_cmd_indicies[i]]  # QueryShortAddress response
-            random_address_conflicts |= await self._process_found_device(rand_addr, resp)
+            random_address_conflicts = set()
+            responses = await send_commands_with_retry(self.driver, cmds, logger=log)
+            for i, (short, rand_addr) in enumerate(known_rand_addrs):
+                resp = responses[query_cmd_indicies[i]]  # QueryShortAddress response
+                random_address_conflicts |= await self._process_found_device(rand_addr, resp)
 
-        log.info(
-            "After querying known random addresses found %d devices "
-            "with random address conflict or unset random address",
-            len(random_address_conflicts),
-        )
-        self._reporter(CommissioningStage.BINARY_SEARCH, 0)
-        bs_found = 0
-        binary_search_counter = 0
-        while True:
-            binary_search_counter += 1
+            log.info(
+                "After querying known random addresses found %d devices "
+                "with random address conflict or unset random address",
+                len(random_address_conflicts),
+            )
+            self._reporter(CommissioningStage.BINARY_SEARCH, 0)
+            bs_found = 0
+            binary_search_counter = 0
+            while True:
+                binary_search_counter += 1
 
-            log.info("Start binary search (%d)", binary_search_counter)
-            low = 0
-            high = 0xFFFFFF
-            last_found_rand_addr: Optional[int] = None
-            same_found_counter = 0
-            while low < high:
+                log.info("Start binary search (%d)", binary_search_counter)
+                low = 0
                 high = 0xFFFFFF
-                found_rand_addr = await self.find_next_device(low, high)
-                if found_rand_addr is None:
-                    log.info("No device found, exiting")
+                last_found_rand_addr: Optional[int] = None
+                same_found_counter = 0
+                while low < high:
+                    high = 0xFFFFFF
+                    found_rand_addr = await self.find_next_device(low, high)
+                    if found_rand_addr is None:
+                        log.info("No device found, exiting")
+                        break
+
+                    if found_rand_addr == last_found_rand_addr:
+                        same_found_counter += 1
+                    else:
+                        same_found_counter = 1
+                        last_found_rand_addr = found_rand_addr
+
+                    if same_found_counter >= 3:
+                        raise RuntimeError(
+                            "smart_extend stuck: same random address "
+                            f"0x{found_rand_addr:06x} found repeatedly"
+                        )
+
+                    for _ in range(3):
+                        resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
+                        try:
+                            check_query_response(resp)
+                            break
+                        except RuntimeError:
+                            pass
+                    await send_with_retry(self.driver, self._cmds.Withdraw(), log)
+                    random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
+                    bs_found += 1
+                    self._reporter(
+                        CommissioningStage.BINARY_SEARCH,
+                        _binary_search_local_progress(bs_found),
+                    )
+                    low = found_rand_addr
+
+                if len(random_address_conflicts) == 0:  # it's O(1)!
+                    log.info(
+                        "Addressing complete, no devices with random address conflict "
+                        "or unset random address found, exiting"
+                    )
                     break
 
-                if found_rand_addr == last_found_rand_addr:
-                    same_found_counter += 1
-                else:
-                    same_found_counter = 1
-                    last_found_rand_addr = found_rand_addr
+                if binary_search_counter >= 3:
+                    log.error("Too many iterations of binary search and randomise, something is wrong")
+                    break
 
-                if same_found_counter >= 3:
-                    raise RuntimeError(
-                        "smart_extend stuck: same random address " f"0x{found_rand_addr:06x} found repeatedly"
-                    )
-
-                for _ in range(3):
-                    resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
-                    try:
-                        check_query_response(resp)
-                        break
-                    except RuntimeError:
-                        pass
-                await send_with_retry(self.driver, self._cmds.Withdraw(), log)
-                random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
-                bs_found += 1
-                self._reporter(
-                    CommissioningStage.BINARY_SEARCH,
-                    _binary_search_local_progress(bs_found),
-                )
-                low = found_rand_addr
-
-            if len(random_address_conflicts) == 0:  # it's O(1)!
-                log.info(
-                    "Addressing complete, no devices with random address conflict "
-                    "or unset random address found, exiting"
-                )
-                break
-
-            if binary_search_counter >= 3:
-                log.error("Too many iterations of binary search and randomise, something is wrong")
-                break
-
-            log.info("Randomise the devices with random address conflict %s", random_address_conflicts)
-            for short in random_address_conflicts:
-                await self._randomise_by_short(short)
-            random_address_conflicts = set()
-
-        await send_with_retry(self.driver, self._cmds.Terminate(), log)
+                log.info("Randomise the devices with random address conflict %s", random_address_conflicts)
+                for short in random_address_conflicts:
+                    await self._randomise_by_short(short)
+                random_address_conflicts = set()
+        finally:
+            await send_with_retry(self.driver, self._cmds.Terminate(), log)
 
         # Classification based purely on old_devices (from file) and found_devices (current scan)
         # Build reverse maps random -> short

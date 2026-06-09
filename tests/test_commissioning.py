@@ -1074,6 +1074,42 @@ class TestCommissioning(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_smart_extend_sends_terminate_on_failure(self):
+        """A failure mid-scan (here: WITHDRAW has no effect, so binary search
+        keeps rediscovering the same random address and the stuck-detection
+        raises) must still leave the bus terminated: a Terminate is sent before
+        the exception propagates, so gear does not stay in INITIALISE until the
+        spec's 15-minute timeout.
+        """
+
+        async def run_test():
+            fake_bus = FakeDALIBus(devices={0: 0x123456})
+            sent_commands = []
+            original_send = fake_bus.send
+
+            async def mock_send(
+                cmd, source=BusTrafficSource.WB, priority=None
+            ):  # pylint: disable=unused-argument
+                sent_commands.append(cmd)
+                if isinstance(cmd, Withdraw):
+                    # Broken bus: WITHDRAW has no effect, so the same random
+                    # address is found repeatedly until stuck-detection raises.
+                    return MockResponse(value=None)
+                return await original_send(cmd, source, priority)
+
+            fake_bus.send = mock_send
+
+            commissioning = Commissioning(fake_bus, [])
+
+            with self.assertRaisesRegex(RuntimeError, "same random address"):
+                await commissioning.smart_extend()
+
+            # Terminate must be the last command on the bus after the failure.
+            self.assertTrue(any(isinstance(c, Terminate) for c in sent_commands))
+            self.assertIsInstance(sent_commands[-1], Terminate)
+
+        asyncio.run(run_test())
+
 
 class TestBinarySearchLocalProgress(unittest.TestCase):
     def test_zero_found_yields_zero(self):

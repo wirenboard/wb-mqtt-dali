@@ -10,6 +10,7 @@ import pytest
 from wb.mqtt_dali.application_controller import (
     MIN_POLLING_INTERVAL,
     ApplicationController,
+    ApplicationControllerConfig,
     ApplicationControllerState,
     ApplicationControllerTask,
     ApplicationControllerTaskType,
@@ -1510,6 +1511,30 @@ class TestPollingLoopFallback:
 
         assert polls_after > polls_before
 
+    @pytest.mark.asyncio
+    async def test_execute_control_batch_failure_resolves_all_futures(self):
+        # pylint: disable=protected-access
+        """An unexpected error while dispatching the EXECUTE_CONTROL batch must
+        resolve every pulled-off future (with the exception) so no one-shot
+        on-topic write hangs, and the loop keeps running."""
+        controller = _make_polling_loop_controller(polling_interval=1.0)
+        controller._poll_step = AsyncMock(return_value=10.0)
+        device = MagicMock()
+        # Raise synchronously while building the gather call, escaping the
+        # gather(return_exceptions=True) net and hitting the recovery branch.
+        device.execute_control = MagicMock(side_effect=RuntimeError("boom"))
+
+        task1 = _make_execute_control_task(device, control_id="ctrl1")
+        task2 = _make_execute_control_task(device, control_id="ctrl2")
+        controller._tasks_queue.put_nowait(task1)
+        controller._tasks_queue.put_nowait(task2)
+
+        await _run_loop_briefly(controller, 0.05)
+
+        for task in (task1, task2):
+            assert task.future.done()
+            assert isinstance(task.future.exception(), RuntimeError)
+
 
 @pytest.mark.asyncio
 async def test_polling_loop_command_stream_does_not_starve_polling():
@@ -1547,3 +1572,52 @@ async def test_polling_loop_command_stream_does_not_starve_polling():
 
     assert device.execute_control.await_count == 6
     assert poll_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_start_rolls_back_on_publisher_bringup_failure():
+    """A bringup failure after the driver is up must leave a clean slate.
+
+    The controller is built with its normal constructor (no I/O) but with the
+    driver and publisher classes patched to mocks. The failure is injected at the
+    virtual-device publication step (register_control_handler) — the dangerous
+    case where the publisher is already initialized and has registered device
+    state/subscriptions. start() must roll back symmetrically: clean up the
+    publisher (so its state/subscriptions are unwound and a re-publish won't hit
+    "Handler already registered"), deinitialize the driver, and re-raise. The
+    rollback is observed publicly: the publisher cleanup and driver teardown were
+    awaited, and a subsequent start() succeeds — only possible if the controller
+    fell back to UNINITIALIZED, since start() rejects any other state.
+    """
+    with patch("wb.mqtt_dali.application_controller.WBDALIDriver") as driver_cls, patch(
+        "wb.mqtt_dali.application_controller.DevicePublisher"
+    ) as publisher_cls:
+        driver = driver_cls.return_value
+        driver.initialize = AsyncMock()
+        driver.deinitialize = AsyncMock()
+        publisher = publisher_cls.return_value
+        publisher.initialize = AsyncMock()
+        publisher.add_device = AsyncMock()
+        publisher.register_control_handler = AsyncMock(side_effect=[RuntimeError("broker down"), None])
+        publisher.cleanup = AsyncMock()
+
+        config = ApplicationControllerConfig(
+            gateway_mqtt_device_id="gw",
+            bus=1,
+            dali_devices=[],
+            dali2_devices=[],
+            polling_interval=1.0,
+        )
+        controller = ApplicationController(config, MagicMock(), MagicMock())
+
+        with pytest.raises(RuntimeError, match="broker down"):
+            await controller.start()
+
+        publisher.cleanup.assert_awaited_once()
+        driver.deinitialize.assert_awaited_once()
+        assert controller.driver is driver
+
+        # A clean re-start is only reachable from UNINITIALIZED, and it must
+        # re-publish the broadcast device without a duplicate-handler error.
+        await controller.start()
+        await controller.stop()

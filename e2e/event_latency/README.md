@@ -41,8 +41,7 @@ DALI 2 ShortPress-кадра в шину (через шлюз-инжектор) 
   `--injector-gateway` bus 2; шлюз можно сменить флагом `--monitor-gateway`,
   номер шины — фиксированный (`MONITOR_BUS = 2`).
 
-  Если на стенде wb-mqtt-dali один и обслуживает оба шлюза (как на стенде
-  10.200.200.1 — см. `doc/event_latency_timeouts_investigation.md`), скрипт
+  Если на стенде wb-mqtt-dali один и обслуживает оба шлюза, скрипт
   на время прогона сам уберёт запись инжектора из `/etc/wb-mqtt-dali.conf`
   и перезапустит сервис, а в конце вернёт исходный конфиг и снова
   перезапустит wb-mqtt-dali — см. раздел «Что делает скрипт со стендом»
@@ -65,9 +64,7 @@ DALI 2 ShortPress-кадра в шину (через шлюз-инжектор) 
    DUT снова появится в списке (`READY_TIMEOUT_S = 30 с`).
 4. Дожидается, пока wb-mqtt-dali закончит первичный `_initialize_device`
    для DALI 2 input-device на DUT, без чего `_dev_inst_map` пуст и
-   входящие event-кадры не декодируются как `_Event` (см.
-   `doc/event_latency_timeouts_investigation.md`, раздел «Почему
-   теряется первая итерация после рестарта wb-mqtt-dali»). Детект —
+   входящие event-кадры не декодируются как `_Event`. Детект —
    через подписку на `/devices/<dali2_mqtt_id>/meta` и ожидание
    первой non-retained-публикации.
 

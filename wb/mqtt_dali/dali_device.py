@@ -109,8 +109,11 @@ def query_device_types_sequence(addr: Address):
         return [r.raw_value.as_integer]
     if r.raw_value.as_integer == 254:
         return []
-    assert r.raw_value.as_integer == 255
-    last_seen = 0
+    if r.raw_value.as_integer != 255:
+        raise RuntimeError(f"Unexpected QueryDeviceType value: {r.raw_value.as_integer}")
+    # Start below 0 so a valid first device type of 0 is accepted; the gear is
+    # required to return types in strictly ascending order, without repeats.
+    last_seen = -1
     result = []
     while True:
         r = yield from request_with_retry_sequence(QueryNextDeviceType(addr))
@@ -119,10 +122,9 @@ def query_device_types_sequence(addr: Address):
                 raise RuntimeError("No device types returned by QueryNextDeviceType")
             return result
         if r.raw_value.as_integer <= last_seen:
-            # The gear is required to return device types in
-            # ascending order, without repeats
             raise RuntimeError("Device type received out of order")
         result.append(r.raw_value.as_integer)
+        last_seen = r.raw_value.as_integer
 
 
 class DaliDevice(DaliDeviceBase):

@@ -175,9 +175,6 @@ Desktop.ini
 config.local.*
 .secrets
 
-# Workflow artifacts: review docs are per-iteration scratch, not merged
-doc/*_review.md
-
 # Claude Code local settings
 .claude/settings.local.json
 

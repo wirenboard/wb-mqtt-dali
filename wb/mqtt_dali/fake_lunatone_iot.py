@@ -31,14 +31,8 @@ from typing import Any, Callable, Optional, Sequence
 import dali.command
 import dali.frame
 import websockets.exceptions
-
-try:
-    from websockets.http import Headers
-    from websockets.server import HTTPResponse, WebSocketServerProtocol, serve
-except ImportError:
-    from websockets.legacy.http import Headers
-    from websockets.legacy.server import HTTPResponse, WebSocketServerProtocol, serve
-
+from websockets.asyncio.server import ServerConnection, serve
+from websockets.http11 import Request, Response
 from websockets.typing import Data
 
 from .asyncio_utils import OneShotTasks
@@ -143,7 +137,7 @@ async def dali_answer(websocket, line, result, dali_data, logger: logging.Logger
 
 
 async def emulate(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
-    websocket: WebSocketServerProtocol,
+    websocket: ServerConnection,
     drivers: Sequence[WBDALIDriver],
     name: str,
     logger: logging.Logger,
@@ -178,7 +172,7 @@ async def emulate(  # pylint: disable=too-many-locals, too-many-branches, too-ma
                         # priority = message["data"]["mode"]["priority"]
                         wait_for_answer = message["data"]["mode"]["waitForAnswer"]
                     except KeyError as e:
-                        raise KeyError(f"Missing {e} for DALI frame: {message}") from e
+                        raise LunatoneIotProtocolError(f"Missing {e} for DALI frame: {message}") from e
                     logger.debug(
                         "WS << daliFrame (bits=%s line=%s sendTwice=%s waitForAnswer=%s) %s",
                         bits,
@@ -298,9 +292,9 @@ def publish_traffic(
     return _traffic_filter
 
 
-async def process_request(path: str, _request_headers: Headers) -> Optional[HTTPResponse]:
-    if path != "/":
-        return (HTTPStatus.NOT_FOUND, [], "Not found".encode("utf-8"))
+async def process_request(connection: ServerConnection, request: Request) -> Optional[Response]:
+    if request.path != "/":
+        return connection.respond(HTTPStatus.NOT_FOUND, "Not found")
     return None
 
 
@@ -314,7 +308,7 @@ async def run_websocket(
     _log = logger.getChild("lunatone-iot-emulator")
     _log.info("Starting Lunatone IoT Gateway emulator on %s:%d", host, port)
 
-    async def _handler(websocket: WebSocketServerProtocol, _path: str = "") -> None:
+    async def _handler(websocket: ServerConnection) -> None:
         await emulate(websocket, drivers, name, _log)
 
     try:

@@ -585,14 +585,20 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                    4 - transmission impossible (no power on bus)
                    5 - gateway overheat
         """
-        resp = int(message.payload.decode())
-
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
             return  # Ignore retained messages
 
-        backward_frame_byte = resp & 0xFF
-        status = (resp >> 8) & 0xFF
+        try:
+            resp = int(message.payload.decode().strip())
+        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+            self.logger.error(
+                "Failed to parse reply payload '%s' from topic '%s': %s",
+                message.payload,
+                message.topic,
+                exc,
+            )
+            resp = None
 
         # Process the message as needed
         resp_pointer = int(
@@ -610,6 +616,22 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         if resp_future.done():
             self.logger.debug("Response future already done for pointer: %d", resp_pointer)
             return
+
+        if resp is None:
+            # Unparseable payload: fail the waiter now so the caller does not
+            # block until the full response timeout.
+            response = WbGatewayTransmissionError()
+            resp_future.set_result(response)
+            self.bus_traffic.notify_command(
+                resp_waiter.send_item.command.frame,
+                response,
+                resp_waiter.send_item.source,
+                resp_waiter.sequence_id,
+            )
+            return
+
+        backward_frame_byte = resp & 0xFF
+        status = (resp >> 8) & 0xFF
 
         if status != 5:
             self._overheat_rate_limiter.on_non_overheat_response()

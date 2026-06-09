@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.17.3) stable; urgency=medium
+
+  * On MQTT broker disconnect, cancel in-flight tasks and tolerate a bus still initializing, instead of terminating the service.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 09 Jun 2026 10:59:56 +0500
+
 wb-mqtt-dali (1.17.2) stable; urgency=medium
 
   * Replace an assert with an explicit error when querying device types (no asserts in production code).

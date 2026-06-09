@@ -10,6 +10,7 @@ import pytest
 from wb.mqtt_dali.application_controller import (
     MIN_POLLING_INTERVAL,
     ApplicationController,
+    ApplicationControllerConfig,
     ApplicationControllerState,
     ApplicationControllerTask,
     ApplicationControllerTaskType,
@@ -1536,3 +1537,52 @@ async def test_polling_loop_command_stream_does_not_starve_polling():
 
     assert device.execute_control.await_count == 6
     assert poll_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_start_rolls_back_on_publisher_bringup_failure():
+    """A bringup failure after the driver is up must leave a clean slate.
+
+    The controller is built with its normal constructor (no I/O) but with the
+    driver and publisher classes patched to mocks. The failure is injected at the
+    virtual-device publication step (register_control_handler) — the dangerous
+    case where the publisher is already initialized and has registered device
+    state/subscriptions. start() must roll back symmetrically: clean up the
+    publisher (so its state/subscriptions are unwound and a re-publish won't hit
+    "Handler already registered"), deinitialize the driver, and re-raise. The
+    rollback is observed publicly: the publisher cleanup and driver teardown were
+    awaited, and a subsequent start() succeeds — only possible if the controller
+    fell back to UNINITIALIZED, since start() rejects any other state.
+    """
+    with patch("wb.mqtt_dali.application_controller.WBDALIDriver") as driver_cls, patch(
+        "wb.mqtt_dali.application_controller.DevicePublisher"
+    ) as publisher_cls:
+        driver = driver_cls.return_value
+        driver.initialize = AsyncMock()
+        driver.deinitialize = AsyncMock()
+        publisher = publisher_cls.return_value
+        publisher.initialize = AsyncMock()
+        publisher.add_device = AsyncMock()
+        publisher.register_control_handler = AsyncMock(side_effect=[RuntimeError("broker down"), None])
+        publisher.cleanup = AsyncMock()
+
+        config = ApplicationControllerConfig(
+            gateway_mqtt_device_id="gw",
+            bus=1,
+            dali_devices=[],
+            dali2_devices=[],
+            polling_interval=1.0,
+        )
+        controller = ApplicationController(config, MagicMock(), MagicMock())
+
+        with pytest.raises(RuntimeError, match="broker down"):
+            await controller.start()
+
+        publisher.cleanup.assert_awaited_once()
+        driver.deinitialize.assert_awaited_once()
+        assert controller.driver is driver
+
+        # A clean re-start is only reachable from UNINITIALIZED, and it must
+        # re-publish the broadcast device without a duplicate-handler error.
+        await controller.start()
+        await controller.stop()

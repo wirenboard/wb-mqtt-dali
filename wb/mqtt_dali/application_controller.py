@@ -504,14 +504,32 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise RuntimeError("Failed to initialize WBDALIDriver") from e
 
-        await self._device_publisher.initialize()
-        await self._publish_virtual_device(self._broadcast_device)
+        try:
+            await self._device_publisher.initialize()
+            await self._publish_virtual_device(self._broadcast_device)
 
-        current_time = default_timer()
-        for device in self.dali_devices + self.dali2_devices:
-            self._devices_by_mqtt_id[device.mqtt_id] = device
-            device.set_logger(self.logger)
-            self._init_scheduler.schedule(device.mqtt_id, current_time)
+            current_time = default_timer()
+            for device in self.dali_devices + self.dali2_devices:
+                self._devices_by_mqtt_id[device.mqtt_id] = device
+                device.set_logger(self.logger)
+                self._init_scheduler.schedule(device.mqtt_id, current_time)
+        except Exception:
+            # Roll back best-effort: a failing cleanup step must not mask the
+            # original startup error nor leave the controller stuck in
+            # INITIALIZING (which would block a later start() retry).
+            self._init_scheduler.clear()
+            try:
+                await self._device_publisher.cleanup()
+            except Exception:  # pylint: disable=broad-exception-caught
+                self.logger.exception("Error cleaning up device publisher during start() rollback")
+            try:
+                await self._dev.deinitialize()
+            except Exception:  # pylint: disable=broad-exception-caught
+                self.logger.exception("Error deinitializing WBDALIDriver during start() rollback")
+            self._devices_by_mqtt_id.pop(self._broadcast_device.mqtt_id, None)
+            async with self._state_lock:
+                self._state = ApplicationControllerState.UNINITIALIZED
+            raise
 
         async with self._state_lock:
             self._state = ApplicationControllerState.READY

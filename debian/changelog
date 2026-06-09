@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.17.7) stable; urgency=medium
+
+  * Roll back cleanly when bus start-up fails after driver initialization, instead of leaking the driver and getting stuck.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 09 Jun 2026 18:16:27 +0500
+
 wb-mqtt-dali (1.17.6) stable; urgency=medium
 
   * Always resolve pending control-write requests if an unexpected error occurs while processing a control batch.

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.17.9) stable; urgency=medium
+
+  * Fix crash and incorrect value when decoding general purpose sensor measurement events.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 09 Jun 2026 18:45:35 +0500
+
 wb-mqtt-dali (1.17.8) stable; urgency=medium
 
   * Return a syntax-error result instead of closing the connection on a malformed Lunatone IoT DALI frame.

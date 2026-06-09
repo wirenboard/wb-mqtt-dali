@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap a self-contained .venv with Python 3.9 bundled inside it.
+# Bootstrap a self-contained .venv with Python 3.13.5 bundled inside it.
 #
 # The interpreter, libpython, and stdlib are copied into .venv/bundle/, so the
 # venv has no external dependencies. This lets the same .venv be used from both
@@ -11,7 +11,7 @@
 # during subsequent uv operations (e.g. uv pip install), which would undo a
 # directory copy placed there.
 #
-# Idempotent: skips the interpreter bootstrap if .venv/bundle/bin/python3.9
+# Idempotent: skips the interpreter bootstrap if .venv/bundle/bin/python3.13
 # already exists; always (re)installs requirements with --link-mode=copy.
 
 set -euo pipefail
@@ -19,14 +19,14 @@ set -euo pipefail
 PROJ="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJ"
 
-PY_VERSION_REQUIRED="3.9"
+PY_VERSION_REQUIRED="3.13.5"
 
 if ! command -v uv >/dev/null 2>&1; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-if [ ! -x .venv/bundle/bin/python3.9 ] || [ -L .venv/bundle ]; then
+if [ ! -x .venv/bundle/bin/python3.13 ] || [ -L .venv/bundle ]; then
     rm -rf .venv
 
     uv python install "$PY_VERSION_REQUIRED"
@@ -39,10 +39,10 @@ if [ ! -x .venv/bundle/bin/python3.9 ] || [ -L .venv/bundle ]; then
 
     cp -a "$PY_ROOT" .venv/bundle
 
-    rm -f .venv/bin/python .venv/bin/python3 .venv/bin/python3.9
-    ln -s ../bundle/bin/python3.9 .venv/bin/python
-    ln -s python                  .venv/bin/python3
-    ln -s python                  .venv/bin/python3.9
+    rm -f .venv/bin/python .venv/bin/python3 .venv/bin/python3.13
+    ln -s ../bundle/bin/python3.13 .venv/bin/python
+    ln -s python                   .venv/bin/python3
+    ln -s python                   .venv/bin/python3.13
 
     PYVER="$("$PY_BIN" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')"
     cat > .venv/pyvenv.cfg <<EOF

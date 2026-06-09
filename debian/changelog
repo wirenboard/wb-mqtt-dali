@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.17.8) stable; urgency=medium
+
+  * Return a syntax-error result instead of closing the connection on a malformed Lunatone IoT DALI frame.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 09 Jun 2026 18:25:54 +0500
+
 wb-mqtt-dali (1.17.7) stable; urgency=medium
 
   * Roll back cleanly when bus start-up fails after driver initialization, instead of leaking the driver and getting stuck.

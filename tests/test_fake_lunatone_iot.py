@@ -182,6 +182,59 @@ async def test_lunatone_emulator_returns_dali_answer_with_correct_line():
     assert answers[0]["data"]["daliData"] == 0x42
 
 
+# -------- emulate(): malformed daliFrame handling --------
+
+
+@pytest.mark.asyncio
+async def test_dali_frame_missing_field_returns_syntax_error():
+    """A daliFrame missing a required field yields a SYNTAX_ERROR result and the
+    receive loop keeps running: a following valid frame is still processed."""
+    drivers = [_make_driver()]
+    incomplete = json.dumps(
+        {
+            "type": "daliFrame",
+            "data": {
+                "numberOfBits": 16,
+                "daliData": [0xFE, 0x00],
+                "line": 0,
+                # "mode" intentionally omitted
+            },
+        }
+    )
+    incoming = [incomplete, _dali_frame_message(0, [0xFE, 0x01])]
+    ws = _StubWebSocket(incoming)
+
+    with patch(
+        "wb.mqtt_dali.fake_lunatone_iot.send_with_retry",
+        new=AsyncMock(return_value=MagicMock(raw_value=None)),
+    ) as mock_send:
+        await emulate(ws, drivers, "wb-only", logging.getLogger("test"))
+
+    frame_results = [m for m in ws.sent if m["type"] == "daliFrame"]
+    assert any(m["data"]["result"] == SendingResult.SYNTAX_ERROR.value for m in frame_results)
+    # The session survived the bad frame and the next valid frame reached the driver.
+    mock_send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_valid_dali_frame_unchanged():
+    """A complete daliFrame is dispatched to the driver and reported as SENT."""
+    drivers = [_make_driver()]
+    incoming = [_dali_frame_message(0, [0xFE, 0x00])]
+    ws = _StubWebSocket(incoming)
+
+    with patch(
+        "wb.mqtt_dali.fake_lunatone_iot.send_with_retry",
+        new=AsyncMock(return_value=MagicMock(raw_value=None)),
+    ) as mock_send:
+        await emulate(ws, drivers, "wb-only", logging.getLogger("test"))
+
+    mock_send.assert_awaited_once()
+    frame_results = [m for m in ws.sent if m["type"] == "daliFrame"]
+    assert frame_results
+    assert frame_results[0]["data"]["result"] == SendingResult.SENT.value
+
+
 # -------- publish_traffic(): line index in daliMonitor messages --------
 
 

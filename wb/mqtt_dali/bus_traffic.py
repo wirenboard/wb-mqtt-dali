@@ -70,14 +70,15 @@ class BusTrafficCallbacks:
         if sequence_id == self._last_item_sequence_id + 1:
             self._dispatch(item)
             self._last_item_sequence_id = sequence_id
-            for pending_item in self._waiting_for_publish:
-                self._dispatch(pending_item)
-                self._last_item_sequence_id = pending_item.frame_counter
-            self._waiting_for_publish.clear()
+            self._drain_contiguous()
             return
-        if sequence_id >= self._last_item_sequence_id + self._gateway_queue_size:
-            # Gap is too large to wait out — flush buffered items in their sorted order
+        if sequence_id > self._last_item_sequence_id + self._gateway_queue_size:
+            # Gap is too large to wait out — flush buffered items in their sorted
+            # order, skipping stale duplicates already past the cursor (as
+            # _drain_contiguous does) so they are not republished.
             for pending_item in self._waiting_for_publish:
+                if pending_item.frame_counter <= self._last_item_sequence_id:
+                    continue
                 self._dispatch(pending_item)
             self._waiting_for_publish.clear()
             self._dispatch(item)
@@ -85,6 +86,22 @@ class BusTrafficCallbacks:
             return
         self._waiting_for_publish.append(item)
         self._waiting_for_publish.sort(key=lambda i: i.frame_counter or 0)
+
+    def _drain_contiguous(self) -> None:
+        # Dispatch only buffered items that directly follow the cursor; items
+        # past a gap stay buffered until the gap is filled, so no frame is
+        # published ahead of its predecessor or silently skipped.
+        while self._waiting_for_publish:
+            head = self._waiting_for_publish[0]
+            if head.frame_counter <= self._last_item_sequence_id:
+                # Already past the cursor (a stale duplicate)
+                self._waiting_for_publish.pop(0)
+                continue
+            if head.frame_counter != self._last_item_sequence_id + 1:
+                break
+            self._dispatch(head)
+            self._last_item_sequence_id = head.frame_counter
+            self._waiting_for_publish.pop(0)
 
     def _dispatch(self, item: BusTrafficItem) -> None:
         for func in self._callbacks:

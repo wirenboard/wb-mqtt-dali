@@ -17,8 +17,10 @@
 #      driver pipelines internally.
 #   3. Wait until the long driver has received TRIGGER_AFTER responses —
 #      at this point the long batch is uncontested.
-#   4. Only then submit HAMMER_BURST QueryStatus commands at the hammer
-#      driver's priority via the hammer driver's `send_commands`.
+#   4. Only then submit HAMMER_BURST frames at the hammer driver's priority
+#      via the hammer driver's `send_commands`. The frame kind is selectable
+#      with `--hammer-frame`: a QueryStatus command (expects a response) or a
+#      DALI 2 input-device event (24-bit forward frame, no response).
 #   5. Await both; print the merged sequence on exit.
 #
 # Each driver registers a `bus_traffic` callback that records every
@@ -27,12 +29,15 @@
 
 import argparse
 import asyncio
+import enum
 import logging
 import sys
 from dataclasses import dataclass
-from typing import List
+from typing import List, Sequence
 
-from dali.address import GearShort
+from dali.address import DeviceShort, GearShort
+from dali.command import Command
+from dali.device.light import LightEvent
 from dali.gear.general import DAPC, QueryActualLevel, QueryStatus
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
@@ -52,6 +57,27 @@ TRIGGER_AFTER = 2
 
 LONG_DRIVER_PRIORITY = FramePriority.AUTOMATIC
 HAMMER_DRIVER_PRIORITY = FramePriority.CONFIGURATION
+
+
+class HammerFrame(enum.Enum):
+    """What the hammer driver puts on the bus to contend with the long batch.
+
+    ``COMMAND`` sends a 16-bit ``QueryStatus`` forward frame (expects a
+    backward frame); ``EVENT`` sends a 24-bit DALI 2 input-device event
+    forward frame (no response).
+    """
+
+    COMMAND = "command"
+    EVENT = "event"
+
+
+def make_hammer_commands(kind: HammerFrame, short_address: int) -> Sequence[Command]:
+    if kind is HammerFrame.COMMAND:
+        return [QueryStatus(GearShort(short_address)) for _ in range(HAMMER_BURST)]
+    return [
+        LightEvent(short_address=DeviceShort(short_address), instance_number=0, data=0)
+        for _ in range(HAMMER_BURST)
+    ]
 
 
 @dataclass
@@ -136,7 +162,11 @@ def print_results(events: List[TrafficEvent], t0: float) -> None:
 
 
 async def run_test(  # pylint: disable=too-many-locals
-    mqtt_dispatcher: MQTTDispatcher, long_gateway: str, hammer_gateway: str, short_address: int
+    mqtt_dispatcher: MQTTDispatcher,
+    long_gateway: str,
+    hammer_gateway: str,
+    short_address: int,
+    hammer_frame: HammerFrame,
 ) -> None:
     logger = logging.getLogger()
     driver_long = WBDALIDriver(
@@ -198,15 +228,15 @@ async def run_test(  # pylint: disable=too-many-locals
                 )
 
                 await asyncio.wait_for(trigger_event.wait(), timeout=5.0)
+                hammer_cmds = make_hammer_commands(hammer_frame, short_address)
                 logging.info(
-                    "%d long response(s) received at t=%.3f s; launching hammer batch "
-                    "(%d x QueryStatus @ prio %d)",
+                    "%d long response(s) received at t=%.3f s; launching hammer batch (%d x %s @ prio %d)",
                     TRIGGER_AFTER,
                     loop.time() - t0,
                     HAMMER_BURST,
+                    type(hammer_cmds[0]).__name__,
                     HAMMER_DRIVER_PRIORITY.value,
                 )
-                hammer_cmds = [QueryStatus(addr) for _ in range(HAMMER_BURST)]
                 hammer_task = asyncio.create_task(
                     driver_hammer.send_commands(hammer_cmds, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY)
                 )
@@ -243,6 +273,18 @@ async def main(argv) -> int:
     parser.add_argument(
         "--short-address", type=int, default=0, help="DALI short address of the device (default: 0)"
     )
+    parser.add_argument(
+        "--hammer-frame",
+        type=HammerFrame,
+        choices=list(HammerFrame),
+        default=HammerFrame.COMMAND,
+        metavar="{command,event}",
+        help=(
+            "What the hammer driver sends to contend on the bus: a QueryStatus "
+            "'command' (expects a response) or a DALI 2 input-device 'event' "
+            "(no response). Default: command."
+        ),
+    )
     args = parser.parse_args(argv[1:])
 
     logging.basicConfig(level=logging.INFO)
@@ -256,7 +298,13 @@ async def main(argv) -> int:
         async with client:
             dispatcher = asyncio.create_task(dispatcher_task(mqtt_dispatcher))
             try:
-                await run_test(mqtt_dispatcher, args.long_gateway, args.hammer_gateway, args.short_address)
+                await run_test(
+                    mqtt_dispatcher,
+                    args.long_gateway,
+                    args.hammer_gateway,
+                    args.short_address,
+                    args.hammer_frame,
+                )
             finally:
                 dispatcher.cancel()
                 try:

@@ -251,19 +251,29 @@ async def wait_for_gateway_ready(
     raise RuntimeError(f"wb-mqtt-dali did not become ready within {timeout:.1f} s (last error: {last_error})")
 
 
-async def wait_for_dali2_device_ready(mqtt_id: str, mqtt_dispatcher: MQTTDispatcher, timeout: float) -> None:
-    """Wait until wb-mqtt-dali finishes _initialize_device for the DALI 2 input-device.
+@asynccontextmanager
+async def dali2_device_ready_subscription(
+    mqtt_id: str, mqtt_dispatcher: MQTTDispatcher
+) -> AsyncGenerator["asyncio.Future[None]", None]:
+    """Subscribe to the DALI 2 device's `/meta` and yield a future that resolves
+    on the first fresh (non-retained, non-empty) publication after init.
 
     `Editor/GetList` becomes responsive as soon as the RPC server is up, which is
     several seconds before `_polling_loop` runs `_initialize_device` for each
     configured device. For DALI 2 input-devices, only the latter call populates
     `_dev_inst_map` (via `_update_dali2_device_instance_map`), and without it
     `from_frame` does not decode event frames as `_Event` and short_press<i> is
-    never published. We detect the post-init moment by waiting for a fresh
-    (non-retained) publication on `/devices/<mqtt_id>/meta` — `publish_device`
-    emits it only after `try_initialize_device` succeeds. Any retained delivery
-    is filtered out so we don't false-positive on stale meta that survived
-    `remove_topics_by_driver` and reached us before the new init completed.
+    never published. `publish_device` emits `/devices/<mqtt_id>/meta` only after
+    `try_initialize_device` succeeds; the broker clears the retain flag on that
+    live delivery to an already-subscribed client, so a fresh init shows up as a
+    non-retained, non-empty payload. The initial retained snapshot (retain set)
+    and the empty `remove_topics_by_driver` clear are both filtered out.
+
+    Crucially this is a context manager so the caller subscribes *before*
+    restarting wb-mqtt-dali: on a fast-initialising DUT (e.g. with the injector
+    gateway evicted) the post-restart `/meta` publish can fire before a
+    subscribe-then-wait helper ever subscribes, and the one-shot signal would be
+    missed. Subscribing first makes the wait race-free.
     """
     topic = f"/devices/{mqtt_id}/meta"
     fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -278,13 +288,7 @@ async def wait_for_dali2_device_ready(mqtt_id: str, mqtt_dispatcher: MQTTDispatc
 
     await mqtt_dispatcher.subscribe(topic, on_message)
     try:
-        try:
-            await asyncio.wait_for(fut, timeout)
-        except asyncio.TimeoutError as exc:
-            raise RuntimeError(
-                f"DALI 2 device {mqtt_id!r} did not finish initialization within "
-                f"{timeout:.1f} s (no fresh publication on {topic})"
-            ) from exc
+        yield fut
     finally:
         await mqtt_dispatcher.unsubscribe(topic, on_message)
 
@@ -686,6 +690,19 @@ async def main(argv) -> int:  # pylint: disable=too-many-locals, too-many-statem
     async with client:
         dispatcher = asyncio.create_task(dispatcher_task(mqtt_dispatcher))
         try:
+            # Resolve the DALI 2 device while wb-mqtt-dali is still up so we can
+            # subscribe to its /meta before the restart and not race the one-shot
+            # init publish. Evicting the injector does not touch the target
+            # gateway, so mqtt_id stays valid across the restart.
+            mqtt_id, short_address, bus_uid = await resolve_dali2_device(args.target_gateway, mqtt_dispatcher)
+            logging.info(
+                "Target DALI 2 device: mqtt_id=%s, short_address=%d (gateway=%s, bus=%d)",
+                mqtt_id,
+                short_address,
+                args.target_gateway,
+                DALI_BUS,
+            )
+
             logging.info(
                 "Evicting injector gateway %s from %s and restarting wb-mqtt-dali",
                 args.injector_gateway,
@@ -693,20 +710,17 @@ async def main(argv) -> int:  # pylint: disable=too-many-locals, too-many-statem
             )
             original_config_text = evict_injector_from_config(WB_MQTT_DALI_CONFIG_PATH, args.injector_gateway)
             try:
-                await restart_wb_mqtt_dali(args.target_gateway, mqtt_dispatcher)
-
-                mqtt_id, short_address, bus_uid = await resolve_dali2_device(
-                    args.target_gateway, mqtt_dispatcher
-                )
-                logging.info(
-                    "Target DALI 2 device: mqtt_id=%s, short_address=%d (gateway=%s, bus=%d)",
-                    mqtt_id,
-                    short_address,
-                    args.target_gateway,
-                    DALI_BUS,
-                )
-                logging.info("Waiting for DALI 2 device init on DUT before starting iterations")
-                await wait_for_dali2_device_ready(mqtt_id, mqtt_dispatcher, DEVICE_READY_TIMEOUT_S)
+                async with dali2_device_ready_subscription(mqtt_id, mqtt_dispatcher) as device_ready:
+                    await restart_wb_mqtt_dali(args.target_gateway, mqtt_dispatcher)
+                    logging.info("Waiting for DALI 2 device init on DUT before starting iterations")
+                    try:
+                        await asyncio.wait_for(device_ready, DEVICE_READY_TIMEOUT_S)
+                    except asyncio.TimeoutError as exc:
+                        raise RuntimeError(
+                            f"DALI 2 device {mqtt_id!r} did not finish initialization within "
+                            f"{DEVICE_READY_TIMEOUT_S:.1f} s (no fresh publication on "
+                            f"/devices/{mqtt_id}/meta)"
+                        ) from exc
 
                 monitor_gateway = args.monitor_gateway or args.injector_gateway
                 async with injector_driver_running(args.injector_gateway, mqtt_dispatcher) as driver:

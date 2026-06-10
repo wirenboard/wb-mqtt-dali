@@ -25,6 +25,14 @@
                     "type": "boolean",
                     "title": "DALI 2 Device",
                     "default": false
+                },
+                "mqtt_id": {
+                    "type": "string",
+                    "title": "MQTT ID"
+                },
+                "name": {
+                    "type": "string",
+                    "title": "Name"
                 }
             },
             "required": ["short", "random"]

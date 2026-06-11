@@ -4,7 +4,7 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
+import aiomqtt
 from wb.mqtt_dali.wbmqtt import (
     ControlMeta,
     ControlState,
@@ -15,12 +15,6 @@ from wb.mqtt_dali.wbmqtt import (
 )
 
 # pylint: disable=redefined-outer-name,too-many-public-methods
-
-
-class MockMessage:  # pylint: disable=too-few-public-methods
-    def __init__(self, topic: str, payload: bytes = b""):
-        self.topic = topic
-        self.payload = payload
 
 
 class MockMessageIterator:
@@ -56,7 +50,7 @@ class MockMQTTClient:
         self._message_index = 0
 
     def add_message(self, topic: str, payload: bytes = b""):
-        self._messages.append(MockMessage(topic, payload))
+        self._messages.append(aiomqtt.Message(topic, payload, 0, False, 0, None))
 
     @property
     def messages(self):

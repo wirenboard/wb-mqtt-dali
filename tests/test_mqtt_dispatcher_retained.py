@@ -10,15 +10,9 @@ sees the latest retained payload regardless of subscribe order.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import aiomqtt
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-
-
-class _Msg:  # pylint: disable=too-few-public-methods
-    def __init__(self, topic: str, payload: bytes, retain: bool):
-        self.topic = topic
-        self.payload = payload
-        self.retain = retain
 
 
 class _FakeClient:  # pylint: disable=too-few-public-methods
@@ -37,7 +31,7 @@ async def test_retained_replayed_to_late_subscriber():
     cb1 = MagicMock()
     await dispatcher.subscribe("topic/x", cb1)
 
-    retained = _Msg("topic/x", b"r", retain=True)
+    retained = aiomqtt.Message("topic/x", b"r", 0, True, 0, None)
     dispatcher._dispatch_message(retained)  # pylint: disable=protected-access
     cb1.assert_called_once_with(retained)
 
@@ -54,7 +48,7 @@ async def test_non_retained_not_replayed():
     cb1 = MagicMock()
     await dispatcher.subscribe("topic/y", cb1)
 
-    msg = _Msg("topic/y", b"hello", retain=False)
+    msg = aiomqtt.Message("topic/y", b"hello", 0, False, 0, None)
     dispatcher._dispatch_message(msg)  # pylint: disable=protected-access
 
     cb2 = MagicMock()
@@ -69,7 +63,7 @@ async def test_unsubscribe_clears_retained_cache():
 
     cb1 = MagicMock()
     await dispatcher.subscribe("topic/z", cb1)
-    dispatcher._dispatch_message(_Msg("topic/z", b"r", retain=True))  # pylint: disable=protected-access
+    dispatcher._dispatch_message(aiomqtt.Message("topic/z", b"r", 0, True, 0, None))  # pylint: disable=protected-access
 
     await dispatcher.unsubscribe("topic/z")
 
@@ -88,12 +82,12 @@ async def test_empty_retained_evicts_cache():
     await dispatcher.subscribe("topic/w", cb1)
 
     # First, a real retained payload arrives and is cached.
-    retained = _Msg("topic/w", b"r", retain=True)
+    retained = aiomqtt.Message("topic/w", b"r", 0, True, 0, None)
     dispatcher._dispatch_message(retained)  # pylint: disable=protected-access
     cb1.assert_called_once_with(retained)
 
     # Then the broker signals retained-delete via an empty retained message.
-    delete = _Msg("topic/w", b"", retain=True)
+    delete = aiomqtt.Message("topic/w", b"", 0, True, 0, None)
     dispatcher._dispatch_message(delete)  # pylint: disable=protected-access
 
     # A late subscriber that arrives after the delete must not receive the

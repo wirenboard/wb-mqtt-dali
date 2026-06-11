@@ -12,7 +12,7 @@ import unittest
 from typing import List, Optional
 from unittest.mock import MagicMock
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from dali.command import Command, Response
 from dali.frame import ForwardFrame
 
@@ -70,11 +70,8 @@ def _meta_error_topic(device_name: str) -> str:
     return f"/devices/{device_name}/meta/error"
 
 
-def _build_retained_msg(topic: str, payload: bytes) -> mqtt.MQTTMessage:
-    msg = mqtt.MQTTMessage(topic=topic.encode())
-    msg.payload = payload
-    msg.retain = True
-    return msg
+def _build_retained_msg(topic: str, payload: bytes) -> aiomqtt.Message:
+    return aiomqtt.Message(topic, payload, 0, True, 0, None)
 
 
 class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
@@ -100,11 +97,15 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
 
     def _deliver_reply(self, driver: WBDALIDriver, slot: int, status_word: int) -> None:
         # pylint: disable=protected-access
-        reply = mqtt.MQTTMessage(
+        reply = aiomqtt.Message(
             topic=f"/devices/{driver.config.device_name}/controls/"
-            f"bus_{driver.config.bus}_bulk_send_reply_{slot}".encode()
+            f"bus_{driver.config.bus}_bulk_send_reply_{slot}",
+            payload=str(status_word),
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        reply.payload = str(status_word).encode()
         self.dispatcher._dispatch_message(reply)
 
     async def _wait_gateway_state(self, driver: WBDALIDriver, expected: bool) -> None:

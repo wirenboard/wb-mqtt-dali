@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Sequence, Union
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from dali.command import Command, Response, from_frame
 from dali.device.general import DTR0 as DeviceDTR0
 from dali.device.general import DTR1 as DeviceDTR1
@@ -25,7 +25,7 @@ from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
-from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .overheat_rate_limiter import OverheatRateLimiter
 from .wbdali_error_response import (
     GatewayUnavailable,
@@ -83,6 +83,13 @@ FRAME_COUNTER_MODULO = 1 << 16
 # so it is a real gap rather than an in-flight reorder.
 BUS_MONITOR_REORDER_WINDOW = 3
 
+def get_int_payload(message: aiomqtt.Message) -> int:
+    if message.payload is None:
+        raise ValueError("payload is empty")
+    if isinstance(message.payload, (bytes, bytearray)):
+        return int(message.payload.decode().strip(), 0)
+    return int(message.payload)
+
 
 @dataclass
 class WBDALIConfig:
@@ -128,13 +135,12 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
         self._bus_traffic = bus_traffic
         self._dev_inst_map = dev_inst_map
 
-    def handle(self, message: mqtt.MQTTMessage) -> None:
+    def handle(self, message: aiomqtt.Message) -> None:
         if message.retain:
             return
 
         try:
-            payload_str = message.payload.decode().strip()
-            raw_value = int(payload_str, 0)
+            raw_value = get_int_payload(message)
         except (ValueError, UnicodeDecodeError, AttributeError) as exc:
             self._logger.error(
                 "Failed to parse bus monitor payload '%s' from topic '%s': %s",
@@ -507,9 +513,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             msg="0000",
         )
 
-    def _handle_meta_error_message(self, message: mqtt.MQTTMessage) -> None:
+    def _handle_meta_error_message(self, message: aiomqtt.Message) -> None:
         try:
-            payload = message.payload.decode().strip() if message.payload else ""
+            payload = get_str_payload(message).strip()
         except (AttributeError, UnicodeDecodeError) as exc:
             self.logger.error("Failed to parse /meta/error payload: %s", exc)
             return
@@ -571,7 +577,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 self._send_queue_item_index += 1
 
     def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
-        self, message: mqtt.MQTTMessage
+        self, message: aiomqtt.Message
     ) -> None:
         """Handle reply message from the DALI bus.
 
@@ -590,7 +596,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return  # Ignore retained messages
 
         try:
-            resp = int(message.payload.decode().strip())
+            resp = get_int_payload(message)
         except (ValueError, UnicodeDecodeError, AttributeError) as exc:
             self.logger.error(
                 "Failed to parse reply payload '%s' from topic '%s': %s",

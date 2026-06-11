@@ -8,7 +8,7 @@ try:
 except ImportError:
     from mock import MagicMock
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from dali.command import Command
 from dali.frame import ForwardFrame
 
@@ -79,12 +79,16 @@ class TestWBDALIStatusOverheat(unittest.IsolatedAsyncioTestCase):
         payload_data = json.loads(payload)
         self.assertEqual(payload_data["params"]["count"], 2)
 
-        message = mqtt.MQTTMessage(
+        message = aiomqtt.Message(
             topic=(
                 f"/devices/{self.config.device_name}/controls/" f"bus_{self.config.bus}_bulk_send_reply_0"
-            ).encode()
+            ),
+            payload=str(0x0500),
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        message.payload = str(0x0500).encode()
         self.mock_mqtt_dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
         result = await fut

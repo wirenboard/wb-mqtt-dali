@@ -2,6 +2,7 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import aiomqtt
 import pytest
 from jsonrpc.exceptions import (
     JSONRPCDispatchException,
@@ -147,10 +148,14 @@ class TestMQTTRPCServer:
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
 
-        mqtt_message = MagicMock()
-        mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
-        request = MQTTRPC10Request(params={"test": "data"}, _id="req1")
-        mqtt_message.payload.decode.return_value = request.json
+        mqtt_message = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/123",
+            payload=MQTTRPC10Request(params={"test": "data"}, _id="req1").json,
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
 
         response = json.loads(await rpc_server._handle_request(mqtt_message))
 
@@ -161,10 +166,14 @@ class TestMQTTRPCServer:
     @pytest.mark.asyncio
     async def test_handle_request_invalid_json(self, rpc_server):
         # pylint: disable=protected-access
-        mqtt_message = MagicMock()
-        mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
-        mqtt_message.payload.decode.return_value = "invalid json"
-
+        mqtt_message = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/123",
+            payload="invalid json",
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
         response = json.loads(await rpc_server._handle_request(mqtt_message))
 
         assert "error" in response
@@ -173,11 +182,14 @@ class TestMQTTRPCServer:
     @pytest.mark.asyncio
     async def test_handle_request_method_not_found(self, rpc_server):
         # pylint: disable=protected-access
-        mqtt_message = MagicMock()
-        mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
-        request = MQTTRPC10Request(params={}, _id="req1")
-        mqtt_message.payload.decode.return_value = request.json
-
+        mqtt_message = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/123",
+            payload=MQTTRPC10Request(params={}, _id="req1").json,
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
         response = json.loads(await rpc_server._handle_request(mqtt_message))
 
         assert response["id"] == "req1"
@@ -195,10 +207,14 @@ class TestMQTTRPCServer:
 
         await rpc_server.add_endpoint("service1", "method1", failing_handler)
 
-        mqtt_message = MagicMock()
-        mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
-        request = MQTTRPC10Request(params={"first_call": True}, _id="req1")
-        mqtt_message.payload.decode.return_value = request.json
+        mqtt_message = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/123",
+            payload=MQTTRPC10Request(params={"first_call": True}, _id="req1").json,
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
 
         response = json.loads(await rpc_server._handle_request(mqtt_message))
 
@@ -208,10 +224,14 @@ class TestMQTTRPCServer:
         assert response["error"]["message"] == "Server error"
         assert response["error"]["data"] == "Test error"
 
-        mqtt_message2 = MagicMock()
-        mqtt_message2.topic = "/rpc/v1/test_driver/service1/method1/222"
-        request = MQTTRPC10Request(params={}, _id="req2")
-        mqtt_message2.payload.decode.return_value = request.json
+        mqtt_message2 = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/222",
+            payload=MQTTRPC10Request(params={}, _id="req2").json,
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
 
         response = json.loads(await rpc_server._handle_request(mqtt_message2))
 
@@ -230,10 +250,14 @@ class TestMQTTRPCServer:
         await rpc_server.add_endpoint("service1", "method1", test_handler)
         mock_mqtt_dispatcher.client.publish.reset_mock()
 
-        mqtt_message = MagicMock()
-        mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
-        request = MQTTRPC10Request(params={}, _id="req1")
-        mqtt_message.payload.decode.return_value = request.json
+        mqtt_message = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/123",
+            payload=MQTTRPC10Request(params={}, _id="req1").json,
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
 
         await rpc_server._process_callback(mqtt_message)
 
@@ -254,10 +278,14 @@ class TestMQTTRPCServer:
         mock_mqtt_dispatcher.client.publish.reset_mock()
 
         mock_mqtt_dispatcher.client.publish.side_effect = [None, Exception("Publish failed")]
-        mqtt_message = MagicMock()
-        mqtt_message.topic = "/rpc/v1/test_driver/service1/method1/123"
-        request = MQTTRPC10Request(params={}, _id="req1")
-        mqtt_message.payload.decode.return_value = request.json
+        mqtt_message = aiomqtt.Message(
+            topic="/rpc/v1/test_driver/service1/method1/123",
+            payload=MQTTRPC10Request(params={}, _id="req1").json,
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
 
         await rpc_server._process_callback(mqtt_message)
 

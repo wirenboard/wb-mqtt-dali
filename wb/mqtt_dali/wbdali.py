@@ -93,7 +93,7 @@ def get_int_payload(message: aiomqtt.Message) -> int:
     if isinstance(message.payload, memoryview):
         return int(message.payload.tobytes().decode().strip(), 0)
     if isinstance(message.payload, str):
-        return int(message.payload, 0)
+        return int(message.payload.strip(), 0)
     return int(message.payload)
 
 

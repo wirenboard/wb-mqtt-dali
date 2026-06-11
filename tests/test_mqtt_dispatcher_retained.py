@@ -63,7 +63,7 @@ async def test_unsubscribe_clears_retained_cache():
 
     cb1 = MagicMock()
     await dispatcher.subscribe("topic/z", cb1)
-    dispatcher._dispatch_message( # pylint: disable=protected-access
+    dispatcher._dispatch_message(  # pylint: disable=protected-access
         aiomqtt.Message("topic/z", b"r", 0, True, 0, None)
     )
     await dispatcher.unsubscribe("topic/z")

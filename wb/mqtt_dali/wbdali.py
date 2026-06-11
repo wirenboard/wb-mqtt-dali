@@ -76,6 +76,7 @@ WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
 FRAME_COUNTER_MODULO = 1 << 16
 
+
 # Maximum number of out-of-order frames `BusMonitorFrameHandler` holds while
 # waiting for the gap to close. Bounded by `ring_size - 1` of the gateway's
 # 4-slot bus_monitor ring: once the 4th ahead-of-expected frame arrives, the

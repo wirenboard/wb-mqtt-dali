@@ -711,10 +711,7 @@ async def _keep_replying(dispatcher: MQTTDispatcher, config: WBDALIConfig) -> No
         await asyncio.sleep(0.005)
         # Inject "transmission with backward response" for whichever slot is
         # currently waiting — driver only ever processes a recognised slot.
-        topic = (
-            f"/devices/{config.device_name}/controls/"
-            f"bus_{config.bus}_bulk_send_reply_{slot % 16}"
-        )
+        topic = f"/devices/{config.device_name}/controls/bus_{config.bus}_bulk_send_reply_{slot % 16}"
         message = aiomqtt.Message(topic, str(0x0100), 0, False, 0, None)
         dispatcher._dispatch_message(message)  # pylint: disable=protected-access
         slot += 1
@@ -726,10 +723,7 @@ async def _keep_replying_no_response(dispatcher: MQTTDispatcher, config: WBDALIC
     slot = 0
     while True:
         await asyncio.sleep(0.005)
-        topic = (
-            f"/devices/{config.device_name}/controls/"
-            f"bus_{config.bus}_bulk_send_reply_{slot % 16}"
-        )
+        topic = f"/devices/{config.device_name}/controls/bus_{config.bus}_bulk_send_reply_{slot % 16}"
         message = aiomqtt.Message(topic, str(0x0200), 0, False, 0, None)
         dispatcher._dispatch_message(message)  # pylint: disable=protected-access
         slot += 1

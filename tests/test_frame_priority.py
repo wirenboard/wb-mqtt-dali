@@ -22,7 +22,7 @@ import logging
 from typing import NamedTuple, Optional
 from unittest.mock import MagicMock
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 import pytest
 from dali.address import GearGroup, GearShort
 from dali.command import Command
@@ -146,9 +146,9 @@ class _MockCommand(Command):
 
 def _simulate_reply(dispatcher: MQTTDispatcher, config: WBDALIConfig, index: int) -> None:
     """Inject a `transmission without response` reply for the given queue slot."""
-    topic = f"/devices/{config.device_name}/controls/" f"bus_{config.bus}_bulk_send_reply_{index}".encode()
-    message = mqtt.MQTTMessage(topic=topic)
-    message.payload = str(0x0200).encode()  # status 2: transmission without response
+    topic = f"/devices/{config.device_name}/controls/" f"bus_{config.bus}_bulk_send_reply_{index}"
+    # status 2: transmission without response
+    message = aiomqtt.Message(topic, str(0x0200), 0, False, 0, None)
     dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
 
@@ -156,9 +156,8 @@ def _simulate_reply_with_response(
     dispatcher: MQTTDispatcher, config: WBDALIConfig, index: int, backward_byte: int = 0
 ) -> None:
     """Inject a `transmission with backward response` reply for the given queue slot."""
-    topic = f"/devices/{config.device_name}/controls/" f"bus_{config.bus}_bulk_send_reply_{index}".encode()
-    message = mqtt.MQTTMessage(topic=topic)
-    message.payload = str(0x0100 | (backward_byte & 0xFF)).encode()
+    topic = f"/devices/{config.device_name}/controls/" f"bus_{config.bus}_bulk_send_reply_{index}"
+    message = aiomqtt.Message(topic, str(0x0100 | (backward_byte & 0xFF)), 0, False, 0, None)
     dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
 
@@ -712,12 +711,8 @@ async def _keep_replying(dispatcher: MQTTDispatcher, config: WBDALIConfig) -> No
         await asyncio.sleep(0.005)
         # Inject "transmission with backward response" for whichever slot is
         # currently waiting — driver only ever processes a recognised slot.
-        topic = (
-            f"/devices/{config.device_name}/controls/"
-            f"bus_{config.bus}_bulk_send_reply_{slot % 16}".encode()
-        )
-        message = mqtt.MQTTMessage(topic=topic)
-        message.payload = str(0x0100).encode()
+        topic = f"/devices/{config.device_name}/controls/bus_{config.bus}_bulk_send_reply_{slot % 16}"
+        message = aiomqtt.Message(topic, str(0x0100), 0, False, 0, None)
         dispatcher._dispatch_message(message)  # pylint: disable=protected-access
         slot += 1
 
@@ -728,12 +723,8 @@ async def _keep_replying_no_response(dispatcher: MQTTDispatcher, config: WBDALIC
     slot = 0
     while True:
         await asyncio.sleep(0.005)
-        topic = (
-            f"/devices/{config.device_name}/controls/"
-            f"bus_{config.bus}_bulk_send_reply_{slot % 16}".encode()
-        )
-        message = mqtt.MQTTMessage(topic=topic)
-        message.payload = str(0x0200).encode()
+        topic = f"/devices/{config.device_name}/controls/bus_{config.bus}_bulk_send_reply_{slot % 16}"
+        message = aiomqtt.Message(topic, str(0x0200), 0, False, 0, None)
         dispatcher._dispatch_message(message)  # pylint: disable=protected-access
         slot += 1
 
@@ -766,12 +757,16 @@ async def _pump_publishes_and_reply_scripted(  # pylint: disable=too-many-argume
         for _ in decoded:
             status, backward = script[script_index] if script_index < len(script) else (0x02, 0)
             script_index += 1
-            message = mqtt.MQTTMessage(
+            message = aiomqtt.Message(
                 topic=(
                     f"/devices/{driver.config.device_name}/controls/"
-                    f"bus_{driver.config.bus}_bulk_send_reply_{slot % 16}".encode()
-                )
+                    f"bus_{driver.config.bus}_bulk_send_reply_{slot % 16}"
+                ),
+                payload=str((status << 8) | (backward & 0xFF)),
+                qos=0,
+                retain=False,
+                mid=0,
+                properties=None,
             )
-            message.payload = str((status << 8) | (backward & 0xFF)).encode()
             dispatcher._dispatch_message(message)  # pylint: disable=protected-access
             slot += 1

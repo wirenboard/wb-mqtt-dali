@@ -3,9 +3,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Union
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 
-from .mqtt_dispatcher import MessageCallback, MQTTDispatcher
+from .mqtt_dispatcher import MessageCallback, MQTTDispatcher, get_str_payload
 from .wbmqtt import ControlMeta, Device, TranslatedTitle
 
 
@@ -264,14 +264,14 @@ class DevicePublisher:
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"
 
-    def _handle_on_message(self, handler_key: str, message: mqtt.MQTTMessage) -> None:
+    def _handle_on_message(self, handler_key: str, message: aiomqtt.Message) -> None:
         if handler_key not in self._control_handlers:
             return
 
         handler = self._control_handlers[handler_key]
         try:
             if self.logger.isEnabledFor(logging.DEBUG):
-                payload = message.payload.decode("utf-8") if message.payload else ""
+                payload = get_str_payload(message)
                 self.logger.debug("Handling %s/%s/on: %s", handler.device_id, handler.control_id, payload)
             handler.callback(message)
         except Exception as e:  # pylint: disable=broad-exception-caught

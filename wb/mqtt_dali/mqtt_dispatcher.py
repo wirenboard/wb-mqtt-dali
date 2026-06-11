@@ -3,10 +3,9 @@ import logging
 from typing import Callable, Dict, Optional, Set
 
 import aiomqtt
-import paho.mqtt.client as mqtt
 from paho.mqtt.matcher import MQTTMatcher
 
-MessageCallback = Callable[[mqtt.MQTTMessage], None]
+MessageCallback = Callable[[aiomqtt.Message], None]
 
 
 class MQTTDispatcher:
@@ -20,12 +19,12 @@ class MQTTDispatcher:
         # Last retained message observed per exact topic, replayed to late subscribers.
         # The broker only delivers retained on the first SUBSCRIBE; without this cache
         # additional callbacks on the same topic miss the initial state.
-        self._retained_cache: Dict[str, mqtt.MQTTMessage] = {}
+        self._retained_cache: Dict[str, aiomqtt.Message] = {}
         self._running = False
         self._lock = asyncio.Lock()
 
     async def subscribe(self, topic: str, callback: MessageCallback) -> None:
-        replay: Optional[mqtt.MQTTMessage] = None
+        replay: Optional[aiomqtt.Message] = None
         async with self._lock:
             if topic not in self._subscriptions:
                 callbacks: Set[MessageCallback] = {callback}
@@ -97,8 +96,8 @@ class MQTTDispatcher:
                 self._retained_cache.clear()
                 self._running = False
 
-    def _dispatch_message(self, message: mqtt.MQTTMessage) -> None:
-        topic = str(message.topic)
+    def _dispatch_message(self, message: aiomqtt.Message) -> None:
+        topic = message.topic.value
 
         if message.retain:
             if message.payload:
@@ -127,3 +126,11 @@ class MQTTDispatcher:
     def client_id(self) -> str:
         client_id = self.client._client._client_id  # pylint: disable=W0212
         return client_id.decode() if isinstance(client_id, bytes) else client_id
+
+
+def get_str_payload(message: aiomqtt.Message) -> str:
+    if message.payload is None:
+        return ""
+    if isinstance(message.payload, (bytes, bytearray)):
+        return message.payload.decode()
+    return str(message.payload)

@@ -1,18 +1,12 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import aiomqtt
 import pytest
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 
 # pylint: disable=redefined-outer-name
-
-
-class MockMessage:  # pylint: disable=R0903
-    def __init__(self, topic: str, payload: bytes, retain: bool = False):
-        self.topic = topic
-        self.payload = payload
-        self.retain = retain
 
 
 class EmptyAsyncIterator:
@@ -123,7 +117,7 @@ async def test_clear_subscriptions(dispatcher, mock_client):
 @pytest.mark.asyncio
 async def test_dispatch_message(dispatcher):
     callback = MagicMock()
-    message = MockMessage("test/topic", b"test payload")
+    message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
 
     await dispatcher.subscribe("test/topic", callback)
     dispatcher._dispatch_message(message)  # pylint: disable=W0212
@@ -135,7 +129,7 @@ async def test_dispatch_message(dispatcher):
 async def test_dispatch_message_multiple_callbacks(dispatcher):
     callback1 = MagicMock()
     callback2 = MagicMock()
-    message = MockMessage("test/topic", b"test payload")
+    message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
 
     await dispatcher.subscribe("test/topic", callback1)
     await dispatcher.subscribe("test/topic", callback2)
@@ -147,7 +141,7 @@ async def test_dispatch_message_multiple_callbacks(dispatcher):
 
 @pytest.mark.asyncio
 async def test_dispatch_message_no_handlers(dispatcher):
-    message = MockMessage("unknown/topic", b"test payload")
+    message = aiomqtt.Message("unknown/topic", b"test payload", 0, False, 0, None)
 
     dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
@@ -156,7 +150,7 @@ async def test_dispatch_message_no_handlers(dispatcher):
 async def test_run_dispatcher(dispatcher, mock_client):
     fut = asyncio.Future()
 
-    original_message = MockMessage("test/topic", b"test payload")
+    original_message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
     incoming_message = None
 
     def callback(message):
@@ -199,7 +193,7 @@ async def test_is_running(dispatcher, mock_client):
     async def message_generator():
         while True:
             await asyncio.sleep(0.1)
-            yield MockMessage("test/topic", b"test")
+            yield aiomqtt.Message("test/topic", b"test", 0, False, 0, None)
 
     mock_client.set_message_generator(message_generator())
 

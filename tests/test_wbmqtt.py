@@ -3,8 +3,9 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
-import pytest
 import aiomqtt
+import pytest
+
 from wb.mqtt_dali.wbmqtt import (
     ControlMeta,
     ControlState,

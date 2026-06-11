@@ -9,8 +9,8 @@ sees the latest retained payload regardless of subscribe order.
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 import aiomqtt
+import pytest
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 

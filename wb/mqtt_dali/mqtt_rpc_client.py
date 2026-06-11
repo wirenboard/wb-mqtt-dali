@@ -75,7 +75,7 @@ async def rpc_call(  # pylint: disable=too-many-arguments, R0917
     def on_response(mqtt_message: aiomqtt.Message) -> None:
         if not fut.done():
             try:
-                response = MQTTRPC10Response.from_json(get_str_payload(mqtt_message))  # type: ignore
+                response = MQTTRPC10Response.from_json(get_str_payload(mqtt_message))
                 if response.error:
                     fut.set_exception(JSONRPCDispatchException(response.error))
                 else:

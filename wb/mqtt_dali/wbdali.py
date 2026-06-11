@@ -84,11 +84,16 @@ FRAME_COUNTER_MODULO = 1 << 16
 # so it is a real gap rather than an in-flight reorder.
 BUS_MONITOR_REORDER_WINDOW = 3
 
+
 def get_int_payload(message: aiomqtt.Message) -> int:
     if message.payload is None:
         raise ValueError("payload is empty")
     if isinstance(message.payload, (bytes, bytearray)):
         return int(message.payload.decode().strip(), 0)
+    if isinstance(message.payload, memoryview):
+        return int(message.payload.tobytes().decode().strip(), 0)
+    if isinstance(message.payload, str):
+        return int(message.payload, 0)
     return int(message.payload)
 
 

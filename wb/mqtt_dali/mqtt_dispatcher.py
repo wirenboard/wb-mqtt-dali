@@ -97,7 +97,7 @@ class MQTTDispatcher:
                 self._running = False
 
     def _dispatch_message(self, message: aiomqtt.Message) -> None:
-        topic = str(message.topic)
+        topic = message.topic.value
 
         if message.retain:
             if message.payload:

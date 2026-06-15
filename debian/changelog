@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.17.14) stable; urgency=medium
+
+  * Reset the button pressed state on short, double and long-press events, not only on the button-released event.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 15 Jun 2026 15:13:59 +0500
+
 wb-mqtt-dali (1.17.13) stable; urgency=medium
 
   * Fix aiomqtt compatibility

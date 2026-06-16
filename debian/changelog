@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.17.14) stable; urgency=medium
+
+  * Bind the colour temperature sliders to the device's live Coolest/Warmest
+    limits via min_limit/max_limit dotted paths instead of static minimum/maximum.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 11 Jun 2026 17:22:12 +0500
+
 wb-mqtt-dali (1.17.13) stable; urgency=medium
 
   * Fix aiomqtt compatibility

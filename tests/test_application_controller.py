@@ -1639,18 +1639,22 @@ class _LogCapture:
 
     def __init__(self, name: str) -> None:
         self._name = name
+        self._prev_level = logging.NOTSET
         self.handler = logging.Handler()
         self.messages: list[str] = []
         self.handler.emit = lambda record: self.messages.append(record.getMessage())
 
     def __enter__(self) -> "_LogCapture":
         logger = logging.getLogger(self._name)
+        self._prev_level = logger.level
         logger.addHandler(self.handler)
         logger.setLevel(logging.INFO)
         return self
 
     def __exit__(self, *exc) -> None:
-        logging.getLogger(self._name).removeHandler(self.handler)
+        logger = logging.getLogger(self._name)
+        logger.removeHandler(self.handler)
+        logger.setLevel(self._prev_level)
 
 
 def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[ApplicationController, MagicMock]:

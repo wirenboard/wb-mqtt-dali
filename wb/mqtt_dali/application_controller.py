@@ -25,8 +25,7 @@ from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
 from .common_dali_device import ControlPollResult, DaliDeviceAddress, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
-from .dali2_controls import publish_dali2_event
-from .dali2_device import Dali2Device
+from .dali2_device import Dali2Device, publish_dali2_event
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
@@ -1598,7 +1597,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                     if instance is not None:
                         self._one_shot_tasks.add(
                             publish_dali2_event(
-                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client
+                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client, instance
                             ),
                             "Publish DALI 2 event to MQTT",
                         )

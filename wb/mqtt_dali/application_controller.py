@@ -32,6 +32,7 @@ from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
+from .send_command import format_command_expression
 from .utils import merge_json_schemas
 from .virtual_devices import (
     AggregatedCapabilities,
@@ -206,6 +207,11 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _local_time_hms() -> str:
+    """Local wall-clock `HH:MM:SS.mmm` prefix for bus-monitor lines."""
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
+
 def _count_devices_to_init(result: Optional[CommissioningResult]) -> int:
     """Count entries that will hit `_try_init_new_device` for one bus's commissioning result."""
     if result is None:
@@ -222,6 +228,7 @@ class ApplicationControllerConfig:
     dali2_devices: list[Dali2Device]
     polling_interval: float
     enable_bus_monitor: bool = False
+    enable_bus_monitor_syslog: bool = False
 
 
 class ApplicationControllerTaskType(Enum):
@@ -431,6 +438,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
+        self._bus_monitor_syslog_enabled = config.enable_bus_monitor_syslog
         self._bus_traffic_cleanup = self._dev.bus_traffic.register(self._handle_bus_traffic_frame)
 
         self._one_shot_tasks = OneShotTasks(self.logger)
@@ -475,6 +483,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     def bus_monitor_enabled(self) -> bool:
         return self._bus_monitor_enabled
 
+    @property
+    def bus_monitor_syslog_enabled(self) -> bool:
+        return self._bus_monitor_syslog_enabled
+
     def set_polling_interval(self, value: float) -> None:
         if value < MIN_POLLING_INTERVAL:
             self.logger.warning(
@@ -488,6 +500,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
     def set_bus_monitor_enabled(self, enabled: bool) -> None:
         self._bus_monitor_enabled = enabled
+
+    def set_bus_monitor_syslog_enabled(self, enabled: bool) -> None:
+        self._bus_monitor_syslog_enabled = enabled
 
     async def start(self) -> None:
         async with self._state_lock:
@@ -1614,55 +1629,56 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._last_bus_traffic_device_type = 0
 
         if self.bus_monitor_enabled:
-            request_msg = format_command(bus_traffic_item.request, decoded_request_command)
+            timestamp = _local_time_hms()
+            request_body = format_command(bus_traffic_item.request, decoded_request_command)
 
             if bus_traffic_item.request_source == BusTrafficSource.BUS:
-                request_msg = f"<<{request_msg} (fc: {bus_traffic_item.frame_counter})"
+                request_body = f"<< {request_body} (fc: {bus_traffic_item.frame_counter})"
+            elif bus_traffic_item.request_source == BusTrafficSource.LUNATONE:
+                request_body = f">> {request_body} (from lunatone)"
             else:
-                if bus_traffic_item.request_source == BusTrafficSource.LUNATONE:
-                    request_msg = f">>{request_msg} (from lunatone)"
-                else:
-                    request_msg = f">>{request_msg}"
-
-            self._one_shot_tasks.add(
-                self._mqtt_dispatcher.client.publish(
-                    self._bus_monitor_topic, request_msg, qos=2, retain=False
-                ),
-                "Publish DALI bus traffic to MQTT",
-            )
+                request_body = f">> {request_body}"
 
             if bus_traffic_item.response is not None and (
                 isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
                 or bus_traffic_item.response.raw_value is not None
             ):
-                response_msg = f"<<{format_response(bus_traffic_item.response)}"
+                request_body = f"{request_body} - {format_response(bus_traffic_item.response)}"
 
-                self._one_shot_tasks.add(
-                    self._mqtt_dispatcher.client.publish(
-                        self._bus_monitor_topic, response_msg, qos=2, retain=False
-                    ),
-                    "Publish DALI bus traffic to MQTT",
-                )
+            self._publish_monitor_line(timestamp, request_body)
+
+    def _publish_monitor_line(self, timestamp: str, body: str) -> None:
+        # MQTT keeps the leading timestamp; the log mirror omits it because
+        # journald already stamps each record (and self.logger is named by bus uid).
+        self._one_shot_tasks.add(
+            self._mqtt_dispatcher.client.publish(
+                self._bus_monitor_topic, f"{timestamp} {body}", qos=2, retain=False
+            ),
+            "Publish DALI bus traffic to MQTT",
+        )
+        if self._bus_monitor_syslog_enabled:
+            self.logger.info(body)
+
+
+def format_frame_hex(frame: Frame) -> str:
+    frame_length = len(frame)
+    if frame_length <= 16:
+        return f"{frame.as_integer:04x}"
+    if frame_length <= 24:
+        return f"{frame.as_integer:06x}"
+    return f"{frame.as_integer:07x}"
 
 
 def format_frame(frame: Frame) -> str:
-    frame_length = len(frame)
-    if frame_length <= 16:
-        frame_value = f"   {frame.as_integer:04x}"
-    elif frame_length <= 24:
-        frame_value = f" {frame.as_integer:06x}"
-    else:
-        frame_value = f"{frame.as_integer:07x}"
-
     frame_type = "FF" if isinstance(frame, ForwardFrame) else "BF"
-    return f"{frame_value} {frame_type}{frame_length:<2}"
+    return f"{format_frame_hex(frame)} {frame_type}{len(frame)}"
 
 
 def format_command(frame: Frame, decoded_command: Optional[Command]) -> str:
     if frame.error:
-        return f"{format_frame(frame)} Error"
+        return f"{format_frame(frame)} framing error"
     if decoded_command is not None:
-        return f"{format_frame(frame)} {decoded_command}"
+        return f"{format_frame_hex(frame)} {format_command_expression(decoded_command)}"
     return format_frame(frame)
 
 
@@ -1674,9 +1690,9 @@ def format_response(response: Response) -> str:
         and response.raw_value is not None
         and response.raw_value.error is not True
     ):
-        return f"{format_frame(response.raw_value)} {response.raw_value.as_integer}"
+        return f"{format_frame_hex(response.raw_value)} {response.raw_value.as_integer}"
 
     try:
-        return f"{format_frame(response.raw_value)} {response}"
+        return f"{format_frame_hex(response.raw_value)} {response}"
     except ResponseError:
         return "framing error"

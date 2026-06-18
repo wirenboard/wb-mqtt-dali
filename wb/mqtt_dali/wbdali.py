@@ -27,6 +27,7 @@ from dali.sequences import sleep as seq_sleep
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .overheat_rate_limiter import OverheatRateLimiter
+from .send_command import LazyCommandExpression, format_command_expression
 from .wbdali_error_response import (
     GatewayUnavailable,
     NoPowerOnBus,
@@ -260,9 +261,9 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
                 if frame_length in (16, 24):
                     cmd = from_frame(frame, dev_inst_map=self._dev_inst_map)
                     if isinstance(cmd, _Event):
-                        self._logger.debug("Event: %s", cmd)
+                        self._logger.debug("Event: %s", LazyCommandExpression(cmd))
                     else:
-                        self._logger.debug("Unexpected FF%d: %s", frame_length, cmd)
+                        self._logger.debug("Unexpected FF%d: %s", frame_length, LazyCommandExpression(cmd))
                 else:
                     self._logger.debug("Unexpected FF%d: %s", frame_length, hex(frame_data))
         self._bus_traffic.notify_bus_frame(frame, frame_counter)
@@ -651,7 +652,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         if status == 0:
             # No transmission
             self.logger.debug(
-                "%s (%d) status 0: No transmission", resp_waiter.send_item.command, resp_pointer
+                "%s (%d) status 0: No transmission",
+                LazyCommandExpression(resp_waiter.send_item.command),
+                resp_pointer,
             )
             response = NoTransmission()
             resp_future.set_result(response)
@@ -666,7 +669,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             # Transmission with backward response
             self.logger.debug(
                 "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
-                resp_waiter.send_item.command,
+                LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
                 backward_frame_byte,
             )
@@ -685,7 +688,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         if status == 2:
             # Transmission without response
             self.logger.debug(
-                "%s (%d) status 2: Transmission without response", resp_waiter.send_item.command, resp_pointer
+                "%s (%d) status 2: Transmission without response",
+                LazyCommandExpression(resp_waiter.send_item.command),
+                resp_pointer,
             )
             if resp_waiter.send_item.command.response is not None:
                 response = resp_waiter.send_item.command.response(None)
@@ -703,7 +708,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             # Broken response (framing error)
             self.logger.error(
                 "%s (%d) status 3: Broken response, backward_frame=0x%02x",
-                resp_waiter.send_item.command,
+                LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
                 backward_frame_byte,
             )
@@ -723,7 +728,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             # Transmission impossible (no power on bus)
             self.logger.error(
                 "%s (%d) status 4: Transmission impossible - no power on bus",
-                resp_waiter.send_item.command,
+                LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
             )
             response = NoPowerOnBus()
@@ -739,7 +744,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             # Gateway overheat
             self.logger.error(
                 "%s (%d) status 5: Gateway overheat",
-                resp_waiter.send_item.command,
+                LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
             )
             self._overheat_rate_limiter.on_overheat()
@@ -756,7 +761,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         # Unknown status
         self.logger.error(
             "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
-            resp_waiter.send_item.command,
+            LazyCommandExpression(resp_waiter.send_item.command),
             resp_pointer,
             status,
             backward_frame_byte,
@@ -809,7 +814,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     except StopIteration as r:
                         return r.value
                     response = Response(None)
-                    logging.debug("got command from sequence: %s", cmd)
+                    logging.debug("got command from sequence: %s", LazyCommandExpression(cmd))
                     if isinstance(cmd, seq_sleep):
                         await asyncio.sleep(cmd.delay)
                     elif isinstance(cmd, seq_progress):
@@ -907,11 +912,13 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         timeout = None
                         continue
 
-                self.logger.debug("Processing queue item: %s", str(item.command))
+                self.logger.debug("Processing queue item: %s", LazyCommandExpression(item.command))
                 timeout = WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S
 
                 if item.future.cancelled():
-                    self.logger.debug("Skipping cancelled queue item: %s", str(item.command))
+                    self.logger.debug(
+                        "Skipping cancelled queue item: %s", LazyCommandExpression(item.command)
+                    )
                     continue
 
                 batch.append(item)
@@ -962,7 +969,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         )
                         self.logger.error(
                             "Timeout waiting for response %s for queue index %d",
-                            waiter_to_clear.send_item.command,
+                            LazyCommandExpression(waiter_to_clear.send_item.command),
                             index,
                         )
 
@@ -999,7 +1006,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         lock_queue: bool,
     ) -> list[Response]:
         if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("send: %s", ", ".join(str(cmd) for cmd in commands))
+            self.logger.debug("send: %s", ", ".join(format_command_expression(cmd) for cmd in commands))
         if self._gateway_unavailable:
             # Synthesise bus-traffic so listeners see the dropped frames just like real errors.
             for cmd in commands:

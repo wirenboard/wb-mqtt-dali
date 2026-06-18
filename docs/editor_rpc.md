@@ -148,8 +148,9 @@
 {
   // Текущие настройки шины
   "config": {
-    "polling_interval": 5,        // период опроса, секунды
-    "bus_monitor_enabled": false,
+    "polling_interval": 5,             // период опроса, секунды
+    "bus_monitor_enabled": false,      // публиковать трафик шины в топик /wb-dali/<uid>/bus_monitor
+    "bus_monitor_syslog_enabled": false, // дублировать строки монитора в лог контроллера
     ...
   },
 
@@ -175,6 +176,7 @@
   "config": {
     "polling_interval": 5,
     "bus_monitor_enabled": false,
+    "bus_monitor_syslog_enabled": false,
     ...
   }
 }
@@ -187,7 +189,8 @@
 ```jsonc
 {
   "polling_interval": 5,
-  "bus_monitor_enabled": false
+  "bus_monitor_enabled": false,
+  "bus_monitor_syslog_enabled": false
 }
 ```
 

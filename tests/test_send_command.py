@@ -7,20 +7,32 @@ from dali.address import (
     GearBroadcast,
     GearGroup,
     GearShort,
+    InstanceNumber,
 )
 from dali.command import Response
 from dali.device.general import DTR0 as DeviceDTR0
-from dali.device.general import EnableInstance, QueryDeviceStatus
+from dali.device.general import EnableInstance, QueryDeviceStatus, QueryEventFilterM
 from dali.device.general import Reset as DeviceReset
 from dali.device.general import Terminate as DeviceTerminate
 from dali.device.pushbutton import QueryShortTimer
-from dali.frame import BackwardFrame
+from dali.frame import BackwardFrame, ForwardFrame
 from dali.gear.colour import Activate as DT8Activate
-from dali.gear.general import DAPC, DTR0, Off, Terminate
+from dali.gear.general import (
+    DAPC,
+    DTR0,
+    Initialise,
+    Off,
+    ProgramShortAddress,
+    Terminate,
+    UnknownGearCommand,
+    VerifyShortAddress,
+)
 
 from wb.mqtt_dali.device.feedback import QueryFeedbackActive
 from wb.mqtt_dali.send_command import (
+    LazyCommandExpression,
     build_command_registry,
+    format_command_expression,
     format_response,
     list_commands,
     parse_expression,
@@ -245,6 +257,36 @@ class TestParseExpression:  # pylint: disable=too-many-public-methods
         with pytest.raises(ValueError):
             parse_expression("FF24.QueryDeviceStatus(G32)", registry)
 
+    def test_parse_commissioning_rejects_multiple_args(self, registry):
+        """The commissioning addressing specials take a single argument; a second
+        token is rejected for every one of them (Initialise included)."""
+        for expr in ("Initialise(A5, A6)", "ProgramShortAddress(A5, A6)", "VerifyShortAddress(A5, A6)"):
+            with pytest.raises(ValueError):
+                parse_expression(expr, registry)
+
+    def test_parse_commissioning_rejects_missing_arg_on_short_address(self, registry):
+        """The address argument is mandatory for ProgramShortAddress/
+        VerifyShortAddress — the no-argument broadcast form is valid only for
+        Initialise."""
+        with pytest.raises(ValueError):
+            parse_expression("ProgramShortAddress()", registry)
+        with pytest.raises(ValueError):
+            parse_expression("VerifyShortAddress()", registry)
+
+    def test_parse_commissioning_rejects_non_address_token(self, registry):
+        """A data token or garbage where an A<n>/no_short_address argument is
+        expected is rejected — neither a bare integer (`ProgramShortAddress(100)`)
+        nor an unparseable token (`Initialise(foo)`) is a valid short address."""
+        with pytest.raises(ValueError):
+            parse_expression("ProgramShortAddress(100)", registry)
+        with pytest.raises(ValueError):
+            parse_expression("Initialise(foo)", registry)
+
+    def test_parse_commissioning_rejects_address_out_of_range(self, registry):
+        """The short address must be in 0..63 — `Initialise(A64)` is out of range."""
+        with pytest.raises(ValueError):
+            parse_expression("Initialise(A64)", registry)
+
 
 class TestBuildCommandRegistry(unittest.TestCase):
     def setUp(self):
@@ -329,6 +371,167 @@ class TestBuildCommandRegistry(unittest.TestCase):
                     info.cls.response,
                     f"Query command {key} should have a response class",
                 )
+
+
+def _canonical_expression(name: str, info) -> str:
+    """Build a representative parseable expression for a registry entry from its
+    kind/flags — enough to exercise every address/instance/data slot the command
+    carries. Used by the all-registry round-trip invariant."""
+    from wb.mqtt_dali.send_command import InstanceMode
+
+    parts: list[str] = []
+    needs_address = info.kind in ("gear_standard", "device_standard", "device_instance", "device_feature")
+    if needs_address:
+        parts.append("A5")
+    if info.instance_mode in (InstanceMode.REQUIRED, InstanceMode.OPTIONAL):
+        parts.append("I0")
+    if info.kind == "gear_commissioning":
+        # All three commissioning specials accept the A<n> form.
+        parts.append("A5")
+    if info.needs_data:
+        parts.append("7")
+    if not parts:
+        return name
+    return f"{name}({', '.join(parts)})"
+
+
+class TestFormatCommandExpression:
+    """`format_command_expression` renders a decoded command in the same
+    `Name(A<n>, data)` syntax the RPC accepts. It is total: registry commands
+    render their `Name(...)` expression, everything else falls back to
+    python-dali's `str()` — it never returns None."""
+
+    @pytest.mark.parametrize(
+        "command, expected",
+        [
+            (Off(GearShort(5)), "Off(A5)"),
+            (Off(GearGroup(3)), "Off(G3)"),
+            (Off(GearBroadcast()), "Off"),
+            (DAPC(GearShort(5), 100), "DAPC(A5, 100)"),
+            (DAPC(GearBroadcast(), 100), "DAPC(100)"),
+            (DTR0(42), "DTR0(42)"),
+            # DT-specific commands keep their registry prefix.
+            (DT8Activate(GearShort(5)), "DT8.Activate(A5)"),
+            # Device instance command renders the I<n> token.
+            (EnableInstance(DeviceShort(3), InstanceNumber(2)), "FF24.EnableInstance(A3, I2)"),
+        ],
+    )
+    def test_renders_expression(self, command, expected):
+        assert format_command_expression(command) == expected
+
+    def test_alias_resolves_to_longer_name(self):
+        """A class registered under two aliases renders the longer, more
+        descriptive one (`QueryEventFilterM` -> `…EightToFifteen`)."""
+        command = QueryEventFilterM(DeviceShort(3), InstanceNumber(0))
+        assert format_command_expression(command) == "FF24.QueryEventFilterEightToFifteen(A3, I0)"
+
+    @pytest.mark.parametrize(
+        "name",
+        sorted(build_command_registry().keys()),
+    )
+    def test_every_registry_command_round_trips(self, registry, name):
+        """For every command in the registry, parsing its canonical expression,
+        formatting the decoded command, and parsing the result yields an
+        identical frame (`as_integer` and length). This is the acceptance
+        invariant for the totality/determinism contract (S1/S3)."""
+        info = registry[name]
+        command = parse_expression(_canonical_expression(name, info), registry)
+        rendered = format_command_expression(command)
+        rebuilt = parse_expression(rendered, registry)
+        assert rebuilt.frame.as_integer == command.frame.as_integer
+        assert len(rebuilt.frame) == len(command.frame)
+
+    def test_program_short_address_renders_address_not_byte(self):
+        """Gear `ProgramShortAddress(5)` renders the semantic address `A5`, not
+        the encoded frame byte `11`."""
+        assert format_command_expression(ProgramShortAddress(5)) == "ProgramShortAddress(A5)"
+
+    def test_initialise_broadcast_form(self, registry):
+        """Gear `Initialise` broadcast (`0x00` byte) renders without an argument
+        and parses back to the same frame."""
+        command = Initialise(broadcast=True)
+        rendered = format_command_expression(command)
+        assert rendered == "Initialise"
+        assert parse_expression(rendered, registry).frame.as_integer == command.frame.as_integer
+
+    def test_initialise_address_form(self, registry):
+        """Gear `Initialise(A5)` carries the `(5<<1)|1` frame byte and round-trips
+        through the `A<n>` form."""
+        command = Initialise(address=5)
+        rendered = format_command_expression(command)
+        assert rendered == "Initialise(A5)"
+        assert command.frame.as_integer & 0xFF == (5 << 1) | 1
+        assert parse_expression(rendered, registry).frame.as_integer == command.frame.as_integer
+
+    def test_initialise_no_short_address_form(self, registry):
+        """Gear `Initialise` with no short address (`0xff` byte) renders the
+        `no_short_address` literal and round-trips."""
+        command = Initialise(address=None)
+        rendered = format_command_expression(command)
+        assert rendered == "Initialise(no_short_address)"
+        assert command.frame.as_integer & 0xFF == 0xFF
+        assert parse_expression(rendered, registry).frame.as_integer == command.frame.as_integer
+
+    def test_short_address_no_short_address_form(self, registry):
+        """`ProgramShortAddress`/`VerifyShortAddress` "no address" (`MASK`, `0xff`
+        byte) render the `no_short_address` literal and round-trip."""
+        for command in (ProgramShortAddress("MASK"), VerifyShortAddress("MASK")):
+            rendered = format_command_expression(command)
+            assert rendered == f"{type(command).__name__}(no_short_address)"
+            assert command.frame.as_integer & 0xFF == 0xFF
+            assert parse_expression(rendered, registry).frame.as_integer == command.frame.as_integer
+
+    def test_device_commissioning_unchanged(self, registry):
+        """Device-side `FF24.Initialise`/`ProgramShortAddress`/`VerifyShortAddress`
+        keep their raw-byte `data` syntax and round-trip unchanged."""
+        for name in ("FF24.Initialise", "FF24.ProgramShortAddress", "FF24.VerifyShortAddress"):
+            command = parse_expression(f"{name}(255)", registry)
+            rendered = format_command_expression(command)
+            assert rendered == f"{name}(255)"
+            assert parse_expression(rendered, registry).frame.as_integer == command.frame.as_integer
+
+    def test_non_registry_command_falls_back_to_str(self):
+        """A command whose type is not in the registry renders python-dali's
+        `str()` rather than None, and the formatter does not raise."""
+        command = UnknownGearCommand(ForwardFrame(16, (0x00, 0x01)))
+        rendered = format_command_expression(command)
+        assert rendered == str(command)
+        assert rendered is not None
+
+    def test_rendered_expression_round_trips(self, registry):
+        """Whatever is rendered parses back to a frame identical to the original."""
+        command = DAPC(GearShort(5), 100)
+        expression = format_command_expression(command)
+        rebuilt = parse_expression(expression, registry)
+        assert rebuilt.frame.as_integer == command.frame.as_integer
+
+    def test_broken_str_does_not_raise(self):
+        """A non-registry object whose `__str__` returns non-string (so `str()`
+        raises TypeError, as `dali.sequences.progress.__str__` does when it has
+        neither a message nor a completed/size pair) renders a type tag instead
+        of propagating — the canonical log path must never raise."""
+
+        class BrokenStr:  # pylint: disable=too-few-public-methods
+            # Deliberately broken: returning non-str makes `str()` raise
+            # TypeError, reproducing python-dali's progress.__str__.
+            def __str__(self):  # pylint: disable=invalid-str-returned
+                return None  # type: ignore[return-value]
+
+        rendered = format_command_expression(BrokenStr())
+        assert rendered == "<BrokenStr>"
+
+
+class TestLazyCommandExpression:
+    """`LazyCommandExpression.__str__` delegates to `format_command_expression`,
+    so it yields the RPC expression for a registry command and falls back to
+    `str()` for a non-registry one — letting `%s` log args defer the cost."""
+
+    def test_registry_command_renders_expression(self):
+        assert str(LazyCommandExpression(Off(GearShort(5)))) == "Off(A5)"
+
+    def test_non_registry_command_falls_back_to_str(self):
+        command = UnknownGearCommand(ForwardFrame(16, (0x00, 0x01)))
+        assert str(LazyCommandExpression(command)) == str(command)
 
 
 class TestFormatResponse(unittest.TestCase):

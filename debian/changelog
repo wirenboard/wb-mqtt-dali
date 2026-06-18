@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.17.16) stable; urgency=medium
+
+  * Add optional "mqtt_id" and "name" device fields to the configuration schema.
+  * Remove the unused, always-null "stage" field from the commissioning progress message.
+  * Rework the README and add docs/editor_rpc.md documenting the supported device types, MQTT topics and RPC API; drop the AsyncAPI spec.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 18 Jun 2026 17:55:54 +0500
+
 wb-mqtt-dali (1.17.15) stable; urgency=medium
 
   * Reset the button pressed state on short, double and long-press events, not only on the button-released event.

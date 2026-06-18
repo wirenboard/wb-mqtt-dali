@@ -113,7 +113,6 @@ class CommissioningState:
         else:
             data["status"] = self.status.value
         data["progress"] = self.progress
-        data["stage"] = None
         data["error"] = self.error
         data["devices"] = [asdict(d) for d in self.devices]
         data["finished_at"] = self.finished_at

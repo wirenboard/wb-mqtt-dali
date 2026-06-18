@@ -46,6 +46,11 @@ UI_MAX_TC_K = 10000
 UI_MIN_TC_MIREK = tc_kelvin_mirek(UI_MAX_TC_K)
 UI_MAX_TC_MIREK = tc_kelvin_mirek(UI_MIN_TC_K)
 
+# Root-relative property holding the live TC limits. The frontend dali-tc editor
+# reads dotted paths into it (e.g. "tc_limits.tc_coolest") to bound its sliders to
+# the device's current limits live, instead of baked-in minimum/maximum.
+TC_LIMITS_PROPERTY = "tc_limits"
+
 COLOR_TEMPERATURE_COLOUR_COMPONENTS = [
     ColourComponent.COLOUR_TEMPERATURE,
 ]
@@ -101,7 +106,7 @@ class ColourTemperatureValue:
     def from_json(self, value: dict) -> None:
         self.tc = value.get("tc", self.tc)
 
-    def get_schema(self, limits: Type8TcLimits) -> dict:
+    def get_schema(self, _limits: Type8TcLimits) -> dict:
         return {
             "properties": {
                 "tc": {
@@ -114,16 +119,8 @@ class ColourTemperatureValue:
                         "grid_columns": 2,
                         "wb": {
                             "dali_tc": {
-                                "minimum": (
-                                    limits.tc_min_mirek
-                                    if limits.tc_min_mirek != MASK_2BYTES
-                                    else UI_MIN_TC_MIREK
-                                ),
-                                "maximum": (
-                                    limits.tc_max_mirek
-                                    if limits.tc_max_mirek != MASK_2BYTES
-                                    else UI_MAX_TC_MIREK
-                                ),
+                                "min_limit": f"{TC_LIMITS_PROPERTY}.tc_coolest",
+                                "max_limit": f"{TC_LIMITS_PROPERTY}.tc_warmest",
                             },
                         },
                     },
@@ -284,7 +281,7 @@ class TcLimitsSettings(SettingsParamBase):
 
     def __init__(self, limits: Type8TcLimits) -> None:
         super().__init__(SettingsParamName("Colour Temperature Limits", "Границы цветовой температуры"))
-        self.property_name = "tc_limits"
+        self.property_name = TC_LIMITS_PROPERTY
         self._limits = limits
 
     def _current_values(self) -> dict:
@@ -370,6 +367,7 @@ class TcLimitsSettings(SettingsParamBase):
                                 "grid_columns": 6,
                                 "wb": {
                                     "dali_tc": {
+                                        "min_limit": f"{self.property_name}.tc_physical_coolest",
                                         "minimum": UI_MIN_TC_MIREK,
                                         "maximum": UI_MAX_TC_MIREK,
                                         "mode": "limit",
@@ -386,6 +384,7 @@ class TcLimitsSettings(SettingsParamBase):
                                 "grid_columns": 6,
                                 "wb": {
                                     "dali_tc": {
+                                        "max_limit": f"{self.property_name}.tc_physical_warmest",
                                         "minimum": UI_MIN_TC_MIREK,
                                         "maximum": UI_MAX_TC_MIREK,
                                         "mode": "limit",
@@ -402,16 +401,8 @@ class TcLimitsSettings(SettingsParamBase):
                                 "grid_columns": 6,
                                 "wb": {
                                     "dali_tc": {
-                                        "minimum": (
-                                            self._limits.tc_phys_min_mirek
-                                            if self._limits.tc_phys_min_mirek != MASK_2BYTES
-                                            else UI_MIN_TC_MIREK
-                                        ),
-                                        "maximum": (
-                                            self._limits.tc_phys_max_mirek
-                                            if self._limits.tc_phys_max_mirek != MASK_2BYTES
-                                            else UI_MAX_TC_MIREK
-                                        ),
+                                        "min_limit": f"{self.property_name}.tc_coolest",
+                                        "max_limit": f"{self.property_name}.tc_physical_warmest",
                                         "mode": "limit",
                                     },
                                 },
@@ -426,16 +417,8 @@ class TcLimitsSettings(SettingsParamBase):
                                 "grid_columns": 6,
                                 "wb": {
                                     "dali_tc": {
-                                        "minimum": (
-                                            self._limits.tc_phys_min_mirek
-                                            if self._limits.tc_phys_min_mirek != MASK_2BYTES
-                                            else UI_MIN_TC_MIREK
-                                        ),
-                                        "maximum": (
-                                            self._limits.tc_phys_max_mirek
-                                            if self._limits.tc_phys_max_mirek != MASK_2BYTES
-                                            else UI_MAX_TC_MIREK
-                                        ),
+                                        "min_limit": f"{self.property_name}.tc_physical_coolest",
+                                        "max_limit": f"{self.property_name}.tc_warmest",
                                         "mode": "limit",
                                     },
                                 },

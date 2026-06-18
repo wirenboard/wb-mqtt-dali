@@ -25,6 +25,7 @@ from wb.mqtt_dali.dali_type8_tc import (
     MIN_TC_MIREK,
     UI_MAX_TC_MIREK,
     UI_MIN_TC_MIREK,
+    ColourTemperatureValue,
     TcLimitsSettings,
     Type8TcLimits,
     read_colour_temperature_limits_mirek,
@@ -415,12 +416,45 @@ def test_get_schema_contains_all_fields():
     assert "tc_warmest" in props
     assert "tc_physical_coolest" in props
     assert "tc_physical_warmest" in props
-    # Physical limits use absolute min/max
+    # Physical limits keep the absolute UI range as their outer static bound
     assert props["tc_physical_coolest"]["options"]["wb"]["dali_tc"]["minimum"] == UI_MIN_TC_MIREK
     assert props["tc_physical_coolest"]["options"]["wb"]["dali_tc"]["maximum"] == UI_MAX_TC_MIREK
-    # User limits use physical limits as bounds
-    assert props["tc_coolest"]["options"]["wb"]["dali_tc"]["minimum"] == 50
-    assert props["tc_coolest"]["options"]["wb"]["dali_tc"]["maximum"] == 500
+    # User limits carry no static bounds — their range comes from the cross-referenced
+    # live limits (see test_get_schema_limits_cross_reference).
+    assert "minimum" not in props["tc_coolest"]["options"]["wb"]["dali_tc"]
+    assert "maximum" not in props["tc_coolest"]["options"]["wb"]["dali_tc"]
+
+
+def test_get_schema_limits_cross_reference():
+    """The four limit sliders cross-reference each other so the nesting
+    physical_coolest <= coolest <= warmest <= physical_warmest cannot invert: each
+    field's inner bound points at its neighbour, while the physical sliders keep the
+    static UI range on their outer side."""
+    props = TcLimitsSettings(_make_limits()).get_schema(False)["properties"]["tc_limits"]["properties"]
+    cool = props["tc_coolest"]["options"]["wb"]["dali_tc"]
+    assert cool["min_limit"] == "tc_limits.tc_physical_coolest"
+    assert cool["max_limit"] == "tc_limits.tc_warmest"
+    warm = props["tc_warmest"]["options"]["wb"]["dali_tc"]
+    assert warm["min_limit"] == "tc_limits.tc_coolest"
+    assert warm["max_limit"] == "tc_limits.tc_physical_warmest"
+    phys_cool = props["tc_physical_coolest"]["options"]["wb"]["dali_tc"]
+    assert phys_cool["max_limit"] == "tc_limits.tc_physical_warmest"
+    assert "min_limit" not in phys_cool  # outer side stays the static UI range
+    phys_warm = props["tc_physical_warmest"]["options"]["wb"]["dali_tc"]
+    assert phys_warm["min_limit"] == "tc_limits.tc_physical_coolest"
+    assert "max_limit" not in phys_warm
+
+
+def test_colour_value_schema_tracks_user_limits_live():
+    """The main colour-temperature slider points at the live user-limit params and
+    carries no static bounds; the frontend derives the range from them."""
+    dali_tc = ColourTemperatureValue().get_schema(_make_limits())["properties"]["tc"]["options"]["wb"][
+        "dali_tc"
+    ]
+    assert dali_tc["min_limit"] == "tc_limits.tc_coolest"
+    assert dali_tc["max_limit"] == "tc_limits.tc_warmest"
+    assert "minimum" not in dali_tc
+    assert "maximum" not in dali_tc
 
 
 # --- Helpers for rebuild_mqtt_controls / ApplyResult / sync_controls_after_broadcast ---

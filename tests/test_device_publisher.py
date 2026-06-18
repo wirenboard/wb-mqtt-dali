@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
+import aiomqtt
 import pytest
 
 from wb.mqtt_dali.device_publisher import (
@@ -13,12 +14,6 @@ from wb.mqtt_dali.device_publisher import (
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
 # pylint: disable=redefined-outer-name,comparison-with-callable,too-many-public-methods
-
-
-class MockMessage:  # pylint: disable=too-few-public-methods
-    def __init__(self, topic: str, payload: bytes = b""):
-        self.topic = topic
-        self.payload = payload
 
 
 class MockMQTTClient:  # pylint: disable=too-few-public-methods
@@ -313,7 +308,7 @@ class TestDevicePublisher:
         callback = MagicMock()
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
-        message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
+        message = aiomqtt.Message("/devices/test_bus_dev1/controls/ctrl1/on", b"1", 0, False, 0, None)
         publisher._handle_on_message("dev1/ctrl1", message)
 
         callback.assert_called_once_with(message)
@@ -334,7 +329,7 @@ class TestDevicePublisher:
         callback = MagicMock(side_effect=ValueError("Test error"))
         await publisher.register_control_handler("dev1", "ctrl1", callback)
 
-        message = MockMessage("/devices/test_bus_dev1/controls/ctrl1/on", b"1")
+        message = aiomqtt.Message("/devices/test_bus_dev1/controls/ctrl1/on", b"1", 0, False, 0, None)
         publisher._handle_on_message("dev1/ctrl1", message)
 
         publisher.logger.error.assert_called_once()

@@ -1,7 +1,7 @@
 import logging
 from typing import Awaitable, Callable, Union
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from jsonrpc.exceptions import (
     JSONRPCDispatchException,
     JSONRPCInvalidRequest,
@@ -11,7 +11,7 @@ from jsonrpc.exceptions import (
 from mqttrpc.protocol import MQTTRPC10Request, MQTTRPC10Response
 
 from .asyncio_utils import OneShotTasks
-from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 
 RpcHandlerFunction = Callable[[dict], Awaitable[Union[dict, list, str, int, float, bool, None]]]
 
@@ -70,12 +70,12 @@ class MQTTRPCServer:
 
         await self._one_shot_tasks.stop()
 
-    def _on_request(self, mqtt_message: mqtt.MQTTMessage) -> None:
+    def _on_request(self, mqtt_message: aiomqtt.Message) -> None:
         self._one_shot_tasks.add(self._process_callback(mqtt_message), "_on_request")
 
-    async def _handle_request(self, mqtt_message: mqtt.MQTTMessage) -> str:
+    async def _handle_request(self, mqtt_message: aiomqtt.Message) -> str:
         try:
-            request_string = mqtt_message.payload.decode()
+            request_string = get_str_payload(mqtt_message)
             self.logger.debug("Request %s: %s", mqtt_message.topic, request_string)
             request = MQTTRPC10Request.from_json(request_string)
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -84,7 +84,7 @@ class MQTTRPCServer:
                 error=JSONRPCInvalidRequest()._data  # pylint: disable=protected-access
             ).json
         try:
-            topic_base, _ = mqtt_message.topic.rsplit("/", 1)
+            topic_base, _ = mqtt_message.topic.value.rsplit("/", 1)
             handler = self._endpoints.get(topic_base)
             if handler is None:
                 self.logger.error("No RPC endpoint for topic: %s", mqtt_message.topic)
@@ -108,10 +108,10 @@ class MQTTRPCServer:
                 error=JSONRPCServerError(data=exception_message)._data,  # pylint: disable=protected-access
             ).json
 
-    async def _process_callback(self, mqtt_message: mqtt.MQTTMessage) -> None:
+    async def _process_callback(self, mqtt_message: aiomqtt.Message) -> None:
         response = await self._handle_request(mqtt_message)
         try:
-            reply_topic = mqtt_message.topic + "/reply"
+            reply_topic = mqtt_message.topic.value + "/reply"
             self.logger.debug("Response %s: %s", reply_topic, response)
             await self._mqtt_dispatcher.client.publish(reply_topic, response, qos=2, retain=False)
         except Exception as e:  # pylint: disable=broad-exception-caught

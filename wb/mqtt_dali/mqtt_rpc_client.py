@@ -2,11 +2,11 @@ import asyncio
 import logging
 import uuid
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from jsonrpc.exceptions import JSONRPCDispatchException
 from mqttrpc.protocol import MQTTRPC10Request, MQTTRPC10Response
 
-from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .mqtt_rpc_server import get_topic_path
 
 
@@ -72,10 +72,10 @@ async def rpc_call(  # pylint: disable=too-many-arguments, R0917
     topic_str = f"{get_topic_path(driver, service, method)}/wb-mqtt-dali-{uuid.uuid4()}"
     fut = asyncio.get_running_loop().create_future()
 
-    def on_response(mqtt_message: mqtt.MQTTMessage) -> None:
+    def on_response(mqtt_message: aiomqtt.Message) -> None:
         if not fut.done():
             try:
-                response = MQTTRPC10Response.from_json(mqtt_message.payload.decode())
+                response = MQTTRPC10Response.from_json(get_str_payload(mqtt_message))
                 if response.error:
                     fut.set_exception(JSONRPCDispatchException(response.error))
                 else:

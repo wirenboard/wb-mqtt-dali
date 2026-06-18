@@ -10,7 +10,7 @@ except ImportError:
 
 from typing import Optional
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from dali.command import Command, Response
 from dali.frame import BackwardFrame, ForwardFrame
 
@@ -111,10 +111,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         for i in range(count):
             index = queue_item_index + i
             index %= self.config.queue_size
-            message = mqtt.MQTTMessage(
-                topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{index}".encode()
+            message = aiomqtt.Message(
+                topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{index}",
+                payload=str(0),
+                qos=0,
+                retain=False,
+                mid=0,
+                properties=None,
             )
-            message.payload = str(0).encode()
             self.mock_mqtt_dispatcher._dispatch_message(message)
 
     async def prepare_driver(self, driver: WBDALIDriver):
@@ -193,10 +197,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
-        message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        message = aiomqtt.Message(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0",
+            payload=str(0x0156),
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        message.payload = str(0x0156).encode()
         self.mock_mqtt_dispatcher._dispatch_message(message)
         result = (await fut)[0]
         self.assertIsInstance(result, MockResponse)
@@ -263,13 +271,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         # Simulate responses
         for i in range(3):
-            message = mqtt.MQTTMessage(
-                topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}".encode()
+            message = aiomqtt.Message(
+                topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}",
+                payload=str(0x0150 + i) if i < 2 else str(0x0200),
+                qos=0,
+                retain=False,
+                mid=0,
+                properties=None,
             )
-            if i < 2:
-                message.payload = str(0x0150 + i).encode()
-            else:
-                message.payload = str(0x0200).encode()  # status 2, transmission without response
             self.mock_mqtt_dispatcher._dispatch_message(message)
 
         results = (await fut)[0]
@@ -340,10 +349,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
 
         # Simulate framing error
-        message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        message = aiomqtt.Message(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0",
+            payload=str(0x0300),
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        message.payload = str(0x0300).encode()
         self.mock_mqtt_dispatcher._dispatch_message(message)
 
         result = (await fut)[0]
@@ -363,10 +376,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
 
-        message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        message = aiomqtt.Message(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0",
+            payload="",
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        message.payload = b""
         self.mock_mqtt_dispatcher._dispatch_message(message)
 
         result = (await asyncio.wait_for(fut, timeout=1.0))[0]
@@ -387,11 +404,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
 
-        message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        message = aiomqtt.Message(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0",
+            payload="",
+            qos=0,
+            retain=True,
+            mid=0,
+            properties=None,
         )
-        message.payload = b""
-        message.retain = True
         self.mock_mqtt_dispatcher._dispatch_message(message)
 
         # Retained drop must not resolve the waiter; a real timeout eventually
@@ -412,8 +432,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         )
 
         topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0"
-        message = mqtt.MQTTMessage(topic=topic.encode())
-        message.payload = b"not-a-number"
+        message = aiomqtt.Message(
+            topic=topic,
+            payload="not-a-number",
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
+        )
         self.mock_mqtt_dispatcher._dispatch_message(message)
 
         result = (await asyncio.wait_for(fut, timeout=1.0))[0]
@@ -447,10 +473,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
 
-        message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0".encode()
+        message = aiomqtt.Message(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0",
+            payload=str(0x0112),
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        message.payload = str(0x0112).encode()
         self.mock_mqtt_dispatcher._dispatch_message(message)
         await fut
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)
@@ -472,10 +502,14 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         driver.bus_traffic.register(traffic_callback)
 
-        message = mqtt.MQTTMessage(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_1".encode()
+        message = aiomqtt.Message(
+            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_monitor_sporadic_frame_1",
+            payload=str(0x1A900180088863B),
+            qos=0,
+            retain=False,
+            mid=0,
+            properties=None,
         )
-        message.payload = str(0x1A900180088863B).encode()
         self.mock_mqtt_dispatcher._dispatch_message(message)
 
         await asyncio.wait_for(callback_invoked.wait(), timeout=1.0)

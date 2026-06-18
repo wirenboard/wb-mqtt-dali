@@ -1,10 +1,29 @@
-wb-mqtt-dali (1.17.13) stable; urgency=medium
+wb-mqtt-dali (1.17.16) stable; urgency=medium
 
   * Add optional "mqtt_id" and "name" device fields to the configuration schema.
   * Remove the unused, always-null "stage" field from the commissioning progress message.
   * Rework the README and add docs/editor_rpc.md documenting the supported device types, MQTT topics and RPC API; drop the AsyncAPI spec.
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 10 Jun 2026 17:41:16 +0500
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 18 Jun 2026 17:55:54 +0500
+
+wb-mqtt-dali (1.17.15) stable; urgency=medium
+
+  * Reset the button pressed state on short, double and long-press events, not only on the button-released event.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 15 Jun 2026 15:13:59 +0500
+
+wb-mqtt-dali (1.17.14) stable; urgency=medium
+
+  * Bind the colour temperature sliders to the device's live Coolest/Warmest
+    limits via min_limit/max_limit dotted paths instead of static minimum/maximum.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 11 Jun 2026 17:22:12 +0500
+
+wb-mqtt-dali (1.17.13) stable; urgency=medium
+
+  * Fix aiomqtt compatibility
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 11 Jun 2026 15:40:07 +0500
 
 wb-mqtt-dali (1.17.12) stable; urgency=medium
 

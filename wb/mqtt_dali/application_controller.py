@@ -6,7 +6,7 @@ from enum import Enum, auto
 from timeit import default_timer
 from typing import Any, Callable, Coroutine, Iterable, Optional, Type, Union
 
-import paho.mqtt.client as mqtt
+import aiomqtt
 from dali.address import (
     DeviceBroadcast,
     DeviceShort,
@@ -25,14 +25,13 @@ from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
 from .common_dali_device import ControlPollResult, DaliDeviceAddress, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
-from .dali2_controls import publish_dali2_event
-from .dali2_device import Dali2Device
+from .dali2_device import Dali2Device, publish_dali2_event
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .gtin_db import DaliDatabase
-from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .utils import merge_json_schemas
 from .virtual_devices import (
     AggregatedCapabilities,
@@ -1128,17 +1127,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
         self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
 
-    def _run_on_topic_handler(self, message: mqtt.MQTTMessage) -> None:
+    def _run_on_topic_handler(self, message: aiomqtt.Message) -> None:
         self._one_shot_tasks.add(self._handle_on_topic(message), f"handle_on_topic for {message.topic}")
 
-    async def _handle_on_topic(self, message: mqtt.MQTTMessage) -> None:
-        topic_parts = message.topic.split("/")
+    async def _handle_on_topic(self, message: aiomqtt.Message) -> None:
+        topic_parts = message.topic.value.split("/")
         if len(topic_parts) < 5:
             self.logger.warning("Received MQTT message with invalid topic format: %s", message.topic)
             return
         device_id = topic_parts[2]
         control_id = topic_parts[4]
-        payload = message.payload.decode("utf-8") if getattr(message, "payload", None) else ""
+        payload = get_str_payload(message)
 
         device = self._devices_by_mqtt_id.get(device_id)
         if device is None:
@@ -1597,7 +1596,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                     if instance is not None:
                         self._one_shot_tasks.add(
                             publish_dali2_event(
-                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client
+                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client, instance
                             ),
                             "Publish DALI 2 event to MQTT",
                         )

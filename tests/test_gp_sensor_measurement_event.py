@@ -11,11 +11,11 @@ actual value.
 import unittest
 from unittest.mock import AsyncMock
 
-from dali.address import DeviceShort
+from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command
 from dali.device.helpers import DeviceInstanceTypeMapper
 
-from wb.mqtt_dali.dali2_controls import publish_dali2_event
+from wb.mqtt_dali.dali2_device import InstanceParameters, publish_dali2_event
 from wb.mqtt_dali.device import general_purpose_sensor
 
 # Bit 9 of the 10-bit event field flags a measurement event (vs. data).
@@ -81,8 +81,9 @@ class MeasurementEventPublishTests(unittest.IsolatedAsyncioTestCase):
             short_address=DeviceShort(1), instance_number=4, data=_measurement_data(257)
         )
         mqtt_client = AsyncMock()
+        instance = InstanceParameters(InstanceNumber(4), general_purpose_sensor.instance_type)
 
-        await publish_dali2_event(event, "wb-dali_1_1", mqtt_client)
+        await publish_dali2_event(event, "wb-dali_1_1", mqtt_client, instance)
 
         mqtt_client.publish.assert_awaited_once()
         topic, value = mqtt_client.publish.await_args.args

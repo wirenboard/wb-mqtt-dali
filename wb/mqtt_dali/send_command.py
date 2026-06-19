@@ -817,7 +817,7 @@ def format_command_expression(command: Command) -> str:
     `sendcommand` accepts. Total by construction: for a command whose type is in
     the registry this is the deterministic inverse of how the command is built
     (so it reproduces the same frame); a DALI 2 event renders its `Name(A<n>,
-    I<n>, ...)` form in the same token convention; any other type (UnknownGearCommand) 
+    I<n>, ...)` form in the same token convention; any other type (UnknownGearCommand)
     falls back to python-dali's `str()`. Never returns None."""
     if isinstance(command, _Event):
         args = _event_expression_args(command)

@@ -30,6 +30,7 @@ from dali.device import general as device_general
 from dali.device import light as device_light
 from dali.device import occupancy as device_occupancy
 from dali.device import pushbutton as device_pushbutton
+from dali.device.general import _Event
 
 from .device import absolute_input_device, feedback, general_purpose_sensor
 from .gear import (
@@ -796,12 +797,33 @@ def _command_expression_args(command: Command, info: CommandInfo) -> list[str]:
     return args
 
 
+def _event_expression_args(event: _Event) -> list[str]:
+    args: list[str] = []
+    if event.short_address is not None:
+        args.append(f"A{event.short_address.address}")
+    elif event.device_group is not None:
+        args.append(f"G{event.device_group}")
+    elif event.instance_group is not None:
+        args.append(f"IG{event.instance_group}")
+    if event.instance_number is not None:
+        args.append(f"I{event.instance_number}")
+    if event.event_data is not None:
+        args.append(str(event.event_data))
+    return args
+
+
 def format_command_expression(command: Command) -> str:
     """Render a decoded command as the `Name(A<n>, ...)` expression the RPC
     `sendcommand` accepts. Total by construction: for a command whose type is in
     the registry this is the deterministic inverse of how the command is built
-    (so it reproduces the same frame); for any other type (UnknownGearCommand,
-    events) it falls back to python-dali's `str()`. Never returns None."""
+    (so it reproduces the same frame); a DALI 2 event renders its `Name(A<n>,
+    I<n>, ...)` form in the same token convention; any other type (UnknownGearCommand) falls back to python-dali's
+    `str()`. Never returns None."""
+    if isinstance(command, _Event):
+        args = _event_expression_args(command)
+        name = type(command).__name__
+        return name if not args else f"{name}({', '.join(args)})"
+
     _, reverse = _formatting_tables()
     info = reverse.get(type(command))
     if info is None:

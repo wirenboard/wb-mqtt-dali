@@ -39,6 +39,49 @@ EXIT_NOTCONFIGURED = 6
 SEND_BATCH_SIZE = 16
 
 
+def _stderr_goes_to_journal() -> bool:
+    """True when this process's stderr is the systemd journal stream.
+
+    systemd sets ``$JOURNAL_STREAM`` to the ``device:inode`` of the journal
+    connection; comparing it against stderr confirms the stream is genuinely ours
+    rather than inherited from a parent or redirected to a file.
+    """
+    stream = os.environ.get("JOURNAL_STREAM")
+    if not stream:
+        return False
+    try:
+        device, inode = (int(part) for part in stream.split(":", 1))
+    except ValueError:
+        return False
+    try:
+        stat = os.fstat(sys.stderr.fileno())
+    except OSError:
+        return False
+    return stat.st_dev == device and stat.st_ino == inode
+
+
+def _make_log_handler() -> logging.Handler:
+    """Pick the log handler based on where output goes.
+
+    Under systemd we emit native journal records so each Python log level maps to
+    a journal PRIORITY.
+    Run from a console (or without python3-systemd) we keep the plain text handler
+    so the level stays readable.
+    """
+    if _stderr_goes_to_journal():
+        try:
+            # Optional dependency, imported lazily only when output is the journal.
+            # pylint: disable-next=import-outside-toplevel
+            from systemd.journal import JournalHandler
+
+            return JournalHandler(SYSLOG_IDENTIFIER="wb-mqtt-dali")
+        except ImportError:
+            pass
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
+    return handler
+
+
 async def wait_for_cancel():
     cancel_event = asyncio.Event()
 
@@ -127,7 +170,7 @@ async def default_service(args, client_factory=make_mqtt_client, gateway_factory
         return EXIT_NOTCONFIGURED
 
     if config.get("debug"):
-        logging.basicConfig(level=logging.DEBUG, force=True)
+        logging.getLogger().setLevel(logging.DEBUG)
         logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     gtin_db = DaliDatabase(GTIN_DB_FILEPATH)
@@ -452,7 +495,7 @@ async def main(argv):  # pylint: disable=too-many-return-statements
 
     args = parser.parse_args(argv[1:])
 
-    logging.basicConfig(level=args.log_level)
+    logging.basicConfig(level=args.log_level, handlers=[_make_log_handler()], force=True)
     logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     if args.check_presence_gateway:

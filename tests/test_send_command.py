@@ -11,10 +11,17 @@ from dali.address import (
 )
 from dali.command import Response
 from dali.device.general import DTR0 as DeviceDTR0
-from dali.device.general import EnableInstance, QueryDeviceStatus, QueryEventFilterM
+from dali.device.general import (
+    AmbiguousInstanceType,
+    EnableInstance,
+    QueryDeviceStatus,
+    QueryEventFilterM,
+)
 from dali.device.general import Reset as DeviceReset
 from dali.device.general import Terminate as DeviceTerminate
-from dali.device.pushbutton import QueryShortTimer
+from dali.device.general import UnknownEvent
+from dali.device.light import LightEvent
+from dali.device.pushbutton import ButtonPressed, QueryShortTimer, ShortPress
 from dali.frame import BackwardFrame, ForwardFrame
 from dali.gear.colour import Activate as DT8Activate
 from dali.gear.general import (
@@ -398,7 +405,8 @@ def _canonical_expression(name: str, info) -> str:
 class TestFormatCommandExpression:
     """`format_command_expression` renders a decoded command in the same
     `Name(A<n>, data)` syntax the RPC accepts. It is total: registry commands
-    render their `Name(...)` expression, everything else falls back to
+    render their `Name(...)` expression, DALI 2 events render the same
+    `Name(A<n>, I<n>, ...)` token form, and anything else falls back to
     python-dali's `str()` — it never returns None."""
 
     @pytest.mark.parametrize(
@@ -418,6 +426,37 @@ class TestFormatCommandExpression:
     )
     def test_renders_expression(self, command, expected):
         assert format_command_expression(command) == expected
+
+    @pytest.mark.parametrize(
+        "event, expected",
+        [
+            # short address + instance number (Device/instance scheme)
+            (ShortPress(short_address=3, instance_number=2), "ShortPress(A3, I2)"),
+            # bare instance scheme — only the instance number is present
+            (ButtonPressed(instance_number=5), "ButtonPressed(I5)"),
+            # device group scheme renders the device group as G<n>
+            (ShortPress(device_group=4), "ShortPress(G4)"),
+            # instance group scheme gets its own IG<n> token
+            (ShortPress(instance_group=7), "ShortPress(IG7)"),
+            # events carrying data append it after the address tokens
+            (LightEvent(short_address=1, instance_number=0, data=123), "LightEvent(A1, I0, 123)"),
+            (
+                UnknownEvent(instance_type=99, short_address=2, instance_number=1, data=5),
+                "UnknownEvent(A2, I1, 5)",
+            ),
+            (
+                AmbiguousInstanceType(short_address=2, instance_number=1, data=9),
+                "AmbiguousInstanceType(A2, I1, 9)",
+            ),
+        ],
+    )
+    def test_renders_event_in_command_token_syntax(self, event, expected):
+        """A decoded DALI 2 event renders as `Name(A<n>, I<n>, ...)` in the same
+        `A`/`G`/`I` token convention as commands, instead of python-dali's
+        `short_address=…, instance_number=…` repr. Each addressing scheme (short
+        address, device group, instance group, bare instance) maps to its token,
+        and event data is appended last."""
+        assert format_command_expression(event) == expected
 
     def test_alias_resolves_to_longer_name(self):
         """A class registered under two aliases renders the longer, more

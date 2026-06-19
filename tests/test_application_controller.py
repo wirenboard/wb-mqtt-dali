@@ -9,7 +9,7 @@ import pytest
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Response, from_frame
 from dali.device.general import EnableInstance
-from dali.frame import BackwardFrame, ForwardFrame
+from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
 
 from wb.mqtt_dali.application_controller import (
     MIN_POLLING_INTERVAL,
@@ -35,6 +35,7 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
+from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
 
@@ -1642,7 +1643,12 @@ class _LogCapture:
         self._prev_level = logging.NOTSET
         self.handler = logging.Handler()
         self.messages: list[str] = []
-        self.handler.emit = lambda record: self.messages.append(record.getMessage())
+        self.levels: list[int] = []
+        self.handler.emit = self._capture
+
+    def _capture(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+        self.levels.append(record.levelno)
 
     def __enter__(self) -> "_LogCapture":
         logger = logging.getLogger(self._name)
@@ -1764,6 +1770,30 @@ async def test_monitor_not_logged_when_monitor_disabled():
 
     assert not log.messages
     dispatcher.client.publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_monitor_problems_logged_at_warning_normal_at_info():
+    """The log mirror carries a level so problems can be filtered out of the
+    firehose: a transmission error, a framing-error response, and a framing error
+    on a received frame are logged at WARNING, while a normal value response stays
+    at INFO. Sequence ids are contiguous so the items dispatch in order."""
+    bus, _ = _monitor_bus(monitor=True, syslog=True)
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_command(
+            command.frame, WbGatewayTransmissionError(), BusTrafficSource.WB, 0
+        )
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrameError(8)), BusTrafficSource.WB, 1
+        )
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrame(42)), BusTrafficSource.WB, 2
+        )
+        bus.driver.bus_traffic.notify_bus_frame(BackwardFrameError(8), 45)
+        await asyncio.sleep(0)
+
+    assert log.levels == [logging.WARNING, logging.WARNING, logging.INFO, logging.WARNING]
 
 
 # --- monitor line formatting -------------------------------------------------

@@ -1645,9 +1645,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             ):
                 request_body = f"{request_body} - {format_response(bus_traffic_item.response)}"
 
-            self._publish_monitor_line(timestamp, request_body)
+            self._publish_monitor_line(timestamp, request_body, bus_traffic_log_level(bus_traffic_item))
 
-    def _publish_monitor_line(self, timestamp: str, body: str) -> None:
+    def _publish_monitor_line(self, timestamp: str, body: str, level: int) -> None:
         # MQTT keeps the leading timestamp; the log mirror omits it because
         # journald already stamps each record (and self.logger is named by bus uid).
         self._one_shot_tasks.add(
@@ -1657,7 +1657,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             "Publish DALI bus traffic to MQTT",
         )
         if self._bus_monitor_syslog_enabled:
-            self.logger.info(body)
+            self.logger.log(level, body)
 
 
 def format_frame_hex(frame: Frame) -> str:
@@ -1680,6 +1680,17 @@ def format_command(frame: Frame, decoded_command: Optional[Command]) -> str:
     if decoded_command is not None:
         return f"{format_frame_hex(frame)} {format_command_expression(decoded_command)}"
     return format_frame(frame)
+
+
+def bus_traffic_log_level(item: BusTrafficItem) -> int:
+    if item.request.error:
+        return logging.WARNING
+    response = item.response
+    if isinstance(response, WbGatewayTransmissionError):
+        return logging.WARNING
+    if response is not None and response.raw_value is not None and response.raw_value.error:
+        return logging.WARNING
+    return logging.INFO
 
 
 def format_response(response: Response) -> str:

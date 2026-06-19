@@ -7,6 +7,8 @@ wb-mqtt-dali (1.18.0) stable; urgency=medium
     redundant frame descriptors, and document the topic and every line variant
     in the README.
   * Make the command expression formatter total over the command registry.
+  * Render decoded DALI 2 events in the bus monitor using the same A<n>/I<n>/G<n>
+    token syntax as commands instead of python-dali's raw repr.
 
  -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 18 Jun 2026 18:30:00 +0500
 

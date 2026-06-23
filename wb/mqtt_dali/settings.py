@@ -240,11 +240,14 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
             schema["properties"][self.property_name]["default"] = self.default
         if self.property_order is not None:
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
-        if self.description is not None:
+        if self.description is not None and not self.description.is_empty():
             # Descriptions are long, so unlike the short title we never use the text
             # itself as the translation key (it would be duplicated in the schema).
-            # Register both locales under a short per-property key instead.
-            description_key = f"{self.property_name}_description"
+            # Register both locales under a short key instead, namespaced by the param
+            # class so that params sharing a property_name across instance types (e.g.
+            # report_timer in types 3 and 6) don't collide in the flat, device-wide
+            # translations map.
+            description_key = f"{type(self).__name__}_{self.property_name}_description"
             schema["properties"][self.property_name]["description"] = description_key
             if self.description.en is not None:
                 add_translations(schema, "en", {description_key: self.description.en})

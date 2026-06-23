@@ -3,9 +3,9 @@ wb-mqtt-dali (1.17.17) stable; urgency=medium
   * Add bilingual (en/ru) descriptions to the DALI 2 occupancy sensor (type 3)
     deadtime, hold and report timer parameters, clarifying what each one affects.
   * Translate config parameter descriptions: a parameter's description is now
-    registered in the schema translations for both locales under a short key
-    namespaced by the parameter class, instead of being emitted as a single
-    untranslated string.
+    registered in the schema translations for both locales under a short,
+    content-derived key, instead of being emitted as a single untranslated
+    string.
 
  -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 23 Jun 2026 09:31:25 +0500
 

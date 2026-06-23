@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -243,11 +244,13 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         if self.description is not None and not self.description.is_empty():
             # Descriptions are long, so unlike the short title we never use the text
             # itself as the translation key (it would be duplicated in the schema).
-            # Register both locales under a short key instead, namespaced by the param
-            # class so that params sharing a property_name across instance types (e.g.
-            # report_timer in types 3 and 6) don't collide in the flat, device-wide
-            # translations map.
-            description_key = f"{type(self).__name__}_{self.property_name}_description"
+            # The key must stay collision-safe in the flat, device-wide translations
+            # map: the same property_name and even the same class name recur across
+            # instance types (e.g. report_timer / ReportTimerParam in types 2/3/4/6),
+            # so neither identifies the text. Derive the key from the text itself, like
+            # the title does — identical descriptions share a key (deduped), differing
+            # ones get distinct keys.
+            description_key = f"{self.property_name}_description_{self._description_digest()}"
             schema["properties"][self.property_name]["description"] = description_key
             if self.description.en is not None:
                 add_translations(schema, "en", {description_key: self.description.en})
@@ -260,6 +263,14 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
 
     def get_read_command(self, short_address: Address) -> Command:
         raise NotImplementedError(f"Read commands for {self.name.en} are not defined")
+
+    # --- Private ---
+
+    def _description_digest(self) -> str:
+        # Hash both locales together: the key must change if either text changes,
+        # so a differing ru with an identical en still gets its own key.
+        payload = f"{self.description.en}\x00{self.description.ru}".encode()
+        return hashlib.blake2s(payload, digest_size=4).hexdigest()
 
 
 class SettingsParamGroup(SettingsParamBase):

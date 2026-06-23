@@ -23,26 +23,24 @@ def test_description_translated_to_both_locales():
         assert schema["translations"]["ru"][description_key].strip()
 
 
-def test_description_key_namespaced_by_param_class():
-    """Two params that share a property_name but are different classes get
-    distinct description keys, so their texts never collide in the flat,
-    device-wide translations map."""
+def _description_key(property_name: str, desc: TranslatedTitle) -> str:
+    param = NumberSettingsParam(SettingsParamName("Name", "Имя"), property_name)
+    param.description = desc
+    return param.get_schema(group_and_broadcast=False)["properties"][property_name]["description"]
 
-    class FirstParam(NumberSettingsParam):
-        pass
 
-    class SecondParam(NumberSettingsParam):
-        pass
+def test_description_key_derived_from_text_not_class_or_property():
+    """The description key is content-addressed: report_timer / ReportTimerParam
+    recur across instance types 2/3/4/6, so neither the property_name nor the class
+    identifies the text. Identical descriptions dedup to one key; a differing en or
+    a differing ru each yields a distinct key — preventing silent collisions in the
+    flat, device-wide translations map."""
+    base = TranslatedTitle(en="Report interval.", ru="Период отчёта.")
+    assert _description_key("report_timer", base) == _description_key("report_timer", base)
 
-    shared_property = "report_timer"
-    first = FirstParam(SettingsParamName("First", "Первый"), shared_property)
-    first.description = TranslatedTitle(en="First text", ru="Первый текст")
-    second = SecondParam(SettingsParamName("Second", "Второй"), shared_property)
-    second.description = TranslatedTitle(en="Second text", ru="Второй текст")
-
-    first_key = first.get_schema(group_and_broadcast=False)["properties"][shared_property]["description"]
-    second_key = second.get_schema(group_and_broadcast=False)["properties"][shared_property]["description"]
-    assert first_key != second_key
+    other_en = _description_key("report_timer", TranslatedTitle(en="Other.", ru="Период отчёта."))
+    other_ru = _description_key("report_timer", TranslatedTitle(en="Report interval.", ru="Другое."))
+    assert len({_description_key("report_timer", base), other_en, other_ru}) == 3
 
 
 def test_description_without_ru_adds_only_en_translation():

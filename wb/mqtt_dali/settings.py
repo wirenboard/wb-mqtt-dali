@@ -244,12 +244,6 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         if self.description is not None and not self.description.is_empty():
             # Descriptions are long, so unlike the short title we never use the text
             # itself as the translation key (it would be duplicated in the schema).
-            # The key must stay collision-safe in the flat, device-wide translations
-            # map: the same property_name and even the same class name recur across
-            # instance types (e.g. report_timer / ReportTimerParam in types 2/3/4/6),
-            # so neither identifies the text. Derive the key from the text itself, like
-            # the title does — identical descriptions share a key (deduped), differing
-            # ones get distinct keys.
             description_key = f"{self.property_name}_description_{self._description_digest()}"
             schema["properties"][self.property_name]["description"] = description_key
             if self.description.en is not None:

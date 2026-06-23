@@ -1,4 +1,5 @@
 import enum
+import functools
 import inspect
 import re
 from dataclasses import dataclass
@@ -29,6 +30,7 @@ from dali.device import general as device_general
 from dali.device import light as device_light
 from dali.device import occupancy as device_occupancy
 from dali.device import pushbutton as device_pushbutton
+from dali.device.general import _Event
 
 from .device import absolute_input_device, feedback, general_purpose_sensor
 from .gear import (
@@ -63,6 +65,35 @@ class AddressKind(enum.Enum):
 
     GEAR = "gear"
     DEVICE = "device"
+
+
+# Literal token for the `0xff` form of the commissioning specials — in
+# python-dali this is `Initialise(address=None)` and `ProgramShortAddress`/
+# `VerifyShortAddress("MASK")`, one sentinel meaning "no short address".
+_NO_SHORT_ADDRESS_TOKEN = "no_short_address"
+
+# python-dali's sentinel for the short-address-special `0xff` form.
+_SHORT_ADDR_MASK = "MASK"
+
+
+class CommissioningArgForm(enum.Enum):
+    """Argument form of the commissioning addressing specials
+    (Initialise/ProgramShortAddress/VerifyShortAddress).
+
+    BROADCAST       — no argument (Initialise only): frame byte `0x00`.
+    SHORT_ADDRESS   — `A<n>`: frame byte `(n<<1)|1`.
+    NO_SHORT_ADDRESS — `no_short_address` literal: frame byte `0xff`.
+    """
+
+    BROADCAST = "broadcast"
+    SHORT_ADDRESS = "short_address"
+    NO_SHORT_ADDRESS = "no_short_address"
+
+
+@dataclass(frozen=True)
+class CommissioningArg:
+    form: CommissioningArgForm
+    address: Optional[int] = None  # set only when form is SHORT_ADDRESS
 
 
 @dataclass(frozen=True)
@@ -117,6 +148,13 @@ _KIND_TRAITS: Dict[str, _KindTraits] = {
         address_kind=AddressKind.GEAR, needs_address=True, instance_mode=InstanceMode.DISALLOWED
     ),
     "gear_special": _KindTraits(
+        address_kind=None, needs_address=False, instance_mode=InstanceMode.DISALLOWED
+    ),
+    # Commissioning specials (Initialise/ProgramShortAddress/VerifyShortAddress)
+    # carry a short-address *parameter* (token `A<n>`), not a normal A/G
+    # destination, so `needs_address` stays False — the address syntax is
+    # handled separately by the commissioning builder/formatter.
+    "gear_commissioning": _KindTraits(
         address_kind=None, needs_address=False, instance_mode=InstanceMode.DISALLOWED
     ),
     "device_standard": _KindTraits(
@@ -285,27 +323,25 @@ def build_command_registry() -> Dict[str, CommandInfo]:  # pylint: disable=too-m
 
     # --- Gear special commands (no address) ---
     # Includes all single-arg `_SpecialCommand` subclasses from python-dali:
-    # data-byte ones (DTR0/1/2, EnableDeviceType, Initialise, SetSearchAddr*,
-    # ProgramShortAddress, VerifyShortAddress) and no-arg ones (Compare,
-    # Randomise, Ping, QueryShortAddress, Terminate, Withdraw). Two-byte or
-    # broadcast/address constructors (WriteMemoryLocation*, the multi-mode
-    # Initialise broadcast form) are out of scope of the single-`data` shape.
+    # data-byte ones (DTR0/1/2, EnableDeviceType, SetSearchAddr*) and no-arg
+    # ones (Compare, Randomise, Ping, QueryShortAddress, Terminate, Withdraw).
+    # The commissioning addressing specials (Initialise, ProgramShortAddress,
+    # VerifyShortAddress) are registered below under `gear_commissioning`.
+    # Two-byte or broadcast/address constructors (WriteMemoryLocation*) are out
+    # of scope of the single-`data` shape.
     gear_specials: list[tuple[str, Type[Command], bool]] = [
         ("Compare", gear_general.Compare, False),
         ("DTR0", gear_general.DTR0, True),
         ("DTR1", gear_general.DTR1, True),
         ("DTR2", gear_general.DTR2, True),
         ("EnableDeviceType", gear_general.EnableDeviceType, True),
-        ("Initialise", gear_general.Initialise, True),
         ("Ping", gear_general.Ping, False),
-        ("ProgramShortAddress", gear_general.ProgramShortAddress, True),
         ("QueryShortAddress", gear_general.QueryShortAddress, False),
         ("Randomise", gear_general.Randomise, False),
         ("SetSearchAddrH", gear_general.SetSearchAddrH, True),
         ("SetSearchAddrL", gear_general.SetSearchAddrL, True),
         ("SetSearchAddrM", gear_general.SetSearchAddrM, True),
         ("Terminate", gear_general.Terminate, False),
-        ("VerifyShortAddress", gear_general.VerifyShortAddress, True),
         ("Withdraw", gear_general.Withdraw, False),
     ]
     for name, cls, needs_data in gear_specials:
@@ -316,6 +352,37 @@ def build_command_registry() -> Dict[str, CommandInfo]:  # pylint: disable=too-m
             needs_data=needs_data,
             category="Gear Special",
             display_name=name,
+        )
+
+    # --- Gear commissioning addressing specials ---
+    # Their argument is a short address (token `A<n>`) or the `no_short_address`
+    # literal (0xff frame), not a data byte; Initialise additionally accepts no
+    # argument for the broadcast form.
+    # Snippets hint the address forms: Initialise offers a broadcast (empty),
+    # `A<n>`, or `no_short_address` choice; the short-address specials offer
+    # `A<n>` or `no_short_address`.
+    gear_commissioning: list[tuple[str, Type[Command], str]] = [
+        ("Initialise", gear_general.Initialise, f"Initialise(${{1|,A0,{_NO_SHORT_ADDRESS_TOKEN}|}})"),
+        (
+            "ProgramShortAddress",
+            gear_general.ProgramShortAddress,
+            f"ProgramShortAddress(${{1|A0,{_NO_SHORT_ADDRESS_TOKEN}|}})",
+        ),
+        (
+            "VerifyShortAddress",
+            gear_general.VerifyShortAddress,
+            f"VerifyShortAddress(${{1|A0,{_NO_SHORT_ADDRESS_TOKEN}|}})",
+        ),
+    ]
+    for name, cls, snippet in gear_commissioning:
+        registry[name] = _make_info(
+            cls=cls,
+            kind="gear_commissioning",
+            device_type=0,
+            needs_data=False,
+            category="Gear Special",
+            display_name=name,
+            snippet_override=snippet,
         )
 
     # --- DT-specific gear commands ---
@@ -463,6 +530,23 @@ def build_device_address(
     return None
 
 
+def _build_commissioning_command(info: CommandInfo, arg: CommissioningArg) -> Command:
+    """Build a commissioning addressing special from its parsed argument.
+    `Initialise` uses the `(broadcast, address)` constructor; the short-address
+    specials take a single `int`/`"MASK"` argument. BROADCAST is valid only for
+    Initialise — the parser enforces that before this is called.
+    """
+    if info.cls is gear_general.Initialise:
+        if arg.form is CommissioningArgForm.BROADCAST:
+            return info.cls(broadcast=True)
+        if arg.form is CommissioningArgForm.NO_SHORT_ADDRESS:
+            return info.cls(address=None)
+        return info.cls(address=arg.address)
+    if arg.form is CommissioningArgForm.NO_SHORT_ADDRESS:
+        return info.cls(_SHORT_ADDR_MASK)
+    return info.cls(arg.address)
+
+
 def _build_command(  # pylint: disable=too-many-arguments, R0917, too-many-return-statements
     info: CommandInfo,
     address: Optional[int],
@@ -470,6 +554,7 @@ def _build_command(  # pylint: disable=too-many-arguments, R0917, too-many-retur
     broadcast: bool,
     data: Optional[int],
     instance_number: Optional[int],
+    commissioning_arg: Optional[CommissioningArg] = None,
 ) -> Command:
     """Pure builder: trusts that the caller has validated all inputs against
     the kind's traits. The `needs_data=True` branches for instance/feature
@@ -486,6 +571,9 @@ def _build_command(  # pylint: disable=too-many-arguments, R0917, too-many-retur
         if info.needs_data:
             return info.cls(data)
         return info.cls()
+
+    if info.kind == "gear_commissioning":
+        return _build_commissioning_command(info, commissioning_arg)
 
     if info.kind == "device_standard":
         addr = build_device_address(address, group, broadcast)
@@ -534,6 +622,30 @@ def _parse_token(token: str, command_name: str) -> tuple[str, int]:
         ) from exc
 
 
+def _parse_commissioning_arg(info: CommandInfo, tokens: list[str], command_name: str) -> CommissioningArg:
+    """Parse the single argument of a commissioning addressing special into a
+    `CommissioningArg`: `A<n>` (short address), `no_short_address` (the `0xff`
+    form), or — Initialise only — no argument (broadcast)."""
+    if len(tokens) > 1:
+        raise ValueError(f"Command '{command_name}' takes a single A<n>/{_NO_SHORT_ADDRESS_TOKEN} argument")
+    if not tokens:
+        if info.cls is not gear_general.Initialise:
+            raise ValueError(f"Command '{command_name}' requires an A<n>/{_NO_SHORT_ADDRESS_TOKEN} argument")
+        return CommissioningArg(form=CommissioningArgForm.BROADCAST)
+
+    token = tokens[0]
+    if token == _NO_SHORT_ADDRESS_TOKEN:
+        return CommissioningArg(form=CommissioningArgForm.NO_SHORT_ADDRESS)
+    kind, value = _parse_token(token, command_name)
+    if kind != "addr":
+        raise ValueError(
+            f"Command '{command_name}': argument must be A<n> or {_NO_SHORT_ADDRESS_TOKEN}, got '{token}'"
+        )
+    if not 0 <= value <= 63:
+        raise ValueError(f"Command '{command_name}': A<n> must be in range 0..63, got {value}")
+    return CommissioningArg(form=CommissioningArgForm.SHORT_ADDRESS, address=value)
+
+
 def parse_expression(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     expr: str, registry: Dict[str, CommandInfo]
 ) -> Command:
@@ -555,6 +667,16 @@ def parse_expression(  # pylint: disable=too-many-locals, too-many-branches, too
 
     tokens = [t.strip() for t in body.split(",")] if body.strip() else []
     tokens = [t for t in tokens if t]
+
+    info = registry.get(command_name)
+    if info is None:
+        raise ValueError(f"Unknown command: {command_name}")
+
+    # Commissioning addressing specials have their own single-argument grammar
+    # (`A<n>` / `no_short_address` / — Initialise only — broadcast).
+    if info.kind == "gear_commissioning":
+        arg = _parse_commissioning_arg(info, tokens, command_name)
+        return _build_command(info, None, None, False, None, None, commissioning_arg=arg)
 
     address: Optional[int] = None
     group: Optional[int] = None
@@ -583,9 +705,6 @@ def parse_expression(  # pylint: disable=too-many-locals, too-many-branches, too
                 raise ValueError(f"Command '{command_name}': duplicate data argument")
             data = value
 
-    info = registry.get(command_name)
-    if info is None:
-        raise ValueError(f"Unknown command: {command_name}")
     traits = _KIND_TRAITS[info.kind]
 
     if not traits.needs_address and (address is not None or group is not None):
@@ -612,6 +731,129 @@ def parse_expression(  # pylint: disable=too-many-locals, too-many-branches, too
     # No A/G on an address-taking command means broadcast.
     broadcast = traits.needs_address and address is None and group is None
     return _build_command(info, address, group, broadcast, data, instance)
+
+
+@functools.lru_cache(maxsize=1)
+def _formatting_tables() -> tuple[Dict[str, CommandInfo], Dict[Type[Command], CommandInfo]]:
+    """Registry plus its reverse `class -> CommandInfo` index, built once for
+    rendering observed bus traffic as `Name(...)` expressions. A class exposed
+    under several aliases (the `QueryEventFilter{L,M,H}` vs
+    `…{ZeroToSeven,EightToFifteen,SixteenToTwentyThree}` pairs) resolves to the
+    longer, more descriptive name."""
+    registry = build_command_registry()
+    reverse: Dict[Type[Command], CommandInfo] = {}
+    for info in registry.values():
+        existing = reverse.get(info.cls)
+        if existing is None or len(info.display_name) > len(existing.display_name):
+            reverse[info.cls] = info
+    return registry, reverse
+
+
+def _commissioning_arg_token(command: Command) -> str:
+    """Render the single argument of a decoded commissioning special as the
+    inverse of `_build_commissioning_command`. Initialise carries `.broadcast`
+    plus `.address` (int or None); the short-address specials carry `.address`
+    (int or `"MASK"`). Empty string means the broadcast form (no argument)."""
+    if isinstance(command, gear_general.Initialise):
+        if command.broadcast:
+            return ""
+        if command.address is None:
+            return _NO_SHORT_ADDRESS_TOKEN
+        return f"A{command.address}"
+    if command.address == _SHORT_ADDR_MASK:
+        return _NO_SHORT_ADDRESS_TOKEN
+    return f"A{command.address}"
+
+
+def _command_expression_args(command: Command, info: CommandInfo) -> list[str]:
+    """`A<n>/G<n>`, `I<n>` and data tokens read off a decoded command as the
+    deterministic inverse of `_build_command`, reading the canonical field for
+    the command's kind (data lives in `.power` for DAPC, `.param` for every
+    other data-bearing registry command — never both)."""
+    traits = _KIND_TRAITS[info.kind]
+    args: list[str] = []
+
+    destination = getattr(command, "destination", None)
+    if traits.needs_address and destination is not None:
+        if getattr(destination, "address", None) is not None:
+            args.append(f"A{destination.address}")
+        elif getattr(destination, "group", None) is not None:
+            args.append(f"G{destination.group}")
+        # Broadcast carries neither attribute — an omitted address means broadcast.
+
+    if traits.instance_mode is not InstanceMode.DISALLOWED:
+        instance = getattr(command, "instance", None)
+        instance_value = getattr(instance, "value", None) if instance is not None else None
+        if instance_value is not None:
+            args.append(f"I{instance_value}")
+
+    if info.needs_data:
+        data = getattr(command, "power", None)
+        if data is None:
+            data = getattr(command, "param", None)
+        if data is not None:
+            args.append(str(data))
+
+    return args
+
+
+def _event_expression_args(event: _Event) -> list[str]:
+    args: list[str] = []
+    if event.short_address is not None:
+        args.append(f"A{event.short_address.address}")
+    elif event.device_group is not None:
+        args.append(f"G{event.device_group}")
+    elif event.instance_group is not None:
+        args.append(f"IG{event.instance_group}")
+    if event.instance_number is not None:
+        args.append(f"I{event.instance_number}")
+    if event.event_data is not None:
+        args.append(str(event.event_data))
+    return args
+
+
+def format_command_expression(command: Command) -> str:
+    """Render a decoded command as the `Name(A<n>, ...)` expression the RPC
+    `sendcommand` accepts. Total by construction: for a command whose type is in
+    the registry this is the deterministic inverse of how the command is built
+    (so it reproduces the same frame); a DALI 2 event renders its `Name(A<n>,
+    I<n>, ...)` form in the same token convention; any other type (UnknownGearCommand)
+    falls back to python-dali's `str()`. Never returns None."""
+    if isinstance(command, _Event):
+        args = _event_expression_args(command)
+        name = type(command).__name__
+        return name if not args else f"{name}({', '.join(args)})"
+
+    _, reverse = _formatting_tables()
+    info = reverse.get(type(command))
+    if info is None:
+        try:
+            return str(command)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return f"<{type(command).__name__}>"
+
+    if info.kind == "gear_commissioning":
+        token = _commissioning_arg_token(command)
+        return info.display_name if not token else f"{info.display_name}({token})"
+
+    args = _command_expression_args(command, info)
+    return info.display_name if not args else f"{info.display_name}({', '.join(args)})"
+
+
+class LazyCommandExpression:  # pylint: disable=too-few-public-methods
+    """`%s`-friendly wrapper whose `__str__` runs `format_command_expression`
+    only when a log record is actually emitted. `format_command_expression` is
+    heavier than `str()`, so passing a command straight to `logger.debug(...)`
+    would pay that cost even at a disabled level; this defers it. Accepts any
+    object — non-Command/non-registry values degrade to `str()`."""
+
+    __slots__ = ("_command",)
+
+    def __init__(self, command: Any) -> None:
+        self._command = command
+
+    def __str__(self) -> str:
+        return format_command_expression(self._command)
 
 
 def format_response(response: Optional[Response]) -> str:

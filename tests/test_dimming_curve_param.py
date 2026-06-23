@@ -59,7 +59,9 @@ def test_editable_param_property_order_and_description():
     state = DimmingCurveState()
     param = Type6DimmingCurveParam(state)
     assert param.property_order == PropertyStartOrder.COMMON.value
-    assert param.description == "dimming_curve_desc"
+    assert param.description.ru and param.description.en
+    # Editable variant documents the linear curve too.
+    assert "linear curve" in param.description.en
 
 
 def test_editable_schema_has_both_curve_options():
@@ -70,14 +72,14 @@ def test_editable_schema_has_both_curve_options():
     assert prop["enum"] == [DimmingCurveType.LOGARITHMIC, DimmingCurveType.LINEAR]
     assert prop["options"]["enum_titles"] == ["standard", "linear"]
     assert prop["propertyOrder"] == PropertyStartOrder.COMMON.value
-    assert prop["description"] == "dimming_curve_desc"
+    # The schema value is a short key; both locales are registered under it.
+    description_key = prop["description"]
+    assert "linear curve" in schema["translations"]["en"][description_key]
     assert "grid_columns" not in prop.get("options", {})
-    # Editable description must mention linear curve in translations
     ru = schema["translations"]["ru"]
     assert ru["standard"] == "стандартная"
     assert ru["linear"] == "линейная"
-    assert "Линейная кривая" in ru["dimming_curve_desc"]
-    assert "linear curve" in schema["translations"]["en"]["dimming_curve_desc"]
+    assert "Линейная кривая" in ru[description_key]
 
 
 def test_editable_schema_for_type17():
@@ -168,13 +170,14 @@ def test_read_only_schema_is_read_only_and_value_is_standard():
     assert prop["options"]["enum_titles"] == ["standard", "linear"]
     assert prop["options"]["wb"] == {"read_only": True}
     assert prop["propertyOrder"] == PropertyStartOrder.COMMON.value
-    assert prop["description"] == "dimming_curve_desc"
     # The read-only fallback always reports the standard (logarithmic) curve.
     assert param._is_read_only is True
     assert "grid_columns" not in prop.get("options", {})
-    # Read-only description must NOT mention the linear curve
-    ru = schema["translations"]["ru"]["dimming_curve_desc"]
-    en = schema["translations"]["en"]["dimming_curve_desc"]
+    # Read-only description must NOT mention the linear curve. The schema value is a
+    # short key; both locale texts are registered under it.
+    description_key = prop["description"]
+    en = schema["translations"]["en"][description_key]
+    ru = schema["translations"]["ru"][description_key]
     assert "Линейная" not in ru and "линейная кривая" not in ru.lower()
     assert "linear curve" not in en.lower()
     assert "фиксированную стандартную" in ru

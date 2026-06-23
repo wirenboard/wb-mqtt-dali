@@ -10,6 +10,7 @@ from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
 from .utils import add_enum, add_translations
 from .wbdali import WBDALIDriver
+from .wbmqtt import TranslatedTitle
 
 
 class NumberGearParam(NumberSettingsParam):
@@ -65,7 +66,7 @@ class DimmingCurveParam(NumberGearParam):
         super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "dimming_curve")
         self._dimming_curve_state = dimming_curve_state
         self.property_order = PropertyStartOrder.COMMON.value
-        self.description = "dimming_curve_desc"
+        self.description = self._build_description()
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
@@ -104,43 +105,38 @@ class DimmingCurveParam(NumberGearParam):
             schema["properties"][self.property_name],
             [(DimmingCurveType.LOGARITHMIC, "standard"), (DimmingCurveType.LINEAR, "linear")],
         )
+        add_translations(schema, "ru", {"standard": "стандартная", "linear": "линейная"})
+        return schema
+
+    # --- Private ---
+
+    def _build_description(self) -> TranslatedTitle:
         if self._is_read_only:
-            ru_desc = (
-                "Яркость в интерфейсе задаётся в процентах, но сами DALI-устройства "
-                "принимают только условные значения от 0 до 254. Кривая диммирования "
-                "задаёт формулу их пересчёта в проценты яркости.\n"
-                "Это устройство использует фиксированную стандартную (логарифмическую) "
-                "кривую. Она подобрана под восприятие света человеческим глазом и "
-                "нелинейна: 50% соответствует примерно 229, а 3% - 127. При этом "
-                "пошаговые команды и плавная регулировка ощущаются равномерно — "
-                "равные шаги в условных значениях выглядят как равные шаги яркости "
-                "на всём диапазоне."
+            return TranslatedTitle(
+                en=(
+                    "The UI sets brightness as a percentage, but DALI devices themselves "
+                    "accept only raw levels from 0 to 254. The dimming curve defines the "
+                    "formula that converts them into brightness percent.\n"
+                    "This device uses a fixed standard (logarithmic) curve. It is matched "
+                    "to how the human eye perceives light and is non-linear: 50% "
+                    "corresponds to about 229, and 3% to 127. At the same time, step "
+                    "commands and smooth dimming feel uniform — equal steps in raw levels "
+                    "look like equal steps in brightness across the whole range."
+                ),
+                ru=(
+                    "Яркость в интерфейсе задаётся в процентах, но сами DALI-устройства "
+                    "принимают только условные значения от 0 до 254. Кривая диммирования "
+                    "задаёт формулу их пересчёта в проценты яркости.\n"
+                    "Это устройство использует фиксированную стандартную (логарифмическую) "
+                    "кривую. Она подобрана под восприятие света человеческим глазом и "
+                    "нелинейна: 50% соответствует примерно 229, а 3% - 127. При этом "
+                    "пошаговые команды и плавная регулировка ощущаются равномерно — "
+                    "равные шаги в условных значениях выглядят как равные шаги яркости "
+                    "на всём диапазоне."
+                ),
             )
-            en_desc = (
-                "The UI sets brightness as a percentage, but DALI devices themselves "
-                "accept only raw levels from 0 to 254. The dimming curve defines the "
-                "formula that converts them into brightness percent.\n"
-                "This device uses a fixed standard (logarithmic) curve. It is matched "
-                "to how the human eye perceives light and is non-linear: 50% "
-                "corresponds to about 229, and 3% to 127. At the same time, step "
-                "commands and smooth dimming feel uniform — equal steps in raw levels "
-                "look like equal steps in brightness across the whole range."
-            )
-        else:
-            ru_desc = (
-                "Яркость в интерфейсе задаётся в процентах, но сами DALI-устройства "
-                "принимают только условные значения от 0 до 254. Кривая диммирования "
-                "задаёт формулу их пересчёта в проценты яркости.\n"
-                "Стандартная (логарифмическая) кривая подобрана под восприятие света "
-                "человеческим глазом. Она нелинейная: 50% соответствует примерно 229, "
-                "а 3% - 127. При этом пошаговые команды и плавная регулировка "
-                "ощущаются равномерно — равные шаги в условных значениях выглядят как "
-                "равные шаги яркости на всём диапазоне.\n"
-                "Линейная кривая сопоставляет проценты и условные значения напрямую "
-                "(50% = 127). Это упрощает работу с внешними системами, которые "
-                "ожидают линейную шкалу, но глаз воспринимает изменение неравномерно."
-            )
-            en_desc = (
+        return TranslatedTitle(
+            en=(
                 "The UI sets brightness as a percentage, but DALI devices themselves "
                 "accept only raw levels from 0 to 254. The dimming curve defines the "
                 "formula that converts them into brightness percent.\n"
@@ -152,11 +148,18 @@ class DimmingCurveParam(NumberGearParam):
                 "The linear curve maps percent and raw levels directly (50% = 127). "
                 "That is convenient for external systems that expect a linear scale, "
                 "but the eye perceives the change unevenly."
-            )
-        add_translations(
-            schema,
-            "ru",
-            {"standard": "стандартная", "linear": "линейная", "dimming_curve_desc": ru_desc},
+            ),
+            ru=(
+                "Яркость в интерфейсе задаётся в процентах, но сами DALI-устройства "
+                "принимают только условные значения от 0 до 254. Кривая диммирования "
+                "задаёт формулу их пересчёта в проценты яркости.\n"
+                "Стандартная (логарифмическая) кривая подобрана под восприятие света "
+                "человеческим глазом. Она нелинейная: 50% соответствует примерно 229, "
+                "а 3% - 127. При этом пошаговые команды и плавная регулировка "
+                "ощущаются равномерно — равные шаги в условных значениях выглядят как "
+                "равные шаги яркости на всём диапазоне.\n"
+                "Линейная кривая сопоставляет проценты и условные значения напрямую "
+                "(50% = 127). Это упрощает работу с внешними системами, которые "
+                "ожидают линейную шкалу, но глаз воспринимает изменение неравномерно."
+            ),
         )
-        add_translations(schema, "en", {"dimming_curve_desc": en_desc})
-        return schema

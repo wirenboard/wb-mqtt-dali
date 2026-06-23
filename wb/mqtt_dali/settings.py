@@ -6,7 +6,7 @@ from typing import Callable, Optional
 from dali.address import Address
 from dali.command import Command
 
-from .utils import merge_json_schema_properties, merge_translations
+from .utils import add_translations, merge_json_schema_properties, merge_translations
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     is_broadcast_or_group_address,
@@ -15,6 +15,7 @@ from .wbdali_utils import (
     query_responses,
     send_with_retry,
 )
+from .wbmqtt import TranslatedTitle
 
 
 @dataclass
@@ -28,7 +29,7 @@ class SettingsParamBase:
 
     def __init__(self, name: SettingsParamName) -> None:
         self.name = name
-        self.description: Optional[str] = None
+        self.description: Optional[TranslatedTitle] = None
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
@@ -240,7 +241,15 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         if self.property_order is not None:
             schema["properties"][self.property_name]["propertyOrder"] = self.property_order
         if self.description is not None:
-            schema["properties"][self.property_name]["description"] = self.description
+            # Descriptions are long, so unlike the short title we never use the text
+            # itself as the translation key (it would be duplicated in the schema).
+            # Register both locales under a short per-property key instead.
+            description_key = f"{self.property_name}_description"
+            schema["properties"][self.property_name]["description"] = description_key
+            if self.description.en is not None:
+                add_translations(schema, "en", {description_key: self.description.en})
+            if self.description.ru is not None:
+                add_translations(schema, "ru", {description_key: self.description.ru})
         return schema
 
     def get_write_commands(self, short_address: Address, value_to_set: int) -> list[Command]:

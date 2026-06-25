@@ -1,3 +1,14 @@
+wb-mqtt-dali (1.18.1) stable; urgency=medium
+
+  * Add bilingual (en/ru) descriptions to the DALI 2 occupancy sensor (type 3)
+    deadtime, hold and report timer parameters, clarifying what each one affects.
+  * Translate config parameter descriptions: a parameter's description is now
+    registered in the schema translations for both locales under a short,
+    content-derived key, instead of being emitted as a single untranslated
+    string.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 25 Jun 2026 13:37:11 +0500
+
 wb-mqtt-dali (1.18.0) stable; urgency=medium
 
   * Add a per-bus "bus_monitor_syslog_enabled" option that mirrors the bus

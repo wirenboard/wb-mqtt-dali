@@ -32,6 +32,7 @@ from .wbdali_utils import (
     query_responses,
     send_with_retry,
 )
+from .wbmqtt import TranslatedTitle
 
 
 class _FeedbackBrightnessParamBase(InstanceParam):
@@ -95,7 +96,7 @@ class _FeedbackColourParamBase(InstanceParam):
         self.default = 63
         self.grid_columns = 3
         self.property_order = property_order
-        self.description = "Packed 6-bit RGB: bits[1:0]=R, [3:2]=G, [5:4]=B"
+        self.description = TranslatedTitle(en="Packed 6-bit RGB: bits[1:0]=R, [3:2]=G, [5:4]=B")
 
 
 class ActiveFeedbackColourParam(_FeedbackColourParamBase):

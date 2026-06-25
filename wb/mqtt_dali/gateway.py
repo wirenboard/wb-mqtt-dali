@@ -188,6 +188,7 @@ def bus_from_json(
         dali2_devices,
         polling_interval,
         data.get("bus_monitor_enabled", False),
+        data.get("bus_monitor_syslog_enabled", False),
     )
 
     res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
@@ -209,6 +210,8 @@ def bus_to_json(bus: ApplicationController) -> dict:
             )
         ),
         "commissioning": bus.commissioning_state.to_dict(),
+        "bus_monitor_enabled": bus.bus_monitor_enabled,
+        "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
     }
 
 
@@ -493,6 +496,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
             "config": {
                 "polling_interval": bus.polling_interval,
                 "bus_monitor_enabled": bus.bus_monitor_enabled,
+                "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
             },
             "schema": schema,
         }
@@ -502,7 +506,10 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         new_config = dict(params.get("config", {}))
         bus.set_polling_interval(new_config.get("polling_interval", bus.polling_interval))
         bus.set_bus_monitor_enabled(new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled))
-        for key in ["polling_interval", "bus_monitor_enabled"]:
+        bus.set_bus_monitor_syslog_enabled(
+            new_config.get("bus_monitor_syslog_enabled", bus.bus_monitor_syslog_enabled)
+        )
+        for key in ["polling_interval", "bus_monitor_enabled", "bus_monitor_syslog_enabled"]:
             new_config.pop(key, None)
         if new_config:
             await bus.apply_bus_parameters(new_config)
@@ -510,6 +517,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         return {
             "polling_interval": bus.polling_interval,
             "bus_monitor_enabled": bus.bus_monitor_enabled,
+            "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
         }
 
     async def get_group_rpc_handler(self, params: dict):
@@ -741,6 +749,7 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                                     for dev in bus.dali_devices + bus.dali2_devices
                                 ],
                                 "bus_monitor_enabled": bus.bus_monitor_enabled,
+                                "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
                             }
                             for bus in gw.buses
                         ],

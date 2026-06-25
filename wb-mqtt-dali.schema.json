@@ -54,6 +54,10 @@
                 "bus_monitor_enabled": {
                     "type": "boolean",
                     "default": false
+                },
+                "bus_monitor_syslog_enabled": {
+                    "type": "boolean",
+                    "default": false
                 }
             },
             "required": ["devices"]

@@ -1,4 +1,4 @@
-wb-mqtt-dali (1.17.17) stable; urgency=medium
+wb-mqtt-dali (1.18.1) stable; urgency=medium
 
   * Add bilingual (en/ru) descriptions to the DALI 2 occupancy sensor (type 3)
     deadtime, hold and report timer parameters, clarifying what each one affects.
@@ -8,6 +8,20 @@ wb-mqtt-dali (1.17.17) stable; urgency=medium
     string.
 
  -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 23 Jun 2026 09:31:25 +0500
+
+wb-mqtt-dali (1.18.0) stable; urgency=medium
+
+  * Add a per-bus "bus_monitor_syslog_enabled" option that mirrors the bus
+    monitor lines to the controller log in addition to the MQTT topic.
+  * Rework the bus monitor line format: join request and response on one line,
+    render decoded commands as copy-pasteable Bus/SendCommand expressions, drop
+    redundant frame descriptors, and document the topic and every line variant
+    in the README.
+  * Make the command expression formatter total over the command registry.
+  * Render decoded DALI 2 events in the bus monitor using the same A<n>/I<n>/G<n>
+    token syntax as commands instead of python-dali's raw repr.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 18 Jun 2026 18:30:00 +0500
 
 wb-mqtt-dali (1.17.16) stable; urgency=medium
 

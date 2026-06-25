@@ -19,6 +19,7 @@ from wb.mqtt_dali.gateway import (
     Gateway,
     WbDaliGateway,
     bus_from_json,
+    bus_to_json,
     save_configuration,
 )
 
@@ -356,6 +357,47 @@ async def test_set_bus_rpc_ignores_legacy_websocket_keys():
     bus.set_bus_monitor_enabled.assert_called_with(True)
 
 
+def _service_with_real_bus(bus_data: dict) -> tuple[Gateway, ApplicationController]:
+    """Build a `Gateway` wrapping one real `ApplicationController` from JSON."""
+    bus = bus_from_json("gw1", 1, bus_data, MagicMock(), MagicMock())
+    svc = _make_gateway_service([WbDaliGateway(uid="gw1", buses=[bus])])
+    return svc, bus
+
+
+@pytest.mark.asyncio
+async def test_set_bus_enables_syslog_flag():
+    """SetBus with `bus_monitor_syslog_enabled: true` applies the runtime flag,
+    triggers a config save, and GetBus reflects the new value back."""
+    svc, bus = _service_with_real_bus({"devices": []})
+    assert bus.bus_monitor_syslog_enabled is False
+
+    set_result = await svc.set_bus_rpc_handler(
+        {"busId": "gw1_bus_1", "config": {"bus_monitor_syslog_enabled": True}}
+    )
+
+    assert set_result["bus_monitor_syslog_enabled"] is True
+    assert bus.bus_monitor_syslog_enabled is True
+    svc._save_configuration.assert_awaited()  # pylint: disable=protected-access
+
+    get_result = await svc.get_bus_rpc_handler({"busId": "gw1_bus_1"})
+    assert get_result["config"]["bus_monitor_syslog_enabled"] is True
+
+
+def test_bus_to_json_exposes_syslog_flag():
+    """`bus_to_json` (bus status) surfaces the syslog flag from the config."""
+    bus = bus_from_json(
+        "gw1", 1, {"devices": [], "bus_monitor_syslog_enabled": True}, MagicMock(), MagicMock()
+    )
+    assert bus_to_json(bus)["bus_monitor_syslog_enabled"] is True
+
+
+def test_syslog_flag_defaults_false():
+    """A bus config without the key leaves the syslog flag off everywhere."""
+    bus = bus_from_json("gw1", 1, {"devices": []}, MagicMock(), MagicMock())
+    assert bus.bus_monitor_syslog_enabled is False
+    assert bus_to_json(bus)["bus_monitor_syslog_enabled"] is False
+
+
 # -------- save_configuration: file shape --------
 
 
@@ -364,6 +406,7 @@ def _bus_with_state(uid: str) -> SimpleNamespace:
     bus.uid = uid
     bus.polling_interval = 5
     bus.bus_monitor_enabled = False
+    bus.bus_monitor_syslog_enabled = False
     bus.dali_devices = []
     bus.dali2_devices = []
     return bus

@@ -6,6 +6,10 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from dali.address import DeviceShort, InstanceNumber
+from dali.command import Response, from_frame
+from dali.device.general import EnableInstance
+from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
 
 from wb.mqtt_dali.application_controller import (
     MIN_POLLING_INTERVAL,
@@ -18,7 +22,11 @@ from wb.mqtt_dali.application_controller import (
     CommissioningStartResult,
     CommissioningState,
     CommissioningStatus,
+    format_command,
+    format_frame_hex,
+    format_response,
 )
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
     ChangedDevice,
     CommissioningResult,
@@ -27,6 +35,7 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
+from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
 
@@ -1621,3 +1630,229 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         # re-publish the broadcast device without a duplicate-handler error.
         await controller.start()
         await controller.stop()
+
+
+# --- bus-monitor syslog mirroring --------------------------------------------
+
+
+class _LogCapture:
+    """Captures records emitted on a named logger (the per-bus controller logger)."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._prev_level = logging.NOTSET
+        self.handler = logging.Handler()
+        self.messages: list[str] = []
+        self.levels: list[int] = []
+        self.handler.emit = self._capture
+
+    def _capture(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+        self.levels.append(record.levelno)
+
+    def __enter__(self) -> "_LogCapture":
+        logger = logging.getLogger(self._name)
+        self._prev_level = logger.level
+        logger.addHandler(self.handler)
+        logger.setLevel(logging.INFO)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        logger = logging.getLogger(self._name)
+        logger.removeHandler(self.handler)
+        logger.setLevel(self._prev_level)
+
+
+def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[ApplicationController, MagicMock]:
+    """Build a real controller wired for the bus-monitor path.
+
+    Returns the controller and its MQTT dispatcher mock. The publish is an
+    AsyncMock so the one-shot publish task is awaitable.
+    """
+    dispatcher = MagicMock()
+    dispatcher.client.publish = AsyncMock()
+    bus = bus_from_json(
+        "gw1",
+        uid_bus,
+        {"devices": [], "bus_monitor_enabled": monitor, "bus_monitor_syslog_enabled": syslog},
+        dispatcher,
+        MagicMock(),
+    )
+    return bus, dispatcher
+
+
+@pytest.mark.asyncio
+async def test_monitor_lines_logged_when_enabled():
+    """With both the monitor and the syslog flag on, handling a command frame and
+    its response emits a single combined monitor line: one MQTT publish and one
+    log record. The log record is the MQTT line stripped of its leading
+    `{HH:MM:SS.mmm} ` timestamp (journald stamps log records itself). Captured via
+    a handler on the bus-uid logger."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=True)
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrame(42)), BusTrafficSource.WB, 0
+        )
+        await asyncio.sleep(0)
+
+    dispatcher.client.publish.assert_called_once()
+    mqtt_payload = dispatcher.client.publish.call_args.args[1]
+    timestamp, _, body = mqtt_payload.partition(" ")
+    assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", timestamp)
+    assert " - " in body
+    assert log.messages == [body]
+    assert not log.messages[0].startswith(timestamp)
+
+
+@pytest.mark.asyncio
+async def test_monitor_request_with_response_is_one_combined_line():
+    """A command frame paired with a response is published as exactly one MQTT
+    line of the form `{request} - {format_response(response)}` — the request part
+    (with its `>>` prefix) joined to the response by ` - `, with the response part
+    carrying no leading `<<`. The combined line is timestamped once."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    response = Response(BackwardFrame(42))
+    bus.driver.bus_traffic.notify_command(command.frame, response, BusTrafficSource.WB, 0)
+    await asyncio.sleep(0)
+
+    dispatcher.client.publish.assert_called_once()
+    payload = dispatcher.client.publish.call_args.args[1]
+    timestamp, _, body = payload.partition(" ")
+    assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", timestamp)
+
+    request_part, sep, response_part = body.partition(" - ")
+    assert sep == " - "
+    assert request_part.startswith(">>")
+    assert response_part == format_response(response)
+    assert not response_part.startswith("<<")
+
+
+@pytest.mark.asyncio
+async def test_monitor_fire_and_forget_request_has_no_arrow():
+    """A fire-and-forget bus frame (no response) is published as a single MQTT
+    line containing only the request, with no ` - ` separator and no response
+    part appended."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(16, 0xFF93), 7)
+    await asyncio.sleep(0)
+
+    dispatcher.client.publish.assert_called_once()
+    payload = dispatcher.client.publish.call_args.args[1]
+    _, _, body = payload.partition(" ")
+    assert " - " not in body
+    assert body.startswith("<<")
+
+
+@pytest.mark.asyncio
+async def test_monitor_not_logged_when_flag_off():
+    """The syslog flag is an extra sink layered on the MQTT monitor: with the
+    monitor on but the flag off, the frame is still published to MQTT but nothing
+    is written to the controller logger."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(16, 0xFF93), 7)
+        await asyncio.sleep(0)
+
+    assert not log.messages
+    dispatcher.client.publish.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_monitor_not_logged_when_monitor_disabled():
+    """The log sink is gated on the MQTT monitor: with the monitor off, a frame
+    produces neither an MQTT publish nor a log record, even with the flag on."""
+    bus, dispatcher = _monitor_bus(monitor=False, syslog=True)
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(16, 0xFF93), 7)
+        await asyncio.sleep(0)
+
+    assert not log.messages
+    dispatcher.client.publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_monitor_problems_logged_at_warning_normal_at_info():
+    """The log mirror carries a level so problems can be filtered out of the
+    firehose: a transmission error, a framing-error response, and a framing error
+    on a received frame are logged at WARNING, while a normal value response stays
+    at INFO. Sequence ids are contiguous so the items dispatch in order."""
+    bus, _ = _monitor_bus(monitor=True, syslog=True)
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_command(
+            command.frame, WbGatewayTransmissionError(), BusTrafficSource.WB, 0
+        )
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrameError(8)), BusTrafficSource.WB, 1
+        )
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrame(42)), BusTrafficSource.WB, 2
+        )
+        bus.driver.bus_traffic.notify_bus_frame(BackwardFrameError(8), 45)
+        await asyncio.sleep(0)
+
+    assert log.levels == [logging.WARNING, logging.WARNING, logging.INFO, logging.WARNING]
+
+
+# --- monitor line formatting -------------------------------------------------
+
+
+def test_format_command_decoded_drops_frame_type_token():
+    """A decoded device command renders as `{hex} {command}` with no `FF{len}`
+    descriptor token: the command name already carries the type (`FF24.…`). The
+    `FF24` substring must appear only as the command-name prefix, never as a
+    standalone frame descriptor between the hex and the command."""
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    frame = command.frame
+    rendered = format_command(frame, from_frame(frame))
+
+    assert rendered == f"{format_frame_hex(frame)} FF24.EnableInstance(A3, I2)"
+    # The raw hex is still present, and FF24 occurs exactly once — as the prefix.
+    assert format_frame_hex(frame).strip() in rendered
+    assert rendered.count("FF24") == 1
+    assert " FF24 " not in rendered
+
+
+def test_format_command_undecoded_forward_keeps_frame_type_token():
+    """An undecoded forward frame has no command name, so the `FF{len}` token is
+    the only type indicator and must be retained."""
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    frame = command.frame
+    assert format_command(frame, None) == f"{format_frame_hex(frame)} FF24"
+
+    gear_frame = ForwardFrame(16, 0xFF93)
+    assert format_command(gear_frame, None) == f"{format_frame_hex(gear_frame)} FF16"
+
+
+def test_format_command_error_frame_keeps_frame_type_token():
+    """A frame received with a framing error keeps the `FF{len} framing error`
+    suffix: there is no decoded command name, so the frame descriptor still
+    carries the only type signal, and `frame.error` is rendered as `framing
+    error` (the meaning of the python-dali frame error flag)."""
+    frame = ForwardFrame(16, 0xFF93)
+    frame._error = True  # pylint: disable=protected-access
+    assert format_command(frame, None) == f"{format_frame_hex(frame)} FF16 framing error"
+
+
+def test_format_response_backward_renders_hex_and_value_without_bf_token():
+    """The response half of `request - response` renders as `{hex} {value}` with
+    no `BF{len}` descriptor: this is always our request's reply, so the position
+    after ` - ` already marks it as a backward frame and the token is just noise
+    (backward frames are invariably 8 bits anyway). Hex and decimal value stay."""
+    response = Response(BackwardFrame(42))
+    rendered = format_response(response)
+    assert "BF" not in rendered
+    assert rendered == f"{format_frame_hex(response.raw_value)} 42"
+
+
+def test_format_command_undecoded_backward_keeps_frame_type_token():
+    """An unexpected backward frame observed on the bus (not a reply to one of our
+    requests — no decoded command, no leading ` - `) keeps its `BF{len}` token:
+    here it is the only signal that the standalone packet is a backward frame
+    rather than a forward one. This is the mirror of the response case above."""
+    frame = BackwardFrame(42)
+    rendered = format_command(frame, None)
+    assert rendered.startswith(format_frame_hex(frame))
+    assert "BF8" in rendered

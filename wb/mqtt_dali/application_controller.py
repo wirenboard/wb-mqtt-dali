@@ -30,6 +30,7 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
+from .device_registry import DeviceRegistry
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .send_command import format_command_expression
@@ -443,7 +444,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self._one_shot_tasks = OneShotTasks(self.logger)
 
-        self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
+        self._device_registry = DeviceRegistry()
+        self._device_registry.set_gear_devices(self.dali_devices)
+        self._device_registry.set_dali2_devices(self.dali2_devices)
         self._devices_by_mqtt_id: dict[str, ControllableDevice] = {}
         self._broadcast_device = BroadcastVirtualDevice(
             capabilities=AggregatedCapabilities(),
@@ -695,10 +698,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
-        if isinstance(device, Dali2Device) and old_short_address != device.address.short:
-            self._dev_inst_map.update_mapping(old_short_address, device.address.short)
-            self._dali2_devices_by_addr.pop(old_short_address, None)
-            self._dali2_devices_by_addr[device.address.short] = device
+        if old_short_address != device.address.short:
+            if isinstance(device, Dali2Device):
+                self._dev_inst_map.update_mapping(old_short_address, device.address.short)
+            self._device_registry.update_short_address(device, old_short_address)
 
         if isinstance(device, DaliDevice):
             await self._refresh_group_virtual_devices()
@@ -878,7 +881,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         else:
             self.dali2_devices.append(new_device)
             self.dali2_devices.sort(key=lambda d: d.address.short)
-            self._dali2_devices_by_addr[new_device.address.short] = new_device
+        self._device_registry.add(new_device)
         await self._try_init_new_device(new_device)
 
     async def _republish_device(
@@ -933,10 +936,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self.dali_devices = [d for d in self.dali_devices if d is not device]
         else:
             self.dali2_devices = [d for d in self.dali2_devices if d is not device]
-            if self._dali2_devices_by_addr.get(old_short) is device:
-                self._dali2_devices_by_addr.pop(old_short, None)
             self._dev_inst_map.remove_short_address(old_short)
 
+        self._device_registry.remove(device)
         self._devices_by_mqtt_id.pop(mqtt_id, None)
         self._init_scheduler.remove(mqtt_id)
         if isinstance(device, DaliDevice):
@@ -1105,6 +1107,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
+        self._device_registry.set_gear_devices(self.dali_devices)
         await self._refresh_group_virtual_devices()
         await self._refresh_broadcast_device()
 
@@ -1140,7 +1143,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self.dali2_devices = new_dali2_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
-        self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
+        self._device_registry.set_dali2_devices(self.dali2_devices)
 
     def _run_on_topic_handler(self, message: aiomqtt.Message) -> None:
         self._one_shot_tasks.add(self._handle_on_topic(message), f"handle_on_topic for {message.topic}")
@@ -1605,7 +1608,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 and incoming_command.instance_number is not None
                 and incoming_command.short_address is not None
             ):
-                device = self._dali2_devices_by_addr.get(incoming_command.short_address.address)
+                device = self._device_registry.dali2_device_by_short(incoming_command.short_address.address)
                 if device is not None:
                     instance = device.instances.get(incoming_command.instance_number)
                     if instance is not None:

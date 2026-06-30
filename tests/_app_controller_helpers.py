@@ -18,6 +18,7 @@ from wb.mqtt_dali.application_controller import (
     CommissioningState,
     PollScheduler,
 )
+from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
 
@@ -41,6 +42,7 @@ def make_loop_controller(polling_interval: float = 1.0) -> ApplicationController
         get_one_retry_ready=MagicMock(return_value=None),
     )
     controller._poll_scheduler = PollScheduler()
+    controller._fetch_scheduler = SettingsFetchScheduler()
     controller._current_commissioning_task = None
     controller._commissioning_state = CommissioningState()
     controller._commissioning_state_cb = None

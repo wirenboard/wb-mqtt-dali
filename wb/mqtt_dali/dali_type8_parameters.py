@@ -3,6 +3,7 @@
 import asyncio
 import enum
 import logging
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Callable, Generator, List, Optional, Union
@@ -389,15 +390,28 @@ class ScenesSettings(SettingsParamBase):
 
         self.property_name = f"scenes_{default_colour_type.value}"
         self._scenes = [SceneSettings(i, default_colour_type, limits) for i in range(SCENES_TOTAL)]
-        self._scene_values = [{} for _ in range(SCENES_TOTAL)]
+        self._scene_values: list[dict] = [{} for _ in range(SCENES_TOTAL)]
+        # Index of the next scene not yet read; 0 = nothing read, SCENES_TOTAL = complete.
+        self._fetch_cursor = 0
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        self._scene_values = await asyncio.gather(
-            *[scene.read(driver, short_address, logger) for scene in self._scenes]
-        )
+        # Always a full read of all 16 scenes (refresh paths rely on this); marks fetch
+        # complete (full read => nothing left for the background fetch).
+        await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
+        self._fetch_cursor = SCENES_TOTAL
         return {self.property_name: self._scene_values}
+
+    async def fetch(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> bool:
+        # One scene per call: a scene is a colour sequence on the shared DTR0 and cannot be split.
+        if self._fetch_cursor >= SCENES_TOTAL:
+            return True
+        await self._read_scenes(driver, short_address, [self._fetch_cursor], logger)
+        self._fetch_cursor += 1
+        return self._fetch_cursor >= SCENES_TOTAL
 
     async def write(
         self,
@@ -463,6 +477,22 @@ class ScenesSettings(SettingsParamBase):
         }
         merge_translations(schema, item_schema)
         return schema
+
+    # --- Private ---
+
+    async def _read_scenes(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        scene_indices: Iterable[int],
+        logger: Optional[logging.Logger],
+    ) -> None:
+        indices = list(scene_indices)
+        results = await asyncio.gather(
+            *[self._scenes[i].read(driver, short_address, logger) for i in indices]
+        )
+        for i, result in zip(indices, results):
+            self._scene_values[i] = result
 
 
 class ColourGroupScenesSettings(ColourState):

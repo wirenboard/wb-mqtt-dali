@@ -683,6 +683,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
             self.is_initialized = True
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
+        """Read every settings param and cache params/schema.
+
+        Runs as a ``LOAD_INFO`` task in the polling-loop coroutine — the same coroutine as the
+        background ``fetch`` idle step, so the two never overlap (no locking). Each param is read in
+        full; if a background ``fetch`` was mid-flight, it is simply re-read from scratch.
+        """
         if self.params and not force_reload:
             return
 
@@ -882,6 +888,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
+
+    def get_settings_parameter_handlers(self) -> list[SettingsParamBase]:
+        return self._parameter_handlers
 
     # --- Hooks for subclasses ---
 

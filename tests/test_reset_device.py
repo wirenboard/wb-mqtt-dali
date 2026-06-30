@@ -18,6 +18,7 @@ from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.wbdali_utils import AsyncDeviceInstanceTypeMapper
 
@@ -45,6 +46,7 @@ def _make_bare_controller():
         get_retry_count=MagicMock(return_value=0),
     )
     controller._poll_scheduler = MagicMock(remove_device=MagicMock(), clear=MagicMock())
+    controller._fetch_scheduler = SettingsFetchScheduler()
     controller._refresh_group_virtual_devices = AsyncMock()
     controller._refresh_broadcast_device = AsyncMock()
     controller._update_dali2_device_instance_map = MagicMock()

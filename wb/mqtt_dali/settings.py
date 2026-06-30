@@ -38,6 +38,20 @@ class SettingsParamBase:
         del driver, short_address, logger
         return {}
 
+    async def fetch(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> bool:
+        """Read the next chunk into the param's internal state, returning whether it is now complete.
+
+        The base reads everything in one call (full ``read()`` then ``True``); heavy params override
+        to read a small portion per call and return ``False`` until done. Values are only accumulated
+        internally — nothing is published. ``fetch`` (the polling loop's idle step) and ``load_info``
+        (a ``LOAD_INFO`` task in the same queue) run in the single polling-loop coroutine and never
+        overlap, so they share the param's progress without any locking.
+        """
+        await self.read(driver, short_address, logger)
+        return True
+
     async def write(
         self,
         driver: WBDALIDriver,

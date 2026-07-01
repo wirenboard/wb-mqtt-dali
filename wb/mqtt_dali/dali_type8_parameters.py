@@ -5,7 +5,7 @@ import enum
 import logging
 from collections.abc import Iterable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Callable, Generator, List, Optional, Union
 
 from dali import command
@@ -30,8 +30,10 @@ from dali.gear.general import (
 
 from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8_xy
 from .common_dali_device import (
+    EVENT_RESYNC_BASE_INTERVAL,
     ControlPollResult,
     ControlsPollRequestResult,
+    EventPollSchedule,
     MqttControlBase,
     PropertyStartOrder,
 )
@@ -44,6 +46,7 @@ from .utils import merge_json_schema_properties, merge_translations
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
+    MASK_2BYTES,
     check_query_response,
     is_broadcast_or_group_address,
     is_transmission_error_response,
@@ -437,6 +440,19 @@ class ScenesSettings(SettingsParamBase):
     def has_changes(self, new_params: dict) -> bool:
         return self.property_name in new_params
 
+    def scene_colour(self, index: int) -> Optional[ColourSettings]:
+        """Colour of scene ``index``, or ``None`` if not yet read or scene disabled (level MASK)."""
+        if index < 0 or index >= self._fetch_cursor:
+            return None
+        colour = self._scenes[index].value
+        if colour is None or colour.level == MASK:
+            return None
+        return colour
+
+    def scene_level(self, index: int) -> Optional[int]:
+        colour = self.scene_colour(index)
+        return None if colour is None else colour.level
+
     def get_schema(self, group_and_broadcast: bool) -> dict:
         item_schema = self._scenes[0].get_schema(group_and_broadcast)
         enabled_schema = {
@@ -612,7 +628,7 @@ class _Type8ColourReadProgress:
     done_values: dict = field(default_factory=dict)
 
 
-class Type8Parameters(TypeParameters):
+class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
         super().__init__()
 
@@ -620,9 +636,13 @@ class Type8Parameters(TypeParameters):
         self._limits = Type8TcLimits()
         self._colour_type_lock = asyncio.Lock()
 
-        self.poll_interval: Optional[float] = None
-        self.last_poll_time: Optional[float] = None
+        # Event control: long, jittered re-sync base interval (kept fresh by Activate
+        # sniffing + confirmation polls).
+        self._init_poll_schedule(EVENT_RESYNC_BASE_INTERVAL, randomize_poll_interval=True)
         self._read_progress: Optional[_Type8ColourReadProgress] = None
+        # Typed active-colour state, projected to the current_* topics.
+        self._colour_value: Optional[object] = None
+        self._scenes_settings: Optional[ScenesSettings] = None
 
     @property
     def default_colour_type(self) -> ColourType:
@@ -631,6 +651,10 @@ class Type8Parameters(TypeParameters):
     @property
     def tc_limits(self) -> Type8TcLimits:
         return self._limits
+
+    @property
+    def scenes_settings(self) -> Optional["ScenesSettings"]:
+        return self._scenes_settings
 
     async def read_mandatory_info(
         self,
@@ -652,11 +676,12 @@ class Type8Parameters(TypeParameters):
                         logger,
                     )
                     self._limits.update_from(result)
+        self._scenes_settings = ScenesSettings(self.default_colour_type, self._limits)
         parameters: list[SettingsParamBase] = [
             CurrentColourState(self.default_colour_type, self._limits),
             PowerOnColourState(self.default_colour_type, self._limits),
             SystemFailureColourState(self.default_colour_type, self._limits),
-            ScenesSettings(self.default_colour_type, self._limits),
+            self._scenes_settings,
         ]
         if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
             parameters.append(TcLimitsSettings(self._limits))
@@ -688,6 +713,47 @@ class Type8Parameters(TypeParameters):
     def cancel_pending_poll(self) -> None:
         self._read_progress = None
 
+    def apply_colour(self, components: dict[str, int]) -> list[ControlPollResult]:
+        """Project sniffed/own colour components onto the current_* topics (optimistic).
+
+        Overlays the captured components on the active typed colour (a fresh all-MASK
+        base before the first real read), clamps Tc to limits, and returns the per-topic
+        publishes. Components left at the MASK sentinel — those this command did not set
+        and that no prior read filled in — are not published (they would otherwise emit
+        the sentinel as a real value); the confirmation poll fills them in. Empty
+        components -> poll only.
+        """
+        ct = self._current_colour_type
+        if ct is None or not components:
+            return []
+        colour = self._colour_value if self._colour_value is not None else ColourSettings(ct).colour
+        for key, raw in components.items():
+            if hasattr(colour, key):
+                setattr(colour, key, raw)
+        self._clamp_tc(colour)
+        self._colour_value = colour
+        return self._known_colour_results(ct, colour)
+
+    def apply_scene_colour(self, scene_colour: "ColourSettings") -> list[ControlPollResult]:
+        """Project a DT8 GoToScene's stored scene colour onto the current_* topics.
+
+        A scene stores each colour component or the MASK sentinel meaning "this scene
+        leaves the component unchanged". A MASK component must keep the device's current
+        value, not overwrite it with the sentinel -- so only the scene's non-MASK
+        components are overlaid (via ``apply_colour``, which also drops MASK topics from
+        the publish); the rest are left as-is and confirmed by the poll.
+        """
+        ct = self._current_colour_type
+        if ct is None or scene_colour.colour_type != ct:
+            return []
+        fresh = ColourSettings(ct).colour
+        components = {
+            member.name: getattr(scene_colour.colour, member.name)
+            for member in fields(scene_colour.colour)
+            if getattr(scene_colour.colour, member.name) != getattr(fresh, member.name)
+        }
+        return self.apply_colour(components)
+
     def has_in_progress_read(self) -> bool:
         return self._read_progress is not None
 
@@ -713,8 +779,12 @@ class Type8Parameters(TypeParameters):
         if self.peek_next_subbatch_size() > max_commands:
             return ControlsPollRequestResult(has_more=True)
         if self._read_progress is None:
+            is_first_poll = self.last_poll_time is None
             self._read_progress = _Type8ColourReadProgress(address)
             self.last_poll_time = now
+            self._redraw_poll_interval()
+            if is_first_poll:
+                self._reconfirm_after_first_poll(now)
         progress = self._read_progress
 
         if progress.colour_type is None:
@@ -818,18 +888,49 @@ class Type8Parameters(TypeParameters):
     def _build_success_results(self, progress: _Type8ColourReadProgress) -> list[ControlPollResult]:
         ct = progress.colour_type
         if ct == ColourType.RGBWAF:
-            colour = dali_type8_rgbwaf.RgbwafColourValues(**progress.done_values)
-            return dali_type8_rgbwaf.handle_poll_controls_result(colour)
-        if ct == ColourType.COLOUR_TEMPERATURE:
+            colour: object = dali_type8_rgbwaf.RgbwafColourValues(**progress.done_values)
+        elif ct == ColourType.COLOUR_TEMPERATURE:
             colour = dali_type8_tc.ColourTemperatureValue(**progress.done_values)
-            return dali_type8_tc.handle_poll_controls_result(colour)
-        if ct == ColourType.PRIMARY_N:
+        elif ct == ColourType.PRIMARY_N:
             colour = dali_type8_primary_n.PrimaryNColourValues(**progress.done_values)
-            return dali_type8_primary_n.handle_poll_controls_result(colour)
-        if ct == ColourType.XY:
+        elif ct == ColourType.XY:
             colour = dali_type8_xy.XYColourValues(**progress.done_values)
+        else:
+            return []
+        self._colour_value = colour
+        return self._format_colour(ct, colour)
+
+    def _clamp_tc(self, colour: object) -> None:
+        if isinstance(colour, dali_type8_tc.ColourTemperatureValue) and colour.tc != MASK_2BYTES:
+            colour.tc = min(max(colour.tc, self._limits.tc_min_mirek), self._limits.tc_max_mirek)
+
+    @staticmethod
+    def _format_colour(colour_type: ColourType, colour: object) -> list[ControlPollResult]:
+        if colour_type == ColourType.RGBWAF:
+            return dali_type8_rgbwaf.handle_poll_controls_result(colour)
+        if colour_type == ColourType.COLOUR_TEMPERATURE:
+            return dali_type8_tc.handle_poll_controls_result(colour)
+        if colour_type == ColourType.PRIMARY_N:
+            return dali_type8_primary_n.handle_poll_controls_result(colour)
+        if colour_type == ColourType.XY:
             return dali_type8_xy.handle_poll_controls_result(colour)
         return []
+
+    def _known_colour_results(self, colour_type: ColourType, colour: object) -> list[ControlPollResult]:
+        """Format ``colour`` but drop topics still at their MASK sentinel value.
+
+        A MASK component is one this optimistic colour never set (and no prior read
+        filled in); publishing it would emit the sentinel as a real value. The MASK
+        representation per topic is whatever a fresh all-MASK colour formats to, so this
+        stays type-agnostic.
+        """
+        masked = {
+            res.control_id: res.value
+            for res in self._format_colour(colour_type, ColourSettings(colour_type).colour)
+        }
+        return [
+            res for res in self._format_colour(colour_type, colour) if res.value != masked.get(res.control_id)
+        ]
 
     def get_group_parameters(self) -> list[SettingsParamBase]:
         params: list[SettingsParamBase] = [

@@ -31,6 +31,7 @@ from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .device_registry import DeviceRegistry
+from .event_sync_coordinator import EventSyncCoordinator, is_event_sync_owned_setpoint
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
@@ -50,6 +51,7 @@ from .wbdali_utils import (
     MASK,
     AsyncDeviceInstanceTypeMapper,
     check_query_response,
+    is_transmission_error_response,
     send_commands_with_retry,
     send_with_retry,
 )
@@ -475,6 +477,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self._poll_scheduler = PollScheduler()
         self._fetch_scheduler = SettingsFetchScheduler()
+
+        self._event_sync = EventSyncCoordinator(
+            publisher=self._device_publisher,
+            device_registry=self._device_registry,
+            group_devices_by_number=self._group_devices_by_number,
+            logger=self.logger,
+        )
 
     @property
     def driver(self) -> WBDALIDriver:
@@ -1189,8 +1198,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
+            # Setpoints event sync owns (real-device wanted_level/dapc/set_*) are published
+            # from the observed truth via the monitor path; confirm only holds their write
+            # error here. Non-owned writables and virtual-device setpoints echo as before.
+            owned = isinstance(device, DaliDevice) and is_event_sync_owned_setpoint(control_id)
             new_value = control.control_info.value
-            if new_value is not None:
+            if not owned and new_value is not None:
                 await self._device_publisher.set_control_value(device_id, control_id, new_value)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
@@ -1419,12 +1432,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         )
                         for (control_task, value_to_set), result in zip(controls, results):
                             _device, control = control_task.data
-                            if not control_task.future.done():
-                                if isinstance(result, Exception):
-                                    control_task.future.set_exception(result)
-                                else:
-                                    control_task.future.set_result(result)
-                                    control.control_info.value = value_to_set
+                            if control_task.future.done():
+                                continue
+                            if isinstance(result, Exception):
+                                control_task.future.set_exception(result)
+                                continue
+                            control_task.future.set_result(result)
+                            control.control_info.value = value_to_set
                     except Exception as e:  # pylint: disable=broad-exception-caught
                         # Guard against an unexpected failure while draining/resolving the
                         # batch: resolve every still-pending pulled-off future so no
@@ -1507,13 +1521,19 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                     await self._publish_poll_results(device, device_responses)
 
     async def _publish_poll_results(self, device: DaliDevice, responses: Iterable[ControlPollResult]) -> None:
+        responses = list(responses)
         tasks = []
         for response in responses:
+            control = device.get_mqtt_control(response.control_id)
             if response.error is not None:
+                if control is not None:
+                    control.read_error = True
                 tasks.append(
                     self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
                 )
                 continue
+            if control is not None:
+                control.read_error = False
             if response.title is not None:
                 tasks.append(
                     self._device_publisher.set_control_title(
@@ -1537,6 +1557,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         device.name,
                         result,
                     )
+
+        # Mirror the readback onto the quantity's setpoints (§5): keeps wanted_level/dapc/
+        # set_* in sync even for commands prediction can't follow.
+        await self._event_sync.publish_poll_setpoint_mirror(device, responses)
 
     def _build_group_state_tasks(
         self,
@@ -1632,6 +1656,20 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                             ),
                             "Publish DALI 2 event to MQTT",
                         )
+
+            # Our own polling queries reach here as WB frames too; they change no state and
+            # would only churn tasks. Only send-only gear commands (queries declare a response
+            # class) carry an event-sync effect, so skip anything that expects a response.
+            # Foreign frames and own effect/DTR commands pass.
+            if (
+                incoming_command is not None
+                and getattr(incoming_command, "response", None) is None
+                and not is_transmission_error_response(item.response)
+            ):
+                self._one_shot_tasks.add(
+                    self._event_sync.apply_commands([incoming_command]),
+                    "Event sync apply",
+                )
 
         self._publish_bus_traffic(item, incoming_command)
 

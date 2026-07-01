@@ -1,3 +1,14 @@
+wb-mqtt-dali (1.19.0) stable; urgency=medium
+
+  * Apply own and foreign commands from a single bus-observation path: writable
+    setpoints (wanted_level, dapc, set_rgb/white/colour_temperature) now stay in
+    sync with the actual value of their quantity, including after foreign commands,
+    instead of freezing; legacy identify publishes the levels the lamp really goes
+    to; a standing /meta/error=r no longer flickers or gets reset by prediction
+    while the bus is busy; and wanted_level is published as an integer percent.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 01 Jul 2026 12:00:00 +0500
+
 wb-mqtt-dali (1.18.1) stable; urgency=medium
 
   * Add bilingual (en/ru) descriptions to the DALI 2 occupancy sensor (type 3)

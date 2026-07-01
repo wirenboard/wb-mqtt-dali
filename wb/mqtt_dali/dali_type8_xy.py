@@ -18,6 +18,12 @@ from dali.gear.colour import (
 from dali.gear.general import DTR0, DTR1
 
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .control_ids import (
+    CURRENT_X_COORDINATE,
+    CURRENT_Y_COORDINATE,
+    SET_X_COORDINATE,
+    SET_Y_COORDINATE,
+)
 from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import MASK_2BYTES
@@ -121,7 +127,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
     return [
         MqttControl(
             ControlInfo(
-                "current_x_coordinate",
+                CURRENT_X_COORDINATE,
                 ControlMeta(
                     title=TranslatedTitle("Current X Coordinate", "Текущая координата X"),
                     read_only=True,
@@ -131,7 +137,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         ),
         MqttControl(
             ControlInfo(
-                "current_y_coordinate",
+                CURRENT_Y_COORDINATE,
                 ControlMeta(
                     title=TranslatedTitle("Current Y Coordinate", "Текущая координата Y"),
                     read_only=True,
@@ -173,7 +179,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         ),
         MqttControl(
             ControlInfo(
-                "set_x_coordinate",
+                SET_X_COORDINATE,
                 ControlMeta(
                     "range",
                     TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
@@ -186,7 +192,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         ),
         MqttControl(
             ControlInfo(
-                "set_y_coordinate",
+                SET_Y_COORDINATE,
                 ControlMeta(
                     "range",
                     TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
@@ -203,12 +209,12 @@ def get_mqtt_controls() -> list[MqttControlBase]:
 def handle_poll_controls_result(new_colour: Optional[XYColourValues]) -> list[ControlPollResult]:
     return [
         ControlPollResult(
-            "current_x_coordinate",
+            CURRENT_X_COORDINATE,
             None if new_colour is None else str(new_colour.x_coordinate),
             error="r" if new_colour is None else None,
         ),
         ControlPollResult(
-            "current_y_coordinate",
+            CURRENT_Y_COORDINATE,
             None if new_colour is None else str(new_colour.y_coordinate),
             error="r" if new_colour is None else None,
         ),

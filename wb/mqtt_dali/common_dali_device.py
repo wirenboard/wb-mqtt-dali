@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -59,18 +60,114 @@ class ApplyResult:
     needs_mqtt_controls_refresh: bool = False
 
 
-class MqttControlBase:
+# Long base poll interval for event-driven controls: their value is kept fresh by
+# sniffed commands + confirmation polls, so the periodic loop only re-syncs them
+# rarely (and jittered, to avoid a synchronized re-sync storm across devices).
+EVENT_RESYNC_BASE_INTERVAL = 300.0
+# Event controls jitter their re-sync interval by ±this fraction (re-drawn after each
+# poll) so devices don't re-sync in lockstep.
+_POLL_JITTER_FRACTION = 0.3
+# At service start, after an event control's first poll, re-read once more at this delay
+# in case start caught a transition mid-fade. The pre-start command (and its fade) is
+# unknown, so this mirrors the default fade delay used for an unknown fade.
+EVENT_STARTUP_RECONFIRM_DELAY = 6.0
+
+
+class EventPollSchedule:
+    """Poll-schedule state and helpers shared by event-driven pollables.
+
+    Owns the ``(last_poll_time, poll_interval)`` axis the ``PollScheduler`` reads, the
+    optional ±30% jitter of an event control's re-sync interval, and the confirmation-
+    poll scheduling the event layer drives after a command. Mixed into both
+    ``MqttControlBase`` and ``Type8Parameters`` (which don't share a base), so the
+    min-semantics / jitter logic lives in one place.
+    """
+
+    last_poll_time: Optional[float]
+    poll_interval: Optional[float]
+    randomize_poll_interval: bool
+    _base_poll_interval: Optional[float]
+
+    def poll_no_later_than(self, now: float, at: float) -> None:
+        """Bring the next poll no later than ``at`` (min-semantics: only earlier).
+
+        Used for the startup / READY-reentry reconfirm hints. A never-polled control is
+        already due as early as possible, so it is left untouched.
+        """
+        if self.last_poll_time is None:
+            return
+        base = self.poll_interval if self.poll_interval is not None else self._base_poll_interval
+        current_due = self.last_poll_time + (base if base is not None else 0.0)
+        if at >= current_due:
+            return
+        self.last_poll_time = now
+        self.poll_interval = max(0.0, at - now)
+
+    def schedule_confirmation(self, now: float, at: float) -> None:
+        """Schedule a confirmation poll at ``at``; the most recent command wins.
+
+        Unlike ``poll_no_later_than`` this overrides a prior pulled-in confirm even with
+        a *later* ``at`` — so an immediate-then-fade command burst confirms after the
+        fade settles, not on the earlier command's short window. Never delays the poll
+        past its normal (re-sync) due time.
+        """
+        if self.last_poll_time is None:
+            return
+        target = max(0.0, at - now)
+        if self._base_poll_interval is not None:
+            target = min(target, self._base_poll_interval)
+        self.last_poll_time = now
+        self.poll_interval = target
+
+    # --- Private ---
+
+    def _init_poll_schedule(self, poll_interval: Optional[float], randomize_poll_interval: bool) -> None:
+        self.poll_interval = poll_interval
+        self.last_poll_time = None
+        # Event controls jitter their interval (base ±30%, re-drawn after each poll);
+        # periodic controls keep their fixed interval.
+        self.randomize_poll_interval = randomize_poll_interval
+        self._base_poll_interval = poll_interval
+
+    def _redraw_poll_interval(self) -> None:
+        if not self.randomize_poll_interval or self._base_poll_interval is None:
+            return
+        jitter = self._base_poll_interval * _POLL_JITTER_FRACTION
+        self.poll_interval = self._base_poll_interval + random.uniform(-jitter, jitter)
+
+    def _reconfirm_after_first_poll(self, now: float) -> None:
+        """An event control's first poll schedules one startup reconfirm.
+
+        The first read (value was ``None``) might have caught a transition mid-fade at
+        service start, so pull one more read in at the startup settle. Periodic controls
+        (no jitter) are unaffected.
+        """
+        if not self.randomize_poll_interval:
+            return
+        self.poll_no_later_than(now, now + EVENT_STARTUP_RECONFIRM_DELAY)
+
+
+class MqttControlBase(EventPollSchedule):
 
     # Marks a read-only control whose value is mirrored to group virtual devices.
     is_group_state_control: bool = False
 
     value_to_set: Optional[str] = None
 
-    def __init__(self, control_info: ControlInfo, poll_interval: Optional[float] = None) -> None:
+    # Set by the re-sync poll: True after a failed read, False after a successful one.
+    # Event sync suppresses prediction of this control's quantity while it stands, so a
+    # standing /meta/error=r doesn't flicker r <-> "" under live traffic.
+    read_error: bool = False
+
+    def __init__(
+        self,
+        control_info: ControlInfo,
+        poll_interval: Optional[float] = None,
+        randomize_poll_interval: bool = False,
+    ) -> None:
         # the property value is used as default value for the control
         self.control_info = control_info
-        self.poll_interval: Optional[float] = poll_interval
-        self.last_poll_time: Optional[float] = None
+        self._init_poll_schedule(poll_interval, randomize_poll_interval)
 
     def is_readable(self) -> bool:
         return False
@@ -114,7 +211,11 @@ class MqttControlBase:
         del default_max_commands
         if max_commands < 1:
             return ControlsPollRequestResult(has_more=True)
+        is_first_poll = self.last_poll_time is None
         self.last_poll_time = now
+        self._redraw_poll_interval()
+        if is_first_poll:
+            self._reconfirm_after_first_poll(now)
         return ControlsPollRequestResult(
             has_more=False,
             poll_coroutine=lambda: self._run_single_query(driver, address, logger),
@@ -123,6 +224,8 @@ class MqttControlBase:
 
     def cancel_pending_poll(self) -> None:
         pass
+
+    # --- Private ---
 
     async def _run_single_query(
         self,
@@ -161,8 +264,9 @@ class MqttControl(MqttControlBase):
         commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
         is_group_state_control: bool = False,
         poll_interval: Optional[float] = None,
+        randomize_poll_interval: bool = False,
     ) -> None:
-        super().__init__(control_info, poll_interval)
+        super().__init__(control_info, poll_interval, randomize_poll_interval)
         self.query_builder = query_builder
         self.value_formatter = value_formatter
         self.commands_builder = commands_builder
@@ -683,6 +787,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
             self.is_initialized = True
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
+        """Read every settings param and cache params/schema.
+
+        Runs as a ``LOAD_INFO`` task in the polling-loop coroutine — the same coroutine as the
+        background ``fetch`` idle step, so the two never overlap (no locking). Each param is read in
+        full; if a background ``fetch`` was mid-flight, it is simply re-read from scratch.
+        """
         if self.params and not force_reload:
             return
 
@@ -882,6 +992,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
+
+    def get_settings_parameter_handlers(self) -> list[SettingsParamBase]:
+        return self._parameter_handlers
 
     # --- Hooks for subclasses ---
 

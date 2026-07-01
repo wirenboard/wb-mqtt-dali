@@ -9,6 +9,7 @@ from dali.gear.colour import Activate, SetTemporaryPrimaryNDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .control_ids import CURRENT_PRIMARY_N, PRIMARY_N_MAX, SET_PRIMARY_N
 from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import MASK_2BYTES
@@ -108,11 +109,11 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         ]
 
     res = []
-    for i in range(6):
+    for i in range(PRIMARY_N_MAX):
         res.append(
             MqttControl(
                 ControlInfo(
-                    f"current_primary_n{i}",
+                    CURRENT_PRIMARY_N.format(i),
                     ControlMeta(
                         title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"),
                         read_only=True,
@@ -124,7 +125,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         res.append(
             MqttControl(
                 ControlInfo(
-                    f"set_primary_n{i}",
+                    SET_PRIMARY_N.format(i),
                     ControlMeta(
                         "range",
                         TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"),
@@ -144,7 +145,7 @@ def get_mqtt_controls() -> list[MqttControlBase]:
 def handle_poll_controls_result(new_colour: Optional[PrimaryNColourValues]) -> list[ControlPollResult]:
     return [
         ControlPollResult(
-            f"current_primary_n{i}",
+            CURRENT_PRIMARY_N.format(i),
             None if new_colour is None else str(getattr(new_colour, f"primary_n{i}")),
             error="r" if new_colour is None else None,
         )

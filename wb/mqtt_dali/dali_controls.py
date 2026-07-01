@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Protocol, Union
 
 from dali.address import Address, GearBroadcast, GearGroup, GearShort
 from dali.command import Command, Response
@@ -20,13 +20,26 @@ from dali.gear.general import (
     Up,
 )
 
-from .common_dali_device import MqttControl, MqttControlBase
-from .dali_common_parameters import SCENES_TOTAL
+from .common_dali_device import EVENT_RESYNC_BASE_INTERVAL, MqttControl, MqttControlBase
+from .control_ids import ACTUAL_LEVEL
+from .control_ids import DAPC as DAPC_ID
+from .control_ids import WANTED_LEVEL
+from .dali_common_parameters import SCENES_TOTAL, MaxLevelParam, MinLevelParam
 from .dali_dimming_curve import DimmingCurveState
 from .device_publisher import ControlInfo
+from .wbdali_utils import MASK
 from .wbmqtt import ControlMeta, TranslatedTitle
 
 AddressFactory = Callable[[int], Union[GearBroadcast, GearGroup, GearShort]]
+
+
+class SceneLevelSource(Protocol):  # pylint: disable=too-few-public-methods
+    """Reports a raw scene level. Implemented by two unrelated classes chosen per device
+    type — the gear ``ScenesParam`` and the DT8 ``ScenesSettings`` — so a structural
+    protocol is what unifies them without a shared base or a cross-module import."""
+
+    def scene_level(self, index: int) -> Optional[int]:
+        """Raw scene level for ``index``, or ``None`` if not known / scene disabled."""
 
 
 def handle_dapc(short_address: Address, value: str) -> list[Command]:
@@ -40,35 +53,123 @@ def handle_dapc(short_address: Address, value: str) -> list[Command]:
 class ActualLevelControl(MqttControlBase):
     is_group_state_control = True
 
-    def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
+    def __init__(
+        self,
+        dimming_curve_state: DimmingCurveState,
+        max_level: Optional[MaxLevelParam] = None,
+        min_level: Optional[MinLevelParam] = None,
+        scene_source: Optional[SceneLevelSource] = None,
+    ) -> None:
         super().__init__(
             ControlInfo(
-                "actual_level",
+                ACTUAL_LEVEL,
                 ControlMeta(
                     title=TranslatedTitle("Actual Level", "Яркость"),
                     read_only=True,
                     units="%",
                 ),
                 "0",
-            )
+            ),
+            poll_interval=EVENT_RESYNC_BASE_INTERVAL,
+            randomize_poll_interval=True,
         )
         self._dimming_curve_state = dimming_curve_state
+        self._max_level = max_level
+        self._min_level = min_level
+        self._scene_source = scene_source
+        # Typed prediction state: last known raw level.
+        self._level: Optional[int] = None
+
+    @property
+    def current_level(self) -> Optional[int]:
+        return self._level
 
     def get_query(self, short_address: Address) -> Optional[Command]:
         return QueryActualLevel(short_address)
 
     def format_response(self, response: Response) -> str:
-        return f"{self._dimming_curve_state.get_level(response.raw_value.as_integer):.3f}"
+        raw = response.raw_value.as_integer
+        if raw <= 254:
+            self._level = raw
+        return self._format_level(raw)
 
     def is_readable(self) -> bool:
         return True
+
+    def apply(self, command: Command) -> Optional[str]:
+        """Predict the new level from a sniffed/own level command.
+
+        Returns the published ``%`` string, or ``None`` when the effect is not
+        predictable (poll only). Reads MAX/MIN/scene from injected owner params.
+        """
+        new_level = self._predict_level(command)
+        if new_level is None:
+            return None
+        self._level = new_level
+        value = self._format_level(new_level)
+        self.control_info.value = value
+        return value
+
+    # --- Private ---
+
+    def _format_level(self, raw: int) -> str:
+        return f"{self._dimming_curve_state.get_level(raw):.3f}"
+
+    def _max(self) -> Optional[int]:
+        return self._max_level.value if self._max_level is not None else None
+
+    def _min(self) -> Optional[int]:
+        return self._min_level.value if self._min_level is not None else None
+
+    def _predict_level(self, command: Command) -> Optional[int]:
+        if isinstance(command, (StepUp, StepDown, StepDownAndOff, OnAndStepUp)):
+            return self._predict_step(command)
+        if isinstance(command, DAPC):
+            # 255 (MASK) = stop fade / no change; 0 = off; else the target level.
+            return None if command.power == MASK else command.power
+        if isinstance(command, Off):
+            return 0
+        if isinstance(command, GoToScene):
+            return self._scene_level(command.param)
+        # GoToLastActiveLevel (rarely emitted, would need last-active tracking), Recall
+        # max/min, Up/Down and anything else are not predicted here.
+        return self._predict_recall(command)
+
+    def _predict_recall(self, command: Command) -> Optional[int]:
+        if isinstance(command, RecallMaxLevel):
+            return self._max()
+        if isinstance(command, RecallMinLevel):
+            return self._min()
+        return None
+
+    def _scene_level(self, index: int) -> Optional[int]:
+        return self._scene_source.scene_level(index) if self._scene_source is not None else None
+
+    def _predict_step(self, command: Command) -> Optional[int]:
+        cur = self._level
+        if cur is None:
+            return None
+        maximum = self._max()
+        minimum = self._min()
+        if isinstance(command, StepUp):
+            return 0 if cur == 0 else self._step_up(cur, maximum)
+        if isinstance(command, StepDown):
+            return 0 if cur == 0 else (None if minimum is None else max(cur - 1, minimum))
+        if isinstance(command, StepDownAndOff):
+            return None if minimum is None else (0 if cur <= minimum else cur - 1)
+        # OnAndStepUp: from off, go to MIN; otherwise step up toward MAX.
+        return minimum if cur == 0 else self._step_up(cur, maximum)
+
+    @staticmethod
+    def _step_up(cur: int, maximum: Optional[int]) -> Optional[int]:
+        return None if maximum is None else min(cur + 1, maximum)
 
 
 class WantedLevelControl(MqttControlBase):
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__(
             ControlInfo(
-                "wanted_level",
+                WANTED_LEVEL,
                 ControlMeta(
                     "range",
                     title=TranslatedTitle("Wanted Level", "Желаемая яркость"),
@@ -99,7 +200,7 @@ def make_controls() -> list[MqttControlBase]:
     return [
         MqttControl(
             ControlInfo(
-                "dapc",
+                DAPC_ID,
                 ControlMeta(
                     "value",
                     TranslatedTitle("Direct Arc Power Control", "Прямое управление яркостью"),

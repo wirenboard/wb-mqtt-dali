@@ -25,6 +25,7 @@ from .common_dali_device import (
     MqttControlBase,
     PropertyStartOrder,
 )
+from .control_ids import CURRENT_COLOUR_TEMPERATURE, SET_COLOUR_TEMPERATURE
 from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .settings import SettingsParamBase, SettingsParamName
@@ -161,7 +162,7 @@ def get_wanted_mqtt_controls(
     return [
         MqttControl(
             ControlInfo(
-                "set_colour_temperature",
+                SET_COLOUR_TEMPERATURE,
                 ControlMeta(
                     "range",
                     TranslatedTitle("Wanted Colour Temperature", "Желаемая цветовая температура"),
@@ -181,7 +182,7 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
     return [
         MqttControl(
             ControlInfo(
-                "current_colour_temperature",
+                CURRENT_COLOUR_TEMPERATURE,
                 ControlMeta(
                     title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
                     read_only=True,
@@ -220,7 +221,7 @@ def handle_poll_controls_result(new_colour: Optional[ColourTemperatureValue]) ->
         error = None
     return [
         ControlPollResult(
-            "current_colour_temperature",
+            CURRENT_COLOUR_TEMPERATURE,
             value,
             error=error,
         ),

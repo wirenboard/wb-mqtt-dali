@@ -9,6 +9,7 @@ from dali.gear.colour import Activate, SetTemporaryRGBDimLevel, SetTemporaryWAFD
 from dali.gear.general import DTR0, DTR1, DTR2
 
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .control_ids import CURRENT_RGB, CURRENT_WHITE, SET_RGB, SET_WHITE
 from .dali_type8_common import ColourComponent
 from .device_publisher import ControlInfo, ControlMeta
 from .wbdali_utils import MASK
@@ -136,7 +137,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
 
     setup_rgb_control = MqttControl(
         ControlInfo(
-            "set_rgb",
+            SET_RGB,
             ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")),
             "0;0;0",
         ),
@@ -145,7 +146,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
 
     setup_white_control = MqttControl(
         ControlInfo(
-            "set_white",
+            SET_WHITE,
             ControlMeta(
                 "range",
                 TranslatedTitle("Wanted W", "Желаемый W"),
@@ -163,7 +164,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
     return [
         MqttControl(
             ControlInfo(
-                "current_rgb",
+                CURRENT_RGB,
                 ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True),
                 "0;0;0",
             ),
@@ -172,7 +173,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
         setup_rgb_control,
         MqttControl(
             ControlInfo(
-                "current_white",
+                CURRENT_WHITE,
                 ControlMeta(title=TranslatedTitle("Current W", "Текущий W"), read_only=True),
                 "0",
             ),
@@ -185,7 +186,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
 def handle_poll_controls_result(new_colour: Optional[RgbwafColourValues]) -> list[ControlPollResult]:
     return [
         ControlPollResult(
-            "current_rgb",
+            CURRENT_RGB,
             (
                 None
                 if new_colour is None
@@ -194,7 +195,7 @@ def handle_poll_controls_result(new_colour: Optional[RgbwafColourValues]) -> lis
             error="r" if new_colour is None else None,
         ),
         ControlPollResult(
-            "current_white",
+            CURRENT_WHITE,
             None if new_colour is None else str(new_colour.white),
             error="r" if new_colour is None else None,
         ),

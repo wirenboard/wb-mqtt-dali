@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterable
 from typing import Optional
 
 from dali.address import Address
@@ -42,6 +43,10 @@ from .wbdali_utils import (
 
 SCENES_TOTAL = 16
 GROUPS_TOTAL = 16
+
+# Each QuerySceneLevel is one frame; reading all 16 at once monopolizes the bus,
+# so a background fetch reads them in chunks of this size.
+SCENES_FETCH_CHUNK = 8
 
 
 class MaxLevelParam(NumberGearParam):
@@ -103,6 +108,15 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость изменения"))
         self._fade_time = None
         self._fade_rate = None
+
+    @property
+    def fade_time(self) -> Optional[int]:
+        """Last known fade-time code (from init, write, or a sniffed SetFadeTime)."""
+        return self._fade_time
+
+    def set_fade_time(self, code: int) -> None:
+        """Update the cached fade-time code from a sniffed DTR0+SetFadeTime (no bus write)."""
+        self._fade_time = code
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
@@ -323,19 +337,27 @@ class ScenesParam(SettingsParamBase):
     def __init__(self) -> None:
         super().__init__(SettingsParamName("Scenes", "Сцены"))
         self._scenes = [MASK for _ in range(SCENES_TOTAL)]
+        # Index of the next scene not yet read; 0 = nothing read, SCENES_TOTAL = complete.
+        self._fetch_cursor = 0
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        commands = [QuerySceneLevel(short_address, scene_number) for scene_number in range(SCENES_TOTAL)]
-        responses = await query_responses_retry_only_failed(
-            driver, commands, logger, priority=FramePriority.CONFIGURATION
-        )
-        res = []
-        for response in responses:
-            res.append(response.raw_value.as_integer)
-        self._scenes = res
+        # Always a full read of all 16 scenes (refresh paths rely on this); marks fetch
+        # complete (full read => nothing left for the background fetch).
+        await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
+        self._fetch_cursor = SCENES_TOTAL
         return self._scenes_to_json()
+
+    async def fetch(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> bool:
+        if self._fetch_cursor >= SCENES_TOTAL:
+            return True
+        end = min(self._fetch_cursor + SCENES_FETCH_CHUNK, SCENES_TOTAL)
+        await self._read_scenes(driver, short_address, range(self._fetch_cursor, end), logger)
+        self._fetch_cursor = end
+        return self._fetch_cursor >= SCENES_TOTAL
 
     async def write(
         self,
@@ -439,6 +461,30 @@ class ScenesParam(SettingsParamBase):
 
     def has_changes(self, new_params: dict) -> bool:
         return "scenes" in new_params
+
+    def scene_level(self, index: int) -> Optional[int]:
+        """Raw scene level, or ``None`` if not yet read or the scene is disabled (MASK)."""
+        if index < 0 or index >= self._fetch_cursor:
+            return None
+        value = self._scenes[index]
+        return None if value == MASK else value
+
+    # --- Private ---
+
+    async def _read_scenes(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        scene_indices: Iterable[int],
+        logger: Optional[logging.Logger],
+    ) -> None:
+        indices = list(scene_indices)
+        commands = [QuerySceneLevel(short_address, scene_number) for scene_number in indices]
+        responses = await query_responses_retry_only_failed(
+            driver, commands, logger, priority=FramePriority.CONFIGURATION
+        )
+        for scene_number, response in zip(indices, responses):
+            self._scenes[scene_number] = response.raw_value.as_integer
 
     def _scenes_to_json(self) -> dict:
         result_scenes = []

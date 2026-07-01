@@ -7,6 +7,16 @@ from typing import Iterable, Optional, Union
 from dali.address import GearBroadcast, GearGroup
 
 from .common_dali_device import MqttControlBase
+from .control_ids import (
+    ACTUAL_LEVEL,
+    CURRENT_COLOUR_TEMPERATURE,
+    CURRENT_RGB,
+    CURRENT_WHITE,
+    SET_COLOUR_TEMPERATURE,
+    SET_RGB,
+    SET_WHITE,
+    WANTED_LEVEL,
+)
 from .dali_controls import WantedLevelControl, make_controls
 from .dali_device import DaliDevice
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
@@ -194,10 +204,10 @@ class AggregatedCapabilities:
 
 # Each state control sits immediately before its anchor on the group card.
 _GROUP_STATE_ANCHOR: dict[ControlId, ControlId] = {
-    "actual_level": "wanted_level",
-    "current_rgb": "set_rgb",
-    "current_white": "set_white",
-    "current_colour_temperature": "set_colour_temperature",
+    ACTUAL_LEVEL: WANTED_LEVEL,
+    CURRENT_RGB: SET_RGB,
+    CURRENT_WHITE: SET_WHITE,
+    CURRENT_COLOUR_TEMPERATURE: SET_COLOUR_TEMPERATURE,
 }
 
 

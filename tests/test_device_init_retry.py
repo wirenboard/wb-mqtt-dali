@@ -21,6 +21,8 @@ from wb.mqtt_dali.device_init_scheduler import (
     INIT_RETRY_MULTIPLIER,
     DeviceInitScheduler,
 )
+from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 
 
 class TestDeviceInitScheduler:
@@ -372,12 +374,13 @@ def _make_controller():
     ctrl.logger = logging.getLogger("test")
     ctrl._init_scheduler = DeviceInitScheduler()
     ctrl._poll_scheduler = PollScheduler()
+    ctrl._fetch_scheduler = SettingsFetchScheduler()
     ctrl._device_publisher = _make_publisher()
     ctrl._dev = AsyncMock()
     ctrl._handle_on_topic = MagicMock()
     ctrl.dali_devices = []
     ctrl.dali2_devices = []
-    ctrl._dali2_devices_by_addr = {}
+    ctrl._device_registry = DeviceRegistry()
     ctrl._dev_inst_map = MagicMock()
     ctrl._group_devices_by_number = {}
     ctrl._devices_by_mqtt_id = {}

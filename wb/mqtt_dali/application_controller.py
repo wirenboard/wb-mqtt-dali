@@ -30,6 +30,9 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
+from .device_registry import DeviceRegistry
+from .event_sync_coordinator import EventSyncCoordinator, is_event_sync_owned_setpoint
+from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .send_command import format_command_expression
@@ -48,6 +51,7 @@ from .wbdali_utils import (
     MASK,
     AsyncDeviceInstanceTypeMapper,
     check_query_response,
+    is_transmission_error_response,
     send_commands_with_retry,
     send_with_retry,
 )
@@ -443,7 +447,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self._one_shot_tasks = OneShotTasks(self.logger)
 
-        self._dali2_devices_by_addr: dict[int, Dali2Device] = {d.address.short: d for d in self.dali2_devices}
+        self._device_registry = DeviceRegistry()
+        self._device_registry.set_gear_devices(self.dali_devices)
+        self._device_registry.set_dali2_devices(self.dali2_devices)
         self._devices_by_mqtt_id: dict[str, ControllableDevice] = {}
         self._broadcast_device = BroadcastVirtualDevice(
             capabilities=AggregatedCapabilities(),
@@ -470,6 +476,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._stop_requested = False
 
         self._poll_scheduler = PollScheduler()
+        self._fetch_scheduler = SettingsFetchScheduler()
+
+        self._event_sync = EventSyncCoordinator(
+            publisher=self._device_publisher,
+            device_registry=self._device_registry,
+            group_devices_by_number=self._group_devices_by_number,
+            logger=self.logger,
+        )
 
     @property
     def driver(self) -> WBDALIDriver:
@@ -695,10 +709,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         else:
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
-        if isinstance(device, Dali2Device) and old_short_address != device.address.short:
-            self._dev_inst_map.update_mapping(old_short_address, device.address.short)
-            self._dali2_devices_by_addr.pop(old_short_address, None)
-            self._dali2_devices_by_addr[device.address.short] = device
+        if old_short_address != device.address.short:
+            if isinstance(device, Dali2Device):
+                self._dev_inst_map.update_mapping(old_short_address, device.address.short)
+            self._device_registry.update_short_address(device, old_short_address)
 
         if isinstance(device, DaliDevice):
             await self._refresh_group_virtual_devices()
@@ -878,7 +892,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         else:
             self.dali2_devices.append(new_device)
             self.dali2_devices.sort(key=lambda d: d.address.short)
-            self._dali2_devices_by_addr[new_device.address.short] = new_device
+        self._device_registry.add(new_device)
         await self._try_init_new_device(new_device)
 
     async def _republish_device(
@@ -933,12 +947,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self.dali_devices = [d for d in self.dali_devices if d is not device]
         else:
             self.dali2_devices = [d for d in self.dali2_devices if d is not device]
-            if self._dali2_devices_by_addr.get(old_short) is device:
-                self._dali2_devices_by_addr.pop(old_short, None)
             self._dev_inst_map.remove_short_address(old_short)
 
+        self._device_registry.remove(device)
         self._devices_by_mqtt_id.pop(mqtt_id, None)
         self._init_scheduler.remove(mqtt_id)
+        self._fetch_scheduler.remove_device(device)
         if isinstance(device, DaliDevice):
             self._poll_scheduler.remove_device(device)
         await self._device_publisher.remove_device(mqtt_id)
@@ -1094,7 +1108,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         await self._device_publisher.rebuild(changes)
 
         for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
+            removed = self._devices_by_mqtt_id.pop(removed_id, None)
+            if isinstance(removed, (DaliDevice, Dali2Device)):
+                self._fetch_scheduler.remove_device(removed)
             self._init_scheduler.remove(removed_id)
 
         for device in created_devices:
@@ -1105,6 +1121,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self.dali_devices = unchanged_devices + created_devices
         self.dali_devices.sort(key=lambda d: d.address.short)
+        self._device_registry.set_gear_devices(self.dali_devices)
         await self._refresh_group_virtual_devices()
         await self._refresh_broadcast_device()
 
@@ -1128,7 +1145,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         await self._device_publisher.rebuild(changes)
 
         for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
+            removed = self._devices_by_mqtt_id.pop(removed_id, None)
+            if isinstance(removed, (DaliDevice, Dali2Device)):
+                self._fetch_scheduler.remove_device(removed)
             self._init_scheduler.remove(removed_id)
 
         for device in created_devices:
@@ -1140,7 +1159,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self.dali2_devices = new_dali2_devices
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
-        self._dali2_devices_by_addr = {d.address.short: d for d in self.dali2_devices}
+        self._device_registry.set_dali2_devices(self.dali2_devices)
 
     def _run_on_topic_handler(self, message: aiomqtt.Message) -> None:
         self._one_shot_tasks.add(self._handle_on_topic(message), f"handle_on_topic for {message.topic}")
@@ -1179,8 +1198,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, "")
+            # Setpoints event sync owns (real-device wanted_level/dapc/set_*) are published
+            # from the observed truth via the monitor path; confirm only holds their write
+            # error here. Non-owned writables and virtual-device setpoints echo as before.
+            owned = isinstance(device, DaliDevice) and is_event_sync_owned_setpoint(control_id)
             new_value = control.control_info.value
-            if new_value is not None:
+            if not owned and new_value is not None:
                 await self._device_publisher.set_control_value(device_id, control_id, new_value)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
@@ -1239,6 +1262,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             current_time,
         )
         if success:
+            self._fetch_scheduler.add_device(device)
             if isinstance(device, DaliDevice):
                 await self._refresh_group_virtual_devices()
                 await self._refresh_broadcast_device()
@@ -1349,7 +1373,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             return 0.001
         # Cap at 1.0s so runtime polling_interval changes (via SetBus RPC)
         # take effect within ~1s.
-        return min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
+        wait = min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
+        # Idle window — poll round done and no control poll due (wait > 0): slip in exactly one
+        # background settings fetch. A due poll (wait <= 0) takes priority. Reached only when the
+        # task queue is empty and the bus is neither quiescent nor commissioning (loop invariants).
+        if wait > 0 and await self._fetch_scheduler.fetch_step(self._dev, self.logger):
+            return 0.001
+        return wait
 
     async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,
@@ -1402,12 +1432,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         )
                         for (control_task, value_to_set), result in zip(controls, results):
                             _device, control = control_task.data
-                            if not control_task.future.done():
-                                if isinstance(result, Exception):
-                                    control_task.future.set_exception(result)
-                                else:
-                                    control_task.future.set_result(result)
-                                    control.control_info.value = value_to_set
+                            if control_task.future.done():
+                                continue
+                            if isinstance(result, Exception):
+                                control_task.future.set_exception(result)
+                                continue
+                            control_task.future.set_result(result)
+                            control.control_info.value = value_to_set
                     except Exception as e:  # pylint: disable=broad-exception-caught
                         # Guard against an unexpected failure while draining/resolving the
                         # batch: resolve every still-pending pulled-off future so no
@@ -1490,13 +1521,19 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                     await self._publish_poll_results(device, device_responses)
 
     async def _publish_poll_results(self, device: DaliDevice, responses: Iterable[ControlPollResult]) -> None:
+        responses = list(responses)
         tasks = []
         for response in responses:
+            control = device.get_mqtt_control(response.control_id)
             if response.error is not None:
+                if control is not None:
+                    control.read_error = True
                 tasks.append(
                     self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
                 )
                 continue
+            if control is not None:
+                control.read_error = False
             if response.title is not None:
                 tasks.append(
                     self._device_publisher.set_control_title(
@@ -1520,6 +1557,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         device.name,
                         result,
                     )
+
+        # Mirror the readback onto the quantity's setpoints (§5): keeps wanted_level/dapc/
+        # set_* in sync even for commands prediction can't follow.
+        await self._event_sync.publish_poll_setpoint_mirror(device, responses)
 
     def _build_group_state_tasks(
         self,
@@ -1605,7 +1646,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 and incoming_command.instance_number is not None
                 and incoming_command.short_address is not None
             ):
-                device = self._dali2_devices_by_addr.get(incoming_command.short_address.address)
+                device = self._device_registry.dali2_device_by_short(incoming_command.short_address.address)
                 if device is not None:
                     instance = device.instances.get(incoming_command.instance_number)
                     if instance is not None:
@@ -1615,6 +1656,20 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                             ),
                             "Publish DALI 2 event to MQTT",
                         )
+
+            # Our own polling queries reach here as WB frames too; they change no state and
+            # would only churn tasks. Only send-only gear commands (queries declare a response
+            # class) carry an event-sync effect, so skip anything that expects a response.
+            # Foreign frames and own effect/DTR commands pass.
+            if (
+                incoming_command is not None
+                and getattr(incoming_command, "response", None) is None
+                and not is_transmission_error_response(item.response)
+            ):
+                self._one_shot_tasks.add(
+                    self._event_sync.apply_commands([incoming_command]),
+                    "Event sync apply",
+                )
 
         self._publish_bus_traffic(item, incoming_command)
 

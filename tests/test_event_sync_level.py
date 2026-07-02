@@ -277,7 +277,7 @@ def test_first_read_not_deferred_by_poll_no_later_than():
     assert control.last_poll_time is None
     control.poll_no_later_than(0.0, 50.0)
     assert control.last_poll_time is None
-    assert control.is_poll_due(0.0, 1.0) is True
+    assert control.is_poll_due(0.0) is True
 
 
 def test_startup_polls_then_reconfirms_after_settle():
@@ -317,8 +317,8 @@ def test_event_param_resynced_after_interval():
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)  # startup reconfirm
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)  # re-sync interval
     interval = control.poll_interval
-    assert control.is_poll_due(10.0 + interval - 1.0, 1.0) is False
-    assert control.is_poll_due(10.0 + interval + 1.0, 1.0) is True
+    assert control.is_poll_due(10.0 + interval - 1.0) is False
+    assert control.is_poll_due(10.0 + interval + 1.0) is True
 
 
 def test_confirmation_poll_resets_resync_timer():
@@ -329,7 +329,7 @@ def test_confirmation_poll_resets_resync_timer():
     control.poll_no_later_than(100.0, 102.0)  # pull confirm to +2s
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=102.0)
     assert control.last_poll_time == 102.0
-    assert control.is_poll_due(103.0, 1.0) is False  # back on the long interval
+    assert control.is_poll_due(103.0) is False  # back on the long interval
 
 
 def test_periodic_param_still_polled():
@@ -339,8 +339,8 @@ def test_periodic_param_still_polled():
     assert err.poll_interval == 120.0
     err.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
     assert err.poll_interval == 120.0  # no jitter re-draw for periodic controls
-    assert err.is_poll_due(119.0, 5.0) is False
-    assert err.is_poll_due(120.0, 5.0) is True
+    assert err.is_poll_due(119.0) is False
+    assert err.is_poll_due(120.0) is True
 
 
 def test_unsettled_value_corrected_by_resync():

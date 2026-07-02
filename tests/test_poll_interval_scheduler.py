@@ -14,7 +14,10 @@ from wb.mqtt_dali.dali_controls import ErrorStatusControl
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type8_parameters import ColourType, Type8Parameters
 from wb.mqtt_dali.dali_type16_parameters import Type16Parameters
+from wb.mqtt_dali.dali_type20_parameters import Type20Parameters
 from wb.mqtt_dali.dali_type21_parameters import Type21Parameters
+from wb.mqtt_dali.dali_type49_parameters import Type49Parameters
+from wb.mqtt_dali.dali_type51_parameters import Type51Parameters
 from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.wbmqtt import ControlMeta
 
@@ -23,7 +26,7 @@ from wb.mqtt_dali.wbmqtt import ControlMeta
 DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
-def _readable_control(control_id: str, poll_interval=None) -> MqttControl:
+def _readable_control(control_id: str, poll_interval=5.0) -> MqttControl:
     return MqttControl(
         control_info=ControlInfo(control_id, ControlMeta(read_only=True), "0"),
         query_builder=lambda addr, _id=control_id: f"Q_{_id}",
@@ -32,7 +35,9 @@ def _readable_control(control_id: str, poll_interval=None) -> MqttControl:
     )
 
 
-def _make_dali_device(short=1, mqtt_id=None, controls=None, type8_handler=None) -> DaliDevice:
+def _make_dali_device(
+    short=1, mqtt_id=None, controls=None, type8_handler=None, standalone_pollable=None
+) -> DaliDevice:
     # pylint: disable=protected-access
     dev = DaliDevice(
         DaliDeviceAddress(short=short, random=0),
@@ -48,6 +53,8 @@ def _make_dali_device(short=1, mqtt_id=None, controls=None, type8_handler=None) 
         pollables.append(type8_handler)
         dev._type8_handler = type8_handler
         dev._standalone_pollables = [type8_handler]
+    if standalone_pollable is not None:
+        pollables.append(standalone_pollable)
     dev._pollables = pollables
     dev._current_round = []
     return dev
@@ -64,48 +71,51 @@ def test_control_with_explicit_interval_polled_at_its_rate():
     fast = _readable_control("fast")
     slow = _readable_control("slow", poll_interval=10.0)
 
-    bus_default = 5.0
-
-    assert fast.is_poll_due(0.0, bus_default)
-    assert slow.is_poll_due(0.0, bus_default)
+    assert fast.is_poll_due(0.0)
+    assert slow.is_poll_due(0.0)
 
     fast.last_poll_time = 0.0
     slow.last_poll_time = 0.0
 
-    assert fast.is_poll_due(5.5, bus_default)
-    assert not slow.is_poll_due(5.5, bus_default)
+    assert fast.is_poll_due(5.5)
+    assert not slow.is_poll_due(5.5)
 
-    assert slow.is_poll_due(10.0, bus_default)
-
-
-def test_control_without_interval_falls_back_to_bus_default():
-    inheriting = _readable_control("inh")
-    overriding = _readable_control("ovr", poll_interval=100.0)
-
-    inheriting.last_poll_time = 0.0
-    overriding.last_poll_time = 0.0
-
-    assert inheriting.is_poll_due(5.0, 5.0)
-    assert not overriding.is_poll_due(5.0, 5.0)
-
-    assert not inheriting.is_poll_due(5.0, 30.0)
-    assert not overriding.is_poll_due(5.0, 30.0)
-    assert overriding.is_poll_due(100.0, 30.0)
+    assert slow.is_poll_due(10.0)
 
 
 def test_alarm_controls_use_120s_interval():
     err = ErrorStatusControl()
     type21 = Type21Parameters().get_mqtt_controls()[0]
     type16 = Type16Parameters().get_mqtt_controls()[0]
+    type20 = Type20Parameters().get_mqtt_controls()[0]
+    type49 = Type49Parameters().get_mqtt_controls()[0]
 
     assert err.poll_interval == 120.0
     assert type21.poll_interval == 120.0
     assert type16.poll_interval == 120.0
+    assert type20.poll_interval == 120.0
+    assert type49.poll_interval == 120.0
 
-    for ctrl in (err, type21, type16):
+    for ctrl in (err, type21, type16, type20, type49):
         ctrl.last_poll_time = 0.0
-        assert not ctrl.is_poll_due(5.0, 5.0)
-        assert ctrl.is_poll_due(120.0, 5.0)
+        assert not ctrl.is_poll_due(5.0)
+        assert ctrl.is_poll_due(120.0)
+
+
+def test_time_until_next_poll_reads_interval_directly():
+    """The real `time_until_next_poll` reads each pollable's `poll_interval` with no None
+    fallback. A Type51 handler (hardcoded 120 s cycle) 60 s in yields ~60 s until due — which
+    would raise TypeError if its `poll_interval` regressed to None — and an empty PollScheduler
+    reports inf (nothing to poll)."""
+    handler = Type51Parameters()
+    handler.last_poll_time = 100.0
+    dev = _make_dali_device(controls=[], standalone_pollable=handler)
+
+    assert dev.time_until_next_poll(160.0) == pytest.approx(60.0)
+
+    scheduler = PollScheduler()
+    scheduler.poll_turn = True
+    assert scheduler.time_until_next_poll(0.0) == float("inf")
 
 
 @pytest.mark.asyncio
@@ -114,17 +124,13 @@ async def test_first_poll_after_init_happens_immediately():
     dev = _make_dali_device(controls=controls)
 
     for c in controls:
-        assert c.is_poll_due(0.0, 5.0)
+        assert c.is_poll_due(0.0)
 
-    res1 = dev.poll_controls(
-        MagicMock(), now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res1 = dev.poll_controls(MagicMock(), now=0.0, max_commands=3, default_max_commands=3)
     assert res1.commands_count == 3
     assert res1.has_more is True
 
-    res2 = dev.poll_controls(
-        MagicMock(), now=0.001, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res2 = dev.poll_controls(MagicMock(), now=0.001, max_commands=3, default_max_commands=3)
     assert res2.commands_count == 2
     assert res2.has_more is False
 
@@ -149,7 +155,7 @@ async def test_polling_tick_budget_capped_at_three_commands():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
-    await scheduler.poll(driver, 0.0, 5.0)
+    await scheduler.poll(driver, 0.0)
 
     total = sum(len(call) for call in sent_per_call)
     assert total <= 3
@@ -165,9 +171,7 @@ async def test_round_snapshot_excludes_controls_matured_mid_round():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=lambda cmds, _src: [_ok_response() for _ in cmds])
 
-    res1 = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res1 = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     await res1.poll_coroutine()
     # pylint: disable-next=protected-access
     assert dev._current_round == [fillers[1], fillers[2]]
@@ -175,16 +179,12 @@ async def test_round_snapshot_excludes_controls_matured_mid_round():
     # pylint: disable-next=protected-access
     assert fast not in dev._current_round
 
-    res2 = dev.poll_controls(
-        driver, now=2.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res2 = dev.poll_controls(driver, now=2.0, max_commands=3, default_max_commands=3)
     await res2.poll_coroutine()
     # pylint: disable-next=protected-access
     assert not dev._current_round
 
-    res3 = dev.poll_controls(
-        driver, now=2.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res3 = dev.poll_controls(driver, now=2.0, max_commands=3, default_max_commands=3)
     assert res3.commands_count == 1
 
 
@@ -199,7 +199,7 @@ async def test_tick_can_mix_commands_from_several_devices():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=lambda cmds, _src: [_ok_response() for _ in cmds])
 
-    responses = await scheduler.poll(driver, 0.0, 5.0)
+    responses = await scheduler.poll(driver, 0.0)
     polled_devices = [device for device, _ in responses]
 
     assert polled_devices == [dev_a, dev_b]
@@ -229,7 +229,7 @@ async def test_dt8_colour_step_consumes_whole_tick():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=opening_batch_send)
 
-    responses = await scheduler.poll(driver, 0.0, 5.0)
+    responses = await scheduler.poll(driver, 0.0)
     polled_devices = [device for device, _ in responses]
 
     assert polled_devices == [dev_a]
@@ -246,9 +246,7 @@ async def test_poll_error_does_not_change_schedule():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(return_value=[None])  # synthetic transmission failure
 
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
 
     # pylint: disable-next=protected-access
     assert c not in dev._current_round
@@ -258,8 +256,8 @@ async def test_poll_error_does_not_change_schedule():
     assert poll_results[0].error == "r"
 
     assert c.last_poll_time == 0.0
-    assert not c.is_poll_due(4.9, 5.0)
-    assert c.is_poll_due(5.0, 5.0)
+    assert not c.is_poll_due(4.9)
+    assert c.is_poll_due(5.0)
 
 
 @pytest.mark.asyncio
@@ -282,7 +280,7 @@ async def test_overdue_deadline_after_quiescent_does_not_burst_catch_up():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
-    await scheduler.poll(driver, 1000.0, 5.0)
+    await scheduler.poll(driver, 1000.0)
     assert sum(len(c) for c in sent_per_call) <= 3
 
 
@@ -299,7 +297,7 @@ async def test_device_removed_drops_its_polling_state():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=lambda cmds, _src: [_ok_response() for _ in cmds])
 
-    responses = await scheduler.poll(driver, 0.0, 5.0)
+    responses = await scheduler.poll(driver, 0.0)
     polled = [device for device, _ in responses]
 
     assert dev_a not in polled

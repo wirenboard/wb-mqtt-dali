@@ -46,11 +46,6 @@
                         "$ref": "#/definitions/device"
                     }
                 },
-                "polling_interval": {
-                    "type": "number",
-                    "title": "Polling Interval",
-                    "default": 5
-                },
                 "bus_monitor_enabled": {
                     "type": "boolean",
                     "default": false
@@ -100,8 +95,7 @@
     },
     "translations": {
         "ru": {
-            "DALI gateway configuration": "Настройки шлюза DALI",
-            "Polling Interval": "Интервал опроса"
+            "DALI gateway configuration": "Настройки шлюза DALI"
         }
     }
 }

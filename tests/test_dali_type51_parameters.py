@@ -293,9 +293,7 @@ def _energy_bytes_to_kwh_str(scale_byte: int, energy_bytes: list) -> str:
 
 
 async def _run_one_chunk(dev: DaliDevice, driver, now: float):
-    res = dev.poll_controls(
-        driver, now=now, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=now, max_commands=3, default_max_commands=3)
     assert res.poll_coroutine is not None
     return await res.poll_coroutine()
 
@@ -520,14 +518,10 @@ async def test_type51_refresh_paced_120s_after_success():
 
     # 120 s window measured from cycle-end, not cycle-start: at cycle-start + 150 we are still
     # inside the window (90 s past cycle-end) — no new cycle.
-    res = dev.poll_controls(
-        driver, now=cycle_end + 119.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=cycle_end + 119.0, max_commands=3, default_max_commands=3)
     assert res.poll_coroutine is None
     # Past cycle-end + 120: new cycle starts.
-    res = dev.poll_controls(
-        driver, now=cycle_end + 121.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=cycle_end + 121.0, max_commands=3, default_max_commands=3)
     assert res.poll_coroutine is not None
     await res.poll_coroutine()
     sent_call = driver.send_commands.await_args.args[0]
@@ -563,7 +557,6 @@ async def test_type51_refresh_paced_120s_after_failure():
         now=failure_now + 119.0,
         max_commands=3,
         default_max_commands=3,
-        default_poll_interval=5.0,
     )
     assert res.poll_coroutine is None
     res = dev.poll_controls(
@@ -571,7 +564,6 @@ async def test_type51_refresh_paced_120s_after_failure():
         now=failure_now + 121.0,
         max_commands=3,
         default_max_commands=3,
-        default_poll_interval=5.0,
     )
     assert res.poll_coroutine is not None
     await res.poll_coroutine()

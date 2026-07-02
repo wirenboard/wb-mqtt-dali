@@ -202,10 +202,6 @@ class CommissioningState:
 
 CommissioningStateCallback = Callable[[CommissioningState], Union[None, Coroutine[Any, Any, None]]]
 
-# Sub-second polling overloads the bus and is rejected; values below this are
-# clamped to the minimum and a warning is logged on every offending call.
-MIN_POLLING_INTERVAL = 1.0
-
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -230,7 +226,6 @@ class ApplicationControllerConfig:
     bus: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
-    polling_interval: float
     enable_bus_monitor: bool = False
     enable_bus_monitor_syslog: bool = False
 
@@ -292,7 +287,7 @@ class PollScheduler:
         self._current_device_index = 0
 
     async def poll(
-        self, driver: WBDALIDriver, current_time: float, default_poll_interval: float
+        self, driver: WBDALIDriver, current_time: float
     ) -> list[tuple[DaliDevice, Union[list[ControlPollResult], BaseException]]]:
         if not self._devices:
             return []
@@ -307,7 +302,6 @@ class PollScheduler:
                 current_time,
                 max_commands_count,
                 default_max_commands,
-                default_poll_interval,
             )
             if res.poll_coroutine is not None:
                 coros.append(res.poll_coroutine)
@@ -329,17 +323,17 @@ class PollScheduler:
         if index < self._current_device_index:
             self._current_device_index -= 1
 
-    def time_until_next_poll(self, current_time: float, default_poll_interval: float) -> float:
+    def time_until_next_poll(self, current_time: float) -> float:
         if not self.poll_turn:
             return 0.001
         if not self._devices:
-            return default_poll_interval
+            return float("inf")
         if self.is_empty():
             # Round done — return the time until the earliest control across
             # all known devices becomes due again.
-            return min(d.time_until_next_poll(current_time, default_poll_interval) for d in self._devices)
+            return min(d.time_until_next_poll(current_time) for d in self._devices)
         device = self._devices[self._current_device_index]
-        return device.time_until_next_poll(current_time, default_poll_interval)
+        return device.time_until_next_poll(current_time)
 
 
 @dataclass
@@ -425,10 +419,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
 
-        # Route initial value through the setter so all entry points share the clamp/warn logic.
-        self._polling_interval = MIN_POLLING_INTERVAL
         self._polling_task: Optional[asyncio.Task] = None
-        self.set_polling_interval(config.polling_interval)
 
         # Special gear commands are preceded by EnableDeviceType
         # Store the type to correctly decode the following command frame
@@ -490,27 +481,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         return self._dev
 
     @property
-    def polling_interval(self) -> float:
-        return self._polling_interval
-
-    @property
     def bus_monitor_enabled(self) -> bool:
         return self._bus_monitor_enabled
 
     @property
     def bus_monitor_syslog_enabled(self) -> bool:
         return self._bus_monitor_syslog_enabled
-
-    def set_polling_interval(self, value: float) -> None:
-        if value < MIN_POLLING_INTERVAL:
-            self.logger.warning(
-                "polling_interval=%s below minimum %.1fs, clamping to %.1fs",
-                value,
-                MIN_POLLING_INTERVAL,
-                MIN_POLLING_INTERVAL,
-            )
-            value = MIN_POLLING_INTERVAL
-        self._polling_interval = value
 
     def set_bus_monitor_enabled(self, enabled: bool) -> None:
         self._bus_monitor_enabled = enabled
@@ -1371,9 +1347,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         if not self._poll_scheduler.is_empty():
             # The round is not over yet, just check incoming queries
             return 0.001
-        # Cap at 1.0s so runtime polling_interval changes (via SetBus RPC)
-        # take effect within ~1s.
-        wait = min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
+        # Cap the idle wait at 1.0s: keeps it finite when nothing is due (time_until_next_poll
+        # can return inf) and paces the background settings fetch to one per idle tick. The poll
+        # cadence itself comes from each control's own interval, not from this ceiling.
+        wait = min(1.0, self._poll_scheduler.time_until_next_poll(current_time))
         # Idle window — poll round done and no control poll due (wait > 0): slip in exactly one
         # background settings fetch. A due poll (wait <= 0) takes priority. Reached only when the
         # task queue is empty and the bus is neither quiescent nor commissioning (loop invariants).
@@ -1510,7 +1487,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
     async def _poll_devices(self, poll_scheduler: PollScheduler, current_time: float) -> None:
         try:
-            responses = await poll_scheduler.poll(self._dev, current_time, self._polling_interval)
+            responses = await poll_scheduler.poll(self._dev, current_time)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.exception("Error polling devices %s", str(e))
         else:

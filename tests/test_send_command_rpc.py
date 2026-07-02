@@ -145,7 +145,6 @@ class TestSendCommandBatchPollingLoop:
     async def test_batch_atomic_against_polling(self, registry):
         """No poll step is taken between commands of a batch (only between bursts)."""
         controller = make_loop_controller()
-        controller._polling_interval = 0.01  # pylint: disable=protected-access
 
         sent = []
 
@@ -172,7 +171,6 @@ class TestSendCommandBatchPollingLoop:
     async def test_batch_atomic_against_control_topic(self, registry):
         """EXECUTE_CONTROL queued during a running batch waits for the batch."""
         controller = make_loop_controller()
-        controller._polling_interval = 100.0  # pylint: disable=protected-access
 
         commands = [parse_expression(f"DAPC(A{i}, 1)", registry) for i in range(2)]
         sent_during_batch: list = []

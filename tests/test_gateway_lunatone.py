@@ -36,7 +36,6 @@ def _bare_bus(uid: str) -> ApplicationController:
     bus.bus_name = "Bus 1"
     bus.dali_devices = []
     bus.dali2_devices = []
-    bus.polling_interval = 5.0
     bus.bus_monitor_enabled = False
     bus.load_bus_info.return_value = {"type": "object", "properties": {}}
     return bus
@@ -80,7 +79,6 @@ def test_legacy_config_loads_and_ignores_per_bus_websocket_keys():
 
     # Bus has no `websocket_config` attribute anymore; only the gateway has settings.
     assert not hasattr(bus, "websocket_config")
-    assert bus.polling_interval == 7
     assert bus.bus_monitor_enabled is True
 
 
@@ -326,7 +324,7 @@ async def test_get_bus_rpc_omits_websocket_keys():
 
     assert "websocket_enabled" not in result["config"]
     assert "websocket_port" not in result["config"]
-    assert "polling_interval" in result["config"]
+    assert "polling_interval" not in result["config"]
     assert "bus_monitor_enabled" in result["config"]
 
 
@@ -353,7 +351,6 @@ async def test_set_bus_rpc_ignores_legacy_websocket_keys():
     assert gw.websocket_enabled is False
     assert gw.websocket_port == DEFAULT_WEBSOCKET_PORT
     bus = gw.buses[0]
-    bus.set_polling_interval.assert_called_with(12)
     bus.set_bus_monitor_enabled.assert_called_with(True)
 
 
@@ -404,7 +401,6 @@ def test_syslog_flag_defaults_false():
 def _bus_with_state(uid: str) -> SimpleNamespace:
     bus = SimpleNamespace()
     bus.uid = uid
-    bus.polling_interval = 5
     bus.bus_monitor_enabled = False
     bus.bus_monitor_syslog_enabled = False
     bus.dali_devices = []

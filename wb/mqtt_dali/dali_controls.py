@@ -20,7 +20,12 @@ from dali.gear.general import (
     Up,
 )
 
-from .common_dali_device import EVENT_RESYNC_BASE_INTERVAL, MqttControl, MqttControlBase
+from .common_dali_device import (
+    EVENT_RESYNC_BASE_INTERVAL,
+    PERIODIC_STATUS_POLL_INTERVAL,
+    MqttControl,
+    MqttControlBase,
+)
 from .control_ids import ACTUAL_LEVEL
 from .control_ids import DAPC as DAPC_ID
 from .control_ids import WANTED_LEVEL
@@ -292,7 +297,7 @@ class ErrorStatusControl(MqttControlBase):
                 ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True),
                 "0",
             ),
-            poll_interval=120.0,
+            poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
         )
 
     def get_query(self, short_address: Address) -> Optional[Command]:

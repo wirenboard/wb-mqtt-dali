@@ -22,6 +22,7 @@ from dali.gear.general import (
     QueryPowerOnLevel,
     QuerySceneLevel,
     QuerySystemFailureLevel,
+    RemoveFromScene,
     SetPowerOnLevel,
     SetScene,
     SetSystemFailureLevel,
@@ -128,10 +129,16 @@ class ColourSettings:
         dali_type8_xy.XYColourValues,
     ]
     level: int
+    # True when the source's SCENE COLOUR TYPE register is MASK (no stored colour). Together
+    # with ``level == MASK`` this is how 62386-209 §9.11.4 marks "not a member of the scene";
+    # a MASK colour type is otherwise read back as the default type with all-MASK components,
+    # which alone can't be told apart from a real colour that happens to be fully masked.
+    colour_masked: bool = False
 
-    def __init__(self, colour_type: ColourType, level: int = MASK) -> None:
+    def __init__(self, colour_type: ColourType, level: int = MASK, colour_masked: bool = False) -> None:
         self.colour_type = colour_type
         self.level = level
+        self.colour_masked = colour_masked
         if colour_type == ColourType.RGBWAF:
             self.colour = dali_type8_rgbwaf.RgbwafColourValues()
         elif colour_type == ColourType.COLOUR_TEMPERATURE:
@@ -172,9 +179,10 @@ def query_colour_with_level(  # pylint: disable=too-many-locals
 
     level = resp[0].raw_value.as_integer
     colour_type = resp[-1].raw_value.as_integer
-    # Colour type is set to MASK, so all colours are also MASK
+    # Colour type is set to MASK, so all colours are also MASK. Flag it so membership can be
+    # told apart from a real colour with all-MASK components (62386-209 §9.11.4).
     if MASK == colour_type:
-        return ColourSettings(default_colour_type, level)
+        return ColourSettings(default_colour_type, level, colour_masked=True)
 
     res = ColourSettings(ColourType(colour_type), level)
 
@@ -364,22 +372,44 @@ class SceneSettings(ColourState):
         value: dict,
         logger: Optional[logging.Logger] = None,
     ) -> dict:
+        if not value.get("enabled", True):
+            return await self._remove_from_scene(driver, short_address, logger)
+        # Level may legitimately be MASK here: an enabled scene with a colour but MASK level
+        # is a valid "change colour, keep brightness" scene (62386-209 §9.11.2, NOTE 2).
         values_to_set = deepcopy(value)
-        if value.get("enabled", True):
-            values_to_set["level"] = value.get("level", 0)
-        else:
-            values_to_set["level"] = MASK
+        values_to_set["level"] = value.get("level", 0)
         res = await super().write(driver, short_address, {self.property_name: values_to_set}, logger=logger)
         return self._to_json(res)
+
+    # --- Private ---
+
+    async def _remove_from_scene(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger]
+    ) -> dict:
+        """Disable = remove the gear from the scene. REMOVE FROM SCENE stores MASK in both the
+        scene level and (62386-209 §9.11.3) the scene colour type, so the gear stops being a
+        member. A plain level=MASK write would keep the colour and leave a still-member
+        colour-only scene."""
+        await send_commands_with_retry(
+            driver,
+            [RemoveFromScene(short_address, self._scene_number)],
+            logger,
+            priority=FramePriority.CONFIGURATION,
+        )
+        if not is_broadcast_or_group_address(short_address):
+            return self._to_json(await self._read_impl(driver, short_address))
+        self.value = ColourSettings(self._default_colour_type, MASK, colour_masked=True)
+        return self._to_json({self.property_name: self.value.to_json()})
 
     def _to_json(self, read_response: dict) -> dict:
         value = read_response.get(self.property_name, {})
         if not value:
             return value
         level = value.get("level", MASK)
-        value["enabled"] = level != MASK
-        if level == MASK:
-            value["level"] = 0
+        # Member of the scene unless BOTH the level and the colour type are MASK
+        # (62386-209 §9.11.4). A MASK level with a stored colour stays enabled (colour-only
+        # scene), and level is left as MASK so the editor shows its "keep brightness" state.
+        value["enabled"] = not (level == MASK and self.value.colour_masked)
         return value
 
 

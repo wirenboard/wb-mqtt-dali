@@ -25,7 +25,7 @@ from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
 
 
-def make_loop_controller(polling_interval: float = 1.0) -> ApplicationController:
+def make_loop_controller() -> ApplicationController:
     # pylint: disable=protected-access
     controller = ApplicationController.__new__(ApplicationController)
     controller.uid = "gw_bus_1"
@@ -35,7 +35,6 @@ def make_loop_controller(polling_interval: float = 1.0) -> ApplicationController
     controller._state_lock = asyncio.Lock()
     controller._tasks_queue = asyncio.Queue()
     controller._in_quiescent_mode = False
-    controller._polling_interval = polling_interval
     controller._stop_requested = False
     controller.dali_devices = []
     controller.dali2_devices = []

@@ -1,11 +1,3 @@
-wb-mqtt-dali (1.18.2) stable; urgency=medium
-
-  * Fix DALI 2 colour scene membership against MASK. A colour scene that changes
-    the colour but leaves the brightness unchanged (MASK level) is now kept
-    enabled instead of turning its "Part of the scene" switch off, and disabling
-    a colour scene now removes the gear from it (REMOVE FROM SCENE, clearing both
-    the level and colour-type registers) instead of leaving a still-active
-    colour-only scene that reappeared as enabled.
 wb-mqtt-dali (1.19.0) stable; urgency=medium
 
   * Apply own and foreign commands from a single bus-observation path: writable
@@ -14,6 +6,17 @@ wb-mqtt-dali (1.19.0) stable; urgency=medium
     instead of freezing; legacy identify publishes the levels the lamp really goes
     to; a standing /meta/error=r no longer flickers or gets reset by prediction
     while the bus is busy; and wanted_level is published as an integer percent.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 03 Jul 2026 12:05:23 +0500
+
+wb-mqtt-dali (1.18.2) stable; urgency=medium
+
+  * Fix DALI 2 colour scene membership against MASK. A colour scene that changes
+    the colour but leaves the brightness unchanged (MASK level) is now kept
+    enabled instead of turning its "Part of the scene" switch off, and disabling
+    a colour scene now removes the gear from it (REMOVE FROM SCENE, clearing both
+    the level and colour-type registers) instead of leaving a still-active
+    colour-only scene that reappeared as enabled.
 
  -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 01 Jul 2026 12:00:00 +0500
 

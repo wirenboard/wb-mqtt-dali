@@ -4,7 +4,11 @@
 
 from dali.command import Response
 
-from .common_dali_device import MqttControl, MqttControlBase
+from .common_dali_device import (
+    PERIODIC_STATUS_POLL_INTERVAL,
+    MqttControl,
+    MqttControlBase,
+)
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.thermal_lamp_protection import FailureStatusResponse, QueryFailureStatus
@@ -40,6 +44,6 @@ class Type21Parameters(TypeParameters):
                 ),
                 query_builder=QueryFailureStatus,
                 value_formatter=_format_failure_status,
-                poll_interval=120.0,
+                poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
             ),
         ]

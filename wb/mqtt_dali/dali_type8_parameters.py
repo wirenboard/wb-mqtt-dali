@@ -728,7 +728,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too
             return dali_type8_xy.get_mqtt_controls()
         return []
 
-    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
+    def is_poll_due(self, now: float) -> bool:
         if self._current_colour_type is None:
             return False
         # In-progress read keeps the handler eligible for the next round so the
@@ -737,8 +737,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too
             return True
         if self.last_poll_time is None:
             return True
-        interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
-        return now - self.last_poll_time >= interval
+        return now - self.last_poll_time >= self.poll_interval
 
     def cancel_pending_poll(self) -> None:
         self._read_progress = None

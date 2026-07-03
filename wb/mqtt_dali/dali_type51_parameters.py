@@ -315,7 +315,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         # None means "no completed cycle yet, run immediately".
         self._last_cycle_end_time: Optional[float] = None
 
-        self.poll_interval: Optional[float] = None
+        self.poll_interval: float = _REFRESH_INTERVAL_S
         self.last_poll_time: Optional[float] = None
 
     @property
@@ -344,8 +344,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
     def get_mqtt_controls(self) -> list[MqttControlBase]:
         return [_ActiveEnergyControl()]
 
-    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
-        del default_poll_interval
+    def is_poll_due(self, now: float) -> bool:
         if self._read_progress is not None:
             return True
         if self._last_cycle_end_time is None:

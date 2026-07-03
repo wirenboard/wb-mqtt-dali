@@ -1,6 +1,10 @@
 # Type 49 Integrated power supply
 
-from .common_dali_device import MqttControl, MqttControlBase
+from .common_dali_device import (
+    PERIODIC_STATUS_POLL_INTERVAL,
+    MqttControl,
+    MqttControlBase,
+)
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.integrated_power_supply import QueryActivePowerSupply
@@ -23,5 +27,6 @@ class Type49Parameters(TypeParameters):
                 ),
                 query_builder=QueryActivePowerSupply,
                 value_formatter=lambda response: "1" if response.value else "0",
+                poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
             ),
         ]

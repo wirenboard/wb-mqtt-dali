@@ -1,6 +1,11 @@
 # Type 20 Demand response
 
-from .common_dali_device import MqttControl, MqttControlBase, PropertyStartOrder
+from .common_dali_device import (
+    PERIODIC_STATUS_POLL_INTERVAL,
+    MqttControl,
+    MqttControlBase,
+    PropertyStartOrder,
+)
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo
 from .gear.demand_response import (
@@ -124,5 +129,6 @@ class Type20Parameters(TypeParameters):
                 ),
                 query_builder=QueryLoadSheddingCondition,
                 value_formatter=lambda response: str(response.value),
+                poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
             ),
         ]

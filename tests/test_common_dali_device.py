@@ -630,9 +630,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
-    res_request = d.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res_request = d.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     assert res_request.commands_count == 3
     assert res_request.poll_coroutine is not None
     res = await res_request.poll_coroutine()

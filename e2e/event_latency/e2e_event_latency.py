@@ -8,8 +8,8 @@
 # total latency that comes from DALI half-duplex serialization is visible.
 # Stand: two gateways with bus 1 wired in parallel. gw1 (DUT) runs wb-mqtt-dali against
 # an RGBW dimmer and has a DALI 2 input-device with N pushbutton instances in its config
-# (the physical device does not need to exist — only the in-memory entry in
-# _dali2_devices_by_addr is required to decode the injected frames). gw2 (injector) is
+# (the physical device does not need to exist — only the in-memory entry in the bus
+# device registry is required to decode the injected frames). gw2 (injector) is
 # used purely as a transport via its WBDALIDriver. The script overrides
 # polling_interval on the DUT bus via Editor/SetBus for the duration of the run and
 # restores it on exit.

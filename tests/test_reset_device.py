@@ -17,6 +17,7 @@ from wb.mqtt_dali.application_controller import (
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
+from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.wbdali_utils import AsyncDeviceInstanceTypeMapper
 
@@ -31,7 +32,7 @@ def _make_bare_controller():
     controller.logger = logging.getLogger("test")
     controller.dali_devices = []
     controller.dali2_devices = []
-    controller._dali2_devices_by_addr = {}
+    controller._device_registry = DeviceRegistry()
     controller._devices_by_mqtt_id = {}
     controller._dev = AsyncMock()
     controller._dev_inst_map = MagicMock(mapping={})
@@ -118,7 +119,7 @@ async def test_reset_device_settings_dali2_sends_reset_and_reinitializes():
     controller = _make_bare_controller()
     device = _make_initialized_dali2_device()
     controller.dali2_devices = [device]
-    controller._dali2_devices_by_addr = {device.address.short: device}
+    controller._device_registry.add(device)
     controller._devices_by_mqtt_id[device.mqtt_id] = device
 
     sent_commands = []
@@ -135,11 +136,11 @@ async def test_reset_device_settings_dali2_sends_reset_and_reinitializes():
 
     assert any(isinstance(c, DeviceReset) for c in sent_commands)
     initialize_mock.assert_awaited_once()
-    # DALI 2 update path uses dali2_devices_by_addr and instance map
+    # DALI 2 update path re-indexes the device registry and instance map
     assert len(controller.dali2_devices) == 1
     new_device = controller.dali2_devices[0]
     assert new_device is not device
-    assert controller._dali2_devices_by_addr[device.address.short] is new_device
+    assert controller._device_registry.dali2_device_by_short(device.address.short) is new_device
     controller._update_dali2_device_instance_map.assert_called_once_with(new_device)
     # No DALI 1 aggregate refresh for DALI 2 devices
     controller._refresh_group_virtual_devices.assert_not_called()
@@ -269,7 +270,7 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
     controller = _make_bare_controller()
     device = _make_initialized_dali2_device()
     controller.dali2_devices = [device]
-    controller._dali2_devices_by_addr = {device.address.short: device}
+    controller._device_registry.add(device)
     controller._devices_by_mqtt_id[device.mqtt_id] = device
     # populate _dev_inst_map for this short address using a real mapper so that
     # remove_short_address() actually mutates the underlying dict
@@ -298,7 +299,7 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
     assert any(isinstance(c, DeviceSetShortAddress) for c in sent)
     # internal maps no longer reference the removed device
     assert controller.dali2_devices == []
-    assert device.address.short not in controller._dali2_devices_by_addr
+    assert controller._device_registry.dali2_device_by_short(device.address.short) is None
     assert (device.address.short, 0) not in controller._dev_inst_map.mapping
     assert (device.address.short, 1) not in controller._dev_inst_map.mapping
     # entries for other short addresses are kept untouched

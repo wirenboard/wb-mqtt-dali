@@ -31,6 +31,7 @@ from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .device_registry import DeviceRegistry
+from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .send_command import format_command_expression
@@ -473,6 +474,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._stop_requested = False
 
         self._poll_scheduler = PollScheduler()
+        self._fetch_scheduler = SettingsFetchScheduler()
 
     @property
     def driver(self) -> WBDALIDriver:
@@ -941,6 +943,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._device_registry.remove(device)
         self._devices_by_mqtt_id.pop(mqtt_id, None)
         self._init_scheduler.remove(mqtt_id)
+        self._fetch_scheduler.remove_device(device)
         if isinstance(device, DaliDevice):
             self._poll_scheduler.remove_device(device)
         await self._device_publisher.remove_device(mqtt_id)
@@ -1096,7 +1099,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         await self._device_publisher.rebuild(changes)
 
         for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
+            removed = self._devices_by_mqtt_id.pop(removed_id, None)
+            if isinstance(removed, (DaliDevice, Dali2Device)):
+                self._fetch_scheduler.remove_device(removed)
             self._init_scheduler.remove(removed_id)
 
         for device in created_devices:
@@ -1131,7 +1136,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         await self._device_publisher.rebuild(changes)
 
         for removed_id in removed_ids:
-            self._devices_by_mqtt_id.pop(removed_id, None)
+            removed = self._devices_by_mqtt_id.pop(removed_id, None)
+            if isinstance(removed, (DaliDevice, Dali2Device)):
+                self._fetch_scheduler.remove_device(removed)
             self._init_scheduler.remove(removed_id)
 
         for device in created_devices:
@@ -1242,6 +1249,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             current_time,
         )
         if success:
+            self._fetch_scheduler.add_device(device)
             if isinstance(device, DaliDevice):
                 await self._refresh_group_virtual_devices()
                 await self._refresh_broadcast_device()
@@ -1352,7 +1360,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             return 0.001
         # Cap at 1.0s so runtime polling_interval changes (via SetBus RPC)
         # take effect within ~1s.
-        return min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
+        wait = min(1.0, self._poll_scheduler.time_until_next_poll(current_time, self._polling_interval))
+        # Idle window — poll round done and no control poll due (wait > 0): slip in exactly one
+        # background settings fetch. A due poll (wait <= 0) takes priority. Reached only when the
+        # task queue is empty and the bus is neither quiescent nor commissioning (loop invariants).
+        if wait > 0 and await self._fetch_scheduler.fetch_step(self._dev, self.logger):
+            return 0.001
+        return wait
 
     async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,

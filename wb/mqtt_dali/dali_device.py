@@ -34,6 +34,7 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_controls import (
     ActualLevelControl,
     ErrorStatusControl,
+    SceneLevelSource,
     WantedLevelControl,
     make_controls,
 )
@@ -127,7 +128,7 @@ def query_device_types_sequence(addr: Address):
         last_seen = r.raw_value.as_integer
 
 
-class DaliDevice(DaliDeviceBase):
+class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
 
     def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
@@ -148,6 +149,11 @@ class DaliDevice(DaliDeviceBase):
         self._dimming_curve_state = DimmingCurveState()
         self._groups_parameter = GroupsParam()
         self._fade_parameter = FadeTimeFadeRateParam()
+        # Prediction-input owners shared with the settings page and the background
+        # fetch (same instances), read by ActualLevelControl.apply.
+        self._max_level_param = MaxLevelParam()
+        self._min_level_param = MinLevelParam()
+        self._scenes_param: Optional[ScenesParam] = None
 
     async def identify(self, driver: WBDALIDriver) -> None:
         address = GearShort(self.address.short)
@@ -196,6 +202,16 @@ class DaliDevice(DaliDeviceBase):
             return self._type8_handler.tc_limits
         return None
 
+    @property
+    def dt8_handler(self) -> Optional[Type8Parameters]:
+        """The Type-8 colour handler (event colour pollable), or ``None`` for non-DT8 gear."""
+        return self._type8_handler
+
+    @property
+    def fade_param(self) -> FadeTimeFadeRateParam:
+        """Owner of the tracked fade-time code (init + sniffed SetFadeTime)."""
+        return self._fade_parameter
+
     # --- Hooks for subclasses ---
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
@@ -209,7 +225,12 @@ class DaliDevice(DaliDeviceBase):
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
         mqtt_controls: list[MqttControlBase] = [
             ErrorStatusControl(),
-            ActualLevelControl(self._dimming_curve_state),
+            ActualLevelControl(
+                self._dimming_curve_state,
+                max_level=self._max_level_param,
+                min_level=self._min_level_param,
+                scene_source=self._scene_level_source(),
+            ),
             WantedLevelControl(self._dimming_curve_state),
         ]
         mqtt_controls.extend(make_controls())
@@ -283,8 +304,8 @@ class DaliDevice(DaliDeviceBase):
         # Parameter handlers for settings page in UI
         parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,
-            MaxLevelParam(),
-            MinLevelParam(),
+            self._max_level_param,
+            self._min_level_param,
             self._fade_parameter,
         ]
 
@@ -300,7 +321,8 @@ class DaliDevice(DaliDeviceBase):
             parameter_handlers.append(fallback)
         # Colour control has own scenes, power on level and system failure level parameters
         if DaliDeviceType.COLOUR_CONTROL.value not in self.types:
-            parameter_handlers.extend([ScenesParam(), PowerOnLevelParam(), SystemFailureLevelParam()])
+            self._scenes_param = ScenesParam()
+            parameter_handlers.extend([self._scenes_param, PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
             parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
 
@@ -323,6 +345,14 @@ class DaliDevice(DaliDeviceBase):
                     group_parameter_handlers.extend(self._type8_handler.get_group_parameters())
 
         return (parameter_handlers, group_parameter_handlers)
+
+    # --- Private ---
+
+    def _scene_level_source(self) -> Optional[SceneLevelSource]:
+        # DT8 keeps scene levels on its colour scenes; other gear on ScenesParam.
+        if self._type8_handler is not None:
+            return self._type8_handler.scenes_settings
+        return self._scenes_param
 
 
 async def legacy_identify_sequence(

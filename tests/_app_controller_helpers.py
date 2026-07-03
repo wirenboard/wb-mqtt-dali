@@ -18,6 +18,8 @@ from wb.mqtt_dali.application_controller import (
     CommissioningState,
     PollScheduler,
 )
+from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
@@ -46,6 +48,15 @@ def make_loop_controller(polling_interval: float = 1.0) -> ApplicationController
     controller._current_commissioning_task = None
     controller._commissioning_state = CommissioningState()
     controller._commissioning_state_cb = None
+    controller._device_registry = DeviceRegistry()
+    controller._group_devices_by_number = {}
+    controller._device_publisher = AsyncMock()
+    controller._event_sync = EventSyncCoordinator(
+        publisher=controller._device_publisher,
+        device_registry=controller._device_registry,
+        group_devices_by_number=controller._group_devices_by_number,
+        logger=controller.logger,
+    )
     return controller
 
 

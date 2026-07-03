@@ -109,6 +109,15 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         self._fade_time = None
         self._fade_rate = None
 
+    @property
+    def fade_time(self) -> Optional[int]:
+        """Last known fade-time code (from init, write, or a sniffed SetFadeTime)."""
+        return self._fade_time
+
+    def set_fade_time(self, code: int) -> None:
+        """Update the cached fade-time code from a sniffed DTR0+SetFadeTime (no bus write)."""
+        self._fade_time = code
+
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
@@ -452,6 +461,13 @@ class ScenesParam(SettingsParamBase):
 
     def has_changes(self, new_params: dict) -> bool:
         return "scenes" in new_params
+
+    def scene_level(self, index: int) -> Optional[int]:
+        """Raw scene level, or ``None`` if not yet read or the scene is disabled (MASK)."""
+        if index < 0 or index >= self._fetch_cursor:
+            return None
+        value = self._scenes[index]
+        return None if value == MASK else value
 
     # --- Private ---
 

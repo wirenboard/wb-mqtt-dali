@@ -10,6 +10,8 @@ from dali.gear.general import DTR0, QueryActualLevel, QueryContentDTR0
 
 from wb.mqtt_dali.application_controller import PollScheduler
 from wb.mqtt_dali.common_dali_device import (
+    EVENT_RESYNC_BASE_INTERVAL,
+    EVENT_STARTUP_RECONFIRM_DELAY,
     DaliDeviceAddress,
     DaliDeviceBase,
     MqttControl,
@@ -17,6 +19,7 @@ from wb.mqtt_dali.common_dali_device import (
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type8_parameters import (
     MAX_COLOUR_SUBBATCH_RETRIES,
+    ColourSettings,
     ColourType,
     Type8Parameters,
 )
@@ -57,6 +60,22 @@ def _make_type8_handler(colour_type: ColourType = ColourType.RGBWAF) -> Type8Par
     # pylint: disable-next=protected-access
     handler._current_colour_type = colour_type
     return handler
+
+
+def test_apply_scene_colour_keeps_masked_component():
+    """A scene whose stored colour leaves a component at the MASK sentinel (here: RGB set,
+    white unchanged) must keep the device's current white on GoToScene, not publish or cache
+    the sentinel as a real value."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    handler.apply_colour({"red": 10, "green": 20, "blue": 30, "white": 200})  # known current colour
+
+    scene = ColourSettings(ColourType.RGBWAF, level=100)
+    scene.colour.red, scene.colour.green, scene.colour.blue = 1, 2, 3  # white left at MASK
+
+    results = {r.control_id: r.value for r in handler.apply_scene_colour(scene)}
+
+    assert results["current_rgb"] == "1;2;3"  # scene RGB applied
+    assert results["current_white"] == "200"  # masked white kept, not the MASK sentinel
 
 
 def _make_dali_device(short=1, controls=None, type8_handler=None) -> DaliDevice:
@@ -323,8 +342,27 @@ async def test_type8_subbatch_failure_publishes_error_and_reschedules():
     assert not handler.has_in_progress_read()
 
     assert handler.last_poll_time == 0.0
-    assert handler.is_poll_due(4.9, 5.0) is False
-    assert handler.is_poll_due(5.0, 5.0) is True
+    # Colour is an event control: it re-syncs on the long jittered base interval, not
+    # the 5s bus default. So it is not due at 5s but is due past the jitter ceiling.
+    assert handler.is_poll_due(5.0, 5.0) is False
+    assert handler.is_poll_due(EVENT_RESYNC_BASE_INTERVAL * 1.31, 5.0) is True
+
+
+@pytest.mark.asyncio
+async def test_type8_first_poll_schedules_startup_reconfirm():
+    """A DT8 colour control's first poll (last_poll_time None) pulls one reconfirm in at
+    the startup delay, mirroring the gear-control first-poll behaviour."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    dev = _make_dali_device(type8_handler=handler)
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_bad_response() for _ in cmds])
+
+    handler.last_poll_time = None
+    dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0)
+
+    assert handler.last_poll_time == 0.0
+    assert handler.poll_interval == EVENT_STARTUP_RECONFIRM_DELAY
 
 
 @pytest.mark.asyncio

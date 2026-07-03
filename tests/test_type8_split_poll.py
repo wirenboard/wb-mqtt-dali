@@ -147,9 +147,7 @@ async def test_type8_colour_poll_split_into_subbatches():
 
     results: list = []
     for _ in range(5):
-        res = dev.poll_controls(
-            driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-        )
+        res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
         assert res.poll_coroutine is not None
         results.append(await res.poll_coroutine())
 
@@ -202,9 +200,7 @@ async def test_type8_colour_poll_does_not_hold_bus_lock_across_subbatches():
         other_call_results.append(result)
 
     for i in range(5):
-        res = dev.poll_controls(
-            driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-        )
+        res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
         assert res.poll_coroutine is not None
         await res.poll_coroutine()
         if i < 4:
@@ -231,15 +227,11 @@ async def test_execute_control_preempts_between_poll_subbatches():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=base_send)
 
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     await res.poll_coroutine()
     assert handler.has_in_progress_read()
 
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     await res.poll_coroutine()
     execute_control_done = False
 
@@ -253,9 +245,7 @@ async def test_execute_control_preempts_between_poll_subbatches():
     assert handler.has_in_progress_read()
 
     for _ in range(3):
-        res = dev.poll_controls(
-            driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-        )
+        res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
         await res.poll_coroutine()
     assert not handler.has_in_progress_read()
 
@@ -289,7 +279,7 @@ async def test_execute_control_latency_under_150ms_in_4_rgbwaf_setup():
 
     for _ in range(30):
         sent_per_tick.append(0)
-        await scheduler.poll(driver, 0.0, 5.0)
+        await scheduler.poll(driver, 0.0)
 
     assert sent_per_tick, "no ticks recorded"
     assert max(sent_per_tick) <= 3
@@ -311,9 +301,7 @@ async def test_type8_subbatch_retries_up_to_three_times():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     await res.poll_coroutine()
 
     assert attempts[0] == 3
@@ -330,9 +318,7 @@ async def test_type8_subbatch_failure_publishes_error_and_reschedules():
     driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_bad_response() for _ in cmds])
 
     handler.last_poll_time = None
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     poll_results = await res.poll_coroutine()
 
     assert {p.control_id for p in poll_results} == {"current_rgb", "current_white"}
@@ -344,8 +330,8 @@ async def test_type8_subbatch_failure_publishes_error_and_reschedules():
     assert handler.last_poll_time == 0.0
     # Colour is an event control: it re-syncs on the long jittered base interval, not
     # the 5s bus default. So it is not due at 5s but is due past the jitter ceiling.
-    assert handler.is_poll_due(5.0, 5.0) is False
-    assert handler.is_poll_due(EVENT_RESYNC_BASE_INTERVAL * 1.31, 5.0) is True
+    assert handler.is_poll_due(5.0) is False
+    assert handler.is_poll_due(EVENT_RESYNC_BASE_INTERVAL * 1.31) is True
 
 
 @pytest.mark.asyncio
@@ -359,7 +345,7 @@ async def test_type8_first_poll_schedules_startup_reconfirm():
     driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_bad_response() for _ in cmds])
 
     handler.last_poll_time = None
-    dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0)
+    dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
 
     assert handler.last_poll_time == 0.0
     assert handler.poll_interval == EVENT_STARTUP_RECONFIRM_DELAY
@@ -381,12 +367,8 @@ async def test_type8_quiescent_mid_read_drops_partial_state():
         side_effect=_make_send_commands(50, ColourType.RGBWAF.value, component_values)
     )
 
-    await dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    ).poll_coroutine()
-    await dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    ).poll_coroutine()
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
     assert handler.has_in_progress_read()
 
     dev.reset_polling_state()
@@ -395,9 +377,7 @@ async def test_type8_quiescent_mid_read_drops_partial_state():
     assert not dev._current_round
 
     sends_before = driver.send_commands.await_count
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     if res.poll_coroutine is not None:
         await res.poll_coroutine()
     # Next send after reset must be a fresh opening batch, not a component continuation.
@@ -423,12 +403,8 @@ async def test_type8_device_removed_mid_read_drops_partial_state():
         side_effect=_make_send_commands(50, ColourType.RGBWAF.value, component_values)
     )
 
-    await dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    ).poll_coroutine()
-    await dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    ).poll_coroutine()
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
     assert handler.has_in_progress_read()
 
     scheduler = PollScheduler()
@@ -445,15 +421,13 @@ async def test_type8_handler_takes_one_snapshot_position_with_own_deadline():
     a = _readable_control("a", poll_interval=5.0)
     dev = _make_dali_device(controls=[a], type8_handler=handler)
 
-    assert handler.is_poll_due(0.0, 5.0) is True
-    assert a.is_poll_due(0.0, 5.0) is True
+    assert handler.is_poll_due(0.0) is True
+    assert a.is_poll_due(0.0) is True
 
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_ok_response() for _ in cmds])
 
-    res = dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    )
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
     assert res.commands_count == 1
     # pylint: disable-next=protected-access
     assert handler in dev._current_round
@@ -477,12 +451,8 @@ async def test_dt8_subbatch_does_not_bundle_with_single_cmd_controls_in_one_send
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
-    await dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    ).poll_coroutine()
-    await dev.poll_controls(
-        driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-    ).poll_coroutine()
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
 
     assert len(sent_calls) >= 2
     dt8_calls = [c for c in sent_calls if _is_first_subbatch(c)]
@@ -514,9 +484,7 @@ async def test_xy_component_batch_is_3_cmds():
 
     results = []
     for _ in range(3):
-        res = dev.poll_controls(
-            driver, now=0.0, max_commands=3, default_max_commands=3, default_poll_interval=5.0
-        )
+        res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
         results.append(await res.poll_coroutine())
 
     final = {item.control_id: item.value for item in results[-1]}

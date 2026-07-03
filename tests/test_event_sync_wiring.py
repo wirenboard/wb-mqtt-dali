@@ -111,7 +111,7 @@ async def test_execute_control_does_not_apply_at_send_time():
     """A successful /on control execution no longer replays its DALI commands into event
     sync at send time — the emitted frames are applied from the monitor path."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     controller._event_sync = MagicMock()
     controller._event_sync.apply_commands = AsyncMock()
     device = MagicMock()
@@ -218,7 +218,7 @@ async def test_setpoint_value_not_published_by_confirm():
     """After a successful setpoint write, confirm clears the write error but does not
     republish the value — event sync owns it (published from the observed truth)."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     device = MagicMock(spec=DaliDevice)
     device.mqtt_id = "dev-5"
     device.execute_control = AsyncMock(return_value=None)
@@ -243,7 +243,7 @@ async def test_setpoint_value_not_published_by_confirm():
 async def test_setpoint_write_error_held_by_confirm():
     """A failed setpoint write still makes confirm publish the "w" write error."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     device = MagicMock(spec=DaliDevice)
     device.mqtt_id = "dev-5"
     device.execute_control = AsyncMock(side_effect=RuntimeError("bus down"))
@@ -264,7 +264,7 @@ async def test_owned_setpoint_echoed_by_confirm_for_virtual_device():
     confirm path applies to real gear does not fire: an owned setpoint write is still echoed
     to MQTT after a successful write (the isinstance guard's False branch)."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     device = MagicMock(spec=GroupVirtualDevice)
     device.mqtt_id = "grp-1"
     device.execute_control = AsyncMock(return_value=None)
@@ -326,7 +326,7 @@ async def test_nonowned_control_published_by_confirm():
     """A non-owned writable (a colour step pushbutton) still has its value published by
     confirm after a successful write."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     device = MagicMock(spec=DaliDevice)
     device.mqtt_id = "dev-5"
     device.execute_control = AsyncMock(return_value=None)

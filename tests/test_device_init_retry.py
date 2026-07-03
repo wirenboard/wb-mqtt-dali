@@ -406,7 +406,6 @@ class TestPollStep:
         ctrl._init_scheduler.schedule("r1", 0.0)
         ctrl._init_scheduler.record_failure("r1", 0.0)
         ctrl._poll_devices = AsyncMock()
-        ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
         t = 100.0
@@ -437,7 +436,6 @@ class TestPollStep:
             scheduler._current_device_index = len(scheduler._devices)
 
         ctrl._poll_devices = AsyncMock(side_effect=_drain)
-        ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
         await ctrl._poll_step(100.0)
@@ -460,7 +458,6 @@ class TestPollStep:
         ctrl._init_scheduler.schedule("r1", 0.0)
         ctrl._init_scheduler.record_failure("r1", 0.0)
         ctrl._poll_devices = AsyncMock()
-        ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
         timeout = await ctrl._poll_step(100.0)
@@ -476,7 +473,6 @@ class TestPollStep:
         dev = _make_mock_device(mqtt_id="new1", is_initialized=False)
         ctrl._devices_by_mqtt_id = {"new1": dev}
         ctrl._init_scheduler.schedule("new1", 0.0)
-        ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
         timeout = await ctrl._poll_step(100.0)
@@ -493,7 +489,6 @@ class TestPollStep:
         ctrl._devices_by_mqtt_id = {"r1": retry_dev}
         ctrl._init_scheduler.schedule("r1", 0.0)
         ctrl._init_scheduler.record_failure("r1", 0.0)
-        ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
         timeout = await ctrl._poll_step(2.0)
@@ -511,7 +506,6 @@ class TestPollStep:
         ctrl.dali_devices = [dev]
         ctrl._devices_by_mqtt_id = {"d1": dev}
         ctrl._poll_devices = AsyncMock()
-        ctrl._polling_interval = 1.0
         ctrl._poll_scheduler.poll_turn = True
 
         t0 = 100.0

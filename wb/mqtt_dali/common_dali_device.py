@@ -71,6 +71,10 @@ _POLL_JITTER_FRACTION = 0.3
 # in case start caught a transition mid-fade. The pre-start command (and its fade) is
 # unknown, so this mirrors the default fade delay used for an unknown fade.
 EVENT_STARTUP_RECONFIRM_DELAY = 6.0
+# Periodic status/alarm controls (error status, thermal failure status, demand-response
+# load shedding, integrated power supply) change rarely and are not event-driven, so they
+# are read on this fixed interval with no re-sync jitter.
+PERIODIC_STATUS_POLL_INTERVAL = 120.0
 
 
 class EventPollSchedule:
@@ -84,9 +88,9 @@ class EventPollSchedule:
     """
 
     last_poll_time: Optional[float]
-    poll_interval: Optional[float]
+    poll_interval: float
     randomize_poll_interval: bool
-    _base_poll_interval: Optional[float]
+    _base_poll_interval: float
 
     def poll_no_later_than(self, now: float, at: float) -> None:
         """Bring the next poll no later than ``at`` (min-semantics: only earlier).
@@ -96,8 +100,7 @@ class EventPollSchedule:
         """
         if self.last_poll_time is None:
             return
-        base = self.poll_interval if self.poll_interval is not None else self._base_poll_interval
-        current_due = self.last_poll_time + (base if base is not None else 0.0)
+        current_due = self.last_poll_time + self.poll_interval
         if at >= current_due:
             return
         self.last_poll_time = now
@@ -113,15 +116,13 @@ class EventPollSchedule:
         """
         if self.last_poll_time is None:
             return
-        target = max(0.0, at - now)
-        if self._base_poll_interval is not None:
-            target = min(target, self._base_poll_interval)
+        target = min(max(0.0, at - now), self._base_poll_interval)
         self.last_poll_time = now
         self.poll_interval = target
 
     # --- Private ---
 
-    def _init_poll_schedule(self, poll_interval: Optional[float], randomize_poll_interval: bool) -> None:
+    def _init_poll_schedule(self, poll_interval: float, randomize_poll_interval: bool) -> None:
         self.poll_interval = poll_interval
         self.last_poll_time = None
         # Event controls jitter their interval (base ±30%, re-drawn after each poll);
@@ -130,7 +131,7 @@ class EventPollSchedule:
         self._base_poll_interval = poll_interval
 
     def _redraw_poll_interval(self) -> None:
-        if not self.randomize_poll_interval or self._base_poll_interval is None:
+        if not self.randomize_poll_interval:
             return
         jitter = self._base_poll_interval * _POLL_JITTER_FRACTION
         self.poll_interval = self._base_poll_interval + random.uniform(-jitter, jitter)
@@ -162,7 +163,7 @@ class MqttControlBase(EventPollSchedule):
     def __init__(
         self,
         control_info: ControlInfo,
-        poll_interval: Optional[float] = None,
+        poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval: bool = False,
     ) -> None:
         # the property value is used as default value for the control
@@ -193,11 +194,10 @@ class MqttControlBase(EventPollSchedule):
     def is_dirty(self) -> bool:
         return self.value_to_set is not None
 
-    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
+    def is_poll_due(self, now: float) -> bool:
         if self.last_poll_time is None:
             return True
-        poll_interval = self.poll_interval if self.poll_interval is not None else default_poll_interval
-        return now - self.last_poll_time >= poll_interval
+        return now - self.last_poll_time >= self.poll_interval
 
     def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
@@ -263,7 +263,7 @@ class MqttControl(MqttControlBase):
         value_formatter: Optional[Callable[[Response], str]] = None,
         commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
         is_group_state_control: bool = False,
-        poll_interval: Optional[float] = None,
+        poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval: bool = False,
     ) -> None:
         super().__init__(control_info, poll_interval, randomize_poll_interval)
@@ -327,9 +327,9 @@ class Pollable(Protocol):
     """
 
     last_poll_time: Optional[float]
-    poll_interval: Optional[float]
+    poll_interval: float
 
-    def is_poll_due(self, now: float, default_poll_interval: float) -> bool:
+    def is_poll_due(self, now: float) -> bool:
         """Whether the pollable is eligible for the next round."""
 
     def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -906,7 +906,6 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         now: float,
         max_commands: int,
         default_max_commands: int,
-        default_poll_interval: float,
     ) -> ControlsPollRequestResult:
         if not self.is_initialized:
             raise RuntimeError(
@@ -917,7 +916,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         consumed_commands = 0
         address = self._compat.getAddress(self.address.short)
         if not self._current_round:
-            self._refresh_round_snapshot(now, default_poll_interval)
+            self._refresh_round_snapshot(now)
         while self._current_round:
             head = self._current_round[0]
             remaining_budget = max_commands - consumed_commands
@@ -952,16 +951,13 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         for pollable in self._pollables:
             pollable.cancel_pending_poll()
 
-    def time_until_next_poll(self, now: float, default_poll_interval: float) -> float:
+    def time_until_next_poll(self, now: float) -> float:
         pollables = self._current_round or self._pollables
-        res = default_poll_interval
+        res = float("inf")
         for pollable in pollables:
             if pollable.last_poll_time is None:
                 return 0
-            poll_interval = (
-                pollable.poll_interval if pollable.poll_interval is not None else default_poll_interval
-            )
-            time_until_poll = poll_interval - (now - pollable.last_poll_time)
+            time_until_poll = pollable.poll_interval - (now - pollable.last_poll_time)
             res = min(time_until_poll, res)
         return res
 
@@ -1019,9 +1015,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
     # --- Private ---
 
-    def _refresh_round_snapshot(self, now: float, default_poll_interval: float) -> None:
+    def _refresh_round_snapshot(self, now: float) -> None:
         for pollable in self._pollables:
-            if pollable.is_poll_due(now, default_poll_interval):
+            if pollable.is_poll_due(now):
                 self._current_round.append(pollable)
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:

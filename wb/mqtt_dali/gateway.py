@@ -28,7 +28,6 @@ from .send_command import (
 )
 from .wbmqtt import remove_topics_by_driver
 
-DEFAULT_POLLING_INTERVAL = 5.0
 DEFAULT_WEBSOCKET_PORT = 8080
 MIN_WEBSOCKET_PORT = 1
 MAX_WEBSOCKET_PORT = 65535
@@ -180,13 +179,11 @@ def bus_from_json(
             )
             dali_devices.append(device)
 
-    polling_interval = data.get("polling_interval", DEFAULT_POLLING_INTERVAL)
     ap_conf = ApplicationControllerConfig(
         gateway_mqtt_device_id,
         bus_index,
         dali_devices,
         dali2_devices,
-        polling_interval,
         data.get("bus_monitor_enabled", False),
         data.get("bus_monitor_syslog_enabled", False),
     )
@@ -494,7 +491,6 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
             }
         return {
             "config": {
-                "polling_interval": bus.polling_interval,
                 "bus_monitor_enabled": bus.bus_monitor_enabled,
                 "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
             },
@@ -504,18 +500,16 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     async def set_bus_rpc_handler(self, params: dict):
         bus = self._find_bus(params.get("busId"))
         new_config = dict(params.get("config", {}))
-        bus.set_polling_interval(new_config.get("polling_interval", bus.polling_interval))
         bus.set_bus_monitor_enabled(new_config.get("bus_monitor_enabled", bus.bus_monitor_enabled))
         bus.set_bus_monitor_syslog_enabled(
             new_config.get("bus_monitor_syslog_enabled", bus.bus_monitor_syslog_enabled)
         )
-        for key in ["polling_interval", "bus_monitor_enabled", "bus_monitor_syslog_enabled"]:
+        for key in ["bus_monitor_enabled", "bus_monitor_syslog_enabled"]:
             new_config.pop(key, None)
         if new_config:
             await bus.apply_bus_parameters(new_config)
         await self._save_configuration()
         return {
-            "polling_interval": bus.polling_interval,
             "bus_monitor_enabled": bus.bus_monitor_enabled,
             "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
         }
@@ -700,7 +694,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 buses = []
                 bus_count = 3
                 for bus_index in range(1, bus_count + 1):
-                    apc_conf = ApplicationControllerConfig(did, bus_index, [], [], DEFAULT_POLLING_INTERVAL)
+                    apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
                     apc = ApplicationController(apc_conf, self._mqtt_dispatcher, self._gtin_db)
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)
@@ -743,7 +737,6 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                         "websocket_port": gw.websocket_port,
                         "buses": [
                             {
-                                "polling_interval": bus.polling_interval,
                                 "devices": [
                                     get_dict_for_device_config(dev)
                                     for dev in bus.dali_devices + bus.dali2_devices

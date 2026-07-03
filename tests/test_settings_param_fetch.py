@@ -351,7 +351,7 @@ async def test_fetch_added_when_device_initializes():
 async def test_polling_loop_calls_fetch_once_per_idle_iteration():
     """Each idle _poll_step performs exactly one fetch and advances the round-robin cursor."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=1.0)
+    controller = make_loop_controller()
     p1, p1_fetch = _stub_param(MaxLevelParam, fetch_return=False)
     p2, p2_fetch = _stub_param(MinLevelParam, fetch_return=False)
     device = _FakeFetchDevice([p1, p2])
@@ -370,7 +370,7 @@ async def test_polling_loop_calls_fetch_once_per_idle_iteration():
 async def test_fetch_yields_to_due_control_poll():
     """A due control poll runs and fetch is skipped in that iteration."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=1.0)
+    controller = make_loop_controller()
     controller._poll_devices = AsyncMock()
     controller._fetch_scheduler = AsyncMock()
     device = MagicMock()
@@ -389,7 +389,7 @@ async def test_fetch_yields_to_due_control_poll():
 async def test_fetch_yields_to_queued_tasks():
     """While the task queue stays non-empty, the loop never reaches the idle fetch step."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     controller._fetch_scheduler = AsyncMock()
     device = MagicMock()
 
@@ -416,7 +416,7 @@ async def test_fetch_yields_to_queued_tasks():
 async def test_fetch_suppressed_in_quiescent_mode():
     """No background fetch while the bus is in quiescent mode."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     controller._fetch_scheduler = AsyncMock()
     controller._in_quiescent_mode = True
 
@@ -433,7 +433,7 @@ async def test_fetch_suppressed_in_quiescent_mode():
 async def test_fetch_suppressed_during_commissioning():
     """No background fetch while a commissioning task occupies the loop."""
     # pylint: disable=protected-access
-    controller = make_loop_controller(polling_interval=0.01)
+    controller = make_loop_controller()
     controller._fetch_scheduler = AsyncMock()
     started = asyncio.Event()
     release = asyncio.Event()

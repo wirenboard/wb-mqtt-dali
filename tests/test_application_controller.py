@@ -35,6 +35,7 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_from_json
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
@@ -76,6 +77,7 @@ def _make_bare_controller():
     controller.dali_devices = []
     controller.dali2_devices = []
     controller._device_registry = DeviceRegistry()
+    controller._fetch_scheduler = SettingsFetchScheduler()
     return controller
 
 

@@ -147,6 +147,7 @@ class DaliDevice(DaliDeviceBase):
         self._standalone_pollables: list[Pollable] = []
         self._dimming_curve_state = DimmingCurveState()
         self._groups_parameter = GroupsParam()
+        self._fade_parameter = FadeTimeFadeRateParam()
 
     async def identify(self, driver: WBDALIDriver) -> None:
         address = GearShort(self.address.short)
@@ -275,13 +276,16 @@ class DaliDevice(DaliDeviceBase):
             await handler.read_mandatory_info(driver, address, self.logger)
 
         await self._groups_parameter.read(driver, address, self.logger)
+        # Fade is read at init (like groups) so it is available as a prediction input
+        # right after the device comes up, not only after the first load_info.
+        await self._fade_parameter.read(driver, address, self.logger)
 
         # Parameter handlers for settings page in UI
         parameter_handlers: list[SettingsParamBase] = [
             self._groups_parameter,
             MaxLevelParam(),
             MinLevelParam(),
-            FadeTimeFadeRateParam(),
+            self._fade_parameter,
         ]
 
         # If none of the type handlers contributed a dimming curve parameter, fall back

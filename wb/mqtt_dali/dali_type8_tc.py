@@ -47,6 +47,9 @@ UI_MAX_TC_K = 10000
 UI_MIN_TC_MIREK = tc_kelvin_mirek(UI_MAX_TC_K)
 UI_MAX_TC_MIREK = tc_kelvin_mirek(UI_MIN_TC_K)
 
+DEFAULT_TC_WARMEST_MIREK = tc_kelvin_mirek(2700)
+DEFAULT_TC_COOLEST_MIREK = tc_kelvin_mirek(6500)
+
 # Root-relative property holding the live TC limits. The frontend dali-tc editor
 # reads dotted paths into it (e.g. "tc_limits.tc_coolest") to bound its sliders to
 # the device's current limits live, instead of baked-in minimum/maximum.
@@ -363,6 +366,7 @@ class TcLimitsSettings(SettingsParamBase):
                             "type": "integer",
                             "title": "Physical Warmest",
                             "format": "dali-tc",
+                            "default": DEFAULT_TC_WARMEST_MIREK,
                             "propertyOrder": 1,
                             "options": {
                                 "grid_columns": 6,
@@ -380,6 +384,7 @@ class TcLimitsSettings(SettingsParamBase):
                             "type": "integer",
                             "title": "Physical Coolest",
                             "format": "dali-tc",
+                            "default": DEFAULT_TC_COOLEST_MIREK,
                             "propertyOrder": 2,
                             "options": {
                                 "grid_columns": 6,
@@ -397,6 +402,7 @@ class TcLimitsSettings(SettingsParamBase):
                             "type": "integer",
                             "title": "UI Warmest",
                             "format": "dali-tc",
+                            "default": DEFAULT_TC_WARMEST_MIREK,
                             "propertyOrder": 3,
                             "options": {
                                 "grid_columns": 6,
@@ -413,6 +419,7 @@ class TcLimitsSettings(SettingsParamBase):
                             "type": "integer",
                             "title": "UI Coolest",
                             "format": "dali-tc",
+                            "default": DEFAULT_TC_COOLEST_MIREK,
                             "propertyOrder": 4,
                             "options": {
                                 "grid_columns": 6,

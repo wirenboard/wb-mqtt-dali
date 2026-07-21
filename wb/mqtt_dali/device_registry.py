@@ -47,6 +47,9 @@ class DeviceRegistry:
     def dali2_device_by_short(self, short_address: ShortAddress) -> Optional[Dali2Device]:
         return self._dali2_by_short.get(short_address)
 
+    def gear_by_uid(self, uid: str) -> Optional[DaliDevice]:
+        return next((d for d in self._gear_by_short.values() if d.uid == uid), None)
+
     def resolve(self, destination: GearDestination) -> list[DaliDevice]:
         """Gear targeted by a python-dali gear destination.
 

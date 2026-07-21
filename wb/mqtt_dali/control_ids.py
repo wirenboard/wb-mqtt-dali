@@ -8,6 +8,7 @@ event_sync_coordinator.py.
 ACTUAL_LEVEL = "actual_level"
 WANTED_LEVEL = "wanted_level"
 DAPC = "dapc"
+ON_OFF = "on_off"
 
 CURRENT_RGB = "current_rgb"
 SET_RGB = "set_rgb"

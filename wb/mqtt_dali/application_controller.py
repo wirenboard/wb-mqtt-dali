@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Any, Callable, Coroutine, Iterable, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Iterable, Mapping, Optional, Type, Union
 
 import aiomqtt
 from dali.address import (
@@ -35,6 +35,11 @@ from .event_sync_coordinator import EventSyncCoordinator, is_event_sync_owned_se
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
+from .on_off_control import (
+    OnOffConfig,
+    on_off_config_to_editor_json,
+    on_off_editor_schema,
+)
 from .send_command import format_command_expression
 from .utils import merge_json_schemas
 from .virtual_devices import (
@@ -44,6 +49,7 @@ from .virtual_devices import (
     GroupStateUpdateKind,
     GroupVirtualDevice,
     aggregate_capabilities,
+    group_value_publishes,
 )
 from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
@@ -228,11 +234,13 @@ class ApplicationControllerConfig:
     dali2_devices: list[Dali2Device]
     enable_bus_monitor: bool = False
     enable_bus_monitor_syslog: bool = False
+    group_on_off: dict[int, OnOffConfig] = field(default_factory=dict)
 
 
 class ApplicationControllerTaskType(Enum):
     APPLY_SETTING = auto()
     APPLY_GROUP_SETTING = auto()
+    SET_GROUP_ON_OFF = auto()
     COMMISSIONING = auto()
     LOAD_INFO = auto()
     EXECUTE_CONTROL = auto()
@@ -448,6 +456,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             bus_name=self.bus_name,
         )
         self._group_devices_by_number: dict[int, GroupVirtualDevice] = {}
+        self._group_on_off = dict(config.group_on_off)
 
         self._gtin_db = gtin_db
 
@@ -695,13 +704,29 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_broadcast_device()
 
     async def load_group_info(self, group_index: int) -> dict:
-        res = {}
+        schema: dict = {}
         for device in self.dali_devices:
             if device.is_initialized and group_index in device.groups:
                 handlers = device.get_group_parameter_handlers()
                 for handler in handlers:
-                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
-        return res
+                    merge_json_schemas(schema, handler.get_schema(group_and_broadcast=True))
+        merge_json_schemas(schema, on_off_editor_schema())
+        config = {"on_off": on_off_config_to_editor_json(self._group_on_off.get(group_index))}
+        return {"config": config, "schema": schema}
+
+    @property
+    def group_on_off(self) -> Mapping[int, OnOffConfig]:
+        return self._group_on_off
+
+    async def set_group_on_off(self, group_number: int, config: Optional[OnOffConfig]) -> bool:
+        async with self._state_lock:
+            if self._state != ApplicationControllerState.READY:
+                raise RuntimeError("ApplicationController must be initialized")
+            task = ApplicationControllerTask(
+                ApplicationControllerTaskType.SET_GROUP_ON_OFF, (group_number, config)
+            )
+            self._tasks_queue.put_nowait(task)
+        return await task.future
 
     async def apply_group_parameters(self, group_index: int, new_params: dict) -> None:
         async with self._state_lock:
@@ -836,8 +861,37 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     ) -> None:
         if res_dali is not None:
             await self._update_dali_devices(res_dali, on_device_initialized)
+            self._prune_vanished_group_on_off()
         if res_dali2 is not None:
             await self._update_dali2_devices(res_dali2, on_device_initialized)
+
+    def _prune_vanished_group_on_off(self) -> None:
+        # Membership of an uninitialized device is unknown, so with any such device
+        # on the bus no group has authoritatively vanished — keep everything.
+        if any(not device.is_initialized for device in self.dali_devices):
+            return
+        active = set(self._get_active_group_numbers())
+        for number in sorted(set(self._group_on_off) - active):
+            self.logger.info("Dropping on/off settings of vanished group %d", number)
+        self._group_on_off = {n: cfg for n, cfg in self._group_on_off.items() if n in active}
+
+    async def _set_group_on_off_task(self, group_number: int, config: Optional[OnOffConfig]) -> bool:
+        if self._group_on_off.get(group_number) == config:
+            return False
+        new_map = dict(self._group_on_off)
+        if config is None:
+            new_map.pop(group_number, None)
+        else:
+            new_map[group_number] = config
+        self._group_on_off = new_map
+        group_device = self._group_devices_by_number.get(group_number)
+        if group_device is not None:
+            update = group_device.set_on_off_config(config)
+            if update.added is not None:
+                await self._device_publisher.add_control(group_device.mqtt_id, update.added)
+            elif update.removed_control_id is not None:
+                await self._device_publisher.remove_control(group_device.mqtt_id, update.removed_control_id)
+        return True
 
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
@@ -849,6 +903,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 self._gtin_db,
                 mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
                 name=device.name if device.has_custom_name else None,
+                on_off=device.on_off_config,
             )
         else:
             new_device = Dali2Device(
@@ -1197,6 +1252,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     def _build_group_spec(self, group_number: int) -> GroupSpec:
         return GroupSpec.from_devices(d for d in self.dali_devices if group_number in d.groups)
 
+    def _make_group_device(self, group_number: int, spec: GroupSpec) -> GroupVirtualDevice:
+        return GroupVirtualDevice.for_group(
+            group_number,
+            spec,
+            self.uid,
+            self.bus_name,
+            device_registry=self._device_registry,
+            on_off_config=self._group_on_off.get(group_number),
+        )
+
     async def _publish_virtual_device(
         self, device: Union[GroupVirtualDevice, BroadcastVirtualDevice]
     ) -> None:
@@ -1275,7 +1340,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         for group_number in sorted(active_groups - existing_groups):
             spec = self._build_group_spec(group_number)
-            device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
+            device = self._make_group_device(group_number, spec)
             self.logger.debug(
                 "Adding group virtual device: group=%d mqtt_id=%s",
                 group_number,
@@ -1293,7 +1358,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 "Rebuilding group virtual device: group=%d capabilities or state-set changed",
                 group_number,
             )
-            new_device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
+            new_device = self._make_group_device(group_number, spec)
             await self._device_publisher.remove_device(old_device.mqtt_id)
             self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
             await self._publish_virtual_device(new_device)
@@ -1440,6 +1505,11 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
                             group_index, new_params = item.data
                             await self._apply_group_parameters_task(group_index, new_params)
+                        elif item.task_type == ApplicationControllerTaskType.SET_GROUP_ON_OFF:
+                            group_number, on_off_config = item.data
+                            changed = await self._set_group_on_off_task(group_number, on_off_config)
+                            if not item.future.done():
+                                item.future.set_result(changed)
                         elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
                             await self._apply_bus_parameters_task(item.data)
                         elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
@@ -1565,12 +1635,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 if action is None:
                     continue
                 if action.kind is GroupStateUpdateKind.VALUE:
-                    tasks.append(
-                        self._device_publisher.set_control_value(
-                            group_device.mqtt_id,
-                            action.control_id,
-                            action.payload,
-                        )
+                    tasks.extend(
+                        self._device_publisher.set_control_value(group_device.mqtt_id, cid, payload)
+                        for cid, payload in group_value_publishes(group_device, action)
                     )
                 elif action.kind is GroupStateUpdateKind.ERROR:
                     tasks.append(

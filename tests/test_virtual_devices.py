@@ -28,6 +28,7 @@ from wb.mqtt_dali.dali_type8_parameters import ColourType
 from wb.mqtt_dali.dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
 from wb.mqtt_dali.dali_type8_tc import MAX_TC_MIREK, MIN_TC_MIREK, Type8TcLimits
 from wb.mqtt_dali.dali_type8_tc import get_mqtt_controls as tc_mqtt_controls
+from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.virtual_devices import (
     AggregatedCapabilities,
     BroadcastVirtualDevice,
@@ -112,6 +113,8 @@ def _make_controller(dali_devices=None):
     ctrl._device_publisher = _make_publisher()  # pylint: disable=protected-access
     ctrl._devices_by_mqtt_id = {}  # pylint: disable=protected-access
     ctrl._group_devices_by_number = {}  # pylint: disable=protected-access
+    ctrl._group_on_off = {}  # pylint: disable=protected-access
+    ctrl._device_registry = DeviceRegistry()  # pylint: disable=protected-access
     ctrl._broadcast_device = BroadcastVirtualDevice(  # pylint: disable=protected-access
         capabilities=AggregatedCapabilities(),
         mqtt_id_prefix=ctrl.uid,
@@ -498,6 +501,7 @@ class TestRefreshGroupVirtualDevices:
             group_number=2,
             state_control_templates={},
             state_candidates={},
+            device_registry=DeviceRegistry(),
         )
         ctrl._group_devices_by_number[2] = old_device
         ctrl._devices_by_mqtt_id[old_device.mqtt_id] = old_device

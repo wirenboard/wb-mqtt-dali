@@ -122,6 +122,20 @@ class DevicePublisher:
         async with self._lock:
             await self._remove_device_internal(device_id)
 
+    async def add_control(self, device_id: str, control_info: ControlInfo) -> None:
+        async with self._lock:
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+            await self._add_control(self._devices[device_id], control_info)
+
+    async def remove_control(self, device_id: str, control_id: str) -> None:
+        async with self._lock:
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+            await self._devices[device_id].remove_control(control_id)
+
     async def set_device_title(self, device_id: str, title: Optional[Union[str, TranslatedTitle]]) -> None:
         async with self._lock:
             if device_id not in self._devices:

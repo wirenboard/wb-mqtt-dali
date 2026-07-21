@@ -27,5 +27,6 @@ Depends: ${python3:Depends},
          python3-systemd,
          python3-wb-common (>= 2.1.0~~),
          python3-websockets
+Breaks: wb-mqtt-homeui (<< 2.244.0~~)
 Description: MQTT DALI bridge for Wiren Board
  This package provides an MQTT DALI bridge for Wiren Board devices.

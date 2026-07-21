@@ -321,6 +321,7 @@ async def test_group_aggregate_mirrors_optimistic_value():
     group_device = SimpleNamespace(
         mqtt_id="group-2",
         state_source=GroupStateSource({"actual_level": [member.uid]}),
+        derive_on_off_value=lambda control_id, value: None,
     )
     coordinator, publisher = _coordinator([member], group_devices={2: group_device})
 
@@ -336,6 +337,7 @@ async def test_group_aggregate_untouched_for_unpredictable_member():
     group_device = SimpleNamespace(
         mqtt_id="group-2",
         state_source=GroupStateSource({"actual_level": [member.uid]}),
+        derive_on_off_value=lambda control_id, value: None,
     )
     coordinator, publisher = _coordinator([member], group_devices={2: group_device})
 
@@ -828,6 +830,7 @@ async def test_group_topic_single_publish():
         mqtt_id="group-2",
         state_source=GroupStateSource({"actual_level": [member.uid], "current_rgb": [member.uid]}),
         get_mqtt_control=lambda cid: object() if cid in group_controls else None,
+        derive_on_off_value=lambda control_id, value: None,
     )
     coordinator, publisher = _coordinator([member], group_devices={2: group_device})
 

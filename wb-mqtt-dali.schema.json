@@ -8,6 +8,60 @@
         "editor": "dali"
     },
     "definitions": {
+        "fade_time_code": {
+            "type": "integer",
+            "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "on_action": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["scene", "last_active_level", "level", "dapc"]
+                },
+                "scene": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 15
+                },
+                "percent": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                },
+                "value": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 254
+                },
+                "fade_time": {
+                    "$ref": "#/definitions/fade_time_code"
+                }
+            }
+        },
+        "off_action": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["off", "dapc"]
+                },
+                "fade_time": {
+                    "$ref": "#/definitions/fade_time_code"
+                }
+            }
+        },
+        "on_off": {
+            "type": "object",
+            "properties": {
+                "on_action": {
+                    "$ref": "#/definitions/on_action"
+                },
+                "off_action": {
+                    "$ref": "#/definitions/off_action"
+                }
+            }
+        },
         "device": {
             "type": "object",
             "properties": {
@@ -33,9 +87,26 @@
                 "name": {
                     "type": "string",
                     "title": "Name"
+                },
+                "on_off": {
+                    "$ref": "#/definitions/on_off"
                 }
             },
             "required": ["short", "random"]
+        },
+        "group": {
+            "type": "object",
+            "properties": {
+                "number": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 15
+                },
+                "on_off": {
+                    "$ref": "#/definitions/on_off"
+                }
+            },
+            "required": ["number", "on_off"]
         },
         "bus": {
             "type": "object",
@@ -44,6 +115,12 @@
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/device"
+                    }
+                },
+                "groups": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/group"
                     }
                 },
                 "bus_monitor_enabled": {

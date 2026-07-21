@@ -405,6 +405,7 @@ def _bus_with_state(uid: str) -> SimpleNamespace:
     bus.bus_monitor_syslog_enabled = False
     bus.dali_devices = []
     bus.dali2_devices = []
+    bus.group_on_off = {}
     return bus
 
 

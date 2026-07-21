@@ -44,6 +44,26 @@ from .wbdali_utils import (
 SCENES_TOTAL = 16
 GROUPS_TOTAL = 16
 
+# Nominal fade durations in seconds for codes 0..15 (IEC 62386-102 Table 4); code 0 = no fade.
+FADE_TIME_ENUM_TITLES = [
+    "no fade",
+    "0.7",
+    "1.0",
+    "1.4",
+    "2.0",
+    "2.8",
+    "4.0",
+    "5.7",
+    "8.0",
+    "11.3",
+    "16.0",
+    "22.6",
+    "32.0",
+    "45.3",
+    "64.0",
+    "90.5",
+]
+
 # Each QuerySceneLevel is one frame; reading all 16 at once monopolizes the bus,
 # so a background fetch reads them in chunks of this size.
 SCENES_FETCH_CHUNK = 8
@@ -187,24 +207,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
                     "enum": list(range(16)),
                     "default": 0,
                     "options": {
-                        "enum_titles": [
-                            "no fade",
-                            "0.7",
-                            "1.0",
-                            "1.4",
-                            "2.0",
-                            "2.8",
-                            "4.0",
-                            "5.7",
-                            "8.0",
-                            "11.3",
-                            "16.0",
-                            "22.6",
-                            "32.0",
-                            "45.3",
-                            "64.0",
-                            "90.5",
-                        ],
+                        "enum_titles": list(FADE_TIME_ENUM_TITLES),
                         "grid_columns": 6,
                         "wb": {
                             "show_editor": True,

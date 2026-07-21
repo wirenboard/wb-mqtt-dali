@@ -12,6 +12,7 @@ from .control_ids import (
     CURRENT_COLOUR_TEMPERATURE,
     CURRENT_RGB,
     CURRENT_WHITE,
+    ON_OFF,
     SET_COLOUR_TEMPERATURE,
     SET_RGB,
     SET_WHITE,
@@ -24,6 +25,8 @@ from .dali_type8_parameters import ColourType
 from .dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_publisher import ControlInfo, TranslatedTitle
+from .device_registry import DeviceRegistry
+from .on_off_control import OnOffConfig, OnOffControl
 from .wbdali import WBDALIDriver
 from .wbdali_utils import send_commands_with_retry
 
@@ -88,6 +91,18 @@ class GroupStateUpdate:
     kind: GroupStateUpdateKind
     control_id: ControlId
     payload: str
+
+
+def group_value_publishes(
+    group_device: "GroupVirtualDevice", update: GroupStateUpdate
+) -> list[tuple[ControlId, str]]:
+    """(control_id, payload) pairs to publish for a VALUE update mirrored onto a group:
+    the update itself plus the group's ``on_off`` derived from a level update."""
+    publishes = [(update.control_id, update.payload)]
+    on_off_value = group_device.derive_on_off_value(update.control_id, update.payload)
+    if on_off_value is not None:
+        publishes.append((ON_OFF, on_off_value))
+    return publishes
 
 
 class CandidatePollStatus(Enum):
@@ -211,14 +226,20 @@ _GROUP_STATE_ANCHOR: dict[ControlId, ControlId] = {
 }
 
 
+def _dimming_state(capabilities: AggregatedCapabilities) -> DimmingCurveState:
+    state = DimmingCurveState()
+    state.curve_type = capabilities.dimming_curve_type
+    return state
+
+
 def build_virtual_device_controls(
     capabilities: AggregatedCapabilities,
     state_controls: Optional[Iterable[MqttControlBase]] = None,
 ) -> dict[ControlId, MqttControlBase]:
-    dimming_state = DimmingCurveState()
-    dimming_state.curve_type = capabilities.dimming_curve_type
-
-    setup_controls: list[MqttControlBase] = [WantedLevelControl(dimming_state), *make_controls()]
+    setup_controls: list[MqttControlBase] = [
+        WantedLevelControl(_dimming_state(capabilities)),
+        *make_controls(),
+    ]
     if capabilities.has_dt8_rgbwaf:
         setup_controls.extend(rgbwaf_mqtt_controls(only_setup_controls=True))
     if capabilities.has_dt8_tc:
@@ -301,6 +322,38 @@ class GroupSpec:
         )
 
 
+_ON_OFF_CONTROL_ORDER = 0
+
+
+@dataclass(frozen=True)
+class OnOffControlUpdate:
+    added: Optional[ControlInfo] = None
+    removed_control_id: Optional[ControlId] = None
+
+
+class GroupOnOffControl(OnOffControl):
+
+    def __init__(
+        self,
+        config: OnOffConfig,
+        dimming_curve_state: DimmingCurveState,
+        state_source: GroupStateSource,
+        device_registry: DeviceRegistry,
+    ) -> None:
+        super().__init__(config, dimming_curve_state)
+        self._state_source = state_source
+        self._device_registry = device_registry
+
+    # --- Hooks for subclasses ---
+
+    def _prior_fade_time(self) -> Optional[int]:
+        uid = self._state_source.pinned_source(ACTUAL_LEVEL)
+        if uid is None:
+            return None
+        device = self._device_registry.gear_by_uid(uid)
+        return device.fade_param.fade_time if device is not None else None
+
+
 class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     """Virtual device that aggregates DALI gear in a single group.
 
@@ -317,27 +370,33 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         group_number: int,
         state_control_templates: dict[ControlId, MqttControlBase],
         state_candidates: dict[ControlId, list[CandidateUid]],
+        device_registry: DeviceRegistry,
+        on_off_config: Optional[OnOffConfig] = None,
     ) -> None:
         self.mqtt_id = mqtt_id
         self.name = name
         self.capabilities = capabilities
         self.logger = logging.getLogger()
 
-        self._controls = build_virtual_device_controls(
-            capabilities,
-            state_controls=state_control_templates.values(),
-        )
+        self._device_registry = device_registry
         self._address = GearGroup(group_number)
         self._state_config = make_group_state_config(state_candidates)
         self._state_source = GroupStateSource(state_candidates)
+        self._controls = build_virtual_device_controls(
+            capabilities, state_controls=state_control_templates.values()
+        )
+        if on_off_config is not None:
+            self._install_on_off_control(on_off_config)
 
     @classmethod
-    def for_group(
+    def for_group(  # pylint: disable=too-many-arguments, R0917
         cls,
         group_number: int,
         spec: GroupSpec,
         mqtt_id_prefix: str,
         bus_name: str,
+        device_registry: DeviceRegistry,
+        on_off_config: Optional[OnOffConfig] = None,
     ) -> "GroupVirtualDevice":
         return cls(
             mqtt_id=f"{mqtt_id_prefix}_group_{group_number:02d}",
@@ -349,6 +408,8 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             group_number=group_number,
             state_control_templates=spec.templates,
             state_candidates=spec.state_candidates,
+            device_registry=device_registry,
+            on_off_config=on_off_config,
         )
 
     @property
@@ -400,8 +461,38 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
                 self.logger,
             )
 
+    def derive_on_off_value(self, control_id: ControlId, value: str) -> Optional[str]:
+        if control_id != ACTUAL_LEVEL:
+            return None
+        control = self._controls.get(ON_OFF)
+        if not isinstance(control, OnOffControl):
+            return None
+        return control.update_from_percent(value)
+
+    def set_on_off_config(self, config: Optional[OnOffConfig]) -> OnOffControlUpdate:
+        existing = self._controls.get(ON_OFF)
+        if config is None:
+            if existing is None:
+                return OnOffControlUpdate()
+            del self._controls[ON_OFF]
+            return OnOffControlUpdate(removed_control_id=ON_OFF)
+        if isinstance(existing, OnOffControl):
+            existing.set_config(config)
+            return OnOffControlUpdate()
+        self._install_on_off_control(config)
+        return OnOffControlUpdate(added=self._controls[ON_OFF].control_info)
+
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
+
+    # --- Private ---
+
+    def _install_on_off_control(self, config: OnOffConfig) -> None:
+        on_off = GroupOnOffControl(
+            config, _dimming_state(self.capabilities), self._state_source, self._device_registry
+        )
+        on_off.control_info.meta.order = _ON_OFF_CONTROL_ORDER
+        self._controls = {ON_OFF: on_off, **{cid: c for cid, c in self._controls.items() if cid != ON_OFF}}
 
 
 class BroadcastVirtualDevice:

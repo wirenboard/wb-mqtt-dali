@@ -59,6 +59,7 @@ from .control_ids import (
 )
 from .control_ids import DAPC as DAPC_ID
 from .control_ids import (
+    ON_OFF,
     PRIMARY_N_MAX,
     SET_COLOUR_TEMPERATURE,
     SET_PRIMARY_N,
@@ -74,8 +75,13 @@ from .dali_type7_parameters import LastActedControl
 from .device_publisher import DevicePublisher
 from .device_registry import DeviceRegistry
 from .dtr_snapshot import DtrSnapshot
+from .on_off_control import OnOffControl
 from .settle_clock import SettleBasis, SettleClock
-from .virtual_devices import GroupStateUpdateKind, GroupVirtualDevice
+from .virtual_devices import (
+    GroupStateUpdateKind,
+    GroupVirtualDevice,
+    group_value_publishes,
+)
 
 _LEVEL_FADE = (DAPC, GoToScene, GoToLastActiveLevel)
 _LEVEL_STEP_WINDOW = (Up, Down)
@@ -154,7 +160,8 @@ def _setpoint_mirror_publishes(device: DaliDevice, control_id: str, value: str) 
 
 def _level_setpoint_publishes(device: DaliDevice, value: str) -> list[Publish]:
     """The level triplet from actual_level's observed %: wanted_level, actual_level and dapc
-    are three representations of one truth (the observed raw).
+    are three representations of one truth (the observed raw); ``on_off`` (when configured)
+    is recomputed from the same % (0 -> "0", else "1").
 
     ``actual_level`` (the passed ``value``) keeps its fractional ``:.3f`` %. ``wanted_level`` is
     an integer-only percent control, so it's published rounded. ``dapc`` carries the raw level.
@@ -169,6 +176,11 @@ def _level_setpoint_publishes(device: DaliDevice, value: str) -> list[Publish]:
         and device.get_mqtt_control(DAPC_ID) is not None
     ):
         publishes.append(Publish(DAPC_ID, str(actual.current_level)))
+    on_off = device.get_mqtt_control(ON_OFF)
+    if isinstance(on_off, OnOffControl):
+        state = on_off.update_from_percent(value)
+        if state is not None:
+            publishes.append(Publish(ON_OFF, state))
     return publishes
 
 
@@ -357,24 +369,23 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
             group_device = self._group_devices.get(group_number)
             if group_device is None:
                 continue
-            task = self._group_mirror_task(group_device, device, control_id, value)
-            if task is not None:
-                tasks.append(task)
+            tasks.extend(self._group_mirror_task(group_device, device, control_id, value))
         return tasks
 
     def _group_mirror_task(
         self, group_device: GroupVirtualDevice, device: DaliDevice, control_id: str, value: str
-    ):
+    ) -> list:
         source = group_device.state_source
         if control_id in source.control_ids:
             update = source.record_poll(
                 candidate_uid=device.uid, control_id=control_id, success=True, value=value
             )
             if update is not None and update.kind is GroupStateUpdateKind.VALUE:
-                return self._publisher.set_control_value(
-                    group_device.mqtt_id, update.control_id, update.payload
-                )
-            return None
+                return [
+                    self._publisher.set_control_value(group_device.mqtt_id, cid, payload)
+                    for cid, payload in group_value_publishes(group_device, update)
+                ]
+            return []
         # Owned setpoint: mirror it onto the group only while its paired state control is
         # pinned to this same member, so the group's setpoint stays consistent with the
         # member whose state the group is currently showing.
@@ -384,5 +395,5 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
             and source.pinned_source(state_id) == device.uid
             and group_device.get_mqtt_control(control_id) is not None
         ):
-            return self._publisher.set_control_value(group_device.mqtt_id, control_id, value)
-        return None
+            return [self._publisher.set_control_value(group_device.mqtt_id, control_id, value)]
+        return []

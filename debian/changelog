@@ -1,3 +1,17 @@
+wb-mqtt-dali (1.20.0) stable; urgency=medium
+
+  * Add a configurable on/off MQTT control for devices and groups: an optional on_off
+    block on a device and a new bus.groups list select a turn-on strategy (scene /
+    last active level / level via the dimming curve / raw DAPC) and a turn-off
+    strategy (off / DAPC), each with an optional fade time that is applied and then
+    restored so later commands do not inherit it.
+  * Editor-RPC contract change, incompatible with older Web UI: Editor/GetGroup now
+    returns {config, schema} like GetDevice, and the device/group on_off block carries
+    an "enabled" flag. This breaks the dali editor in older wb-mqtt-homeui; the
+    compatible Web UI is wb-mqtt-homeui >= 2.244.0 (enforced via Breaks).
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 22 Jul 2026 13:16:14 +0500
+
 wb-mqtt-dali (1.19.2) stable; urgency=medium
 
   * Harden the settings-parameter apply path: every handler's read/write now returns

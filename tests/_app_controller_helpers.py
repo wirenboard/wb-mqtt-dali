@@ -49,6 +49,7 @@ def make_loop_controller() -> ApplicationController:
     controller._commissioning_state_cb = None
     controller._device_registry = DeviceRegistry()
     controller._group_devices_by_number = {}
+    controller._group_on_off = {}
     controller._device_publisher = AsyncMock()
     controller._event_sync = EventSyncCoordinator(
         publisher=controller._device_publisher,

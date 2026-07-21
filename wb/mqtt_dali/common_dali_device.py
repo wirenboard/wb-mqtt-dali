@@ -43,6 +43,7 @@ class PropertyStartOrder(Enum):
     SPECIFIC = 600
     GROUPS = 700
     SCENES = 800
+    ON_OFF = 900
 
 
 def request_with_retry_sequence(cmd):

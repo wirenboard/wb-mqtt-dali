@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.19.1) stable; urgency=medium
+
+  * Fix colour-temperature-limit fields on group and broadcast settings forms
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 21 Jul 2026 10:26:58 +0500
+
 wb-mqtt-dali (1.19.0) stable; urgency=medium
 
   * Apply own and foreign commands from a single bus-observation path: writable

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -35,6 +36,13 @@ class SettingsParamBase:
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
+        """Read the param from the device and return ``{property_name: <full value>}``.
+
+        Performs device I/O and returns a freshly-built, independent object holding the full
+        value of the key.
+
+        It must never be a live reference to the handler's internal state.
+        """
         del driver, short_address, logger
         return {}
 
@@ -64,12 +72,15 @@ class SettingsParamBase:
 
         Args:
             driver (WBDALIDriver): The DALI driver instance used to communicate with devices.
-            address (Address): The address of the DALI control device to write to or broadcast or group.
+            short_address (Address): The address of the DALI control device to write to, or a
+                group/broadcast address.
             value (dict): A dictionary containing the parameter values to write to the device.
 
         Returns:
-            dict: An empty dictionary if nothing was changed or if short_address is group or broadcast,
-            otherwise a dictionary with the updated parameter values.
+            dict: An empty dictionary if nothing was changed or if short_address is group or
+            broadcast, otherwise ``{property_name: <full value>}`` — the complete, independent
+            current value of the param's key(s), not just the changed sub-fields, and never a live
+            reference to internal state.
         """
         del driver, short_address, value, logger
         return {}
@@ -289,6 +300,7 @@ class SettingsParamGroup(SettingsParamBase):
 
         self._property_name = property_name
         self._parameters: list[SettingsParamBase] = []
+        self._cached_value: dict = {}
 
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
@@ -301,7 +313,8 @@ class SettingsParamGroup(SettingsParamBase):
                 raise RuntimeError(f'Error reading "{param.name.en}": {result}') from result
             if result is not None:
                 res.update(result)
-        return {self._property_name: res}
+        self._cached_value = res
+        return {self._property_name: deepcopy(res)}
 
     async def write(
         self,
@@ -317,15 +330,18 @@ class SettingsParamGroup(SettingsParamBase):
             param.write(driver, short_address, instance_value, logger) for param in self._parameters
         ]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
-        res = {}
+        changed = {}
         for param, result in zip(self._parameters, results):
             if isinstance(result, BaseException):
                 raise RuntimeError(f'Error writing "{param.name.en}": {result}') from result
-            if result is not None:
-                res.update(result)
+            if result:
+                changed.update(result)
         if is_broadcast_or_group_address(short_address):
             return {}
-        return {self._property_name: res}
+        if not changed:
+            return {}
+        self._cached_value.update(changed)
+        return {self._property_name: deepcopy(self._cached_value)}
 
     def has_changes(self, new_params: dict) -> bool:
         if self._property_name not in new_params:

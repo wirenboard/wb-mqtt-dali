@@ -29,7 +29,7 @@ from .wbdali_utils import (
     query_response,
     send_commands_with_retry,
 )
-from .wbmqtt import TranslatedTitle
+from .wbmqtt import ControlError, TranslatedTitle
 
 
 class PropertyStartOrder(Enum):
@@ -241,9 +241,9 @@ class MqttControlBase(EventPollSchedule):
             try:
                 check_query_response(response)
             except RuntimeError:
-                return [ControlPollResult(control_id=self.control_info.id, value="", error="r")]
+                return [ControlPollResult(control_id=self.control_info.id, value="", error=ControlError.READ)]
 
-            if self.control_info.meta.control_type == "alarm":
+            if self.control_info.state.meta.control_type == "alarm":
                 title = self.format_title(response)
                 value = self.format_response(response)
                 return [ControlPollResult(control_id=self.control_info.id, value=value, title=title)]
@@ -252,7 +252,7 @@ class MqttControlBase(EventPollSchedule):
         except Exception as e:  # pylint: disable=broad-exception-caught
             if logger is not None:
                 logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
-            return [ControlPollResult(control_id=self.control_info.id, value="", error="r")]
+            return [ControlPollResult(control_id=self.control_info.id, value="", error=ControlError.READ)]
 
 
 class MqttControl(MqttControlBase):
@@ -298,7 +298,7 @@ class MqttControl(MqttControlBase):
 class ControlPollResult:
     control_id: str
     value: Optional[str] = None
-    error: Optional[str] = None
+    error: ControlError = ControlError.NONE
     title: Optional[Union[str, TranslatedTitle]] = None
 
 

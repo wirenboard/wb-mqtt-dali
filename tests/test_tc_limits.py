@@ -30,9 +30,9 @@ from wb.mqtt_dali.dali_type8_tc import (
     Type8TcLimits,
     read_colour_temperature_limits_mirek,
 )
-from wb.mqtt_dali.device_publisher import ControlInfo, ControlMeta
+from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
-from wb.mqtt_dali.wbmqtt import TranslatedTitle
+from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 
 def _make_response(msb, lsb):
@@ -494,9 +494,7 @@ def _make_device(**kwargs):
 def _make_readable_control(control_id):
     return MqttControl(
         ControlInfo(
-            control_id,
-            ControlMeta("range", TranslatedTitle(control_id, control_id)),
-            "0",
+            control_id, ControlState(ControlMeta("range", TranslatedTitle(control_id, control_id)), "0")
         ),
         query_builder=lambda addr: MagicMock(),
         value_formatter=lambda resp: "0",
@@ -506,9 +504,7 @@ def _make_readable_control(control_id):
 def _make_writable_control(control_id):
     return MqttControl(
         ControlInfo(
-            control_id,
-            ControlMeta("range", TranslatedTitle(control_id, control_id)),
-            "0",
+            control_id, ControlState(ControlMeta("range", TranslatedTitle(control_id, control_id)), "0")
         ),
         commands_builder=lambda addr, val: [],
     )

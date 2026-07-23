@@ -23,6 +23,7 @@ from wb.mqtt_dali.device_init_scheduler import (
 )
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
+from wb.mqtt_dali.wbmqtt import ControlError
 
 
 class TestDeviceInitScheduler:
@@ -316,7 +317,7 @@ class TestTryInitializeDevice:
 
         await try_initialize_device(device, driver, publisher, scheduler, handler, logger, 100.0)
 
-        publisher.set_control_error.assert_awaited_once_with(device.mqtt_id, "brightness", "r")
+        publisher.set_control_error.assert_awaited_once_with(device.mqtt_id, "brightness", ControlError.READ)
 
     @pytest.mark.asyncio
     async def test_failure_does_not_republish_if_already_published(self):

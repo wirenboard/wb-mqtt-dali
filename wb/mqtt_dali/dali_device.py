@@ -237,7 +237,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         for type_handler in self._type_handlers:
             mqtt_controls.extend(type_handler.get_mqtt_controls())
         for i, control in enumerate(mqtt_controls, start=1):
-            control.control_info.meta.order = i
+            control.control_info.state.meta.order = i
         return mqtt_controls
 
     def _build_pollables(self) -> list[Pollable]:

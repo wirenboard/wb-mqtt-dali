@@ -31,7 +31,7 @@ from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
-from .wbmqtt import ControlMeta, TranslatedTitle
+from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 # Bank 202 / 203 / 204 layout per IEC 62386-252:2023.
 # Energy (totalizer): scale at 0x04, six bytes at 0x05..0x0a.
@@ -280,11 +280,13 @@ class _ActiveEnergyControl(MqttControlBase):
         super().__init__(
             ControlInfo(
                 _ACTIVE_ENERGY_CONTROL_ID,
-                ControlMeta(
-                    "value",
-                    title=TranslatedTitle("Active energy", "Активная энергия"),
-                    read_only=True,
-                    units="kWh",
+                ControlState(
+                    ControlMeta(
+                        "value",
+                        title=TranslatedTitle("Active energy", "Активная энергия"),
+                        read_only=True,
+                        units="kWh",
+                    )
                 ),
             ),
         )
@@ -459,18 +461,22 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
     def _fail_cycle(self, cycle_end_time: float) -> list[ControlPollResult]:
         self._read_progress = None
         self._last_cycle_end_time = cycle_end_time
-        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error="r")]
+        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)]
 
     def _finish_cycle(self, energy_bytes: list, cycle_end_time: float) -> list[ControlPollResult]:
         self._read_progress = None
         self._last_cycle_end_time = cycle_end_time
         if self._scale_byte is None:
-            return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error="r")]
+            return [
+                ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)
+            ]
         raw = bytes([self._scale_byte, *energy_bytes])
         check = ActiveEnergy.check_raw(raw)
         if check is not None:
             # MASK / TMASK / Invalid — surface as error so the UI is not misled.
-            return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error="r")]
+            return [
+                ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)
+            ]
         value = ActiveEnergy.raw_to_value(raw)
         kwh = float(value) / 1000.0
-        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value=f"{kwh:.3f}", error=None)]
+        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value=f"{kwh:.3f}")]

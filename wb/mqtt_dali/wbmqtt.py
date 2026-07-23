@@ -5,6 +5,7 @@ import random
 import string
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from enum import Flag, auto
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
@@ -47,11 +48,39 @@ class ControlMeta:  # pylint: disable=too-many-instance-attributes, too-few-publ
         self.units = units
 
 
+class ControlError(Flag):
+    """Per-control ``/meta/error`` state, modeled as WB error flags.
+
+    Members map to the WB wire characters emitted on ``/meta/error``;
+    ``ControlError.NONE`` (the empty flag) means "no error". Only ``READ``
+    (``"r"``) and ``WRITE`` (``"w"``) are used by this project — ``p`` (late
+    poll) is never detected here, so it is deliberately not modeled. ``Flag``
+    requires integer bit values, so ``READ``/``WRITE`` use ``auto()`` and are
+    mapped to their characters in :meth:`to_mqtt` rather than carrying the
+    string as their value.
+    """
+
+    NONE = 0
+    READ = auto()
+    WRITE = auto()
+
+    def __str__(self) -> str:
+        return self.to_mqtt()
+
+    def to_mqtt(self) -> str:
+        chars = []
+        if self & ControlError.READ:
+            chars.append("r")
+        if self & ControlError.WRITE:
+            chars.append("w")
+        return "".join(chars)
+
+
 @dataclass
 class ControlState:
     meta: ControlMeta
     value: Optional[str] = None
-    error: Optional[str] = None
+    error: ControlError = ControlError.NONE
 
     def __post_init__(self):
         # meta can be changed during runtime with set_control_read_only and set_control_title,
@@ -128,8 +157,8 @@ class Device:
             if control.value != value or force:
                 control.value = value
                 await self._publish(self._get_control_base_topic(mqtt_control_name), value)
-            if control.error is not None:
-                await self.set_control_error(mqtt_control_name, "")
+            if control.error:
+                await self.set_control_error(mqtt_control_name, ControlError.NONE)
         else:
             logging.debug("Can't set value of undeclared control %s", mqtt_control_name)
 
@@ -158,14 +187,13 @@ class Device:
         else:
             logging.debug("Can't set title of undeclared control %s", mqtt_control_name)
 
-    async def set_control_error(self, mqtt_control_name: str, error: str) -> None:
+    async def set_control_error(self, mqtt_control_name: str, error: ControlError) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
-            error_to_set = error if error else None
-            if control.error != error_to_set:
-                control.error = error_to_set
+            if control.error != error:
+                control.error = error
                 error_topic = self._get_control_base_topic(mqtt_control_name) + "/meta/error"
-                await self._publish(error_topic, error_to_set)
+                await self._publish(error_topic, error.to_mqtt() or None)
         else:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 

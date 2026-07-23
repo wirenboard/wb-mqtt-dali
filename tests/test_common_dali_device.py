@@ -13,7 +13,7 @@ from wb.mqtt_dali.common_dali_device import (
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.wbdali import FramePriority
-from wb.mqtt_dali.wbmqtt import ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
 # pylint: disable=invalid-name
 
@@ -441,12 +441,12 @@ def _make_readable_alarm_control(control_id: str, query, value_formatter, title_
         def format_title(self, response):  # type: ignore[override]
             return title_formatter(response)
 
-    return _AlarmControl(ControlInfo(control_id, ControlMeta(control_type="alarm"), "0"))
+    return _AlarmControl(ControlInfo(control_id, ControlState(ControlMeta(control_type="alarm"), "0")))
 
 
 def _make_readable_value_control(control_id, query, value_formatter) -> MqttControl:
     return MqttControl(
-        control_info=ControlInfo(control_id, ControlMeta(control_type="value"), "0"),
+        control_info=ControlInfo(control_id, ControlState(ControlMeta(control_type="value"), "0")),
         query_builder=lambda short_address, q=query: q,
         value_formatter=value_formatter,
     )
@@ -465,7 +465,23 @@ async def test_run_single_query_returns_error_when_response_is_none():
     assert len(res) == 1
     assert res[0].control_id == "c1"
     assert res[0].value == ""
-    assert res[0].error == "r"
+    assert res[0].error == ControlError.READ
+
+
+@pytest.mark.asyncio
+async def test_poll_read_failure_yields_read_flag():
+    """A poll whose transport raises surfaces a ControlPollResult carrying the READ flag
+    (and empty value), so the caller publishes /meta/error=r."""
+    # pylint: disable=protected-access
+    control = _make_readable_value_control("c1", "Q1", lambda r: "formatted")
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=RuntimeError("bus down"))
+
+    res = await control._run_single_query(driver, GearShort(1))
+
+    assert len(res) == 1
+    assert res[0].error == ControlError.READ
+    assert res[0].value == ""
 
 
 @pytest.mark.asyncio
@@ -484,7 +500,7 @@ async def test_run_single_query_returns_error_when_raw_value_is_none():
     assert len(res) == 1
     assert res[0].control_id == "c2"
     assert res[0].value == ""
-    assert res[0].error == "r"
+    assert res[0].error == ControlError.READ
     formatter.assert_not_called()
 
 
@@ -507,7 +523,7 @@ async def test_run_single_query_returns_error_when_raw_value_has_error():
     assert len(res) == 1
     assert res[0].control_id == "c3"
     assert res[0].value == ""
-    assert res[0].error == "r"
+    assert res[0].error == ControlError.READ
     formatter.assert_not_called()
 
 
@@ -517,7 +533,7 @@ async def test_run_single_query_formats_regular_control_value():
     formatter = MagicMock(return_value="77")
     query_builder = MagicMock(return_value="Q_BRIGHT")
     control = MqttControl(
-        control_info=ControlInfo("brightness", ControlMeta(control_type="value"), "0"),
+        control_info=ControlInfo("brightness", ControlState(ControlMeta(control_type="value"), "0")),
         query_builder=query_builder,
         value_formatter=formatter,
     )
@@ -535,7 +551,7 @@ async def test_run_single_query_formats_regular_control_value():
     assert len(res) == 1
     assert res[0].control_id == "brightness"
     assert res[0].value == "77"
-    assert res[0].error is None
+    assert res[0].error == ControlError(0)
     assert res[0].title is None
 
 
@@ -559,7 +575,7 @@ async def test_run_single_query_alarm_control_active_when_response_error_true():
     assert res[0].control_id == "alarm1"
     assert res[0].value == "1"
     assert res[0].title == "Lamp failure"
-    assert res[0].error is None
+    assert res[0].error == ControlError(0)
     format_response.assert_called_once_with(response)
 
 
@@ -584,7 +600,7 @@ async def test_run_single_query_alarm_control_inactive_when_response_error_false
     assert res[0].control_id == "alarm2"
     assert res[0].value == "0"
     assert res[0].title == "No alarms"
-    assert res[0].error is None
+    assert res[0].error == ControlError(0)
 
 
 def _build_ok_response():
@@ -641,7 +657,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     assert by_id["alarm"].value == "0"
     assert by_id["alarm"].title == "Alarm text"
     assert by_id["bad"].value == ""
-    assert by_id["bad"].error == "r"
+    assert by_id["bad"].error == ControlError.READ
     c3_format.assert_not_called()
 
 

@@ -220,7 +220,7 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
         """
         publishes: list[Publish] = []
         for res in results:
-            if res.error is not None or res.value is None:
+            if res.error or res.value is None:
                 continue
             publishes.extend(_setpoint_mirror_publishes(device, res.control_id, res.value))
         await self._publish(device, publishes)

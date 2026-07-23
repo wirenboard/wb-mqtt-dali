@@ -1301,7 +1301,7 @@ def _make_execute_control(control_id: str = "ctrl", value_to_set: str = "payload
     """Build a stand-in for MqttControlBase carrying the fields the loop touches."""
     control = MagicMock()
     control.control_info.id = control_id
-    control.control_info.value = None
+    control.control_info.state.value = None
     control.value_to_set = value_to_set
     return control
 

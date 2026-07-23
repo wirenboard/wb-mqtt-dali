@@ -57,6 +57,7 @@ from wb.mqtt_dali.event_sync_coordinator import (
 from wb.mqtt_dali.settle_clock import SettleBasis, SettleClock
 from wb.mqtt_dali.virtual_devices import GroupStateSource
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
+from wb.mqtt_dali.wbmqtt import ControlError
 
 NOW = 1000.0
 RESYNC_INTERVAL = 300.0
@@ -757,7 +758,7 @@ async def test_poll_readback_skips_errored_and_none_results():
     coordinator, publisher = _coordinator([device])
 
     results = [
-        ControlPollResult("actual_level", error="r"),  # failed read -> no level setpoints
+        ControlPollResult("actual_level", error=ControlError.READ),  # failed read -> no level setpoints
         ControlPollResult("current_white", None),  # value-less read -> no set_white
         ControlPollResult("current_rgb", "1;2;3"),  # good read -> mirrors
     ]

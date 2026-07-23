@@ -27,6 +27,7 @@ from wb.mqtt_dali.control_ids import SET_RGB, WANTED_LEVEL
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
+from wb.mqtt_dali.wbmqtt import ControlError
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
 
@@ -230,7 +231,7 @@ async def test_setpoint_value_not_published_by_confirm():
 
     await _run_confirm(controller, "dev-5", WANTED_LEVEL, "50")
 
-    controller._device_publisher.set_control_error.assert_any_await("dev-5", "wanted_level", "")
+    controller._device_publisher.set_control_error.assert_any_await("dev-5", "wanted_level", ControlError(0))
     value_calls = [
         c
         for c in controller._device_publisher.set_control_value.await_args_list
@@ -255,7 +256,7 @@ async def test_setpoint_write_error_held_by_confirm():
 
     await _run_confirm(controller, "dev-5", SET_RGB, "1;2;3")
 
-    controller._device_publisher.set_control_error.assert_any_await("dev-5", "set_rgb", "w")
+    controller._device_publisher.set_control_error.assert_any_await("dev-5", "set_rgb", ControlError.WRITE)
 
 
 @pytest.mark.asyncio
@@ -306,7 +307,7 @@ async def test_publish_poll_results_flags_read_error_and_mirrors_setpoints():
     responses = (
         result
         for result in [
-            ControlPollResult(control_id="current_rgb", value=None, error="r"),
+            ControlPollResult(control_id="current_rgb", value=None, error=ControlError.READ),
             ControlPollResult(control_id="actual_level", value="50.000"),
         ]
     )
@@ -314,7 +315,7 @@ async def test_publish_poll_results_flags_read_error_and_mirrors_setpoints():
 
     assert fail_control.read_error is True
     assert ok_control.read_error is False
-    controller._device_publisher.set_control_error.assert_any_await("dev-5", "current_rgb", "r")
+    controller._device_publisher.set_control_error.assert_any_await("dev-5", "current_rgb", ControlError.READ)
 
     controller._event_sync.publish_poll_setpoint_mirror.assert_awaited_once()
     mirrored = controller._event_sync.publish_poll_setpoint_mirror.await_args.args[1]

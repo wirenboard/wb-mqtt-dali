@@ -33,7 +33,7 @@ from .dali_common_parameters import SCENES_TOTAL, MaxLevelParam, MinLevelParam
 from .dali_dimming_curve import DimmingCurveState
 from .device_publisher import ControlInfo
 from .wbdali_utils import MASK
-from .wbmqtt import ControlMeta, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 AddressFactory = Callable[[int], Union[GearBroadcast, GearGroup, GearShort]]
 
@@ -68,12 +68,14 @@ class ActualLevelControl(MqttControlBase):
         super().__init__(
             ControlInfo(
                 ACTUAL_LEVEL,
-                ControlMeta(
-                    title=TranslatedTitle("Actual Level", "Яркость"),
-                    read_only=True,
-                    units="%",
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Actual Level", "Яркость"),
+                        read_only=True,
+                        units="%",
+                    ),
+                    "0",
                 ),
-                "0",
             ),
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
@@ -112,7 +114,7 @@ class ActualLevelControl(MqttControlBase):
             return None
         self._level = new_level
         value = self._format_level(new_level)
-        self.control_info.value = value
+        self.control_info.state.value = value
         return value
 
     # --- Private ---
@@ -175,14 +177,16 @@ class WantedLevelControl(MqttControlBase):
         super().__init__(
             ControlInfo(
                 WANTED_LEVEL,
-                ControlMeta(
-                    "range",
-                    title=TranslatedTitle("Wanted Level", "Желаемая яркость"),
-                    units="%",
-                    minimum=0,
-                    maximum=100,
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        title=TranslatedTitle("Wanted Level", "Желаемая яркость"),
+                        units="%",
+                        minimum=0,
+                        maximum=100,
+                    ),
+                    "0",
                 ),
-                "0",
             )
         )
         self._dimming_curve_state = dimming_curve_state
@@ -206,82 +210,98 @@ def make_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 DAPC_ID,
-                ControlMeta(
-                    "value",
-                    TranslatedTitle("Direct Arc Power Control", "Прямое управление яркостью"),
-                    minimum=0,
-                    maximum=254,
+                ControlState(
+                    ControlMeta(
+                        "value",
+                        TranslatedTitle("Direct Arc Power Control", "Прямое управление яркостью"),
+                        minimum=0,
+                        maximum=254,
+                    ),
+                    "0",
                 ),
-                "0",
             ),
             commands_builder=handle_dapc,
         ),
         MqttControl(
             ControlInfo(
                 "go_to_last_active_level",
-                ControlMeta(
-                    "pushbutton",
-                    TranslatedTitle("Last Active Level", "Последняя активная яркость"),
+                ControlState(
+                    ControlMeta(
+                        "pushbutton",
+                        TranslatedTitle("Last Active Level", "Последняя активная яркость"),
+                    )
                 ),
             ),
             commands_builder=lambda short_address, _: [GoToLastActiveLevel(short_address)],
         ),
         MqttControl(
-            ControlInfo("off", ControlMeta("pushbutton", TranslatedTitle("Off", "Выкл"))),
+            ControlInfo("off", ControlState(ControlMeta("pushbutton", TranslatedTitle("Off", "Выкл")))),
             commands_builder=lambda short_address, _: [Off(short_address)],
         ),
         MqttControl(
-            ControlInfo("up", ControlMeta("pushbutton", TranslatedTitle("Up", "Вверх"))),
+            ControlInfo("up", ControlState(ControlMeta("pushbutton", TranslatedTitle("Up", "Вверх")))),
             commands_builder=lambda short_address, _: [Up(short_address)],
         ),
         MqttControl(
-            ControlInfo("down", ControlMeta("pushbutton", TranslatedTitle("Down", "Вниз"))),
+            ControlInfo("down", ControlState(ControlMeta("pushbutton", TranslatedTitle("Down", "Вниз")))),
             commands_builder=lambda short_address, _: [Down(short_address)],
         ),
         MqttControl(
-            ControlInfo("step_up", ControlMeta("pushbutton", TranslatedTitle("Step Up", "Шаг вверх"))),
+            ControlInfo(
+                "step_up", ControlState(ControlMeta("pushbutton", TranslatedTitle("Step Up", "Шаг вверх")))
+            ),
             commands_builder=lambda short_address, _: [StepUp(short_address)],
         ),
         MqttControl(
-            ControlInfo("step_down", ControlMeta("pushbutton", TranslatedTitle("Step Down", "Шаг вниз"))),
+            ControlInfo(
+                "step_down", ControlState(ControlMeta("pushbutton", TranslatedTitle("Step Down", "Шаг вниз")))
+            ),
             commands_builder=lambda short_address, _: [StepDown(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "recall_max_level",
-                ControlMeta("pushbutton", TranslatedTitle("Recall Max Level", "Максимальная яркость")),
+                ControlState(
+                    ControlMeta("pushbutton", TranslatedTitle("Recall Max Level", "Максимальная яркость"))
+                ),
             ),
             commands_builder=lambda short_address, _: [RecallMaxLevel(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "recall_min_level",
-                ControlMeta("pushbutton", TranslatedTitle("Recall Min Level", "Минимальная яркость")),
+                ControlState(
+                    ControlMeta("pushbutton", TranslatedTitle("Recall Min Level", "Минимальная яркость"))
+                ),
             ),
             commands_builder=lambda short_address, _: [RecallMinLevel(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "step_down_and_off",
-                ControlMeta("pushbutton", TranslatedTitle("Step Down And Off", "Шаг вниз и выкл")),
+                ControlState(
+                    ControlMeta("pushbutton", TranslatedTitle("Step Down And Off", "Шаг вниз и выкл"))
+                ),
             ),
             commands_builder=lambda short_address, _: [StepDownAndOff(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "on_and_step_up",
-                ControlMeta("pushbutton", TranslatedTitle("On And Step Up", "Вкл и шаг вверх")),
+                ControlState(ControlMeta("pushbutton", TranslatedTitle("On And Step Up", "Вкл и шаг вверх"))),
             ),
             commands_builder=lambda short_address, _: [OnAndStepUp(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "go_to_scene",
-                ControlMeta(
-                    title=TranslatedTitle("Go To Scene", "Перейти к сцене"),
-                    enum={str(i): TranslatedTitle() for i in range(SCENES_TOTAL)},
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Go To Scene", "Перейти к сцене"),
+                        enum={str(i): TranslatedTitle() for i in range(SCENES_TOTAL)},
+                    ),
+                    "0",
                 ),
-                "0",
             ),
             commands_builder=lambda short_address, value: [GoToScene(short_address, int(value, 0))],
         ),
@@ -294,8 +314,7 @@ class ErrorStatusControl(MqttControlBase):
         super().__init__(
             ControlInfo(
                 "error_status",
-                ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True),
-                "0",
+                ControlState(ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True), "0"),
             ),
             poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
         )

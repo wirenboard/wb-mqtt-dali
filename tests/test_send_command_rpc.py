@@ -394,7 +394,7 @@ class TestSendCommandBatchPollingLoop:
 def _make_execute_control_obj():
     control = MagicMock()
     control.control_info.id = "ctrl"
-    control.control_info.value = None
+    control.control_info.state.value = None
     control.value_to_set = "1"
     return control
 

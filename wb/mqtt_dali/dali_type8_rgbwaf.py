@@ -11,9 +11,9 @@ from dali.gear.general import DTR0, DTR1, DTR2
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .control_ids import CURRENT_RGB, CURRENT_WHITE, SET_RGB, SET_WHITE
 from .dali_type8_common import ColourComponent
-from .device_publisher import ControlInfo, ControlMeta
+from .device_publisher import ControlInfo
 from .wbdali_utils import MASK
-from .wbmqtt import TranslatedTitle
+from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 MAX_COLOUR_VALUE = MASK - 1
 
@@ -137,9 +137,7 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
 
     setup_rgb_control = MqttControl(
         ControlInfo(
-            SET_RGB,
-            ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")),
-            "0;0;0",
+            SET_RGB, ControlState(ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")), "0;0;0")
         ),
         commands_builder=_set_rgb_commands_builder,
     )
@@ -147,13 +145,15 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
     setup_white_control = MqttControl(
         ControlInfo(
             SET_WHITE,
-            ControlMeta(
-                "range",
-                TranslatedTitle("Wanted W", "Желаемый W"),
-                minimum=0,
-                maximum=MAX_COLOUR_VALUE,
+            ControlState(
+                ControlMeta(
+                    "range",
+                    TranslatedTitle("Wanted W", "Желаемый W"),
+                    minimum=0,
+                    maximum=MAX_COLOUR_VALUE,
+                ),
+                "0",
             ),
-            "0",
         ),
         commands_builder=_set_white_commands_builder,
     )
@@ -165,8 +165,9 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 CURRENT_RGB,
-                ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True),
-                "0;0;0",
+                ControlState(
+                    ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True), "0;0;0"
+                ),
             ),
             is_group_state_control=True,
         ),
@@ -174,8 +175,9 @@ def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 CURRENT_WHITE,
-                ControlMeta(title=TranslatedTitle("Current W", "Текущий W"), read_only=True),
-                "0",
+                ControlState(
+                    ControlMeta(title=TranslatedTitle("Current W", "Текущий W"), read_only=True), "0"
+                ),
             ),
             is_group_state_control=True,
         ),
@@ -192,11 +194,11 @@ def handle_poll_controls_result(new_colour: Optional[RgbwafColourValues]) -> lis
                 if new_colour is None
                 else ";".join([str(new_colour.red), str(new_colour.green), str(new_colour.blue)])
             ),
-            error="r" if new_colour is None else None,
+            error=ControlError.READ if new_colour is None else ControlError.NONE,
         ),
         ControlPollResult(
             CURRENT_WHITE,
             None if new_colour is None else str(new_colour.white),
-            error="r" if new_colour is None else None,
+            error=ControlError.READ if new_colour is None else ControlError.NONE,
         ),
     ]

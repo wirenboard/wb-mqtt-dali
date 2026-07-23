@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.19.3) stable; urgency=medium
+
+  * Internal cleanup of the control-state representation: the per-control
+    /meta/error value is now a typed ControlError flag (READ/WRITE) instead of a
+    free string, and ControlInfo carries a single ControlState object
+    (meta, value, error) instead of separate fields. Behaviour on the bus is
+    unchanged — /meta/error still publishes the same r/w flag strings.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 23 Jul 2026 17:32:39 +0500
+
 wb-mqtt-dali (1.19.2) stable; urgency=medium
 
   * Harden the settings-parameter apply path: every handler's read/write now returns

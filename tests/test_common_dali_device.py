@@ -735,29 +735,30 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     d._apply_common_parameters.assert_awaited_once_with(driver, new_values)
 
 
-def _make_instance_group_handler(property_name, sparse_delta):
-    """Mock SettingsParamGroup handler reproducing its real write() return shape:
-    {property_name: {changed fields}} for the touched instance, or {property_name: {}}
-    for a present-but-unchanged instance (see settings.py SettingsParamGroup.write)."""
+def _make_instance_group_handler(write_return):
+    """Mock SettingsParamGroup handler reproducing its real write() return shape under the
+    full-object contract: {property_name: <full instance value>} for a changed instance, or
+    {} for a present-but-unchanged one (see settings.py SettingsParamGroup.write)."""
     handler = MagicMock()
-    handler.write = AsyncMock(return_value={property_name: dict(sparse_delta)})
+    handler.write = AsyncMock(return_value={k: dict(v) for k, v in write_return.items()})
     handler.requires_mqtt_controls_refresh = False
     return handler
 
 
 @pytest.mark.asyncio
-async def test_apply_parameters_sparse_instance_delta_keeps_other_instances():
+async def test_apply_parameters_full_instance_value_keeps_other_instances():
     """Regression for the save-priority bug. A full DALI-2 config with several
-    instances sits in device.params. apply_parameters receives the write deltas
-    SettingsParamGroup.write actually emits: a sparse {"event_priority": 5} for the
-    changed instance0, and empty {} groups for present-but-unchanged siblings. The
-    handlers are installed through the public initialize() path. apply_parameters'
-    deep-merge must keep the sibling instances and instance0's unmentioned fields
-    intact, instead of the old shallow update wiping them to {} / 2 fields."""
+    instances sits in device.params. apply_parameters receives the write returns
+    SettingsParamGroup.write actually emits under the full-object contract: the
+    complete {"event_priority": 5, ...} value for the changed instance0, and empty
+    {} for present-but-unchanged siblings. The handlers are installed through the
+    public initialize() path. apply_parameters' plain params.update() must store
+    instance0's full value and keep the sibling instances (their handlers returned
+    {}) intact, instead of a partial delta wiping instance0's unmentioned fields."""
     handlers = [
-        _make_instance_group_handler("instance0", {"event_priority": 5}),
-        _make_instance_group_handler("instance1", {}),
-        _make_instance_group_handler("instance2", {}),
+        _make_instance_group_handler({"instance0": {"event_priority": 5, "event_scheme": 1, "active": True}}),
+        _make_instance_group_handler({}),
+        _make_instance_group_handler({}),
     ]
 
     d = _make_device(extra_param_handlers=handlers)
@@ -783,9 +784,9 @@ async def test_apply_parameters_sparse_instance_delta_keeps_other_instances():
         await d.apply_parameters(driver, new_values)
 
     assert d.params["instance0"]["event_priority"] == 5
-    # Unmentioned sibling field of instance0 survives.
+    # Unmentioned field of instance0 survives (the handler returned the full value).
     assert d.params["instance0"]["active"] is True
-    # Present-but-unchanged instances are fully preserved (not wiped to {}).
+    # Present-but-unchanged instances are fully preserved (their handlers returned {}).
     assert d.params["instance1"] == {"event_priority": 3, "event_scheme": 1, "active": True}
     assert d.params["instance2"] == {"event_priority": 3, "event_scheme": 1, "active": True}
 

@@ -434,7 +434,7 @@ class ScenesSettings(SettingsParamBase):
         # complete (full read => nothing left for the background fetch).
         await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
         self._fetch_cursor = SCENES_TOTAL
-        return {self.property_name: self._scene_values}
+        return {self.property_name: deepcopy(self._scene_values)}
 
     async def fetch(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
@@ -465,7 +465,7 @@ class ScenesSettings(SettingsParamBase):
         )
         for i, res in enumerate(results):
             self._scene_values[i].update(res)
-        return {self.property_name: self._scene_values}
+        return {self.property_name: deepcopy(self._scene_values)}
 
     def has_changes(self, new_params: dict) -> bool:
         return self.property_name in new_params

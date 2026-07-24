@@ -335,6 +335,231 @@ async def test_type8_subbatch_failure_publishes_error_and_reschedules():
 
 
 @pytest.mark.asyncio
+async def test_type8_failed_first_subbatch_leaves_round_and_backs_off():
+    """A failing DT8 first subbatch publishes the read error, then leaves the poll round:
+    a second poll_controls on the same round must not re-issue the read (the handler is
+    popped, no coroutine, no new bus traffic), and the handler is not due again until its
+    poll interval elapses. Guards against the restart-in-place regression where a stuck
+    failing colour read sticks at the head of the round."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    dev = _make_dali_device(type8_handler=handler)
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_bad_response() for _ in cmds])
+
+    handler.last_poll_time = None
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+    poll_results = await res.poll_coroutine()
+
+    assert {p.control_id for p in poll_results} == {"current_rgb", "current_white"}
+    assert all(p.error == ControlError.READ for p in poll_results)
+    assert not handler.has_in_progress_read()
+
+    sends_after_failure = driver.send_commands.await_count
+    assert sends_after_failure == MAX_COLOUR_SUBBATCH_RETRIES
+
+    # Second poll on the same round: the handler must be dropped, not restarted in place.
+    res2 = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+    assert res2.poll_coroutine is None
+    assert res2.has_more is False
+    # pylint: disable-next=protected-access
+    assert not dev._current_round
+    assert driver.send_commands.await_count == sends_after_failure
+
+    # Not due again until the interval elapses (first poll pulls the reconfirm in).
+    assert handler.is_poll_due(5.0) is False
+    assert handler.is_poll_due(EVENT_RESYNC_BASE_INTERVAL * 1.31) is True
+
+
+@pytest.mark.asyncio
+async def test_type8_failed_read_does_not_block_sibling_pollable():
+    """With a persistently failing DT8 at the head of the round and a healthy sibling
+    control behind it, the failing colour read must not starve the sibling: the sibling
+    is skipped on the tick the DT8 subbatch runs, but once the DT8 backs off it is polled
+    on the very next tick instead of the DT8 restarting ahead of it forever."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    sibling = _readable_control("sibling", poll_interval=5.0)
+    dev = _make_dali_device(controls=[sibling], type8_handler=handler)
+    # Put the failing DT8 at the head so it would block the sibling if it restarted in place.
+    # pylint: disable-next=protected-access
+    dev._pollables = [handler, sibling]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_bad_response() for _ in cmds])
+
+    handler.last_poll_time = None
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+    await res.poll_coroutine()
+
+    # First tick ran the DT8 first subbatch (and it failed); the sibling was held back.
+    assert not handler.has_in_progress_read()
+    assert sibling.last_poll_time is None
+
+    # Next tick: DT8 backs off and is dropped, so the sibling finally gets its turn.
+    dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+    assert sibling.last_poll_time == 0.0
+    # pylint: disable-next=protected-access
+    assert handler not in dev._current_round
+
+
+@pytest.mark.asyncio
+async def test_type8_successful_cycle_reschedules_by_interval():
+    """Regression for the happy path: a full multi-subbatch RGBWAF read completes, drops
+    out of the round, and reschedules by its poll interval — a follow-up poll before the
+    interval elapses must not restart the read (round stays empty, no extra bus traffic)."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    dev = _make_dali_device(type8_handler=handler)
+
+    component_values = {
+        QueryColourValueDTR.RedDimLevel.value: 10,
+        QueryColourValueDTR.GreenDimLevel.value: 20,
+        QueryColourValueDTR.BlueDimLevel.value: 30,
+        QueryColourValueDTR.WhiteDimLevel.value: 40,
+    }
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(
+        side_effect=_make_send_commands(180, ColourType.RGBWAF.value, component_values)
+    )
+
+    handler.last_poll_time = None
+    results: list = []
+    for _ in range(5):
+        res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+        assert res.poll_coroutine is not None
+        results.append(await res.poll_coroutine())
+
+    final = {item.control_id: item for item in results[-1]}
+    assert final["current_rgb"].value == "10;20;30"
+    assert final["current_white"].value == "40"
+    assert not handler.has_in_progress_read()
+    # pylint: disable-next=protected-access
+    assert not dev._current_round
+
+    # A poll before the interval elapses must not restart the read.
+    sends_after_success = driver.send_commands.await_count
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+    assert res.poll_coroutine is None
+    assert driver.send_commands.await_count == sends_after_success
+
+    assert handler.is_poll_due(5.0) is False
+    assert handler.is_poll_due(EVENT_RESYNC_BASE_INTERVAL * 1.31) is True
+
+
+@pytest.mark.asyncio
+async def test_type8_unfinished_cycle_stays_in_round_regardless_of_interval():
+    """Regression for the in-progress invariant: once the opening subbatch has run, a
+    partially-read cycle keeps the handler in the round and continues with its component
+    subbatches on the next tick even though the poll interval has not elapsed — the
+    back-off guard must only apply to finished cycles, never to an in-flight one."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    dev = _make_dali_device(type8_handler=handler)
+
+    component_values = {
+        QueryColourValueDTR.RedDimLevel.value: 1,
+        QueryColourValueDTR.GreenDimLevel.value: 2,
+        QueryColourValueDTR.BlueDimLevel.value: 3,
+        QueryColourValueDTR.WhiteDimLevel.value: 4,
+    }
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(
+        side_effect=_make_send_commands(100, ColourType.RGBWAF.value, component_values)
+    )
+
+    handler.last_poll_time = None
+    # Opening subbatch: identifies the colour type, leaves the read in progress.
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
+    assert handler.has_in_progress_read()
+    # last_poll_time is now stamped, so a *finished* cycle would back off here — but this
+    # cycle is unfinished, so the handler must stay eligible at the same instant.
+    assert handler.last_poll_time == 0.0
+
+    # pylint: disable-next=protected-access
+    assert handler in dev._current_round
+    res = dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
+    assert res.poll_coroutine is not None
+    await res.poll_coroutine()
+    assert handler.has_in_progress_read()
+    # pylint: disable-next=protected-access
+    assert handler in dev._current_round
+
+
+@pytest.mark.asyncio
+async def test_type8_failed_component_backs_off_at_nonzero_time_then_resumes():
+    """Component-subbatch failure path plus the guard's interval comparison at nonzero
+    elapsed times. The opening subbatch succeeds at t0 (colour type identified, a
+    multi-component RGBWAF read in progress); at t=2.0 a non-last component subbatch fails,
+    which clears _read_progress even though that step had already reported has_more=True —
+    leaving the handler stuck at the head of the round. On the next same-round tick (still
+    t=2.0, inside the interval) the handler must back off: it is popped, issues no colour
+    subbatch on the bus, and the sibling queued behind it is polled instead. Once now
+    advances past the poll interval the guard falls through and the handler opens a fresh
+    read (a new first subbatch). This exercises now - last_poll_time both below and above
+    the interval, so an operand-swap or inverted comparison would be caught."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    # Large interval keeps the sibling out of the round once polled, so the resume tick
+    # isolates the handler and its fresh opening is unambiguous.
+    sibling = _readable_control("sibling", poll_interval=100.0)
+    dev = _make_dali_device(controls=[sibling], type8_handler=handler)
+    # Failing DT8 at the head: a restart-in-place would starve the sibling queued behind it.
+    # pylint: disable-next=protected-access
+    dev._pollables = [handler, sibling]
+
+    sent_calls: list[list] = []
+
+    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+        sent_calls.append(list(cmds))
+        if _is_first_subbatch(cmds):
+            return [_ok_response(60), _ok_response(0), _ok_response(ColourType.RGBWAF.value)]
+        if len(cmds) == 1:  # sibling single-command query
+            return [_ok_response(0)]
+        return [_bad_response() for _ in cmds]  # DT8 component subbatch: fail
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+
+    handler.last_poll_time = None
+    # t0: opening subbatch succeeds; a multi-component read is now in progress.
+    await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
+    assert handler.has_in_progress_read()
+    assert handler.last_poll_time == 0.0
+    # First-poll reconfirm pulls the interval in to the startup delay.
+    interval = handler.poll_interval
+
+    # t=2.0: a non-last component subbatch fails and clears the in-progress read.
+    await dev.poll_controls(driver, now=2.0, max_commands=3, default_max_commands=3).poll_coroutine()
+    assert not handler.has_in_progress_read()
+    # pylint: disable-next=protected-access
+    assert handler in dev._current_round  # still stuck at the head right after the failure
+
+    # Next tick, still t=2.0 and inside the interval: the handler backs off, sibling proceeds.
+    # last_poll_time is 0.0, so the elapsed time the guard sees is 2.0 (nonzero, < interval).
+    assert 2.0 < interval
+    sends_before_backoff = len(sent_calls)
+    res_backoff = dev.poll_controls(driver, now=2.0, max_commands=3, default_max_commands=3)
+    # pylint: disable-next=protected-access
+    assert handler not in dev._current_round  # popped, not restarted in place
+    assert not handler.has_in_progress_read()
+    assert sibling.last_poll_time == 2.0  # sibling reached in the same round
+    # The returned coroutine belongs to the sibling; run it and confirm the handler put no
+    # colour subbatch on the bus this tick (a restart would have sent a first/component one).
+    await res_backoff.poll_coroutine()
+    backoff_sends = sent_calls[sends_before_backoff:]
+    assert not any(_is_first_subbatch(c) or len(c) == 2 for c in backoff_sends)
+
+    # now past the interval: guard falls through, handler opens a fresh read (first subbatch).
+    # Elapsed since last_poll_time (0.0) is resume_now, so this drives the > interval branch.
+    resume_now = interval + 1.0
+    assert resume_now > interval
+    sends_before_resume = len(sent_calls)
+    res_resume = dev.poll_controls(driver, now=resume_now, max_commands=3, default_max_commands=3)
+    assert res_resume.poll_coroutine is not None
+    await res_resume.poll_coroutine()
+    resume_sends = sent_calls[sends_before_resume:]
+    assert any(_is_first_subbatch(c) for c in resume_sends)
+    assert handler.has_in_progress_read()
+
+
+@pytest.mark.asyncio
 async def test_type8_first_poll_schedules_startup_reconfirm():
     """A DT8 colour control's first poll (last_poll_time None) pulls one reconfirm in at
     the startup delay, mirroring the gear-control first-poll behaviour."""

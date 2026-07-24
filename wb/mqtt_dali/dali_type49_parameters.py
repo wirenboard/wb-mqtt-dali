@@ -8,7 +8,7 @@ from .common_dali_device import (
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.integrated_power_supply import QueryActivePowerSupply
-from .wbmqtt import ControlMeta, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 
 class Type49Parameters(TypeParameters):
@@ -18,12 +18,14 @@ class Type49Parameters(TypeParameters):
             MqttControl(
                 control_info=ControlInfo(
                     "integrated_power_supply",
-                    ControlMeta(
-                        "switch",
-                        TranslatedTitle("Integrated Power Supply", "Встроенный источник питания"),
-                        read_only=True,
+                    ControlState(
+                        ControlMeta(
+                            "switch",
+                            TranslatedTitle("Integrated Power Supply", "Встроенный источник питания"),
+                            read_only=True,
+                        ),
+                        "0",
                     ),
-                    "0",
                 ),
                 query_builder=QueryActivePowerSupply,
                 value_formatter=lambda response: "1" if response.value else "0",

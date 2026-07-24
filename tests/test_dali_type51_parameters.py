@@ -20,6 +20,7 @@ from dali.memory.location import FlagValue
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam
+from wb.mqtt_dali.wbmqtt import ControlError
 
 # pylint: disable=redefined-outer-name
 
@@ -224,9 +225,9 @@ async def test_type51_mqtt_controls_only_active_energy():
     controls = dev.get_mqtt_controls()
     energy = [c for c in controls if c.id == "active_energy"]
     assert len(energy) == 1
-    assert energy[0].meta.units == "kWh"
-    assert energy[0].meta.title.en == "Active energy"
-    assert energy[0].meta.read_only is True
+    assert energy[0].state.meta.units == "kWh"
+    assert energy[0].state.meta.title.en == "Active energy"
+    assert energy[0].state.meta.read_only is True
 
 
 def _ok_int_response(value: int):
@@ -328,7 +329,7 @@ async def test_type51_chunked_poll_assembles_value():
     final = results[2]
     assert len(final) == 1
     assert final[0].control_id == "active_energy"
-    assert final[0].error is None
+    assert final[0].error == ControlError(0)
     assert final[0].value == _energy_bytes_to_kwh_str(0, energy_bytes)
 
 
@@ -367,7 +368,7 @@ async def test_type51_chunked_poll_publishes_kwh_three_decimals(scale_byte, ener
     final = results[2]
     assert len(final) == 1
     assert final[0].control_id == "active_energy"
-    assert final[0].error is None
+    assert final[0].error == ControlError(0)
     assert final[0].value == expected_value
 
 
@@ -431,7 +432,7 @@ async def test_type51_chunked_poll_failure_publishes_error():
     result2 = await _run_one_chunk(dev, driver, now=1.0)
     assert len(result2) == 1
     assert result2[0].control_id == "active_energy"
-    assert result2[0].error == "r"
+    assert result2[0].error == ControlError.READ
 
 
 @pytest.mark.asyncio
@@ -460,7 +461,7 @@ async def test_type51_chunked_poll_restarts_after_failure():
 
     await _run_one_chunk(dev, driver, now=0.0)
     failure = await _run_one_chunk(dev, driver, now=1.0)
-    assert failure[0].error == "r"
+    assert failure[0].error == ControlError.READ
 
     completion_time = 1.0 + 200.0
     result: list = []
@@ -469,7 +470,7 @@ async def test_type51_chunked_poll_restarts_after_failure():
         if i < 2:
             assert result == []
     assert result[0].control_id == "active_energy"
-    assert result[0].error is None
+    assert result[0].error == ControlError(0)
     assert result[0].value == _energy_bytes_to_kwh_str(0, energy_bytes_attempt_2)
 
     # Restarting the cycle resets DTR0 back to byte 0x05.
@@ -495,7 +496,7 @@ async def test_type51_chunked_poll_no_publish_on_partial():
     assert await _run_one_chunk(dev, driver, now=1.0) == []
     final = await _run_one_chunk(dev, driver, now=2.0)
     assert len(final) == 1
-    assert final[0].error is None
+    assert final[0].error == ControlError(0)
 
 
 @pytest.mark.asyncio
@@ -548,7 +549,7 @@ async def test_type51_refresh_paced_120s_after_failure():
     assert await _run_one_chunk(dev, driver, now=0.0) == []
     failure_now = 30.0
     failure = await _run_one_chunk(dev, driver, now=failure_now)
-    assert failure[0].error == "r"
+    assert failure[0].error == ControlError.READ
     assert driver.send_commands.await_count == 2
 
     # 120 s window measured from cycle-end (failure_now), not cycle-start (t=0).
@@ -586,7 +587,7 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send_failing)
     result = await _run_one_chunk(dev, driver, now=0.0)
-    assert result[0].error == "r"
+    assert result[0].error == ControlError.READ
 
     energy_bytes = [0, 0, 0, 0, 0x10, 0x00]  # 4096 Wh
 
@@ -614,7 +615,7 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     assert res_scale == []
     assert res1 == []
     assert res2 == []
-    assert res3[0].error is None
+    assert res3[0].error == ControlError(0)
     assert res3[0].value == _energy_bytes_to_kwh_str(0, energy_bytes)
 
     assert isinstance(sent_calls[0][1], DTR0)

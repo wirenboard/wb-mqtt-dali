@@ -7,6 +7,7 @@ import aiomqtt
 import pytest
 
 from wb.mqtt_dali.wbmqtt import (
+    ControlError,
     ControlMeta,
     ControlState,
     Device,
@@ -148,6 +149,27 @@ class TestControlState:
         meta.title.en = "Modified"
 
         assert state.meta.title.en == "Original"
+
+    def test_default_error_is_empty_flag(self):
+        state = ControlState(ControlMeta(), "value")
+        assert state.error == ControlError(0)
+        assert not state.error
+
+
+class TestControlError:
+    def test_to_mqtt(self):
+        """The flag serializes to the WB wire chars in a fixed r-then-w order; the
+        empty flag serializes to the empty string."""
+        assert ControlError.READ.to_mqtt() == "r"
+        assert ControlError.WRITE.to_mqtt() == "w"
+        assert (ControlError.READ | ControlError.WRITE).to_mqtt() == "rw"
+        assert (ControlError.WRITE | ControlError.READ).to_mqtt() == "rw"
+        assert ControlError(0).to_mqtt() == ""
+        assert str(ControlError.READ | ControlError.WRITE) == "rw"
+
+    def test_empty_flag_is_falsy(self):
+        assert not ControlError(0)
+        assert ControlError.READ
 
 
 class TestDevice:
@@ -314,7 +336,7 @@ class TestDevice:
         await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
-        await device.set_control_error("ctrl1", "r")
+        await device.set_control_error("ctrl1", ControlError.READ)
 
         error_calls = [
             c
@@ -323,7 +345,7 @@ class TestDevice:
         ]
         assert len(error_calls) == 1
         assert error_calls[0][0][1] == "r"
-        assert device._controls["ctrl1"].error == "r"
+        assert device._controls["ctrl1"].error == ControlError.READ
 
     @pytest.mark.asyncio
     async def test_set_control_error_clears(self, mock_client):
@@ -333,7 +355,7 @@ class TestDevice:
 
         meta = ControlMeta(title="Test")
         await device.create_control("ctrl1", meta, "value")
-        await device.set_control_error("ctrl1", "r")
+        await device.set_control_error("ctrl1", ControlError.READ)
         mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "new_value")
@@ -345,7 +367,7 @@ class TestDevice:
         ]
         assert len(error_calls) == 1
         assert error_calls[0][0][1] is None
-        assert device._controls["ctrl1"].error is None
+        assert device._controls["ctrl1"].error == ControlError(0)
 
     @pytest.mark.asyncio
     async def test_set_control_error_nonexistent(self, mock_client):
@@ -353,9 +375,30 @@ class TestDevice:
         await device.initialize()
         mock_client.publish.reset_mock()
 
-        await device.set_control_error("nonexistent", "r")
+        await device.set_control_error("nonexistent", ControlError.READ)
 
         mock_client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_control_error_publishes_flag_string(self, mock_client):
+        """set_control_error serializes the flag to the wire chars; a combined
+        READ|WRITE flag publishes "rw", and the empty flag clears the topic."""
+        # pylint: disable=protected-access
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(title="Test"), "value")
+        error_topic = "/devices/test_device/controls/ctrl1/meta/error"
+
+        mock_client.publish.reset_mock()
+        await device.set_control_error("ctrl1", ControlError.READ | ControlError.WRITE)
+        combined_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == error_topic]
+        assert combined_calls[0][0][1] == "rw"
+
+        mock_client.publish.reset_mock()
+        await device.set_control_error("ctrl1", ControlError(0))
+        clear_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == error_topic]
+        assert clear_calls[0][0][1] is None
+        assert device._controls["ctrl1"].error == ControlError(0)
 
     @pytest.mark.asyncio
     async def test_remove_control(self, mock_client):

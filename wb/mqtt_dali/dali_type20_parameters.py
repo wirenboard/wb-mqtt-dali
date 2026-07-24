@@ -20,7 +20,7 @@ from .gear.demand_response import (
 )
 from .settings import SettingsParamName
 from .utils import add_enum, add_translations
-from .wbmqtt import ControlMeta, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 
 class LoadSheddingConditionParam(NumberGearParam):
@@ -115,17 +115,19 @@ class Type20Parameters(TypeParameters):
             MqttControl(
                 control_info=ControlInfo(
                     "load_shedding_condition",
-                    ControlMeta(
-                        title=TranslatedTitle("Load Shedding Condition", "Условие снижения нагрузки"),
-                        read_only=True,
-                        enum={
-                            "0": TranslatedTitle("no reduction", "без снижения"),
-                            "1": TranslatedTitle("reduction factor 1", "фактор снижения 1"),
-                            "2": TranslatedTitle("reduction factor 2", "фактор снижения 2"),
-                            "3": TranslatedTitle("reduction factor 3", "фактор снижения 3"),
-                        },
+                    ControlState(
+                        ControlMeta(
+                            title=TranslatedTitle("Load Shedding Condition", "Условие снижения нагрузки"),
+                            read_only=True,
+                            enum={
+                                "0": TranslatedTitle("no reduction", "без снижения"),
+                                "1": TranslatedTitle("reduction factor 1", "фактор снижения 1"),
+                                "2": TranslatedTitle("reduction factor 2", "фактор снижения 2"),
+                                "3": TranslatedTitle("reduction factor 3", "фактор снижения 3"),
+                            },
+                        ),
+                        "0",
                     ),
-                    "0",
                 ),
                 query_builder=QueryLoadSheddingCondition,
                 value_formatter=lambda response: str(response.value),

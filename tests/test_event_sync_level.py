@@ -35,7 +35,7 @@ from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from wb.mqtt_dali.dali_type7_parameters import LastActedControl
 from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.settle_clock import SettleBasis, SettleClock
-from wb.mqtt_dali.wbmqtt import ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
 ADDR = GearShort(5)
 
@@ -232,7 +232,7 @@ def test_settle_clock_horizon_bounded_by_max_fade():
 
 def _event_control() -> MqttControlBase:
     return MqttControlBase(
-        ControlInfo("c", ControlMeta(read_only=True), "0"),
+        ControlInfo("c", ControlState(ControlMeta(read_only=True), "0")),
         poll_interval=EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval=True,
     )

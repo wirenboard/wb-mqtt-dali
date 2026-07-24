@@ -164,7 +164,11 @@ class GroupStateSource:
         book.pinned_source = None
         if self._all_errored(book) and not book.err_published:
             book.err_published = True
-            return GroupStateUpdate(kind=GroupStateUpdateKind.ERROR, control_id=control_id, payload="r")
+            return GroupStateUpdate(
+                kind=GroupStateUpdateKind.ERROR,
+                control_id=control_id,
+                payload="",
+            )
         return None
 
     def update_candidates(self, new_candidates_by_control_id: dict[ControlId, list[CandidateUid]]) -> None:
@@ -238,7 +242,7 @@ def build_virtual_device_controls(
     controls.extend(state_by_id.values())
 
     for i, control in enumerate(controls, start=1):
-        control.control_info.meta.order = i
+        control.control_info.state.meta.order = i
 
     return {c.control_info.id: c for c in controls}
 

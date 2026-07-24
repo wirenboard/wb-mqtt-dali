@@ -55,6 +55,7 @@ from .wbdali_utils import (
     send_commands_with_retry,
     send_with_retry,
 )
+from .wbmqtt import ControlError
 
 
 class ApplicationControllerState(Enum):
@@ -393,7 +394,7 @@ async def publish_device(
     await publisher.register_control_handler(device.mqtt_id, "+", control_handler)
     for control in common_controls:
         if control.is_readable():
-            await publisher.set_control_error(device.mqtt_id, control.control_info.id, "r")
+            await publisher.set_control_error(device.mqtt_id, control.control_info.id, ControlError.READ)
 
 
 class ApplicationController:  # pylint: disable=too-many-instance-attributes, too-many-public-methods
@@ -1173,17 +1174,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             task = ApplicationControllerTask(ApplicationControllerTaskType.EXECUTE_CONTROL, key)
             self._tasks_queue.put_nowait(task)
             await task.future
-            await self._device_publisher.set_control_error(device_id, control_id, "")
+            await self._device_publisher.set_control_error(device_id, control_id, ControlError.NONE)
             # Setpoints event sync owns (real-device wanted_level/dapc/set_*) are published
             # from the observed truth via the monitor path; confirm only holds their write
             # error here. Non-owned writables and virtual-device setpoints echo as before.
             owned = isinstance(device, DaliDevice) and is_event_sync_owned_setpoint(control_id)
-            new_value = control.control_info.value
+            new_value = control.control_info.state.value
             if not owned and new_value is not None:
                 await self._device_publisher.set_control_value(device_id, control_id, new_value)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
-            await self._device_publisher.set_control_error(device_id, control_id, "w")
+            await self._device_publisher.set_control_error(device_id, control_id, ControlError.WRITE)
 
     def _get_bus_capabilities(self) -> AggregatedCapabilities:
         return aggregate_capabilities(self.dali_devices)
@@ -1415,7 +1416,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                                 control_task.future.set_exception(result)
                                 continue
                             control_task.future.set_result(result)
-                            control.control_info.value = value_to_set
+                            control.control_info.state.value = value_to_set
                     except Exception as e:  # pylint: disable=broad-exception-caught
                         # Guard against an unexpected failure while draining/resolving the
                         # batch: resolve every still-pending pulled-off future so no
@@ -1502,11 +1503,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         tasks = []
         for response in responses:
             control = device.get_mqtt_control(response.control_id)
-            if response.error is not None:
+            if response.error:
                 if control is not None:
                     control.read_error = True
                 tasks.append(
-                    self._device_publisher.set_control_error(device.mqtt_id, response.control_id, "r")
+                    self._device_publisher.set_control_error(
+                        device.mqtt_id, response.control_id, ControlError.READ
+                    )
                 )
                 continue
             if control is not None:
@@ -1559,7 +1562,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 action = source.record_poll(
                     candidate_uid=device.uid,
                     control_id=control_id,
-                    success=response.error is None,
+                    success=not response.error,
                     value=response.value,
                 )
                 if action is None:
@@ -1573,11 +1576,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         )
                     )
                 elif action.kind is GroupStateUpdateKind.ERROR:
+                    # Group state only surfaces read failures; action.payload carries the
+                    # matching wire string ("r") for the update's polymorphic value slot.
                     tasks.append(
                         self._device_publisher.set_control_error(
                             group_device.mqtt_id,
                             action.control_id,
-                            action.payload,
+                            ControlError.READ,
                         )
                     )
         return tasks

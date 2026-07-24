@@ -60,7 +60,7 @@ from wb.mqtt_dali.dali_type8_parameters import ColourType, query_colour_with_lev
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_utils import send_commands_with_retry
-from wb.mqtt_dali.wbmqtt import ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
 _RPC_LOAD_TOPIC = "/rpc/v1/wb-mqtt-serial/port/Load/{client_id}"
 
@@ -259,7 +259,9 @@ async def test_polling_loop_uses_periodic_query_priority(initialized_driver):
     frame produced by the polling code path, not a stub."""
     driver, mqtt_client, dispatcher = initialized_driver
     control = MqttControl(
-        control_info=ControlInfo(id="level", meta=ControlMeta(control_type="value", read_only=True)),
+        control_info=ControlInfo(
+            id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))
+        ),
         query_builder=QueryActualLevel,
         value_formatter=lambda r: str(r.raw_value.as_integer if r.raw_value is not None else ""),
     )

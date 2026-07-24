@@ -11,9 +11,9 @@ from dali.gear.general import DTR0, DTR1, DTR2
 from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
 from .control_ids import CURRENT_PRIMARY_N, PRIMARY_N_MAX, SET_PRIMARY_N
 from .dali_type8_common import ColourComponent
-from .device_publisher import ControlInfo, ControlMeta
+from .device_publisher import ControlInfo
 from .wbdali_utils import MASK_2BYTES
-from .wbmqtt import TranslatedTitle
+from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 COLOUR_NAMES = {
     ColourComponent.PRIMARY_N0: ("Primary N0", "Основной N0"),
@@ -114,11 +114,13 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             MqttControl(
                 ControlInfo(
                     CURRENT_PRIMARY_N.format(i),
-                    ControlMeta(
-                        title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"),
-                        read_only=True,
+                    ControlState(
+                        ControlMeta(
+                            title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"),
+                            read_only=True,
+                        ),
+                        "0",
                     ),
-                    "0",
                 ),
             ),
         )
@@ -126,13 +128,15 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             MqttControl(
                 ControlInfo(
                     SET_PRIMARY_N.format(i),
-                    ControlMeta(
-                        "range",
-                        TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"),
-                        minimum=0,
-                        maximum=MASK_2BYTES,
+                    ControlState(
+                        ControlMeta(
+                            "range",
+                            TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"),
+                            minimum=0,
+                            maximum=MASK_2BYTES,
+                        ),
+                        "0",
                     ),
-                    "0",
                 ),
                 commands_builder=lambda short_address, value, index=i: _set_primary_n_commands_builder(
                     short_address, value, index
@@ -147,7 +151,7 @@ def handle_poll_controls_result(new_colour: Optional[PrimaryNColourValues]) -> l
         ControlPollResult(
             CURRENT_PRIMARY_N.format(i),
             None if new_colour is None else str(getattr(new_colour, f"primary_n{i}")),
-            error="r" if new_colour is None else None,
+            error=ControlError.READ if new_colour is None else ControlError.NONE,
         )
         for i, _ in enumerate(PRIMARY_N_COLOUR_COMPONENTS)
     ]

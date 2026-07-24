@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Set, Union
 import aiomqtt
 
 from .mqtt_dispatcher import MessageCallback, MQTTDispatcher, get_str_payload
-from .wbmqtt import ControlMeta, Device, TranslatedTitle
+from .wbmqtt import ControlError, ControlState, Device, TranslatedTitle
 
 
 @dataclass
@@ -15,8 +15,7 @@ class ControlInfo:  # pylint: disable=R0903
     # Must be unique per device
     # Control topic /devices/{device_mqtt_name}/controls/{id}
     id: str
-    meta: ControlMeta
-    value: Optional[str] = None
+    state: ControlState
 
 
 @dataclass
@@ -151,7 +150,7 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_title(control_id, title)
 
-    async def set_control_error(self, device_id: str, control_id: str, error: str) -> None:
+    async def set_control_error(self, device_id: str, control_id: str, error: ControlError) -> None:
         async with self._lock:
             if device_id not in self._devices:
                 self.logger.warning("Device %s not found", device_id)
@@ -258,8 +257,8 @@ class DevicePublisher:
         self.logger.info("Removed device %s", device_id)
 
     async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
-        value = control_info.value if control_info.value is not None else ""
-        await device.create_control(control_info.id, control_info.meta, value)
+        value = control_info.state.value if control_info.state.value is not None else ""
+        await device.create_control(control_info.id, control_info.state.meta, value)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

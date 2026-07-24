@@ -25,9 +25,9 @@ from .control_ids import (
     SET_Y_COORDINATE,
 )
 from .dali_type8_common import ColourComponent
-from .device_publisher import ControlInfo, ControlMeta
+from .device_publisher import ControlInfo
 from .wbdali_utils import MASK_2BYTES
-from .wbmqtt import TranslatedTitle
+from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 XY_COLOUR_COMPONENTS = [
     ColourComponent.X_COORDINATE,
@@ -128,78 +128,102 @@ def get_mqtt_controls() -> list[MqttControlBase]:
         MqttControl(
             ControlInfo(
                 CURRENT_X_COORDINATE,
-                ControlMeta(
-                    title=TranslatedTitle("Current X Coordinate", "Текущая координата X"),
-                    read_only=True,
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Current X Coordinate", "Текущая координата X"),
+                        read_only=True,
+                    ),
+                    "0",
                 ),
-                "0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 CURRENT_Y_COORDINATE,
-                ControlMeta(
-                    title=TranslatedTitle("Current Y Coordinate", "Текущая координата Y"),
-                    read_only=True,
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Current Y Coordinate", "Текущая координата Y"),
+                        read_only=True,
+                    ),
+                    "0",
                 ),
-                "0",
             ),
         ),
         MqttControl(
             ControlInfo(
                 "x_coordinate_step_up",
-                ControlMeta("pushbutton", TranslatedTitle("X Coordinate Step Up", "Координата X шаг вверх")),
-                "0",
+                ControlState(
+                    ControlMeta(
+                        "pushbutton", TranslatedTitle("X Coordinate Step Up", "Координата X шаг вверх")
+                    ),
+                    "0",
+                ),
             ),
             commands_builder=lambda short_address, _: [XCoordinateStepUp(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "x_coordinate_step_down",
-                ControlMeta("pushbutton", TranslatedTitle("X Coordinate Step Down", "Координата X шаг вниз")),
-                "0",
+                ControlState(
+                    ControlMeta(
+                        "pushbutton", TranslatedTitle("X Coordinate Step Down", "Координата X шаг вниз")
+                    ),
+                    "0",
+                ),
             ),
             commands_builder=lambda short_address, _: [XCoordinateStepDown(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "y_coordinate_step_up",
-                ControlMeta("pushbutton", TranslatedTitle("Y Coordinate Step Up", "Координата Y шаг вверх")),
-                "0",
+                ControlState(
+                    ControlMeta(
+                        "pushbutton", TranslatedTitle("Y Coordinate Step Up", "Координата Y шаг вверх")
+                    ),
+                    "0",
+                ),
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepUp(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "y_coordinate_step_down",
-                ControlMeta("pushbutton", TranslatedTitle("Y Coordinate Step Down", "Координата Y шаг вниз")),
-                "0",
+                ControlState(
+                    ControlMeta(
+                        "pushbutton", TranslatedTitle("Y Coordinate Step Down", "Координата Y шаг вниз")
+                    ),
+                    "0",
+                ),
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepDown(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 SET_X_COORDINATE,
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
-                    minimum=0,
-                    maximum=MASK_2BYTES,
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
+                        minimum=0,
+                        maximum=MASK_2BYTES,
+                    ),
+                    "0",
                 ),
-                "0",
             ),
             commands_builder=_set_x_coordinate_commands_builder,
         ),
         MqttControl(
             ControlInfo(
                 SET_Y_COORDINATE,
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
-                    minimum=0,
-                    maximum=MASK_2BYTES,
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
+                        minimum=0,
+                        maximum=MASK_2BYTES,
+                    ),
+                    "0",
                 ),
-                "0",
             ),
             commands_builder=_set_y_coordinate_commands_builder,
         ),
@@ -211,11 +235,11 @@ def handle_poll_controls_result(new_colour: Optional[XYColourValues]) -> list[Co
         ControlPollResult(
             CURRENT_X_COORDINATE,
             None if new_colour is None else str(new_colour.x_coordinate),
-            error="r" if new_colour is None else None,
+            error=ControlError.READ if new_colour is None else ControlError.NONE,
         ),
         ControlPollResult(
             CURRENT_Y_COORDINATE,
             None if new_colour is None else str(new_colour.y_coordinate),
-            error="r" if new_colour is None else None,
+            error=ControlError.READ if new_colour is None else ControlError.NONE,
         ),
     ]

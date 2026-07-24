@@ -12,7 +12,7 @@ from .common_dali_device import (
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
 from .gear.thermal_gear_protection import FailureStatusResponse, QueryFailureStatus
-from .wbmqtt import ControlMeta, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 
 def _format_failure_status(value: Response) -> str:
@@ -31,16 +31,18 @@ class Type16Parameters(TypeParameters):
             MqttControl(
                 control_info=ControlInfo(
                     "thermal_gear_protection",
-                    ControlMeta(
-                        title=TranslatedTitle("Thermal gear protection", "Тепловая защита"),
-                        read_only=True,
-                        enum={
-                            "0": TranslatedTitle("ok", "ок"),
-                            "1": TranslatedTitle("shutdown", "отключение"),
-                            "2": TranslatedTitle("overload", "перегрузка"),
-                        },
+                    ControlState(
+                        ControlMeta(
+                            title=TranslatedTitle("Thermal gear protection", "Тепловая защита"),
+                            read_only=True,
+                            enum={
+                                "0": TranslatedTitle("ok", "ок"),
+                                "1": TranslatedTitle("shutdown", "отключение"),
+                                "2": TranslatedTitle("overload", "перегрузка"),
+                            },
+                        ),
+                        "0",
                     ),
-                    "0",
                 ),
                 query_builder=QueryFailureStatus,
                 value_formatter=_format_failure_status,

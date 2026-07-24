@@ -39,6 +39,7 @@ from wb.mqtt_dali.virtual_devices import (
     build_virtual_device_controls,
     collect_group_state_controls,
 )
+from wb.mqtt_dali.wbmqtt import ControlError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -168,7 +169,7 @@ class TestBuildVirtualDeviceControls:
         caps = AggregatedCapabilities(has_dt8_tc=True, tc_min_mirek=200, tc_max_mirek=400)
         controls = build_virtual_device_controls(caps)
         tc_ctrl = controls["set_colour_temperature"]
-        meta = tc_ctrl.control_info.meta
+        meta = tc_ctrl.control_info.state.meta
         # minimum Kelvin = kelvin of max mirek (coldest colour temperature)
         assert meta.minimum == tc_kelvin_mirek(400)
         # maximum Kelvin = kelvin of min mirek (warmest colour temperature)
@@ -844,9 +845,26 @@ class TestGroupStateSourceSemantics:
         action = source.record_poll(d2.uid, "actual_level", success=False, value=None)
 
         assert action == GroupStateUpdate(
-            kind=GroupStateUpdateKind.ERROR, control_id="actual_level", payload="r"
+            kind=GroupStateUpdateKind.ERROR, control_id="actual_level", payload=""
         )
         assert source.is_err_set("actual_level")
+
+    @pytest.mark.asyncio
+    async def test_group_error_update_has_empty_payload(self):
+        """A group ERROR update needs no payload: the ERROR kind is self-describing
+        (group state only ever surfaces read failures), and no consumer reads the
+        payload for ERROR — the controller emits ControlError.READ directly. So the
+        polymorphic payload slot is left empty for ERROR updates."""
+        ctrl, d1, d2 = self._build_group_with_two_actual_level_candidates()
+        await self._refresh(ctrl)
+        source = ctrl._group_devices_by_number[1].state_source
+
+        source.record_poll(d1.uid, "actual_level", success=False, value=None)
+        action = source.record_poll(d2.uid, "actual_level", success=False, value=None)
+
+        assert action is not None
+        assert action.kind is GroupStateUpdateKind.ERROR
+        assert action.payload == ""
 
     @pytest.mark.asyncio
     async def test_group_clears_err_on_next_successful_candidate_poll(self):
@@ -1219,17 +1237,17 @@ class TestBuildGroupStateTasks:
         ctrl, (d1, d2), group_mqtt_id = await self._setup_group_with_two_members()
 
         tasks_first = ctrl._build_group_state_tasks(
-            d1, [ControlPollResult(control_id="actual_level", value=None, error="r")]
+            d1, [ControlPollResult(control_id="actual_level", value=None, error=ControlError.READ)]
         )
         assert not tasks_first
 
         tasks_second = ctrl._build_group_state_tasks(
-            d2, [ControlPollResult(control_id="actual_level", value=None, error="r")]
+            d2, [ControlPollResult(control_id="actual_level", value=None, error=ControlError.READ)]
         )
 
         assert len(tasks_second) == 1
         cast(AsyncMock, ctrl._device_publisher.set_control_error).assert_called_once_with(
-            group_mqtt_id, "actual_level", "r"
+            group_mqtt_id, "actual_level", ControlError.READ
         )
         cast(AsyncMock, ctrl._device_publisher.set_control_value).assert_not_called()
         for task in tasks_second:
@@ -1285,7 +1303,7 @@ class TestGroupStateUpdate:  # pylint: disable=too-few-public-methods
 class TestSourceMetaIsolation:  # pylint: disable=too-few-public-methods
     def test_group_layout_does_not_mutate_source_meta(self):
         source_control = ActualLevelControl(DimmingCurveState())
-        source_control.control_info.meta.order = 99
+        source_control.control_info.state.meta.order = 99
 
         dev = _make_real_dali_device(
             mqtt_id="real",
@@ -1299,5 +1317,5 @@ class TestSourceMetaIsolation:  # pylint: disable=too-few-public-methods
             AggregatedCapabilities(), state_controls=templates.values()
         )
 
-        assert group_controls["actual_level"].control_info.meta.order == 1
-        assert source_control.control_info.meta.order == 99
+        assert group_controls["actual_level"].control_info.state.meta.order == 1
+        assert source_control.control_info.state.meta.order == 99

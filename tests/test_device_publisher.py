@@ -11,7 +11,7 @@ from wb.mqtt_dali.device_publisher import (
     DeviceInfo,
     DevicePublisher,
 )
-from wb.mqtt_dali.wbmqtt import ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
 # pylint: disable=redefined-outer-name,comparison-with-callable,too-many-public-methods
 
@@ -94,6 +94,26 @@ class TestControlHandler:  # pylint: disable=too-few-public-methods
         assert handler.callback == callback
 
 
+class TestControlInfo:
+    def test_default_error_is_empty(self):
+        control_info = ControlInfo("c", ControlState(ControlMeta()))
+        assert control_info.state.error == ControlError(0)
+        assert not control_info.state.error
+
+    def test_state_deepcopies_meta(self):
+        """The ControlState embedded in ControlInfo copies its meta, so runtime mutations
+        of the stored state (as done by set_control_read_only/title) don't leak back to the
+        meta the model handed in."""
+        meta = ControlMeta(control_type="switch", read_only=False, order=1)
+        control_info = ControlInfo("c", ControlState(meta, "0"))
+
+        control_info.state.meta.read_only = True
+        control_info.state.meta.order = 99
+
+        assert meta.read_only is False
+        assert meta.order == 1
+
+
 class TestDevicePublisher:
     @pytest.mark.asyncio
     async def test_initialization(self, publisher):
@@ -118,7 +138,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -190,7 +210,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -216,7 +236,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -242,7 +262,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -260,7 +280,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -279,7 +299,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -299,7 +319,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -320,7 +340,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -341,7 +361,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
         device_info2 = DeviceInfo("dev2", "Device 2")
@@ -358,7 +378,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
 
@@ -374,7 +394,7 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
             ],
         )
         await publisher.add_device(device_info)
@@ -402,7 +422,7 @@ class TestDevicePublisher:
                 f"dev{i}",
                 f"Device {i}",
                 [
-                    ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
+                    ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
                 ],
             )
             for i in range(10)
@@ -423,8 +443,8 @@ class TestDevicePublisher:
             "dev1",
             "Device 1",
             [
-                ControlInfo("ctrl1", ControlMeta("switch", "Control 1"), "0"),
-                ControlInfo("ctrl2", ControlMeta("text", "Control 2"), "test"),
+                ControlInfo("ctrl1", ControlState(ControlMeta("switch", "Control 1"), "0")),
+                ControlInfo("ctrl2", ControlState(ControlMeta("text", "Control 2"), "test")),
             ],
         )
 
@@ -449,7 +469,7 @@ class TestDevicePublisher:
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
-            [ControlInfo("ctrl1", ControlMeta("temperature", "Full Control", True, 1), "23.5")],
+            [ControlInfo("ctrl1", ControlState(ControlMeta("temperature", "Full Control", True, 1), "23.5"))],
         )
 
         await publisher.add_device(device_info)

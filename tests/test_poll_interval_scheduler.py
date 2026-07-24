@@ -19,7 +19,7 @@ from wb.mqtt_dali.dali_type21_parameters import Type21Parameters
 from wb.mqtt_dali.dali_type49_parameters import Type49Parameters
 from wb.mqtt_dali.dali_type51_parameters import Type51Parameters
 from wb.mqtt_dali.device_publisher import ControlInfo
-from wb.mqtt_dali.wbmqtt import ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
 # Avoid filesystem reads in DaliDeviceBase.__init__.
 # pylint: disable-next=protected-access
@@ -28,7 +28,7 @@ DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 def _readable_control(control_id: str, poll_interval=5.0) -> MqttControl:
     return MqttControl(
-        control_info=ControlInfo(control_id, ControlMeta(read_only=True), "0"),
+        control_info=ControlInfo(control_id, ControlState(ControlMeta(read_only=True), "0")),
         query_builder=lambda addr, _id=control_id: f"Q_{_id}",
         value_formatter=lambda resp: "v",
         poll_interval=poll_interval,
@@ -253,7 +253,7 @@ async def test_poll_error_does_not_change_schedule():
 
     poll_results = await res.poll_coroutine()
     assert len(poll_results) == 1
-    assert poll_results[0].error == "r"
+    assert poll_results[0].error == ControlError.READ
 
     assert c.last_poll_time == 0.0
     assert not c.is_poll_due(4.9)

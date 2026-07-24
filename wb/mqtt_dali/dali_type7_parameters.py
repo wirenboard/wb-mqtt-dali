@@ -12,7 +12,7 @@ from .common_dali_device import (
     PropertyStartOrder,
 )
 from .dali_parameters import NumberGearParam, TypeParameters
-from .device_publisher import ControlInfo, ControlMeta, TranslatedTitle
+from .device_publisher import ControlInfo
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,
@@ -31,6 +31,7 @@ from .gear.switching_function import (
 from .settings import SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import query_response
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 
 class UpSwitchOnThresholdParam(NumberGearParam):
@@ -122,18 +123,20 @@ class LastActedControl(MqttControlBase):
         super().__init__(
             ControlInfo(
                 "last_acted",
-                ControlMeta(
-                    title=TranslatedTitle("Last Acted", "Последнее действие"),
-                    read_only=True,
-                    enum={
-                        "0": TranslatedTitle("unknown", "неизвестно"),
-                        "1": TranslatedTitle("up switch on", "верхний переключатель вкл"),
-                        "2": TranslatedTitle("up switch off", "верхний переключатель выкл"),
-                        "3": TranslatedTitle("down switch on", "нижний переключатель вкл"),
-                        "4": TranslatedTitle("down switch off", "нижний переключатель выкл"),
-                    },
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Last Acted", "Последнее действие"),
+                        read_only=True,
+                        enum={
+                            "0": TranslatedTitle("unknown", "неизвестно"),
+                            "1": TranslatedTitle("up switch on", "верхний переключатель вкл"),
+                            "2": TranslatedTitle("up switch off", "верхний переключатель выкл"),
+                            "3": TranslatedTitle("down switch on", "нижний переключатель вкл"),
+                            "4": TranslatedTitle("down switch off", "нижний переключатель выкл"),
+                        },
+                    ),
+                    "0",
                 ),
-                "0",
             ),
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
@@ -168,7 +171,7 @@ class LastActedControl(MqttControlBase):
         if code is None:
             return None
         value = str(code)
-        self.control_info.value = value
+        self.control_info.state.value = value
         return value
 
     # --- Private ---

@@ -27,7 +27,7 @@ from .common_dali_device import (
 )
 from .control_ids import CURRENT_COLOUR_TEMPERATURE, SET_COLOUR_TEMPERATURE
 from .dali_type8_common import ColourComponent
-from .device_publisher import ControlInfo, ControlMeta
+from .device_publisher import ControlInfo
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
@@ -35,7 +35,7 @@ from .wbdali_utils import (
     is_broadcast_or_group_address,
     send_commands_with_retry,
 )
-from .wbmqtt import TranslatedTitle
+from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 MAX_TC_MIREK = MASK_2BYTES - 1
 MIN_TC_MIREK = 1
@@ -166,14 +166,16 @@ def get_wanted_mqtt_controls(
         MqttControl(
             ControlInfo(
                 SET_COLOUR_TEMPERATURE,
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Wanted Colour Temperature", "Желаемая цветовая температура"),
-                    minimum=min_k,
-                    maximum=max_k,
-                    units="K",
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle("Wanted Colour Temperature", "Желаемая цветовая температура"),
+                        minimum=min_k,
+                        maximum=max_k,
+                        units="K",
+                    ),
+                    str(default_k),
                 ),
-                str(default_k),
             ),
             commands_builder=_set_colour_temperature_commands_builder,
         ),
@@ -186,12 +188,14 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
         MqttControl(
             ControlInfo(
                 CURRENT_COLOUR_TEMPERATURE,
-                ControlMeta(
-                    title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
-                    read_only=True,
-                    units="K",
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
+                        read_only=True,
+                        units="K",
+                    ),
+                    "4000",
                 ),
-                "4000",
             ),
             is_group_state_control=True,
         ),
@@ -199,16 +203,20 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
         MqttControl(
             ControlInfo(
                 "colour_temperature_step_warmer",
-                ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Warmer", "Теплее")),
-                "0",
+                ControlState(
+                    ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Warmer", "Теплее")),
+                    "0",
+                ),
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepWarmer(short_address)],
         ),
         MqttControl(
             ControlInfo(
                 "colour_temperature_step_cooler",
-                ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Cooler", "Холоднее")),
-                "0",
+                ControlState(
+                    ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Cooler", "Холоднее")),
+                    "0",
+                ),
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepCooler(short_address)],
         ),
@@ -218,10 +226,10 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
 def handle_poll_controls_result(new_colour: Optional[ColourTemperatureValue]) -> list[ControlPollResult]:
     if new_colour is None or new_colour.tc == MASK_2BYTES:
         value = None
-        error = "r"
+        error = ControlError.READ
     else:
         value = str(tc_kelvin_mirek(new_colour.tc))
-        error = None
+        error = ControlError.NONE
     return [
         ControlPollResult(
             CURRENT_COLOUR_TEMPERATURE,

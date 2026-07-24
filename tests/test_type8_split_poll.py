@@ -24,7 +24,7 @@ from wb.mqtt_dali.dali_type8_parameters import (
     Type8Parameters,
 )
 from wb.mqtt_dali.device_publisher import ControlInfo
-from wb.mqtt_dali.wbmqtt import ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
 # pylint: disable-next=protected-access
 DaliDeviceBase._common_schema = {"title": "test-schema"}
@@ -32,7 +32,7 @@ DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 def _readable_control(control_id: str, poll_interval=None) -> MqttControl:
     return MqttControl(
-        control_info=ControlInfo(control_id, ControlMeta(read_only=True), "0"),
+        control_info=ControlInfo(control_id, ControlState(ControlMeta(read_only=True), "0")),
         query_builder=lambda addr, _id=control_id: f"Q_{_id}",
         value_formatter=lambda resp: "v",
         poll_interval=poll_interval,
@@ -162,9 +162,9 @@ async def test_type8_colour_poll_split_into_subbatches():
         assert res == []
     final = {item.control_id: item for item in results[-1]}
     assert final["current_rgb"].value == "10;20;30"
-    assert final["current_rgb"].error is None
+    assert final["current_rgb"].error == ControlError(0)
     assert final["current_white"].value == "40"
-    assert final["current_white"].error is None
+    assert final["current_white"].error == ControlError(0)
 
     assert not handler.has_in_progress_read()
 
@@ -322,7 +322,7 @@ async def test_type8_subbatch_failure_publishes_error_and_reschedules():
     poll_results = await res.poll_coroutine()
 
     assert {p.control_id for p in poll_results} == {"current_rgb", "current_white"}
-    assert all(p.error == "r" for p in poll_results)
+    assert all(p.error == ControlError.READ for p in poll_results)
 
     assert driver.send_commands.await_count == MAX_COLOUR_SUBBATCH_RETRIES
     assert not handler.has_in_progress_read()

@@ -805,6 +805,13 @@ class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too
         del default_max_commands, logger
         if self._current_colour_type is None:
             return ControlsPollRequestResult(has_more=False)
+        # Don't restart a finished or failed cycle until poll_interval elapses.
+        if (
+            self._read_progress is None
+            and self.last_poll_time is not None
+            and now - self.last_poll_time < self.poll_interval
+        ):
+            return ControlsPollRequestResult(has_more=False)
         if self.peek_next_subbatch_size() > max_commands:
             return ControlsPollRequestResult(has_more=True)
         if self._read_progress is None:

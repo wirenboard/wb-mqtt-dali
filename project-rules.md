@@ -30,6 +30,10 @@ both the author side (code being written) and the review side stay in sync.
   - When several dicts share the same key set (`a[k]`, `b[k]`, `c[k]` always read together), that's a missing dataclass — collapse them into one `dict[Key, RecordType]`.
   - Type aliases (`ControlId = str`) are cheap and worth using to document intent in signatures.
   - Do not type a field `Optional[T]` defensively if every code path that constructs the parent already supplies a non-`None` value — narrow it to `T` so callers and the type-checker see the real contract.
+- **No bare class-level annotations for instance state** — a name annotated in the class body with no value (`next_due_at: Optional[float]`) creates nothing at runtime: it only describes an attribute some *other* method assigns later, and its practical effect is silencing pylint's `attribute-defined-outside-init` instead of fixing the shape. Two legitimate forms, nothing in between:
+  - a real class attribute — annotate **and** assign the default (`read_error: bool = False`), which is right when instances share the default and only some of them ever rebind it;
+  - or all instance state assigned in `__init__`. A mixin is not an exception: give it its own `__init__` and have the host invoke it — `super().__init__(...)` with a single base, or an explicit `Base.__init__(self, ...)` per base when the bases are independent and take different arguments — rather than an `_init_*` method the host has to remember to call.
+  - `@dataclass`, `Protocol`, `NamedTuple`, `TypedDict` and `Enum` bodies are unaffected — there the bare annotation *is* the declaration the class is built from.
 
 ### Class method ordering
 

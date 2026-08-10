@@ -632,7 +632,7 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     d._current_round = list(controls)
     d.is_initialized = True
     for ctrl in controls:
-        ctrl.last_poll_time = 0.0
+        ctrl.schedule_next_periodic_poll(polled_at=0.0)
 
     responses_per_call = {"Q1": [r1], "Q2": [r2], "Q3": [None]}
     issued_queries: list[str] = []

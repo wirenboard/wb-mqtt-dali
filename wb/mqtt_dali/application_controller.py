@@ -1348,9 +1348,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         if not self._poll_scheduler.is_empty():
             # The round is not over yet, just check incoming queries
             return 0.001
-        # Cap the idle wait at 1.0s: keeps it finite when nothing is due (time_until_next_poll
-        # can return inf) and paces the background settings fetch to one per idle tick. The poll
-        # cadence itself comes from each control's own interval, not from this ceiling.
+        # Cap the idle wait at 1.0s: keeps it finite when nothing is due (time_until_next_poll can
+        # return inf) and paces the background settings fetch to one per idle tick. The periodic
+        # poll cadence comes from each control's own interval, not from this ceiling — but a
+        # reschedule made after this wait was computed has no way to wake the loop (event sync
+        # runs as its own task), so the ceiling is also what bounds how late a confirmation
+        # poll can be served.
         wait = min(1.0, self._poll_scheduler.time_until_next_poll(current_time))
         # Idle window — poll round done and no control poll due (wait > 0): slip in exactly one
         # background settings fetch. A due poll (wait <= 0) takes priority. Reached only when the

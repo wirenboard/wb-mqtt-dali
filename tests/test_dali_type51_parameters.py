@@ -5,6 +5,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dali.address import GearShort
 from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.gear.general import DTR0, DTR1, ReadMemoryLocation
 from dali.memory.energy import (
@@ -19,7 +20,7 @@ from dali.memory.location import FlagValue
 
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_device import DaliDevice
-from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam
+from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam, Type51Parameters
 from wb.mqtt_dali.wbmqtt import ControlError
 
 # pylint: disable=redefined-outer-name
@@ -500,6 +501,62 @@ async def test_type51_chunked_poll_no_publish_on_partial():
 
 
 @pytest.mark.asyncio
+async def test_type51_unfinished_cycle_continues_regardless_of_the_schedule():
+    """A cycle stamped at its open reads as "not due" from the second chunk on, so only the
+    `_read_progress` bypass in `is_poll_due` keeps its remaining chunks in the round."""
+    handler = Type51Parameters()
+    handler.scale_byte = 0
+
+    async def fake_send(cmds, priority=None):
+        del cmds, priority
+        return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+
+    def step(now: float):
+        return handler.next_poll_step(driver, GearShort(3), max_commands=3, default_max_commands=3, now=now)
+
+    assert await step(0.0).poll_coroutine() == []  # cycle open, 2 of 6 bytes read
+    assert handler.has_in_progress_read()
+    assert handler.next_due_at == 120.0  # stamped at the open, so the comparison says "not due"
+
+    res = step(1.0)
+    assert res.poll_coroutine is not None  # bypassed: the open cycle still gets its chunk
+    assert await res.poll_coroutine() == []
+    assert handler.has_in_progress_read()
+
+    # The bypass is `is_poll_due`'s alone: the wait keeps reporting the real moment, so the
+    # loop never treats an in-flight cycle as a reason to stop sleeping.
+    assert handler.is_poll_due(1.0) is True
+    assert handler.time_until_next_poll(1.0) == pytest.approx(119.0)
+
+
+@pytest.mark.asyncio
+async def test_type51_cancelled_cycle_waits_out_the_interval():
+    """A cycle dropped by `reset_polling_state` (quiescent entry, controls rebuild) keeps the
+    stamp its open already made, so the re-read waits out the rest of the 120 s window instead
+    of restarting at once. The stamp lives at the open precisely so no exit path has to make it.
+    """
+    dev = await _make_initialized_device_with_type51(scale_byte=0)
+
+    async def fake_send(cmds, priority=None):
+        del cmds, priority
+        return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+
+    await _run_one_chunk(dev, driver, now=0.0)  # cycle open, stamped at t=0
+    dev.reset_polling_state()
+
+    res = dev.poll_controls(driver, now=1.0, max_commands=3, default_max_commands=3)
+    assert res.poll_coroutine is None
+    res = dev.poll_controls(driver, now=121.0, max_commands=3, default_max_commands=3)
+    assert res.poll_coroutine is not None
+
+
+@pytest.mark.asyncio
 async def test_type51_refresh_paced_120s_after_success():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
 
@@ -515,14 +572,14 @@ async def test_type51_refresh_paced_120s_after_success():
     for t in chunk_times:
         await _run_one_chunk(dev, driver, now=t)
     assert driver.send_commands.await_count == 3
-    cycle_end = chunk_times[-1]
+    cycle_start = chunk_times[0]
 
-    # 120 s window measured from cycle-end, not cycle-start: at cycle-start + 150 we are still
-    # inside the window (90 s past cycle-end) — no new cycle.
-    res = dev.poll_controls(driver, now=cycle_end + 119.0, max_commands=3, default_max_commands=3)
+    # 120 s window measured from cycle-start, not cycle-end: at t=119 the cycle has been over
+    # for 59 s and we are still inside the window — no new cycle.
+    res = dev.poll_controls(driver, now=cycle_start + 119.0, max_commands=3, default_max_commands=3)
     assert res.poll_coroutine is None
-    # Past cycle-end + 120: new cycle starts.
-    res = dev.poll_controls(driver, now=cycle_end + 121.0, max_commands=3, default_max_commands=3)
+    # Past cycle-start + 120: new cycle starts.
+    res = dev.poll_controls(driver, now=cycle_start + 121.0, max_commands=3, default_max_commands=3)
     assert res.poll_coroutine is not None
     await res.poll_coroutine()
     sent_call = driver.send_commands.await_args.args[0]
@@ -546,23 +603,24 @@ async def test_type51_refresh_paced_120s_after_failure():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
-    assert await _run_one_chunk(dev, driver, now=0.0) == []
-    failure_now = 30.0
-    failure = await _run_one_chunk(dev, driver, now=failure_now)
+    cycle_start = 0.0
+    assert await _run_one_chunk(dev, driver, now=cycle_start) == []
+    failure = await _run_one_chunk(dev, driver, now=30.0)
     assert failure[0].error == ControlError.READ
     assert driver.send_commands.await_count == 2
 
-    # 120 s window measured from cycle-end (failure_now), not cycle-start (t=0).
+    # 120 s window measured from cycle-start, not from the failure that ended the cycle: a
+    # failed cycle backs off on the moment stamped at its open, with no code of its own.
     res = dev.poll_controls(
         driver,
-        now=failure_now + 119.0,
+        now=cycle_start + 119.0,
         max_commands=3,
         default_max_commands=3,
     )
     assert res.poll_coroutine is None
     res = dev.poll_controls(
         driver,
-        now=failure_now + 121.0,
+        now=cycle_start + 121.0,
         max_commands=3,
         default_max_commands=3,
     )

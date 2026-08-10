@@ -79,6 +79,7 @@ class ActualLevelControl(MqttControlBase):
             ),
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
+            startup_reconfirm=True,
         )
         self._dimming_curve_state = dimming_curve_state
         self._max_level = max_level

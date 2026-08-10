@@ -132,9 +132,9 @@ def _coordinator(devices, group_devices=None):
 
 
 def _prime_poll(control) -> None:
-    """Simulate a prior completed poll so poll_no_later_than can pull the next one earlier."""
-    control.last_poll_time = NOW
-    control.poll_interval = RESYNC_INTERVAL
+    """Polled at NOW, next poll one exact base interval later — no startup reconfirm, no jitter,
+    so a confirmation has something unambiguous to move."""
+    control.next_due_at = NOW + RESYNC_INTERVAL
 
 
 async def _make_colour_handler(colour_type: ColourType) -> Type8Parameters:
@@ -197,9 +197,8 @@ async def test_external_command_schedules_confirmation_poll():
     await coordinator.apply_commands([DAPC(GearShort(5), 100)])
 
     expected = SettleClock().settle_for(SettleBasis.FADE, 8)
-    assert actual.last_poll_time == NOW
-    assert actual.poll_interval == pytest.approx(expected)
-    assert actual.poll_interval < RESYNC_INTERVAL
+    assert actual.next_due_at == pytest.approx(NOW + expected)
+    assert actual.next_due_at < NOW + RESYNC_INTERVAL
 
 
 @pytest.mark.asyncio
@@ -213,7 +212,7 @@ async def test_fade_time_unknown_uses_default_delay():
 
     await coordinator.apply_commands([DAPC(GearShort(5), 100)])
 
-    assert actual.poll_interval == pytest.approx(SettleClock().settle_for(SettleBasis.FADE, None))
+    assert actual.next_due_at == pytest.approx(NOW + SettleClock().settle_for(SettleBasis.FADE, None))
 
 
 @pytest.mark.asyncio
@@ -228,7 +227,7 @@ async def test_external_set_fade_time_then_dapc_uses_new_fade():
     await coordinator.apply_commands([DTR0(10), SetFadeTime(GearShort(5)), DAPC(GearShort(5), 120)])
 
     assert device.fade_param.fade_time == 10
-    assert actual.poll_interval == pytest.approx(SettleClock().settle_for(SettleBasis.FADE, 10))
+    assert actual.next_due_at == pytest.approx(NOW + SettleClock().settle_for(SettleBasis.FADE, 10))
 
 
 @pytest.mark.asyncio
@@ -241,11 +240,11 @@ async def test_confirmation_poll_is_single_read():
     coordinator, _ = _coordinator([device])
 
     await coordinator.apply_commands([DAPC(GearShort(5), 100)])
-    assert actual.poll_interval < RESYNC_INTERVAL  # pulled in for the confirm
+    assert actual.next_due_at < NOW + RESYNC_INTERVAL  # pulled in for the confirm
 
     # The read fires; the control re-draws its interval back to the long base.
     actual.next_poll_step(None, GearShort(5), max_commands=3, default_max_commands=3, now=NOW + 2.0)
-    assert actual.poll_interval >= RESYNC_INTERVAL * 0.7
+    assert actual.next_due_at >= NOW + 2.0 + RESYNC_INTERVAL * 0.7
 
 
 # --- Type 7 last_acted ---------------------------------------------------
@@ -272,7 +271,7 @@ async def test_type7_last_acted_predicted_from_level_crossing():
     await coordinator.apply_commands([DAPC(GearShort(5), 200)])  # 50 -> 200 crosses up-on (150)
 
     assert _published(publisher)[("dev-5", "last_acted")] == "1"
-    assert last_acted.poll_interval < RESYNC_INTERVAL  # also confirm-polled
+    assert last_acted.next_due_at < NOW + RESYNC_INTERVAL  # also confirm-polled
 
 
 # --- Group / broadcast ---------------------------------------------------
@@ -533,7 +532,7 @@ async def test_partial_color_sequence_polls_without_optimistic_value():
     await coordinator.apply_commands([SetTemporaryXCoordinate(GearShort(5)), Activate(GearShort(5))])
 
     publisher.set_control_value.assert_not_awaited()
-    assert handler.poll_interval < RESYNC_INTERVAL  # still confirm-polled
+    assert handler.next_due_at < NOW + RESYNC_INTERVAL  # still confirm-polled
 
 
 @pytest.mark.asyncio
@@ -549,7 +548,7 @@ async def test_color_step_command_polls_without_optimistic_value():
     await coordinator.apply_commands([XCoordinateStepUp(GearShort(5))])
 
     publisher.set_control_value.assert_not_awaited()
-    assert handler.poll_interval < RESYNC_INTERVAL
+    assert handler.next_due_at < NOW + RESYNC_INTERVAL
 
 
 @pytest.mark.asyncio

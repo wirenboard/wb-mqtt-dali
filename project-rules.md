@@ -11,6 +11,7 @@ both the author side (code being written) and the review side stay in sync.
 - **No commits without approval** — never create a git commit without explicit user approval in the current conversation.
 - **No editing existing tests without approval.**
 - **No gratuitous renames** — do not rename existing identifiers (locals, params, functions, methods, classes, module-level constants) unless functionally required (old name became misleading after a behavior change, or a real name clash). Subjective "consistency"/"better naming" doesn't count; expanding a signature does not justify renaming.
+- **No gratuitous comment rewrites** — the same rule applies to existing comments and docstrings: leave them alone unless the code they describe changed and made them wrong or incomplete. Rewording, re-wrapping, or "clarifying" a still-accurate comment is diff noise that costs reviewer attention. When a comment does have to change, edit the part that went stale, don't rewrite the whole block.
 - **No throwaway temp vars** — do not introduce a temporary local variable for 1–2 uses; only if used 3+ times or it materially improves readability.
 - **No silencing tests or linters** — do not disable/skip tests; do not add `# pylint: disable` / `# noqa` / `# type: ignore` without a concrete reason. Fix the underlying issue.
 - **Never force-push a PR** — no `--force` / `--force-with-lease` to update a PR. Add new commits — reviewers need incremental changes.
@@ -22,6 +23,7 @@ both the author side (code being written) and the review side stay in sync.
 - **Style/lint config** — `pyproject.toml` (baseline: `https://github.com/wirenboard/codestyle/blob/master/python/config/pyproject.toml`).
 - **Async I/O & test base** — all I/O is `asyncio`; tests use `unittest.IsolatedAsyncioTestCase`.
 - **Docstrings on non-trivial tests** — start the test with a short docstring describing the scenario being tested (what's set up, what's exercised, what's expected). Trivial one-liners (single assertion against a pure function) don't need it; anything with multi-step setup, async interactions, or non-obvious expectations does.
+- **Comments carry what the code can't** — a comment or docstring earns its place by stating the non-obvious: why this way, what breaks otherwise, which external contract forces it. Don't restate what the next line already says, and don't spend three sentences where one does. Keep a comment at a call site to a line or two; when a mechanism genuinely needs several paragraphs, state it once in the module or class docstring and let the call sites refer to it by name instead of each repeating the context.
 - **Enums over string/int constants** — when a value has a small, fixed set of options (status, kind, mode, action), model it with `enum.Enum` rather than string or integer literals.
   - Plain `Enum` with descriptive values is the default; reach for `IntEnum`/`StrEnum`/`Flag` only when there's a concrete reason (interop, bitwise ops).
   - Anti-pattern: a dataclass field typed `status: str` with conventional literals `"ok"`/`"error"` — make it a typed enum.

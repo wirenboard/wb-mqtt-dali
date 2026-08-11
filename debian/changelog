@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.19.7) stable; urgency=medium
+
+  * Fix the bus monitor showing one and the same record instead of the frames actually
+    on the bus.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 11 Aug 2026 16:51:20 +0500
+
 wb-mqtt-dali (1.19.6) stable; urgency=medium
 
   * Fix devices being polled more often than the configured interval after a dimming or a

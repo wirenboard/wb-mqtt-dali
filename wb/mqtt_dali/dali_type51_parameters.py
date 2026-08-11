@@ -21,6 +21,7 @@ from dali.memory.energy import (
 from .common_dali_device import (
     ControlPollResult,
     ControlsPollRequestResult,
+    EventPollSchedule,
     MqttControlBase,
     PropertyStartOrder,
     read_bank_as_dict,
@@ -295,7 +296,7 @@ class _ActiveEnergyControl(MqttControlBase):
         return False
 
 
-class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-attributes
+class Type51Parameters(EventPollSchedule, TypeParameters):
     """DT51 (Energy reporting) integration.
 
     Owns:
@@ -306,19 +307,14 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
     """
 
     def __init__(self) -> None:
-        super().__init__()
+        TypeParameters.__init__(self)
+        EventPollSchedule.__init__(self, _REFRESH_INTERVAL_S, randomize_poll_interval=False)
         self._compat = DaliCommandsCompatibilityLayer()
         self._energy_param = Type51EnergyParam()
         self._parameters = [self._energy_param]
 
         self._scale_byte: Optional[int] = None
         self._read_progress: Optional[_Type51EnergyReadProgress] = None
-
-        # None means "no completed cycle yet, run immediately".
-        self._last_cycle_end_time: Optional[float] = None
-
-        self.poll_interval: float = _REFRESH_INTERVAL_S
-        self.last_poll_time: Optional[float] = None
 
     @property
     def scale_byte(self) -> Optional[int]:
@@ -349,9 +345,7 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
     def is_poll_due(self, now: float) -> bool:
         if self._read_progress is not None:
             return True
-        if self._last_cycle_end_time is None:
-            return True
-        return now - self._last_cycle_end_time >= _REFRESH_INTERVAL_S
+        return super().is_poll_due(now)
 
     def cancel_pending_poll(self) -> None:
         self._read_progress = None
@@ -379,33 +373,27 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         # is allowed but only when no other commands have been issued this tick.
         if max_commands < default_max_commands:
             return ControlsPollRequestResult(has_more=True)
-        if (
-            self._read_progress is None
-            and self._last_cycle_end_time is not None
-            and now - self._last_cycle_end_time < _REFRESH_INTERVAL_S
-        ):
+        if not self.is_poll_due(now):
             return ControlsPollRequestResult(has_more=False)
         if self._read_progress is None:
             self._read_progress = _Type51EnergyReadProgress()
-        self.last_poll_time = now
+            self.schedule_next_periodic_poll(polled_at=now)
         progress = self._read_progress
         # Scale-byte fallback when init failed: first chunk re-reads scale, energy chunks follow.
         if self._scale_byte is None and not progress.bytes_read:
             return ControlsPollRequestResult(
                 has_more=True,
-                poll_coroutine=lambda: self._do_scale_chunk(driver, address, now),
+                poll_coroutine=lambda: self._do_scale_chunk(driver, address),
                 commands_count=4,
             )
         more_after_this = progress.next_chunk_index < (_ENERGY_DATA_LEN // _ENERGY_CHUNK_SIZE) - 1
         return ControlsPollRequestResult(
             has_more=more_after_this,
-            poll_coroutine=lambda: self._do_chunk(driver, address, progress, now),
+            poll_coroutine=lambda: self._do_chunk(driver, address, progress),
             commands_count=4,
         )
 
-    async def _do_scale_chunk(
-        self, driver: WBDALIDriver, address: Address, tick_now: float
-    ) -> list[ControlPollResult]:
+    async def _do_scale_chunk(self, driver: WBDALIDriver, address: Address) -> list[ControlPollResult]:
         # 4-cmd chunk reading scale at 0x04. The second ReadMemoryLocation advances
         # DTR0 past addr 0x05; its result is discarded and energy re-read next tick.
         cmds = [
@@ -417,11 +405,11 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         try:
             responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
         except Exception:  # pylint: disable=broad-exception-caught
-            return self._fail_cycle(tick_now)
+            return self._fail_cycle()
         scale_resp = responses[2]
         raw = getattr(scale_resp, "raw_value", None)
         if raw is None or getattr(raw, "error", False):
-            return self._fail_cycle(tick_now)
+            return self._fail_cycle()
         self._scale_byte = raw.as_integer
         return []
 
@@ -430,7 +418,6 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         driver: WBDALIDriver,
         address: Address,
         progress: _Type51EnergyReadProgress,
-        tick_now: float,
     ) -> list[ControlPollResult]:
         cmds = [
             self._compat.DTR1(BANK_202.address),
@@ -441,14 +428,14 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         try:
             responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
         except Exception:  # pylint: disable=broad-exception-caught
-            return self._fail_cycle(tick_now)
+            return self._fail_cycle()
 
         read_responses = responses[-_ENERGY_CHUNK_SIZE:]
         new_bytes: list = []
         for response in read_responses:
             raw = getattr(response, "raw_value", None)
             if raw is None or getattr(raw, "error", False):
-                return self._fail_cycle(tick_now)
+                return self._fail_cycle()
             new_bytes.append(raw.as_integer)
 
         progress.bytes_read.extend(new_bytes)
@@ -456,16 +443,14 @@ class Type51Parameters(TypeParameters):  # pylint: disable=too-many-instance-att
         if not progress.is_complete():
             return []
 
-        return self._finish_cycle(progress.bytes_read, tick_now)
+        return self._finish_cycle(progress.bytes_read)
 
-    def _fail_cycle(self, cycle_end_time: float) -> list[ControlPollResult]:
+    def _fail_cycle(self) -> list[ControlPollResult]:
         self._read_progress = None
-        self._last_cycle_end_time = cycle_end_time
         return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)]
 
-    def _finish_cycle(self, energy_bytes: list, cycle_end_time: float) -> list[ControlPollResult]:
+    def _finish_cycle(self, energy_bytes: list) -> list[ControlPollResult]:
         self._read_progress = None
-        self._last_cycle_end_time = cycle_end_time
         if self._scale_byte is None:
             return [
                 ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)

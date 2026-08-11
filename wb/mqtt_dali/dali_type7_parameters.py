@@ -140,6 +140,7 @@ class LastActedControl(MqttControlBase):
             ),
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
+            startup_reconfirm=True,
         )
         self._up_on = up_on
         self._up_off = up_off

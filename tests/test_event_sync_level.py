@@ -2,7 +2,7 @@
 
 `ActualLevelControl.apply` and `LastActedControl.apply` are pure against their
 injected owner params, so they are exercised directly with lightweight stubs (no
-bus). `SettleClock` and the event-poll scheduling additions (`poll_no_later_than`,
+bus). `SettleClock` and the event-poll scheduling additions (`schedule_poll_at`,
 randomized re-draw) are tested in isolation too.
 """
 
@@ -28,6 +28,7 @@ from dali.gear.general import (
 from wb.mqtt_dali.common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
     EVENT_STARTUP_RECONFIRM_DELAY,
+    PERIODIC_STATUS_POLL_INTERVAL,
     MqttControlBase,
 )
 from wb.mqtt_dali.dali_controls import ActualLevelControl, ErrorStatusControl
@@ -227,7 +228,7 @@ def test_settle_clock_horizon_bounded_by_max_fade():
     assert clock.settle_for(SettleBasis.FADE, 15) < 92.0
 
 
-# --- poll_no_later_than / randomized re-draw -----------------------------
+# --- Confirmation scheduling / randomized re-draw ------------------------
 
 
 def _event_control() -> MqttControlBase:
@@ -235,49 +236,42 @@ def _event_control() -> MqttControlBase:
         ControlInfo("c", ControlState(ControlMeta(read_only=True), "0")),
         poll_interval=EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval=True,
+        startup_reconfirm=True,
     )
 
 
-def test_poll_no_later_than_only_pulls_earlier():
+def _polled_event_control(at: float) -> MqttControlBase:
+    """Event control past its first poll, due one exact base interval later — no startup
+    reconfirm, no jitter, so a confirmation has something unambiguous to move."""
     control = _event_control()
-    control.last_poll_time = 1000.0  # already polled, long interval
-    control.poll_interval = 300.0
-
-    # A settle of 2s after 'now' is far earlier than the 300s due time -> pulled in.
-    control.poll_no_later_than(1000.0, 1002.0)
-    assert control.last_poll_time == 1000.0
-    assert control.poll_interval == 2.0
-
-    # A request later than the current due time is ignored (min-semantics).
-    control.last_poll_time = 1000.0
-    control.poll_interval = 5.0
-    control.poll_no_later_than(1000.0, 1100.0)
-    assert control.poll_interval == 5.0
+    control.next_due_at = at + EVENT_RESYNC_BASE_INTERVAL
+    return control
 
 
-def test_schedule_confirmation_latest_command_wins():
-    """schedule_confirmation lets the latest command's settle win — a later confirm
+def test_schedule_poll_at_latest_command_wins():
+    """schedule_poll_at lets the latest command's settle win — a later confirm
     replaces an earlier pulled-in one (so an immediate-then-fade burst confirms after the
-    fade, not on the immediate command's short window), and never delays past the long
-    re-sync interval."""
-    control = _event_control()
-    control.last_poll_time = 1000.0
-    control.poll_interval = 300.0
-    control.schedule_confirmation(1000.0, 1002.0)  # immediate command -> +2s
-    assert control.poll_interval == 2.0
-    control.schedule_confirmation(1000.0, 1008.0)  # fade command -> +8s, overrides the earlier
-    assert control.poll_interval == 8.0
-    control.schedule_confirmation(1000.0, 5000.0)  # capped at the re-sync base, never later
-    assert control.poll_interval == EVENT_RESYNC_BASE_INTERVAL
+    fade, not on the immediate command's short window), and it overrides the periodic
+    schedule outright: rescheduling is a deliberate interference with the period."""
+    control = _polled_event_control(1000.0)
+    control.schedule_poll_at(1002.0)  # immediate command -> +2s
+    assert control.next_due_at == 1002.0
+    control.schedule_poll_at(1008.0)  # fade command -> +8s, overrides the earlier
+    assert control.next_due_at == 1008.0
+    control.schedule_poll_at(5000.0)  # not capped at the re-sync base
+    assert control.next_due_at == 5000.0
 
 
-def test_first_read_not_deferred_by_poll_no_later_than():
-    """A never-polled event control is already due ASAP; a confirm request cannot delay it."""
+def test_first_read_not_deferred_by_schedule_poll_at():
+    """Rescheduling overrides the period, but not before the first poll: bus traffic at
+    service start must not push a control's very first read into the future."""
     control = _event_control()
-    assert control.last_poll_time is None
-    control.poll_no_later_than(0.0, 50.0)
-    assert control.last_poll_time is None
+    control.schedule_poll_at(50.0)
     assert control.is_poll_due(0.0) is True
+    # Once polled, the same call does move the poll on.
+    control.schedule_next_periodic_poll(polled_at=0.0)
+    control.schedule_poll_at(50.0)
+    assert control.next_due_at == 50.0
 
 
 def test_startup_polls_then_reconfirms_after_settle():
@@ -286,12 +280,36 @@ def test_startup_polls_then_reconfirms_after_settle():
     mid-fade); the next poll then settles to the long re-sync interval. This per-control
     first-read reconfirm replaces any global READY pass."""
     control = _event_control()
-    assert control.last_poll_time is None
+    assert control.is_poll_due(0.0) is True
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
-    assert control.poll_interval == EVENT_STARTUP_RECONFIRM_DELAY
+    assert control.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
     # The reconfirm poll itself is not a first poll -> back on the long re-sync interval.
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=6.0)
-    assert EVENT_RESYNC_BASE_INTERVAL * 0.7 <= control.poll_interval <= EVENT_RESYNC_BASE_INTERVAL * 1.3
+    interval = control.next_due_at - 6.0
+    assert EVENT_RESYNC_BASE_INTERVAL * 0.7 <= interval <= EVENT_RESYNC_BASE_INTERVAL * 1.3
+
+
+def test_startup_reconfirm_only_ever_pulls_the_poll_closer():
+    """The reconfirm is a `min`, not an assignment: a pollable whose base interval is shorter
+    than the startup delay keeps its own interval instead of having its first read pushed out.
+    """
+    control = MqttControlBase(
+        ControlInfo("short", ControlState(ControlMeta(read_only=True), "0")),
+        poll_interval=2.0,
+        randomize_poll_interval=True,
+        startup_reconfirm=True,
+    )
+    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
+    assert control.next_due_at <= 2.0 * 1.3
+
+
+def test_level_and_last_acted_opt_into_the_startup_reconfirm():
+    """The two event controls the coordinator confirms carry `startup_reconfirm`, so a level
+    captured mid-fade at service start is corrected 6 s later, not one re-sync interval later.
+    """
+    for control in (ActualLevelControl(DimmingCurveState()), LastActedControl()):
+        control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
+        assert control.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
 
 
 def test_resync_interval_randomized_within_bounds():
@@ -303,11 +321,11 @@ def test_resync_interval_randomized_within_bounds():
         # First poll schedules the startup reconfirm; the next lands on the re-sync interval.
         control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
         control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)
-        assert control.last_poll_time == 10.0
+        interval = control.next_due_at - 10.0
         low = EVENT_RESYNC_BASE_INTERVAL * 0.7
         high = EVENT_RESYNC_BASE_INTERVAL * 1.3
-        assert low <= control.poll_interval <= high
-        intervals.add(round(control.poll_interval, 6))
+        assert low <= interval <= high
+        intervals.add(round(interval, 6))
     assert len(intervals) > 1  # jittered, not constant -> no synchronized storm
 
 
@@ -316,19 +334,34 @@ def test_event_param_resynced_after_interval():
     control = _event_control()
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)  # startup reconfirm
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)  # re-sync interval
-    interval = control.poll_interval
+    interval = control.next_due_at - 10.0
     assert control.is_poll_due(10.0 + interval - 1.0) is False
     assert control.is_poll_due(10.0 + interval + 1.0) is True
 
 
+def test_rescheduled_poll_restores_the_base_interval_without_jitter():
+    """A pollable with no jitter recovers its base interval after a rescheduled poll.
+
+    Restoring it used to be a side effect of the ±30% re-draw, which returns early for
+    periodic controls — a confirmation would have left one polling every couple of seconds.
+    """
+    err = ErrorStatusControl()
+    err.schedule_next_periodic_poll(polled_at=0.0)
+    err.schedule_poll_at(2.0)
+    assert err.is_poll_due(2.0) is True
+
+    err.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=2.0)
+    assert err.next_due_at == 2.0 + PERIODIC_STATUS_POLL_INTERVAL
+    assert err.is_poll_due(4.0) is False
+
+
 def test_confirmation_poll_resets_resync_timer():
-    """A confirmation poll stamps last_poll_time, so the background re-sync does not double it."""
-    control = _event_control()
-    control.last_poll_time = 100.0
-    control.poll_interval = 300.0
-    control.poll_no_later_than(100.0, 102.0)  # pull confirm to +2s
+    """A confirmation poll moves the schedule on from itself, so the background re-sync
+    does not fire a second read right behind it."""
+    control = _polled_event_control(100.0)
+    control.schedule_poll_at(102.0)  # pull confirm to +2s
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=102.0)
-    assert control.last_poll_time == 102.0
+    assert control.next_due_at >= 102.0 + EVENT_RESYNC_BASE_INTERVAL * 0.7
     assert control.is_poll_due(103.0) is False  # back on the long interval
 
 
@@ -336,9 +369,8 @@ def test_periodic_param_still_polled():
     """Periodic controls keep a fixed (un-jittered) interval and are unaffected by event poll logic."""
     err = ErrorStatusControl()
     assert err.randomize_poll_interval is False
-    assert err.poll_interval == 120.0
     err.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
-    assert err.poll_interval == 120.0  # no jitter re-draw for periodic controls
+    assert err.next_due_at == 120.0  # fixed interval, no jitter re-draw
     assert err.is_poll_due(119.0) is False
     assert err.is_poll_due(120.0) is True
 

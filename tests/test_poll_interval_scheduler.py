@@ -74,8 +74,8 @@ def test_control_with_explicit_interval_polled_at_its_rate():
     assert fast.is_poll_due(0.0)
     assert slow.is_poll_due(0.0)
 
-    fast.last_poll_time = 0.0
-    slow.last_poll_time = 0.0
+    fast.schedule_next_periodic_poll(polled_at=0.0)
+    slow.schedule_next_periodic_poll(polled_at=0.0)
 
     assert fast.is_poll_due(5.5)
     assert not slow.is_poll_due(5.5)
@@ -90,32 +90,75 @@ def test_alarm_controls_use_120s_interval():
     type20 = Type20Parameters().get_mqtt_controls()[0]
     type49 = Type49Parameters().get_mqtt_controls()[0]
 
-    assert err.poll_interval == 120.0
-    assert type21.poll_interval == 120.0
-    assert type16.poll_interval == 120.0
-    assert type20.poll_interval == 120.0
-    assert type49.poll_interval == 120.0
-
     for ctrl in (err, type21, type16, type20, type49):
-        ctrl.last_poll_time = 0.0
+        ctrl.schedule_next_periodic_poll(polled_at=0.0)
+        assert ctrl.next_due_at == 120.0
         assert not ctrl.is_poll_due(5.0)
         assert ctrl.is_poll_due(120.0)
 
 
-def test_time_until_next_poll_reads_interval_directly():
-    """The real `time_until_next_poll` reads each pollable's `poll_interval` with no None
-    fallback. A Type51 handler (hardcoded 120 s cycle) 60 s in yields ~60 s until due — which
-    would raise TypeError if its `poll_interval` regressed to None — and an empty PollScheduler
-    reports inf (nothing to poll)."""
+def test_time_until_next_poll_reads_the_due_moment_directly():
+    """`time_until_next_poll` and `is_poll_due` are two derivations of one moment, so the loop
+    cannot sleep past a poll it considers due. The subject is a chunked pollable, whose moment
+    comes from a cycle boundary rather than a tick — that is where they used to diverge.
+    Nothing to poll reports inf."""
     handler = Type51Parameters()
-    handler.last_poll_time = 100.0
+    handler.next_due_at = 220.0  # a cycle that opened at 100.0
     dev = _make_dali_device(controls=[], standalone_pollable=handler)
 
     assert dev.time_until_next_poll(160.0) == pytest.approx(60.0)
+    assert handler.is_poll_due(160.0) is False
+    assert dev.time_until_next_poll(220.0) == pytest.approx(0.0)
+    assert handler.is_poll_due(220.0) is True
+
+    assert _make_dali_device(controls=[]).time_until_next_poll(0.0) == float("inf")
 
     scheduler = PollScheduler()
     scheduler.poll_turn = True
     assert scheduler.time_until_next_poll(0.0) == float("inf")
+
+
+def test_time_until_next_poll_follows_a_rescheduled_confirmation():
+    """The loop must wake up for a rescheduled poll, not for the interval it replaced.
+
+    If only `is_poll_due` honoured the reschedule, the confirming read would arrive up to a
+    second late — the idle wait is capped at 1 s — rather than fail outright.
+    """
+    control = _readable_control("c", poll_interval=300.0)
+    dev = _make_dali_device(controls=[control])
+    control.schedule_next_periodic_poll(polled_at=1000.0)
+    assert dev.time_until_next_poll(1000.0) == pytest.approx(300.0)
+
+    control.schedule_poll_at(1002.0)
+
+    assert dev.time_until_next_poll(1000.0) == pytest.approx(2.0)
+    assert control.is_poll_due(1002.0) is True
+
+
+def test_time_until_next_poll_is_never_negative():
+    """A never-polled pollable is due immediately (`next_due_at` is None) and an overdue one is
+    in the past, but the reported wait must not go negative: it is added to a timestamp in
+    `_polling_loop` to get the next deadline."""
+    control = _readable_control("c", poll_interval=5.0)
+    dev = _make_dali_device(controls=[control])
+
+    assert dev.time_until_next_poll(0.0) == 0.0  # never polled
+
+    control.schedule_next_periodic_poll(polled_at=0.0)
+    assert dev.time_until_next_poll(100.0) == 0.0  # long overdue
+
+
+def test_time_until_next_poll_reports_the_earliest_of_several_pollables():
+    """The device reports the *earliest* due moment across its pollables; anything else would
+    let the loop idle past a due poll, bounded only by the 1 s ceiling in `_poll_step`."""
+    fast = _readable_control("fast", poll_interval=5.0)
+    slow = _readable_control("slow", poll_interval=300.0)
+    dev = _make_dali_device(controls=[fast, slow])
+
+    fast.schedule_next_periodic_poll(polled_at=0.0)
+    slow.schedule_next_periodic_poll(polled_at=0.0)
+
+    assert dev.time_until_next_poll(0.0) == pytest.approx(5.0)
 
 
 @pytest.mark.asyncio
@@ -239,7 +282,9 @@ async def test_dt8_colour_step_consumes_whole_tick():
 
 
 @pytest.mark.asyncio
-async def test_poll_error_does_not_change_schedule():
+async def test_failed_poll_still_advances_schedule():
+    """A read that fails is accounted like a successful one: the control waits the full
+    interval instead of becoming due again right away."""
     c = _readable_control("c", poll_interval=5.0)
     dev = _make_dali_device(controls=[c])
 
@@ -255,7 +300,7 @@ async def test_poll_error_does_not_change_schedule():
     assert len(poll_results) == 1
     assert poll_results[0].error == ControlError.READ
 
-    assert c.last_poll_time == 0.0
+    assert c.next_due_at == 5.0
     assert not c.is_poll_due(4.9)
     assert c.is_poll_due(5.0)
 
@@ -265,7 +310,7 @@ async def test_overdue_deadline_after_quiescent_does_not_burst_catch_up():
     controls = [_readable_control(f"c{i}", poll_interval=5.0) for i in range(6)]
     dev = _make_dali_device(controls=controls)
     for c in controls:
-        c.last_poll_time = 0.0
+        c.schedule_next_periodic_poll(polled_at=0.0)
 
     scheduler = PollScheduler()
     scheduler.set_devices([dev])

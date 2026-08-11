@@ -658,17 +658,17 @@ class _Type8ColourReadProgress:
     done_values: dict = field(default_factory=dict)
 
 
-class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too-many-instance-attributes
+class Type8Parameters(EventPollSchedule, TypeParameters):
     def __init__(self) -> None:
-        super().__init__()
+        TypeParameters.__init__(self)
+        EventPollSchedule.__init__(
+            self, EVENT_RESYNC_BASE_INTERVAL, randomize_poll_interval=True, startup_reconfirm=True
+        )
 
         self._current_colour_type: Optional[ColourType] = None
         self._limits = Type8TcLimits()
         self._colour_type_lock = asyncio.Lock()
 
-        # Event control: long, jittered re-sync base interval (kept fresh by Activate
-        # sniffing + confirmation polls).
-        self._init_poll_schedule(EVENT_RESYNC_BASE_INTERVAL, randomize_poll_interval=True)
         self._read_progress: Optional[_Type8ColourReadProgress] = None
         # Typed active-colour state, projected to the current_* topics.
         self._colour_value: Optional[object] = None
@@ -735,9 +735,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too
         # remaining subbatches can run regardless of the per-handler interval.
         if self._read_progress is not None:
             return True
-        if self.last_poll_time is None:
-            return True
-        return now - self.last_poll_time >= self.poll_interval
+        return super().is_poll_due(now)
 
     def cancel_pending_poll(self) -> None:
         self._read_progress = None
@@ -803,24 +801,13 @@ class Type8Parameters(EventPollSchedule, TypeParameters):  # pylint: disable=too
         logger: Optional[logging.Logger] = None,
     ) -> ControlsPollRequestResult:
         del default_max_commands, logger
-        if self._current_colour_type is None:
-            return ControlsPollRequestResult(has_more=False)
-        # Don't restart a finished or failed cycle until poll_interval elapses.
-        if (
-            self._read_progress is None
-            and self.last_poll_time is not None
-            and now - self.last_poll_time < self.poll_interval
-        ):
+        if not self.is_poll_due(now):
             return ControlsPollRequestResult(has_more=False)
         if self.peek_next_subbatch_size() > max_commands:
             return ControlsPollRequestResult(has_more=True)
         if self._read_progress is None:
-            is_first_poll = self.last_poll_time is None
             self._read_progress = _Type8ColourReadProgress(address)
-            self.last_poll_time = now
-            self._redraw_poll_interval()
-            if is_first_poll:
-                self._reconfirm_after_first_poll(now)
+            self.schedule_next_periodic_poll(polled_at=now)
         progress = self._read_progress
 
         if progress.colour_type is None:

@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.19.6) stable; urgency=medium
+
+  * Fix devices being polled more often than the configured interval after a dimming or a
+    command sent from outside the service.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 11 Aug 2026 15:34:06 +0500
+
 wb-mqtt-dali (1.19.5) stable; urgency=medium
 
   * Clean up /etc/wb-mqtt-dali.conf on purge

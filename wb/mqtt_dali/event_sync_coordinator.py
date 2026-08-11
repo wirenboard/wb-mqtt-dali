@@ -337,7 +337,7 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
         for pollable in pollables:
             # The latest command's settle wins: an immediate-then-fade burst confirms
             # after the fade, not on the earlier command's short window.
-            pollable.schedule_confirmation(now, at)
+            pollable.schedule_poll_at(at)
 
     async def _publish(self, device: DaliDevice, publishes: list[Publish]) -> None:
         if not publishes:

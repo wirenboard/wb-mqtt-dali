@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -e
+
+CONFFILE=/etc/wb-mqtt-dali.conf
+
+if [ "$1" = "purge" ]; then
+    rm -f $CONFFILE
+    rm -f $CONFFILE.default
+fi
+
+#DEBHELPER#

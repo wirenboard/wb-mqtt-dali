@@ -77,25 +77,45 @@ WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
 FRAME_COUNTER_MODULO = 1 << 16
 
+BUS_MONITOR_RING_SIZE = 4
+
 
 # Maximum number of out-of-order frames `BusMonitorFrameHandler` holds while
 # waiting for the gap to close. Bounded by `ring_size - 1` of the gateway's
 # 4-slot bus_monitor ring: once the 4th ahead-of-expected frame arrives, the
 # slot that would have held the missing earlier frame has been overwritten,
 # so it is a real gap rather than an in-flight reorder.
-BUS_MONITOR_REORDER_WINDOW = 3
+BUS_MONITOR_REORDER_WINDOW = BUS_MONITOR_RING_SIZE - 1
+
+
+# Distinct counters landing further behind expected than the ring can hold, after
+# which the handler resynchronises to the stream instead of its own position.
+BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND = BUS_MONITOR_RING_SIZE
+
+
+# Frame sizes a DALI bus can carry: FF16 (IEC 62386-102), FF24 (IEC 62386-103),
+# FF25 (proprietary), BF8.
+FORWARD_FRAME_BIT_LENGTHS = frozenset((16, 24, 25))
+BACKWARD_FRAME_BIT_LENGTH = 8
+
+# Forward-frame sizes `dali.command.from_frame` can decode; FF25 has no decoding.
+DECODABLE_FRAME_BIT_LENGTHS = frozenset((16, 24))
 
 
 def get_int_payload(message: aiomqtt.Message) -> int:
-    if message.payload is None:
-        raise ValueError("payload is empty")
-    if isinstance(message.payload, (bytes, bytearray)):
-        return int(message.payload.decode().strip(), 0)
-    if isinstance(message.payload, memoryview):
-        return int(message.payload.tobytes().decode().strip(), 0)
-    if isinstance(message.payload, str):
-        return int(message.payload.strip(), 0)
-    return int(message.payload)
+    """Parse a message payload as an integer; every failure comes out as `ValueError`."""
+    try:
+        if message.payload is None:
+            raise ValueError("payload is empty")
+        if isinstance(message.payload, (bytes, bytearray)):
+            return int(message.payload.decode().strip(), 0)
+        if isinstance(message.payload, memoryview):
+            return int(message.payload.tobytes().decode().strip(), 0)
+        if isinstance(message.payload, str):
+            return int(message.payload.strip(), 0)
+        return int(message.payload)
+    except (AttributeError, TypeError) as exc:
+        raise ValueError(f"unsupported payload type {type(message.payload).__name__}: {exc}") from exc
 
 
 @dataclass
@@ -112,6 +132,53 @@ class WBDALIConfig:
     queue_modbus_bus_offset: int = 1000
 
 
+@dataclass(frozen=True)
+class BusMonitorSlot:
+    raw_value: int
+    frame_counter: int
+    frame_length: int
+    frame_data: int
+    is_backward: bool
+    is_broken: bool
+
+    @classmethod
+    def from_raw(cls, message: aiomqtt.Message) -> BusMonitorSlot:
+        """Decode a slot publication; raises `ValueError` if the payload is not a slot value."""
+        raw_value = get_int_payload(message)
+        if raw_value >> 64:
+            raise ValueError(f"does not fit the slot register: {raw_value.bit_length()} bit(s)")
+        frame_length = (raw_value >> 32) & 0xFF
+        return cls(
+            raw_value=raw_value,
+            frame_counter=(raw_value >> 48) & 0xFFFF,
+            frame_length=frame_length,
+            frame_data=raw_value & ((1 << frame_length) - 1),
+            is_backward=bool((raw_value >> 40) & 0x1),
+            is_broken=bool((raw_value >> 41) & 0x1),
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        """Ring slot the gateway has not filled in yet."""
+        return self.raw_value == 0
+
+    @property
+    def is_valid(self) -> bool:
+        if self.is_backward:
+            return self.frame_length == BACKWARD_FRAME_BIT_LENGTH
+        return self.frame_length in FORWARD_FRAME_BIT_LENGTHS
+
+    def build_frame(self) -> Frame:
+        if self.is_backward:
+            if self.is_broken:
+                return BackwardFrameError(self.frame_data)
+            return BackwardFrame(self.frame_data)
+        frame = ForwardFrame(self.frame_length, self.frame_data)
+        if self.is_broken:
+            frame._error = True  # pylint: disable=protected-access
+        return frame
+
+
 class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
     """Decode and reorder sporadic-frame bus_monitor publications.
 
@@ -121,13 +188,22 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
     (and published) earlier than its predecessor. We keep an ordered buffer
     of up to `BUS_MONITOR_REORDER_WINDOW` frames whose `frame_counter` is
     ahead of what we expect next, and dispatch them as soon as the gap
-    closes. Frames are dispatched to callbacks in strict counter order. A
+    closes. Frames are dispatched to callbacks in counter order. A
     warning is emitted when a frame's counter jumps forward beyond the
     reorder window (= a real gap on the wire). A frame whose counter falls
     behind the expected one (already overtaken in the dispatch stream) is
     treated as a gateway anomaly (republished frame or oversized
     wb-mqtt-serial reorder) — it is dropped with a warning rather than
-    spliced out of order into the dispatch stream.
+    spliced out of order into the dispatch stream. Once frames with
+    `BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND` distinct counters land further
+    behind than the ring can hold, the expected counter itself is taken to
+    be wrong and the stream resynchronises to the last of them — the only
+    case where the dispatched counter restarts lower.
+
+    A slot that does not describe a DALI frame — length not 16/24/25 forward, not 8
+    backward — is reported and never published. Its counter is honoured only where an
+    error in it is harmless: on the expected number or inside the reorder window, where
+    it costs at most one ring position. An empty slot is ignored outright.
     """
 
     def __init__(
@@ -137,18 +213,19 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
         dev_inst_map: Optional[DeviceInstanceTypeMapper],
     ) -> None:
         self._next_expected_fc: Optional[int] = None
-        self._buffer: dict[int, int] = {}
+        self._far_behind_fcs: set[int] = set()
+        self._buffer: dict[int, BusMonitorSlot] = {}
         self._logger = logger
         self._bus_traffic = bus_traffic
         self._dev_inst_map = dev_inst_map
 
     def handle(self, message: aiomqtt.Message) -> None:
-        if message.retain:
+        if message.retain or not message.payload:
             return
 
         try:
-            raw_value = get_int_payload(message)
-        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+            slot = BusMonitorSlot.from_raw(message)
+        except ValueError as exc:
             self._logger.error(
                 "Failed to parse bus monitor payload '%s' from topic '%s': %s",
                 message.payload,
@@ -157,116 +234,158 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
             )
             return
 
-        fc = (raw_value >> 48) & 0xFFFF
+        if slot.is_empty:
+            self._logger.debug("Empty bus monitor slot on topic '%s'", message.topic)
+            return
 
+        if not slot.is_valid:
+            self._logger.warning(
+                "Bus monitor slot holds no DALI frame: %d bit(s), raw 0x%016x, fc=%d — dropping",
+                slot.frame_length,
+                slot.raw_value,
+                slot.frame_counter,
+            )
+
+        self._order_and_publish(slot)
+
+    # --- Private ---
+
+    def _order_and_publish(self, slot: BusMonitorSlot) -> None:
         if self._next_expected_fc is None:
-            self._next_expected_fc = (fc + 1) % FRAME_COUNTER_MODULO
-            self._bus_traffic_invoke(raw_value)
+            if not slot.is_valid:
+                return
+            self._next_expected_fc = (slot.frame_counter + 1) % FRAME_COUNTER_MODULO
+            self._publish([slot])
             return
 
         # Modular forward distance from expected to received: 0 = right on
         # time; small positive = ahead by a few slots (out-of-order ahead);
         # large positive (near FRAME_COUNTER_MODULO) = arrived behind expected
         # (modular wrap), i.e. a late frame we have already given up on.
-        distance = (fc - self._next_expected_fc) % FRAME_COUNTER_MODULO
+        distance = (slot.frame_counter - self._next_expected_fc) % FRAME_COUNTER_MODULO
 
         if distance == 0:
-            self._bus_traffic_invoke(raw_value)
-            self._next_expected_fc = self._drain_buffer((fc + 1) % FRAME_COUNTER_MODULO)
+            self._far_behind_fcs.clear()
+            ready = [slot]
+            ready.extend(self._take_contiguous((slot.frame_counter + 1) % FRAME_COUNTER_MODULO))
+            self._publish(ready)
             return
 
         if distance <= BUS_MONITOR_REORDER_WINDOW:
             # Future frame within the reorder window
-            self._buffer[fc] = raw_value
+            self._far_behind_fcs.clear()
+            self._buffer[slot.frame_counter] = slot
+            return
+
+        # Must stay below the window check: an invalid slot still reserves its number
+        if not slot.is_valid:
+            self._logger.debug(
+                "Not trusting frame counter %d of dropped bus monitor slot 0x%016x (expected %d)",
+                slot.frame_counter,
+                slot.raw_value,
+                self._next_expected_fc,
+            )
             return
 
         if distance < FRAME_COUNTER_MODULO // 2:
             # Forward jump beyond the reorder window — earlier frames are gone
-            advanced_expected = self._flush_buffer_after_gap(self._next_expected_fc)
-            if fc != advanced_expected:
-                self._logger.warning(
-                    "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
-                    (advanced_expected - 1) % FRAME_COUNTER_MODULO,
-                    fc,
-                    (fc - advanced_expected) % FRAME_COUNTER_MODULO,
-                )
-            self._bus_traffic_invoke(raw_value)
-            self._next_expected_fc = (fc + 1) % FRAME_COUNTER_MODULO
+            self._far_behind_fcs.clear()
+            ready = self._take_all_after_gap(self._next_expected_fc)
+            if slot.frame_counter != self._next_expected_fc:
+                self._log_counter_jump(self._next_expected_fc, slot.frame_counter)
+            ready.append(slot)
+            self._next_expected_fc = (slot.frame_counter + 1) % FRAME_COUNTER_MODULO
+            self._publish(ready)
             return
 
-        # Backward jump beyond the reorder window — the gateway misbehaved
+        self._handle_frame_behind_expected(slot)
+
+    def _handle_frame_behind_expected(self, slot: BusMonitorSlot) -> None:
+        if (self._next_expected_fc - slot.frame_counter) % FRAME_COUNTER_MODULO <= BUS_MONITOR_RING_SIZE:
+            self._far_behind_fcs.clear()
+        else:
+            self._far_behind_fcs.add(slot.frame_counter)
+
+        if len(self._far_behind_fcs) < BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND:
+            self._logger.warning(
+                "Bus monitor frame counter went backwards: fc=%d, expected=%d — dropping",
+                slot.frame_counter,
+                self._next_expected_fc,
+            )
+            return
+
         self._logger.warning(
-            "Bus monitor frame counter went backwards: fc=%d, expected=%d — dropping",
-            fc,
+            "Bus monitor resynchronising to fc=%d: %d frame(s) with distinct counters landed "
+            "behind expected %d, so the expected counter itself was wrong",
+            slot.frame_counter,
+            len(self._far_behind_fcs),
             self._next_expected_fc,
         )
+        self._far_behind_fcs.clear()
+        self._buffer.clear()
+        self._next_expected_fc = (slot.frame_counter + 1) % FRAME_COUNTER_MODULO
+        self._publish([slot])
 
-    # --- Private ---
-
-    def _drain_buffer(self, expected: int) -> int:
+    def _take_contiguous(self, expected: int) -> list[BusMonitorSlot]:
+        """Take buffered slots that directly follow `expected` and commit the
+        counter past them. Slots beyond a gap stay buffered until it closes.
+        """
+        taken: list[BusMonitorSlot] = []
         while expected in self._buffer:
-            raw = self._buffer.pop(expected)
-            self._bus_traffic_invoke(raw)
+            taken.append(self._buffer.pop(expected))
             expected = (expected + 1) % FRAME_COUNTER_MODULO
-        return expected
+        self._next_expected_fc = expected
+        return taken
 
-    def _flush_buffer_after_gap(self, expected: int) -> int:
-        """Forward jump beyond the window — concede the gap, dispatch all
-        buffered frames in counter order, and return the new expected counter
-        past them.
+    def _take_all_after_gap(self, expected: int) -> list[BusMonitorSlot]:
+        """Forward jump beyond the window — concede the gap, take every buffered
+        slot in counter order and commit the counter past them.
         """
         if not self._buffer:
-            return expected
-        sorted_items = sorted(
-            self._buffer.items(),
-            key=lambda kv: (kv[0] - expected) % FRAME_COUNTER_MODULO,
+            return []
+        ordered = sorted(
+            self._buffer.values(),
+            key=lambda slot: (slot.frame_counter - expected) % FRAME_COUNTER_MODULO,
         )
-        first_fc = sorted_items[0][0]
-        missed = (first_fc - expected) % FRAME_COUNTER_MODULO
-        if missed > 0:
-            self._logger.warning(
-                "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
-                (expected - 1) % FRAME_COUNTER_MODULO,
-                first_fc,
-                missed,
-            )
-        for _, buf_raw in sorted_items:
-            self._bus_traffic_invoke(buf_raw)
-        last_fc = sorted_items[-1][0]
+        if ordered[0].frame_counter != expected:
+            self._log_counter_jump(expected, ordered[0].frame_counter)
         self._buffer.clear()
-        return (last_fc + 1) % FRAME_COUNTER_MODULO
+        self._next_expected_fc = (ordered[-1].frame_counter + 1) % FRAME_COUNTER_MODULO
+        return ordered
 
-    def _bus_traffic_invoke(self, raw_value: int) -> None:
-        frame_length = (raw_value >> 32) & 0xFF
-        frame_mask = (1 << frame_length) - 1
-        frame_data = raw_value & frame_mask
-        is_backward = bool((raw_value >> 40) & 0x1)
-        is_broken = bool((raw_value >> 41) & 0x1)
-        frame_counter = (raw_value >> 48) & 0xFFFF
+    def _log_counter_jump(self, expected: int, frame_counter: int) -> None:
+        self._logger.warning(
+            "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
+            (expected - 1) % FRAME_COUNTER_MODULO,
+            frame_counter,
+            (frame_counter - expected) % FRAME_COUNTER_MODULO,
+        )
 
-        if is_broken:
-            if is_backward:
-                frame = BackwardFrameError(frame_data)
-                self._logger.debug("Unexpected broken BF: %s", hex(frame_data))
-            else:
-                frame = ForwardFrame(frame_length, frame_data)
-                frame._error = True  # pylint: disable=protected-access
-                self._logger.debug("Unexpected broken FF%d: %s", frame_length, hex(frame_data))
+    def _publish(self, slots: list[BusMonitorSlot]) -> None:
+        for slot in slots:
+            if not slot.is_valid:
+                continue  # already reported when it arrived
+            try:
+                frame = slot.build_frame()
+                self._log_frame(frame, slot)
+                self._bus_traffic.notify_bus_frame(frame, slot.frame_counter)
+            except Exception:  # pylint: disable=broad-exception-caught
+                self._logger.exception("Failed to dispatch bus monitor slot 0x%016x", slot.raw_value)
+
+    def _log_frame(self, frame: Frame, slot: BusMonitorSlot) -> None:
+        if slot.is_backward or slot.is_broken or slot.frame_length not in DECODABLE_FRAME_BIT_LENGTHS:
+            self._logger.debug(
+                "Unexpected %s%s: %s",
+                "broken " if slot.is_broken else "",
+                "BF" if slot.is_backward else f"FF{slot.frame_length}",
+                hex(slot.frame_data),
+            )
+            return
+        cmd = from_frame(frame, dev_inst_map=self._dev_inst_map)
+        if isinstance(cmd, _Event):
+            self._logger.debug("Event: %s", LazyCommandExpression(cmd))
         else:
-            if is_backward:
-                frame = BackwardFrame(frame_data)
-                self._logger.debug("Unexpected BF: %s", hex(frame_data))
-            else:
-                frame = ForwardFrame(frame_length, frame_data)
-                if frame_length in (16, 24):
-                    cmd = from_frame(frame, dev_inst_map=self._dev_inst_map)
-                    if isinstance(cmd, _Event):
-                        self._logger.debug("Event: %s", LazyCommandExpression(cmd))
-                    else:
-                        self._logger.debug("Unexpected FF%d: %s", frame_length, LazyCommandExpression(cmd))
-                else:
-                    self._logger.debug("Unexpected FF%d: %s", frame_length, hex(frame_data))
-        self._bus_traffic.notify_bus_frame(frame, frame_counter)
+            self._logger.debug("Unexpected FF%d: %s", slot.frame_length, LazyCommandExpression(cmd))
 
 
 @dataclass
@@ -430,7 +549,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         # Subscribe to FF24 topic
         self.logger.debug("Subscribing to FF24 topic...")
-        for i in range(1, 5):
+        for i in range(1, BUS_MONITOR_RING_SIZE + 1):
             await self._mqtt_dispatcher.subscribe(
                 f"/devices/{self.config.device_name}/controls/"
                 f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
@@ -466,7 +585,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         # Unsubscribe from FF24 topic
         if self._mqtt_dispatcher.is_running:
-            for i in range(1, 5):
+            for i in range(1, BUS_MONITOR_RING_SIZE + 1):
                 await self._mqtt_dispatcher.unsubscribe(
                     f"/devices/{self.config.device_name}/controls/"
                     f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
@@ -604,7 +723,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         try:
             resp = get_int_payload(message)
-        except (ValueError, UnicodeDecodeError, AttributeError) as exc:
+        except ValueError as exc:
             self.logger.error(
                 "Failed to parse reply payload '%s' from topic '%s': %s",
                 message.payload,

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.19.5) stable; urgency=medium
+
+  * Clean up /etc/wb-mqtt-dali.conf on purge
+
+ -- Nikolay Korotkiy <nikolay.korotkiy@wirenboard.com>  Tue, 11 Aug 2026 13:20:00 +0400
+
 wb-mqtt-dali (1.19.4) stable; urgency=medium
 
   * Fix DT8 colour polling: a failing colour read no longer restarts in place at the head

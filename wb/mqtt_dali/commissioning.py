@@ -120,6 +120,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
             log.info("No device left to address, exiting")
             return None
 
+        low_compared = False
         while high - low > 1:
             midpoint = (low + high) // 2
             if await self.compare(midpoint):
@@ -128,9 +129,12 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
             else:
                 # No response - search upper half
                 low = midpoint
+                low_compared = True
 
-        # Check which of the two remaining addresses is the device
-        if await self.compare(low):
+        # Check which of the two remaining addresses is the device. `high` has always
+        # answered COMPARE, and once the loop moved `low` up it has answered "no" —
+        # asking it again would just repeat a frame on the bus.
+        if not low_compared and await self.compare(low):
             found_addr = low
         else:
             found_addr = high

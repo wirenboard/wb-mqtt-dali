@@ -14,7 +14,7 @@ from dali.address import (
     GearGroup,
     InstanceNumber,
 )
-from dali.command import Command, Response, from_frame
+from dali.command import Command, Response, YesNoResponse, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.exceptions import ResponseError
 from dali.frame import ForwardFrame, Frame
@@ -56,6 +56,10 @@ from .wbdali_utils import (
     send_with_retry,
 )
 from .wbmqtt import ControlError
+
+# A device is allowed to ignore commands until 300 ms after Reset started
+# (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
+RESET_SETTLE_TIME_S = 0.35
 
 
 class ApplicationControllerState(Enum):
@@ -251,7 +255,9 @@ class SendCommandStatus(Enum):
 
 @dataclass
 class SendCommandResponse:
-    raw: int
+    # `raw` is None for a YesNo query answered "No": silence is the answer,
+    # so there is no backward frame to report.
+    raw: Optional[int]
     value: str
 
 
@@ -842,6 +848,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+        await asyncio.sleep(RESET_SETTLE_TIME_S)
 
         if isinstance(device, DaliDevice):
             new_device = DaliDevice(
@@ -901,7 +908,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 SendCommandResult(
                     status=SendCommandStatus.OK,
                     response=SendCommandResponse(
-                        raw=response.raw_value.as_integer,
+                        raw=None if response.raw_value is None else response.raw_value.as_integer,
                         value=str(response),
                     ),
                 )
@@ -909,11 +916,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         return results
 
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        commands = [
-            device.dali_commands.Reset(device.address.short),
-            *device.dali_commands.setShortAddressCommands(device.address.short, MASK),
-        ]
-        await send_commands_with_retry(self._dev, commands, self.logger)
+        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+        await asyncio.sleep(RESET_SETTLE_TIME_S)
+        await send_commands_with_retry(
+            self._dev,
+            device.dali_commands.setShortAddressCommands(device.address.short, MASK),
+            self.logger,
+        )
         await self._remove_device(device)
 
     async def _remove_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
@@ -1679,9 +1688,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             else:
                 request_body = f">> {request_body}"
 
+            # A query gets a response part even without a backward frame — the
+            # missing answer is what the reader needs to see. A send-only command
+            # (no response class) gets none.
             if bus_traffic_item.response is not None and (
                 isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
                 or bus_traffic_item.response.raw_value is not None
+                or (decoded_request_command is not None and decoded_request_command.response is not None)
             ):
                 request_body = f"{request_body} - {format_response(bus_traffic_item.response)}"
 
@@ -1742,6 +1755,10 @@ def format_response(response: Response) -> str:
         and response.raw_value.error is not True
     ):
         return f"{format_frame_hex(response.raw_value)} {response.raw_value.as_integer}"
+    if response.raw_value is None:
+        # Nothing came back. For a YesNo query that silence is the "no" answer;
+        # any other query simply went unanswered.
+        return str(response) if isinstance(response, YesNoResponse) else "no response"
 
     try:
         return f"{format_frame_hex(response.raw_value)} {response}"

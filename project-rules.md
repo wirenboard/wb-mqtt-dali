@@ -17,6 +17,7 @@ both the author side (code being written) and the review side stay in sync.
 - **Never force-push a PR** — no `--force` / `--force-with-lease` to update a PR. Add new commits — reviewers need incremental changes.
 - **No new private access from tests** — tests must not **add new** access to private attributes (`_underscore`) of production classes. If a test can't be written against the public API, **stop and ask the user** — the fix usually requires widening the API or rethinking the test. Pre-existing private access in untouched test code is tolerated debt.
 - **Scope `protected-access` disables** — `# pylint: disable=protected-access` must scope to a single function or line, never a whole module.
+- **Changelog is written from the user's side** — a `debian/changelog` entry says what changed for someone running the service: what used to go wrong, what happens now, what to expect in MQTT or on the bus. Module, class and function names, RPC internals and refactoring details belong in the commit message, not there.
 
 ## Code Style & Notes
 
@@ -27,6 +28,7 @@ both the author side (code being written) and the review side stay in sync.
 - **Enums over string/int constants** — when a value has a small, fixed set of options (status, kind, mode, action), model it with `enum.Enum` rather than string or integer literals.
   - Plain `Enum` with descriptive values is the default; reach for `IntEnum`/`StrEnum`/`Flag` only when there's a concrete reason (interop, bitwise ops).
   - Anti-pattern: a dataclass field typed `status: str` with conventional literals `"ok"`/`"error"` — make it a typed enum.
+- **Units in the names of numeric constants** — a numeric constant holding a physical quantity (time, length, temperature, current, …) names its unit: `RESET_SETTLE_TIME_S`, `WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS`. Without the suffix the unit is the one thing a reader has to guess, and guessing wrong is a factor-of-1000 bug.
 - **Structures over `dict`/`tuple` soup when the shape is known** — if you know the keys and types, declare a `@dataclass` (frozen for immutable records, mutable for in-place state) or `NamedTuple` and use it as the field/parameter type.
   - Avoid `Optional[dict]`, `dict[str, list[str]]`, `tuple[tuple[str, tuple[str, ...]], ...]`, or several parallel dicts keyed by the same value — they hide what each string means and force readers to reverse-engineer the shape from assignment sites.
   - When several dicts share the same key set (`a[k]`, `b[k]`, `c[k]` always read together), that's a missing dataclass — collapse them into one `dict[Key, RecordType]`.

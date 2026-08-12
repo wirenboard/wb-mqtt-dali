@@ -333,6 +333,59 @@ class TestSendCommandBatchPollingLoop:
         assert result[1].status is SendCommandStatus.OK
 
     @pytest.mark.asyncio
+    async def test_yes_no_query_without_answer_is_no(self, registry):
+        """Silence is the "No" answer of a YesNo query, not a failure: the result
+        stays ok, `raw` is null because no backward frame arrived, and the batch
+        runs on.
+        """
+        controller = make_loop_controller()
+        commands = [
+            parse_expression("QueryControlGearPresent(A0)", registry),
+            parse_expression("Off(A5)", registry),
+        ]
+
+        async def fake_send(_drv, command, *_a, **_kw):
+            if command is commands[0]:
+                return command.response(None)
+            return Response(BackwardFrame(0))
+
+        with patch_send_with_retry(fake_send):
+            loop_task = asyncio.create_task(controller._polling_loop())  # pylint: disable=protected-access
+            try:
+                result = await controller.send_command_batch(commands)
+            finally:
+                await stop_loop(controller, loop_task)
+
+        assert len(result) == 2
+        assert result[0].status is SendCommandStatus.OK
+        assert result[0].response == SendCommandResponse(raw=None, value="False")
+        assert result[0].to_dict() == {"status": "ok", "response": {"raw": None, "value": "False"}}
+        assert result[1].status is SendCommandStatus.OK
+
+    @pytest.mark.asyncio
+    async def test_yes_no_query_framing_error_is_yes(self, registry):
+        """A framing error on a YesNo query means more than one device answered
+        "Yes", so it stays an ok "True" — unlike the numeric-query case, which is
+        an error.
+        """
+        controller = make_loop_controller()
+        cmd = parse_expression("QueryControlGearPresent(A0)", registry)
+
+        async def fake_send(_drv, command, *_a, **_kw):
+            return command.response(BackwardFrameError(0xFF))
+
+        with patch_send_with_retry(fake_send):
+            loop_task = asyncio.create_task(controller._polling_loop())  # pylint: disable=protected-access
+            try:
+                result = await controller.send_command_batch([cmd])
+            finally:
+                await stop_loop(controller, loop_task)
+
+        assert len(result) == 1
+        assert result[0].status is SendCommandStatus.OK
+        assert result[0].response == SendCommandResponse(raw=0xFF, value="True")
+
+    @pytest.mark.asyncio
     async def test_batch_dt8_setup_and_activate(self, registry):
         """Typical DT8 setup: DTR0/1/2 → DT8.Activate. Commands reach the bus in
         order and the result list is all-ok with the same length.

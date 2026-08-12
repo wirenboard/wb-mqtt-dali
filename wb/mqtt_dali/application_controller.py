@@ -1747,11 +1747,15 @@ def bus_traffic_log_level(item: BusTrafficItem) -> int:
 def format_response(response: Response) -> str:
     if isinstance(response, WbGatewayTransmissionError):
         return str(response)
-    if response.raw_value is None:
-        # Nothing came back, so there is no frame to show — the decoded answer
-        # (a YesNo query reads silence as "no") is the whole line.
+    if isinstance(response, YesNoResponse) and response.raw_value is None:
+        # A YesNo query answers "no" by staying silent: no frame to show, the
+        # decoded answer is the whole line.
         return str(response)
-    if type(response) is Response and response.raw_value.error is not True:  # pylint: disable=C0123
+    if (
+        type(response) is Response  # pylint: disable=C0123
+        and response.raw_value is not None
+        and response.raw_value.error is not True
+    ):
         return f"{format_frame_hex(response.raw_value)} {response.raw_value.as_integer}"
 
     try:

@@ -241,19 +241,21 @@ async def test_reset_device_dali_sends_reset_and_set_short_mask_and_removes():
     controller.dali_devices = [device]
     controller._devices_by_mqtt_id[device.mqtt_id] = device
 
-    captured: list = []
+    sent: list = []
+
+    async def fake_send(_driver, command, *_args, **_kwargs):
+        sent.append(command)
+        return MagicMock(raw_value=MagicMock(error=False))
 
     async def fake_send_commands(_driver, commands, *_args, **_kwargs):
-        captured.append(list(commands))
+        sent.extend(commands)
         return [MagicMock(raw_value=MagicMock(error=False)) for _ in commands]
 
     with patch(
         "wb.mqtt_dali.application_controller.send_commands_with_retry", side_effect=fake_send_commands
-    ):
+    ), patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send):
         await controller._reset_device_task(device)
 
-    assert len(captured) == 1
-    sent = captured[0]
     assert any(isinstance(c, GearReset) for c in sent)
     assert any(isinstance(c, GearSetShortAddress) for c in sent)
     # device removed from active configuration
@@ -285,18 +287,21 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
         }
     )
 
-    captured: list = []
+    sent: list = []
+
+    async def fake_send(_driver, command, *_args, **_kwargs):
+        sent.append(command)
+        return MagicMock(raw_value=MagicMock(error=False))
 
     async def fake_send_commands(_driver, commands, *_args, **_kwargs):
-        captured.append(list(commands))
+        sent.extend(commands)
         return [MagicMock(raw_value=MagicMock(error=False)) for _ in commands]
 
     with patch(
         "wb.mqtt_dali.application_controller.send_commands_with_retry", side_effect=fake_send_commands
-    ):
+    ), patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send):
         await controller._reset_device_task(device)
 
-    sent = captured[0]
     assert any(isinstance(c, DeviceReset) for c in sent)
     assert any(isinstance(c, DeviceSetShortAddress) for c in sent)
     # internal maps no longer reference the removed device

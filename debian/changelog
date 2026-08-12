@@ -1,10 +1,12 @@
-wb-mqtt-dali (1.19.8) stable; urgency=medium
+wb-mqtt-dali (1.20.0) stable; urgency=medium
 
   * Fix an error instead of a result when a device stays silent in answer to a "yes"/"no"
     query: silence now reads as "no".
   * Fix device reset not always clearing the short address and re-reading the settings.
+  * Show a query left without an answer in the bus monitor: on a "yes"/"no" query silence
+    reads as "False", on any other query as "no response".
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 12 Aug 2026 11:50:05 +0500
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 12 Aug 2026 14:24:52 +0500
 
 wb-mqtt-dali (1.19.7) stable; urgency=medium
 

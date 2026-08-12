@@ -10,7 +10,7 @@ from dali.address import DeviceShort, GearShort, InstanceNumber
 from dali.command import Response, from_frame
 from dali.device.general import EnableInstance
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
-from dali.gear.general import QueryControlGearPresent
+from dali.gear.general import QueryActualLevel, QueryControlGearPresent
 
 from wb.mqtt_dali.application_controller import (
     ApplicationController,
@@ -1657,6 +1657,25 @@ async def test_monitor_silent_yes_no_query_publishes_the_no_answer():
     assert sep == " - "
     assert request_part.startswith(">>")
     assert response_part == "False"
+
+
+@pytest.mark.asyncio
+async def test_monitor_unanswered_query_publishes_no_response():
+    """A query other than YesNo that got no backward frame is published as
+    `no response`: the missing answer is what the reader has to see, and it is
+    not a gateway error, so no error status is shown."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    command = QueryActualLevel(GearShort(5))
+    bus.driver.bus_traffic.notify_command(command.frame, command.response(None), BusTrafficSource.WB, 0)
+    await asyncio.sleep(0)
+
+    dispatcher.client.publish.assert_called_once()
+    payload = dispatcher.client.publish.call_args.args[1]
+    _, _, body = payload.partition(" ")
+    request_part, sep, response_part = body.partition(" - ")
+    assert sep == " - "
+    assert request_part.startswith(">>")
+    assert response_part == "no response"
 
 
 @pytest.mark.asyncio

@@ -1688,11 +1688,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             else:
                 request_body = f">> {request_body}"
 
-            # A YesNo query answers "no" by staying silent, so it gets a response
-            # part even without a backward frame; a send-only command gets none.
+            # A query gets a response part even without a backward frame — the
+            # missing answer is what the reader needs to see. A send-only command
+            # (no response class) gets none.
             if bus_traffic_item.response is not None and (
-                isinstance(bus_traffic_item.response, (WbGatewayTransmissionError, YesNoResponse))
+                isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
                 or bus_traffic_item.response.raw_value is not None
+                or (decoded_request_command is not None and decoded_request_command.response is not None)
             ):
                 request_body = f"{request_body} - {format_response(bus_traffic_item.response)}"
 
@@ -1753,10 +1755,10 @@ def format_response(response: Response) -> str:
         and response.raw_value.error is not True
     ):
         return f"{format_frame_hex(response.raw_value)} {response.raw_value.as_integer}"
-    if isinstance(response, YesNoResponse) and response.raw_value is None:
-        # A YesNo query answers "no" by staying silent: no frame to show, the
-        # decoded answer is the whole line.
-        return str(response)
+    if response.raw_value is None:
+        # Nothing came back. For a YesNo query that silence is the "no" answer;
+        # any other query simply went unanswered.
+        return str(response) if isinstance(response, YesNoResponse) else "no response"
 
     try:
         return f"{format_frame_hex(response.raw_value)} {response}"

@@ -270,12 +270,7 @@ class SendCommandResult:
     def to_dict(self) -> dict:
         out: dict = {"status": self.status.value}
         if self.response is not None:
-            # The editor does not accept null in `raw`, so a missing backward
-            # frame is reported as an empty string.
-            out["response"] = {
-                "raw": "" if self.response.raw is None else self.response.raw,
-                "value": self.response.value,
-            }
+            out["response"] = {"raw": self.response.raw, "value": self.response.value}
         if self.error is not None:
             out["error"] = self.error
         return out

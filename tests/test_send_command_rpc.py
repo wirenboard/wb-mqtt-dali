@@ -335,7 +335,7 @@ class TestSendCommandBatchPollingLoop:
     @pytest.mark.asyncio
     async def test_yes_no_query_without_answer_is_no(self, registry):
         """Silence is the "No" answer of a YesNo query, not a failure: the result
-        stays ok, `raw` is empty because no backward frame arrived, and the batch
+        stays ok, `raw` is null because no backward frame arrived, and the batch
         runs on.
         """
         controller = make_loop_controller()
@@ -359,7 +359,7 @@ class TestSendCommandBatchPollingLoop:
         assert len(result) == 2
         assert result[0].status is SendCommandStatus.OK
         assert result[0].response == SendCommandResponse(raw=None, value="False")
-        assert result[0].to_dict() == {"status": "ok", "response": {"raw": "", "value": "False"}}
+        assert result[0].to_dict() == {"status": "ok", "response": {"raw": None, "value": "False"}}
         assert result[1].status is SendCommandStatus.OK
 
     @pytest.mark.asyncio

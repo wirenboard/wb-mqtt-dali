@@ -196,6 +196,49 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, device_address)
 
+    async def test_no_address_is_compared_twice(self):
+        """A device at the top of the range makes the search walk `low` up to
+        `high - 1`, so the final check faces an address the loop has already
+        compared. It must not ask again: the search address has not changed
+        since, so the COMPARE would go out as a bare duplicate frame.
+        """
+        device_address = 0xFFFFFF
+        compare_calls = []
+
+        async def mock_compare(addr):
+            compare_calls.append(addr)
+            return addr >= device_address
+
+        async def mock_set_search(_addr):
+            pass
+
+        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+
+        self.assertEqual(result, device_address)
+        self.assertCountEqual(compare_calls, set(compare_calls))
+
+    async def test_lower_bound_is_compared_when_search_never_moves_it(self):
+        """A device at the lower bound answers every COMPARE, so the search only
+        ever moves `high` and leaves the initial `low` untested. That one address
+        still has to be compared, otherwise the device is reported at `low + 1`.
+        """
+        device_address = 0x000000
+        compare_calls = []
+
+        async def mock_compare(addr):
+            compare_calls.append(addr)
+            return addr >= device_address
+
+        async def mock_set_search(_addr):
+            pass
+
+        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+
+        self.assertEqual(result, device_address)
+        self.assertIn(0x000000, compare_calls)
+
 
 class FakeDALIBus:
     def __init__(self, devices=None):
@@ -539,8 +582,7 @@ class TestCommissioning(unittest.TestCase):
                 Compare(),
                 *search_sequence(SearchaddrH, [127, 63, 31, 15, 23, 19, 17, 18]),
                 *search_sequence(SearchaddrM, [127, 63, 31, 47, 55, 51, 53, 52]),
-                *search_sequence(SearchaddrL, [127, 63, 95, 79, 87, 83, 85, 86, 85]),
-                SearchaddrL(86),
+                *search_sequence(SearchaddrL, [127, 63, 95, 79, 87, 83, 85, 86]),
                 QueryShortAddress(),
                 Withdraw(),
                 ProgramShortAddress(0),

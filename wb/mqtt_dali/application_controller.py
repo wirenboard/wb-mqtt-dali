@@ -14,7 +14,7 @@ from dali.address import (
     GearGroup,
     InstanceNumber,
 )
-from dali.command import Command, Response, from_frame
+from dali.command import Command, Response, YesNoResponse, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.exceptions import ResponseError
 from dali.frame import ForwardFrame, Frame
@@ -1688,8 +1688,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             else:
                 request_body = f">> {request_body}"
 
+            # A YesNo query answers "no" by staying silent, so it gets a response
+            # part even without a backward frame; a send-only command gets none.
             if bus_traffic_item.response is not None and (
-                isinstance(bus_traffic_item.response, WbGatewayTransmissionError)
+                isinstance(bus_traffic_item.response, (WbGatewayTransmissionError, YesNoResponse))
                 or bus_traffic_item.response.raw_value is not None
             ):
                 request_body = f"{request_body} - {format_response(bus_traffic_item.response)}"
@@ -1745,11 +1747,11 @@ def bus_traffic_log_level(item: BusTrafficItem) -> int:
 def format_response(response: Response) -> str:
     if isinstance(response, WbGatewayTransmissionError):
         return str(response)
-    if (
-        type(response) is Response  # pylint: disable=C0123
-        and response.raw_value is not None
-        and response.raw_value.error is not True
-    ):
+    if response.raw_value is None:
+        # Nothing came back, so there is no frame to show — the decoded answer
+        # (a YesNo query reads silence as "no") is the whole line.
+        return str(response)
+    if type(response) is Response and response.raw_value.error is not True:  # pylint: disable=C0123
         return f"{format_frame_hex(response.raw_value)} {response.raw_value.as_integer}"
 
     try:

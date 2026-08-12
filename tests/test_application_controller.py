@@ -6,10 +6,11 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dali.address import DeviceShort, InstanceNumber
+from dali.address import DeviceShort, GearShort, InstanceNumber
 from dali.command import Response, from_frame
 from dali.device.general import EnableInstance
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
+from dali.gear.general import QueryControlGearPresent
 
 from wb.mqtt_dali.application_controller import (
     ApplicationController,
@@ -1637,6 +1638,25 @@ async def test_monitor_request_with_response_is_one_combined_line():
     assert request_part.startswith(">>")
     assert response_part == format_response(response)
     assert not response_part.startswith("<<")
+
+
+@pytest.mark.asyncio
+async def test_monitor_silent_yes_no_query_publishes_the_no_answer():
+    """A YesNo query the device answers by staying silent still gets a response
+    part: no backward frame arrived, but "no" is the answer and belongs on the
+    monitor line, unlike a send-only command which gets no response part."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    command = QueryControlGearPresent(GearShort(0))
+    bus.driver.bus_traffic.notify_command(command.frame, command.response(None), BusTrafficSource.WB, 0)
+    await asyncio.sleep(0)
+
+    dispatcher.client.publish.assert_called_once()
+    payload = dispatcher.client.publish.call_args.args[1]
+    _, _, body = payload.partition(" ")
+    request_part, sep, response_part = body.partition(" - ")
+    assert sep == " - "
+    assert request_part.startswith(">>")
+    assert response_part == "False"
 
 
 @pytest.mark.asyncio

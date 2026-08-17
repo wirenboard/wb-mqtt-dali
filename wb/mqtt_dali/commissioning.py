@@ -282,7 +282,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         await send_with_retry(self.driver, self._cmds.Randomise(), log)
         await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
 
-    async def _process_found_device(  # pylint: disable=too-many-branches
+    async def _process_found_device(  # pylint: disable=too-many-branches,too-many-statements
         self, found_addr: int, query_short_resp: Response
     ) -> set[Optional[int]]:
         """Returns empty set if no random address conflict,

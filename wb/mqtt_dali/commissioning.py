@@ -161,6 +161,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         self.binary_search_finder = BinarySearchAddressFinder(
             compare_callback=self.compare, set_search_addr_callback=self.set_search_addr
         )
+        self._polled_short_to_rand: dict[int, int] = {}  # short addr -> random addr read cleanly at poll
         self._is_dali2 = dali2
         if dali2:
             self._cmds = Dali2CommandsCompatibilityLayer()
@@ -281,14 +282,14 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         await send_with_retry(self.driver, self._cmds.Randomise(), log)
         await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
 
-    async def _process_found_device(  # pylint: disable=too-many-branches
+    async def _process_found_device(  # pylint: disable=too-many-branches,too-many-statements
         self, found_addr: int, query_short_resp: Response
     ) -> set[Optional[int]]:
         """Returns empty set if no random address conflict,
         or set of short addresses that need to be randomised
         """
 
-        random_address_conflicts: set[Optional[int]] = set()
+        shorts_with_random_address_conflicts: set[Optional[int]] = set()
         short_addr = self._cmds.QueryShortAddressResponseValue(query_short_resp)
         if short_addr is None:
             log.info("Device found at 0x%06x without short address", found_addr)
@@ -307,13 +308,23 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 found_addr,
             )
 
-            log.info(
-                "Mark 0x%06x for readdressing by resetting its short address",
-                found_addr,
-            )
-            await self.set_search_addr(found_addr)
-            await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
-            random_address_conflicts.add(
+            trusted_short_addr = self._poll_confirmed_config_short(found_addr)
+            if trusted_short_addr is not None:
+                log.info(
+                    "0x%06x is a poll-confirmed config device: keep its short address %d, "
+                    "randomise the unaddressed duplicates",
+                    found_addr,
+                    trusted_short_addr,
+                )
+                self._add_device(trusted_short_addr, found_addr)
+            else:
+                log.info(
+                    "Mark 0x%06x for readdressing by resetting its short address",
+                    found_addr,
+                )
+                await self.set_search_addr(found_addr)
+                await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
+            shorts_with_random_address_conflicts.add(
                 None
             )  # None means "unset short address", so we can use it to mark devices with unset short address
 
@@ -324,7 +335,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     "Mark it for readdressing (leave short address unset)",
                     found_addr,
                 )
-                random_address_conflicts.add(None)
+                shorts_with_random_address_conflicts.add(None)
             else:
                 log.warning(
                     "Device found at 0x%06x, with unset short address. "
@@ -344,7 +355,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             )
             await self.set_search_addr(found_addr)
             await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
-            random_address_conflicts.add(None)
+            shorts_with_random_address_conflicts.add(None)
         else:
             if short_addr in self.found_devices:
                 await self.set_search_addr(found_addr)
@@ -360,7 +371,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         found_addr,
                     )
                     await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
-                    random_address_conflicts.add(None)
+                    shorts_with_random_address_conflicts.add(None)
                 else:
                     log.warning(
                         "Device found at 0x%06x with short address %d, "
@@ -386,7 +397,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         found_addr,
                         short_addr,
                     )
-                    random_address_conflicts.add(short_addr)
+                    shorts_with_random_address_conflicts.add(short_addr)
                 else:
                     log.info(
                         "Keep short address %d for device at 0x%06x",
@@ -395,13 +406,30 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     )
                     self._add_device(short_addr, found_addr)
 
-        return random_address_conflicts
+        return shorts_with_random_address_conflicts
+
+    def _poll_confirmed_config_short(self, rand_addr: int) -> Optional[int]:
+        """On a random address conflict, decide which device keeps its
+        addresses. If exactly one config device holds this random address and
+        confirmed it at poll, return its short address: the duplicate then has
+        no short address, and the between-pass RANDOMISE re-rolls only it.
+        Otherwise return None — all holders get reset as usual."""
+        if rand_addr == 0xFFFFFF:
+            return None
+        matching_short_addrs = [
+            short
+            for short, rand in self.old_devices.items()
+            if rand == rand_addr and self._polled_short_to_rand.get(short) == rand
+        ]
+        return matching_short_addrs[0] if len(matching_short_addrs) == 1 else None
 
     async def smart_extend(self) -> CommissioningResult:  # pylint: disable=R0912 disable=R0914 disable=R0915
-        # Есть весёлая железка, с таким поведением:
-        #   на запросы QUERY RANDOM ADDRESS H/M/L не отвечает вообще
-        #   на VERIFY SHORT ADDRESS тоже не отвечает
-        #   randomAddress у неё всегда 0x14d1d4, на Randomise не реагирует
+        # Some devices may have a broken implementation of the DALI standard,
+        # which can lead to problems during commissioning.
+        # Example:
+        # A device does not respond to QUERY RANDOM ADDRESS H/M/L requests at all,
+        # and it also does not respond to VERIFY SHORT ADDRESS requests.
+        # Its randomAddress is always 0x14d1d4, and it does not react to the Randomise command.
 
         self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 0)
         short_addr_present = await self._get_present_short_addresses()
@@ -464,6 +492,8 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     log.info("Device %d has NEW random address 0x%06x", short, addr)
                     known_rand_addrs.append((short, addr))
 
+        self._polled_short_to_rand = dict(known_rand_addrs)
+
         await send_with_retry(self.driver, self._cmds.Terminate(), log)
         await send_with_retry(self.driver, self._cmds.Initialise(MASK), log)
 
@@ -504,16 +534,18 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 cmds.append(self._cmds.QueryShortAddress())
                 cmds.append(self._cmds.Withdraw())
 
-            random_address_conflicts = set()
+            # Short addresses that have devices with random address conflict or unset random address
+            # None means "unset short address", so we can use it to mark devices with unset short address
+            shorts_with_random_address_conflicts = set()
             responses = await send_commands_with_retry(self.driver, cmds, logger=log)
             for i, (short, rand_addr) in enumerate(known_rand_addrs):
                 resp = responses[query_cmd_indicies[i]]  # QueryShortAddress response
-                random_address_conflicts |= await self._process_found_device(rand_addr, resp)
+                shorts_with_random_address_conflicts |= await self._process_found_device(rand_addr, resp)
 
             log.info(
                 "After querying known random addresses found %d devices "
                 "with random address conflict or unset random address",
-                len(random_address_conflicts),
+                len(shorts_with_random_address_conflicts),
             )
             self._reporter(CommissioningStage.BINARY_SEARCH, 0)
             bs_found = 0
@@ -553,7 +585,9 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         except RuntimeError:
                             pass
                     await send_with_retry(self.driver, self._cmds.Withdraw(), log)
-                    random_address_conflicts |= await self._process_found_device(found_rand_addr, resp)
+                    shorts_with_random_address_conflicts |= await self._process_found_device(
+                        found_rand_addr, resp
+                    )
                     bs_found += 1
                     self._reporter(
                         CommissioningStage.BINARY_SEARCH,
@@ -561,7 +595,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     )
                     low = found_rand_addr
 
-                if len(random_address_conflicts) == 0:  # it's O(1)!
+                if len(shorts_with_random_address_conflicts) == 0:  # it's O(1)!
                     log.info(
                         "Addressing complete, no devices with random address conflict "
                         "or unset random address found, exiting"
@@ -572,10 +606,13 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     log.error("Too many iterations of binary search and randomise, something is wrong")
                     break
 
-                log.info("Randomise the devices with random address conflict %s", random_address_conflicts)
-                for short in random_address_conflicts:
+                log.info(
+                    "Randomise the devices with random address conflict %s",
+                    shorts_with_random_address_conflicts,
+                )
+                for short in shorts_with_random_address_conflicts:
                     await self._randomise_by_short(short)
-                random_address_conflicts = set()
+                shorts_with_random_address_conflicts = set()
         finally:
             await send_with_retry(self.driver, self._cmds.Terminate(), log)
 

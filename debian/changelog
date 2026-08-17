@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.20.2) stable; urgency=medium
+
+  * Fix the device search losing a device from the config when another device on the bus
+    has the same random address. The device lost its custom name and MQTT id and came
+    back as a new one. Now it stays in the config and only the duplicate is found as a
+    new device.
+  * Describe the device search and address assignment logic in the README.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 14 Aug 2026 18:45:04 +0500
+
 wb-mqtt-dali (1.20.1) stable; urgency=medium
 
   * Fix the device search sending a duplicate COMPARE for every device it finds — the bus

@@ -701,6 +701,111 @@ async def test_apply_parameters_does_not_call_load_info_when_params_present():
 
 
 @pytest.mark.asyncio
+async def test_short_address_change_writes_the_address_and_moves_the_auto_name():
+    """A default-named device moved to another short address: the write goes out as one
+    sequence at configuration priority, and the auto-derived name and MQTT id follow it."""
+    d = _make_device()
+    d.is_initialized = True
+    d.params = {"short_address": 1}
+    d.schema = {"type": "object"}
+    driver = AsyncMock()
+    driver.run_sequence.return_value = 9
+
+    with patch("wb.mqtt_dali.common_dali_device.set_short_address_sequence") as make_sequence:
+        await d.apply_parameters(
+            driver, {"short_address": 9, "name": d.default_name, "mqtt_id": d.default_mqtt_id}
+        )
+
+    make_sequence.assert_called_once_with(d._compat, 1, 9, d.logger)  # pylint: disable=protected-access
+    driver.run_sequence.assert_awaited_once_with(
+        make_sequence.return_value, priority=FramePriority.CONFIGURATION
+    )
+    assert d.address.short == 9
+    assert d.params["short_address"] == 9
+    assert d.has_custom_name is False
+    assert d.has_custom_mqtt_id is False
+    assert d.name.endswith("9")
+    assert d.mqtt_id.endswith("9")
+
+
+@pytest.mark.asyncio
+async def test_short_address_change_keeps_a_custom_name():
+    """A name that was not the auto-derived one stays as sent when the address moves."""
+    d = _make_device(name="Kitchen")
+    d.is_initialized = True
+    d.params = {"short_address": 1}
+    d.schema = {"type": "object"}
+    driver = AsyncMock()
+    driver.run_sequence.return_value = 9
+
+    with patch("wb.mqtt_dali.common_dali_device.set_short_address_sequence"):
+        await d.apply_parameters(driver, {"short_address": 9, "name": "Kitchen", "mqtt_id": "kitchen"})
+
+    assert d.name == "Kitchen"
+    assert d.mqtt_id == "kitchen"
+    assert d.has_custom_name is True
+
+
+@pytest.mark.asyncio
+async def test_short_address_change_takes_a_replaced_custom_name_at_its_word():
+    """Renaming a custom-named device to what used to be its auto name while the address
+    moves keeps that exact string: only an auto value echoed back unchanged is protected
+    from being read as custom, a device already renamed once is taken at its word."""
+    d = _make_device(name="Kitchen")
+    d.is_initialized = True
+    d.params = {"short_address": 1}
+    d.schema = {"type": "object"}
+    old_default_name = d.default_name
+    driver = AsyncMock()
+    driver.run_sequence.return_value = 9
+
+    with patch("wb.mqtt_dali.common_dali_device.set_short_address_sequence"):
+        await d.apply_parameters(driver, {"short_address": 9, "name": old_default_name, "mqtt_id": d.mqtt_id})
+
+    assert d.name == old_default_name
+    assert d.has_custom_name is True
+    # the untouched auto mqtt_id still follows the address
+    assert d.mqtt_id == d.default_mqtt_id
+    assert d.has_custom_mqtt_id is False
+
+
+@pytest.mark.asyncio
+async def test_short_address_change_not_confirmed_reports_the_address_the_device_has():
+    """The device keeps its old short address: no exception, params report what the bus really
+    has. The name sent along is still applied — it is ours, not the device's."""
+    d = _make_device()
+    d.is_initialized = True
+    d.params = {"short_address": 1, "name": d.name}
+    d.schema = {"type": "object"}
+    driver = AsyncMock()
+    driver.run_sequence.return_value = 1
+
+    await d.apply_parameters(driver, {"short_address": 9, "name": "New Name"})
+
+    assert d.address.short == 1
+    assert d.params["short_address"] == 1
+    assert d.params["name"] == "New Name"
+    assert d.params["mqtt_id"] == d.default_mqtt_id
+
+
+@pytest.mark.asyncio
+async def test_short_address_change_keeps_the_address_when_nothing_answered():
+    """Nothing usable answered: the model keeps the address it had rather than assume either
+    outcome."""
+    d = _make_device()
+    d.is_initialized = True
+    d.params = {"short_address": 1}
+    d.schema = {"type": "object"}
+    driver = AsyncMock()
+    driver.run_sequence.return_value = None
+
+    await d.apply_parameters(driver, {"short_address": 9})
+
+    assert d.address.short == 1
+    assert d.params["short_address"] == 1
+
+
+@pytest.mark.asyncio
 async def test_apply_parameters_validates_with_current_schema():
     # pylint: disable=protected-access
     d = _make_device()

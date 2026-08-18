@@ -71,6 +71,3 @@ class Dali2CommandsCompatibilityLayer:  # pylint: disable=too-many-instance-attr
         if short_address is None:
             return DeviceBroadcast()
         return DeviceShort(short_address)
-
-    def setShortAddressCommands(self, short_address: Optional[int], new_short_address: int) -> list[Command]:
-        return [self.DTR0(new_short_address), control_device.SetShortAddress(self.getAddress(short_address))]

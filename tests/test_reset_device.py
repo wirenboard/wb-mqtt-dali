@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from dali.device.general import Reset as DeviceReset
-from dali.device.general import SetShortAddress as DeviceSetShortAddress
 from dali.gear.general import Reset as GearReset
-from dali.gear.general import SetShortAddress as GearSetShortAddress
 
 from wb.mqtt_dali.application_controller import (
     ApplicationController,
@@ -20,7 +18,7 @@ from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
-from wb.mqtt_dali.wbdali_utils import AsyncDeviceInstanceTypeMapper
+from wb.mqtt_dali.wbdali_utils import MASK, AsyncDeviceInstanceTypeMapper
 
 # Prevent file system access inside DaliDeviceBase.__init__
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
@@ -234,7 +232,7 @@ async def test_reset_device_settings_handles_init_failure_via_retry_scheduler():
 
 
 @pytest.mark.asyncio
-async def test_reset_device_dali_sends_reset_and_set_short_mask_and_removes():
+async def test_reset_device_dali_sends_reset_and_clears_short_address_and_removes():
     # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
@@ -247,17 +245,18 @@ async def test_reset_device_dali_sends_reset_and_set_short_mask_and_removes():
         sent.append(command)
         return MagicMock(raw_value=MagicMock(error=False))
 
-    async def fake_send_commands(_driver, commands, *_args, **_kwargs):
-        sent.extend(commands)
-        return [MagicMock(raw_value=MagicMock(error=False)) for _ in commands]
+    controller._dev.run_sequence.return_value = MASK
 
-    with patch(
-        "wb.mqtt_dali.application_controller.send_commands_with_retry", side_effect=fake_send_commands
-    ), patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send):
+    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
+        "wb.mqtt_dali.application_controller.set_short_address_sequence"
+    ) as make_sequence:
         await controller._reset_device_task(device)
 
     assert any(isinstance(c, GearReset) for c in sent)
-    assert any(isinstance(c, GearSetShortAddress) for c in sent)
+    # cleared by the verified addressing sequence, not by a bare SET SHORT ADDRESS
+    make_sequence.assert_called_once()
+    assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
+    controller._dev.run_sequence.assert_awaited_once_with(make_sequence.return_value)
     # device removed from active configuration
     assert controller.dali_devices == []
     assert device.mqtt_id not in controller._devices_by_mqtt_id
@@ -293,17 +292,16 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
         sent.append(command)
         return MagicMock(raw_value=MagicMock(error=False))
 
-    async def fake_send_commands(_driver, commands, *_args, **_kwargs):
-        sent.extend(commands)
-        return [MagicMock(raw_value=MagicMock(error=False)) for _ in commands]
+    controller._dev.run_sequence.return_value = MASK
 
-    with patch(
-        "wb.mqtt_dali.application_controller.send_commands_with_retry", side_effect=fake_send_commands
-    ), patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send):
+    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
+        "wb.mqtt_dali.application_controller.set_short_address_sequence"
+    ) as make_sequence:
         await controller._reset_device_task(device)
 
     assert any(isinstance(c, DeviceReset) for c in sent)
-    assert any(isinstance(c, DeviceSetShortAddress) for c in sent)
+    make_sequence.assert_called_once()
+    assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
     # internal maps no longer reference the removed device
     assert controller.dali2_devices == []
     assert controller._device_registry.dali2_device_by_short(device.address.short) is None
@@ -319,21 +317,41 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
 
 
 @pytest.mark.asyncio
-async def test_reset_device_propagates_failure_without_removal():
+async def test_reset_device_removes_the_device_even_when_the_address_was_not_cleared(caplog):
+    """The device still reports its old short address. Reset already wiped its settings, so the
+    entry would only be a stale copy: it is dropped anyway, with a warning to run a search."""
     # pylint: disable=protected-access
     controller = _make_bare_controller()
     device = _make_initialized_dali_device()
     controller.dali_devices = [device]
     controller._devices_by_mqtt_id[device.mqtt_id] = device
+    controller._dev.run_sequence.return_value = device.address.short
 
-    with patch(
-        "wb.mqtt_dali.application_controller.send_commands_with_retry",
-        new=AsyncMock(side_effect=RuntimeError("bus down")),
-    ):
-        with pytest.raises(RuntimeError, match="bus down"):
+    with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
+        with caplog.at_level(logging.WARNING, logger="test"):
             await controller._reset_device_task(device)
 
-    # Device stays in active configuration on failure
+    assert controller.dali_devices == []
+    assert device.mqtt_id not in controller._devices_by_mqtt_id
+    controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
+    assert "not cleared" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reset_device_keeps_the_device_when_the_bus_cannot_be_reached():
+    """The gateway stopped taking frames, so nothing reached the device — not even the reset.
+    There is nothing stale to drop, and the entry stays."""
+    # pylint: disable=protected-access
+    controller = _make_bare_controller()
+    device = _make_initialized_dali_device()
+    controller.dali_devices = [device]
+    controller._devices_by_mqtt_id[device.mqtt_id] = device
+    controller._dev.run_sequence.side_effect = RuntimeError("Gateway did not accept")
+
+    with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
+        with pytest.raises(RuntimeError, match="Gateway did not accept"):
+            await controller._reset_device_task(device)
+
     assert controller.dali_devices == [device]
     assert controller._devices_by_mqtt_id[device.mqtt_id] is device
     controller._device_publisher.remove_device.assert_not_awaited()

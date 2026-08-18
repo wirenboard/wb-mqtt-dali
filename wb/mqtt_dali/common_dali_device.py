@@ -21,6 +21,7 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .device_publisher import ControlInfo
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
+from .short_address import set_short_address_sequence
 from .utils import merge_json_schemas
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
@@ -983,18 +984,33 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
                 self._current_round.append(pollable)
 
     async def _apply_common_parameters(self, driver: WBDALIDriver, new_values: dict) -> None:
-        self.name = new_values.get("name", self.name)
-        self.mqtt_id = new_values.get("mqtt_id", self.mqtt_id)
+        new_name = new_values.get("name", self.name)
+        new_mqtt_id = new_values.get("mqtt_id", self.mqtt_id)
+        # An auto value the client echoed back unchanged stays auto, which can only be
+        # judged before the write moves the address.
+        keep_auto_name = not self.has_custom_name and new_name == self.name
+        keep_auto_mqtt_id = not self.has_custom_mqtt_id and new_mqtt_id == self.mqtt_id
 
         new_short_address = new_values.get("short_address", self.address.short)
         if new_short_address != self.address.short:
-            await send_commands_with_retry(
-                driver,
-                self._compat.setShortAddressCommands(self.address.short, new_short_address),
-                self.logger,
+            reported = await driver.run_sequence(
+                set_short_address_sequence(self._compat, self.address.short, new_short_address, self.logger),
                 priority=FramePriority.CONFIGURATION,
             )
-            self.address.short = new_short_address
+            if reported == new_short_address:
+                self.address.short = new_short_address
+            else:
+                self.logger.warning(
+                    "Short address stays %d: the change to %d was not confirmed, the device reports %s",
+                    self.address.short,
+                    new_short_address,
+                    reported,
+                )
+
+        if not keep_auto_name:
+            self.name = new_name
+        if not keep_auto_mqtt_id:
+            self.mqtt_id = new_mqtt_id
 
         self.params["short_address"] = self.address.short
         self.params["name"] = self.name

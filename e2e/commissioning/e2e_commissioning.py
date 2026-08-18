@@ -17,7 +17,9 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.dali2_compat import Dali2CommandsCompatibilityLayer
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.short_address import set_short_address_sequence
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali_utils import MASK
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
 EXIT_SUCCESS = 0
@@ -47,6 +49,11 @@ async def run_cmd(cmd: str):
     if stderr:
         print("STDERR:")
         print(stderr)
+
+
+async def clear_short_addresses(driver: WBDALIDriver, cmds, dali2: bool) -> None:
+    for address in await search_short(driver, dali2):
+        await driver.run_sequence(set_short_address_sequence(cmds, address.short, MASK, logging.getLogger()))
 
 
 async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
@@ -121,7 +128,7 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
                 await driver.initialize()
                 await driver.send(cmds.Reset(None))
                 await asyncio.sleep(0.5)  # Wait for devices to reset
-                await driver.send_commands(cmds.setShortAddressCommands(None, 255))
+                await clear_short_addresses(driver, cmds, args.dali2)
                 if len(await search_short(driver, args.dali2)):
                     logging.warning("Reset failed, some devices have short address. Iteration failed")
                     successful_runs.append(False)

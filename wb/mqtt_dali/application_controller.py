@@ -36,6 +36,7 @@ from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 from .send_command import format_command_expression
+from .short_address import set_short_address_sequence
 from .utils import merge_json_schemas
 from .virtual_devices import (
     AggregatedCapabilities,
@@ -52,7 +53,6 @@ from .wbdali_utils import (
     AsyncDeviceInstanceTypeMapper,
     check_query_response,
     is_transmission_error_response,
-    send_commands_with_retry,
     send_with_retry,
 )
 from .wbmqtt import ControlError
@@ -918,11 +918,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
         await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
         await asyncio.sleep(RESET_SETTLE_TIME_S)
-        await send_commands_with_retry(
-            self._dev,
-            device.dali_commands.setShortAddressCommands(device.address.short, MASK),
-            self.logger,
+        reported = await self._dev.run_sequence(
+            set_short_address_sequence(device.dali_commands, device.address.short, MASK, self.logger)
         )
+        if reported != MASK:
+            self.logger.warning(
+                "Short address %d not cleared, the device reports %s and stays on the bus; "
+                "removing it from the configuration anyway, run a device search to pick it up",
+                device.address.short,
+                reported,
+            )
         await self._remove_device(device)
 
     async def _remove_device(self, device: Union[DaliDevice, Dali2Device]) -> None:

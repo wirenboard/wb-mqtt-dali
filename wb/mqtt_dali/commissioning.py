@@ -14,6 +14,7 @@ from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDeviceAddress
 from .wbdali_utils import (
+    FLASH_WRITE_TIME_S,
     MASK,
     AsyncDeviceInstanceTypeMapper,
     WBDALIDriver,
@@ -237,7 +238,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             found_addr,
         )
         await send_with_retry(self.driver, self._cmds.ProgramShortAddress(new_addr), log)
-        await asyncio.sleep(0.3)  # Wait for flash write
+        await asyncio.sleep(FLASH_WRITE_TIME_S)
         r = await query_response(self.driver, self._cmds.VerifyShortAddress(new_addr), log)
         if r.value is True:
             log.info("Short address %d programmed successfully", new_addr)
@@ -427,9 +428,11 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         # Some devices may have a broken implementation of the DALI standard,
         # which can lead to problems during commissioning.
         # Example:
-        # A device does not respond to QUERY RANDOM ADDRESS H/M/L requests at all,
-        # and it also does not respond to VERIFY SHORT ADDRESS requests.
+        # A device answers QUERY RANDOM ADDRESS H/M/L, but not on every read — some answers are
+        # silent or carry a framing error.
         # Its randomAddress is always 0x14d1d4, and it does not react to the Randomise command.
+        # It does not respond to VERIFY SHORT ADDRESS and ignores SET SHORT ADDRESS (see
+        # short_address.py).
 
         self._reporter(CommissioningStage.QUERY_SHORT_ADDRESSES, 0)
         short_addr_present = await self._get_present_short_addresses()

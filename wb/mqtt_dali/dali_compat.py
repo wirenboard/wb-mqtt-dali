@@ -74,9 +74,3 @@ class DaliCommandsCompatibilityLayer:  # pylint: disable=too-many-instance-attri
         if short_address is None:
             return GearBroadcast()
         return GearShort(short_address)
-
-    def setShortAddressCommands(self, short_address: Optional[int], new_short_address: int) -> list[Command]:
-        # Convert to gear short address format
-        if new_short_address != MASK:
-            new_short_address = (new_short_address << 1) | 1
-        return [self.DTR0(new_short_address), control_gear.SetShortAddress(self.getAddress(short_address))]

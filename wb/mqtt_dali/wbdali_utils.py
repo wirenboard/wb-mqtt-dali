@@ -35,6 +35,9 @@ MASK_2BYTES = 65535
 
 MAX_COMMAND_RETRIES = 3
 
+# How long a device may need to store a short address in its EEPROM before it answers about it.
+FLASH_WRITE_TIME_S = 0.3
+
 
 class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
     # pylint: disable=too-many-locals, too-many-branches

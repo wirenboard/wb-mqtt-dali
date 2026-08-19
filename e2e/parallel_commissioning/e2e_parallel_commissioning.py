@@ -22,7 +22,9 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.dali2_compat import Dali2CommandsCompatibilityLayer
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.short_address import set_short_address_sequence
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali_utils import MASK
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
 EXIT_SUCCESS = 0
@@ -39,7 +41,7 @@ class IterationOutcome(Enum):
 
 
 class VerifyResetOutcome(Enum):
-    OK = "ok"  # reset succeeded — no leftover addresses
+    OK = "ok"  # reset succeeded — nothing carries a short address
     LEFTOVERS = "leftovers"  # verification ran cleanly but found responding devices
     UNAVAILABLE = "unavailable"  # verification couldn't run (e.g. bus lost power)
 
@@ -98,35 +100,48 @@ async def run_cmd(cmd: str) -> None:
         print(stderr)
 
 
-async def reset_bus(driver: WBDALIDriver) -> None:
-    """Broadcast Reset + clear short addresses on both DALI-1 and DALI-2 layers.
-    Sending both layers covers control gear and control devices without forcing
-    the stand to be declared as one or the other."""
-    for cmds in (DaliCommandsCompatibilityLayer(), Dali2CommandsCompatibilityLayer()):
+async def reset_bus(driver: WBDALIDriver, bus: int, logger: logging.Logger) -> None:
+    for dali2, cmds in (
+        (False, DaliCommandsCompatibilityLayer()),
+        (True, Dali2CommandsCompatibilityLayer()),
+    ):
         await driver.send(cmds.Reset(None))
         await asyncio.sleep(0.5)
-        await driver.send_commands(cmds.setShortAddressCommands(None, 255))
+        for address in await search_short(driver, dali2=dali2):
+            try:
+                reported = await driver.run_sequence(
+                    set_short_address_sequence(cmds, address.short, MASK, logger)
+                )
+            except RuntimeError as exc:
+                # One unreachable device must not stop the others; verify_reset decides.
+                logger.warning("Bus %d: short address %d not cleared: %s", bus, address.short, exc)
+                continue
+            if reported != MASK:
+                logger.warning(
+                    "Bus %d: short address %d not cleared, the device reports %s",
+                    bus,
+                    address.short,
+                    reported,
+                )
 
 
 async def verify_reset(driver: WBDALIDriver, bus: int, logger: logging.Logger) -> VerifyResetOutcome:
     """Check both DALI-1 and DALI-2 layers for any gear/device still carrying a short
-    address or a random address. A RuntimeError from the underlying driver (e.g. bus
-    lost power between reset and verify) is reported as UNAVAILABLE so the caller can
-    log a precise reason; genuine programming errors are not caught."""
+    address. A RuntimeError from the underlying driver (e.g. bus lost power between
+    reset and verify) is reported as UNAVAILABLE so the caller can log a precise
+    reason; genuine programming errors are not caught.
+
+    A leftover random address is not checked: some devices keep it through Reset and no
+    DALI command clears one, while commissioning finds and addresses them anyway."""
     try:
         if len(await search_short(driver, dali2=False)) > 0:
             return VerifyResetOutcome.LEFTOVERS
         if len(await search_short(driver, dali2=True)) > 0:
             return VerifyResetOutcome.LEFTOVERS
-        random_addresses = await Commissioning(driver, []).binary_search()
     except RuntimeError as exc:
         logger.warning("Bus %d: reset verification could not run: %s", bus, exc)
         return VerifyResetOutcome.UNAVAILABLE
-    if not random_addresses:
-        return VerifyResetOutcome.OK
-    if len(random_addresses) == 1 and random_addresses[0] == 0xFFFFFF:
-        return VerifyResetOutcome.OK
-    return VerifyResetOutcome.LEFTOVERS
+    return VerifyResetOutcome.OK
 
 
 async def commission_bus(driver: WBDALIDriver, print_summary: bool = True) -> tuple[float, int]:
@@ -150,7 +165,7 @@ async def commission_bus(driver: WBDALIDriver, print_summary: bool = True) -> tu
 
 
 async def reset_and_verify(driver: WBDALIDriver, bus: int, logger: logging.Logger) -> bool:
-    await reset_bus(driver)
+    await reset_bus(driver, bus, logger)
     outcome = await verify_reset(driver, bus, logger)
     if outcome is VerifyResetOutcome.LEFTOVERS:
         logger.warning("Bus %d: reset failed (devices still respond)", bus)

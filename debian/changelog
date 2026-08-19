@@ -1,3 +1,16 @@
+wb-mqtt-dali (1.20.3) stable; urgency=medium
+
+  * Fix changing and clearing a device's short address: some devices ignored the command
+    that used to be sent and silently kept their old address. The new address is now
+    programmed the way the device search does it and read back from the device.
+  * A short address change the device does not confirm is no longer applied: the settings
+    page shows the address the device really has instead of the requested one.
+  * Resetting a device now always removes it from the configuration. If its short address
+    could not be cleared, a warning is logged — run a device search to pick the device up
+    again, it keeps the address it holds.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 17 Aug 2026 12:20:00 +0500
+
 wb-mqtt-dali (1.20.2) stable; urgency=medium
 
   * Fix the device search losing a device from the config when another device on the bus

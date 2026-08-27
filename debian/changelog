@@ -1,3 +1,14 @@
+wb-mqtt-dali (1.21.0) stable; urgency=medium
+
+  * A device that does not answer a query for one of these settings no longer breaks: groups,
+    scenes, maximum and minimum level, power-on level, system failure level, fade time and fade
+    rate, fast fade time of LED modules, dimming curve. Such a device used to never appear in
+    MQTT at all and its settings page did not open.
+  * A setting the device does not report is not shown and is not written to. The dimming curve
+    is shown anyway — the standard one.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 27 Aug 2026 16:40:00 +0500
+
 wb-mqtt-dali (1.20.3) stable; urgency=medium
 
   * Fix changing and clearing a device's short address: some devices ignored the command

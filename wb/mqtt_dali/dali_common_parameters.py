@@ -25,11 +25,12 @@ from dali.gear.general import (
 )
 
 from .common_dali_device import PropertyStartOrder
-from .dali_parameters import NumberGearParam
-from .settings import SettingsParamBase, SettingsParamName
+from .dali_parameters import OptionalGearParam
+from .settings import OptionalSetting, SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
+    NoAnswerError,
     is_broadcast_or_group_address,
     query_response,
     query_responses,
@@ -49,7 +50,7 @@ GROUPS_TOTAL = 16
 SCENES_FETCH_CHUNK = 8
 
 
-class MaxLevelParam(NumberGearParam):
+class MaxLevelParam(OptionalGearParam):
     query_command_class = QueryMaxLevel
     set_command_class = SetMaxLevel
 
@@ -62,7 +63,7 @@ class MaxLevelParam(NumberGearParam):
         self.property_order = PropertyStartOrder.COMMON.value + 2
 
 
-class MinLevelParam(NumberGearParam):
+class MinLevelParam(OptionalGearParam):
     query_command_class = QueryMinLevel
     set_command_class = SetMinLevel
 
@@ -74,7 +75,7 @@ class MinLevelParam(NumberGearParam):
         self.property_order = PropertyStartOrder.COMMON.value + 1
 
 
-class PowerOnLevelParam(NumberGearParam):
+class PowerOnLevelParam(OptionalGearParam):
     query_command_class = QueryPowerOnLevel
     set_command_class = SetPowerOnLevel
 
@@ -88,7 +89,7 @@ class PowerOnLevelParam(NumberGearParam):
         self.property_order = PropertyStartOrder.POWER_ON_LEVEL.value
 
 
-class SystemFailureLevelParam(NumberGearParam):
+class SystemFailureLevelParam(OptionalGearParam):
     query_command_class = QuerySystemFailureLevel
     set_command_class = SetSystemFailureLevel
 
@@ -102,10 +103,11 @@ class SystemFailureLevelParam(NumberGearParam):
         self.property_order = PropertyStartOrder.SYSTEM_FAILURE_LEVEL.value
 
 
-class FadeTimeFadeRateParam(SettingsParamBase):
+class FadeTimeFadeRateParam(SettingsParamBase, OptionalSetting):
 
     def __init__(self) -> None:
         super().__init__(SettingsParamName("Fade time and fade rate", "Время и скорость изменения"))
+        OptionalSetting.__init__(self)
         self._fade_time = None
         self._fade_rate = None
 
@@ -121,9 +123,15 @@ class FadeTimeFadeRateParam(SettingsParamBase):
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        value = await query_response(
-            driver, QueryFadeTimeFadeRate(short_address), logger, FramePriority.CONFIGURATION
-        )
+        try:
+            value = await query_response(
+                driver, QueryFadeTimeFadeRate(short_address), logger, FramePriority.CONFIGURATION
+            )
+        except NoAnswerError:
+            if not self.note_absent(short_address, logger):
+                raise
+            return {}
+        self.note_answered()
         self._fade_time = value.fade_time
         self._fade_rate = value.fade_rate
         return {
@@ -141,7 +149,7 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         fade_rate_to_set = value.get("fade_rate")
         fade_time_to_set = value.get("fade_time")
 
-        if fade_rate_to_set is None and fade_time_to_set is None:
+        if self.is_absent or (fade_rate_to_set is None and fade_time_to_set is None):
             return {}
 
         is_for_single_device = not is_broadcast_or_group_address(short_address)
@@ -178,6 +186,8 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         return "fade_time" in new_params or "fade_rate" in new_params
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
+        if self.is_absent:
+            return {}
         return {
             "properties": {
                 "fade_time": {
@@ -252,9 +262,11 @@ class FadeTimeFadeRateParam(SettingsParamBase):
         }
 
 
-class GroupsParam(SettingsParamBase):
+class GroupsParam(SettingsParamBase, OptionalSetting):
+
     def __init__(self) -> None:
         super().__init__(SettingsParamName("Groups", "Группы"))
+        OptionalSetting.__init__(self)
         self._groups = [False for _ in range(GROUPS_TOTAL)]
         self._group_indexes = set()
 
@@ -263,9 +275,15 @@ class GroupsParam(SettingsParamBase):
     ) -> dict:
         groups = []
         commands = [QueryGroupsZeroToSeven(short_address), QueryGroupsEightToFifteen(short_address)]
-        responses = await query_responses_retry_only_failed(
-            driver, commands, logger, priority=FramePriority.CONFIGURATION
-        )
+        try:
+            responses = await query_responses_retry_only_failed(
+                driver, commands, logger, priority=FramePriority.CONFIGURATION
+            )
+        except NoAnswerError:
+            if not self.note_absent(short_address, logger):
+                raise
+            return {}
+        self.note_answered()
         for response in responses:
             groups.extend([((response.raw_value.as_integer >> i) & 1) == 1 for i in range(8)])
         self._groups = groups
@@ -280,7 +298,7 @@ class GroupsParam(SettingsParamBase):
         logger: Optional[logging.Logger] = None,
     ) -> dict:
         groups_to_set = value.get("groups")
-        if groups_to_set is None:
+        if groups_to_set is None or self.is_absent:
             return {}
         is_for_single_device = not is_broadcast_or_group_address(short_address)
         if is_for_single_device and self._groups == groups_to_set:
@@ -315,6 +333,8 @@ class GroupsParam(SettingsParamBase):
         return "groups" in new_params
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
+        if self.is_absent:
+            return {}
         return {
             "properties": {
                 "groups": {
@@ -333,9 +353,11 @@ class GroupsParam(SettingsParamBase):
         return self._group_indexes
 
 
-class ScenesParam(SettingsParamBase):
+class ScenesParam(SettingsParamBase, OptionalSetting):
+
     def __init__(self) -> None:
         super().__init__(SettingsParamName("Scenes", "Сцены"))
+        OptionalSetting.__init__(self)
         self._scenes = [MASK for _ in range(SCENES_TOTAL)]
         # Index of the next scene not yet read; 0 = nothing read, SCENES_TOTAL = complete.
         self._fetch_cursor = 0
@@ -345,7 +367,13 @@ class ScenesParam(SettingsParamBase):
     ) -> dict:
         # Always a full read of all 16 scenes (refresh paths rely on this); marks fetch
         # complete (full read => nothing left for the background fetch).
-        await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
+        try:
+            await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
+        except NoAnswerError:
+            if not self.note_absent(short_address, logger):
+                raise
+            return {}
+        self.note_answered()
         self._fetch_cursor = SCENES_TOTAL
         return self._scenes_to_json()
 
@@ -355,7 +383,13 @@ class ScenesParam(SettingsParamBase):
         if self._fetch_cursor >= SCENES_TOTAL:
             return True
         end = min(self._fetch_cursor + SCENES_FETCH_CHUNK, SCENES_TOTAL)
-        await self._read_scenes(driver, short_address, range(self._fetch_cursor, end), logger)
+        try:
+            await self._read_scenes(driver, short_address, range(self._fetch_cursor, end), logger)
+        except NoAnswerError:
+            if not self.note_absent(short_address, logger):
+                raise
+            return True
+        self.note_answered()
         self._fetch_cursor = end
         return self._fetch_cursor >= SCENES_TOTAL
 
@@ -367,7 +401,7 @@ class ScenesParam(SettingsParamBase):
         logger: Optional[logging.Logger] = None,
     ) -> dict:
         scenes = value.get("scenes")
-        if scenes is None:
+        if scenes is None or self.is_absent:
             return {}
         values_to_set = [MASK for _ in range(SCENES_TOTAL)]
         for i in range(SCENES_TOTAL):
@@ -412,6 +446,8 @@ class ScenesParam(SettingsParamBase):
         return {}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
+        if self.is_absent:
+            return {}
         return {
             "properties": {
                 "scenes": {

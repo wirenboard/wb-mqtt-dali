@@ -39,6 +39,16 @@ MAX_COMMAND_RETRIES = 3
 FLASH_WRITE_TIME_S = 0.3
 
 
+class NoAnswerError(RuntimeError):
+    """A query the gear did not answer at all.
+
+    Kept apart from an unreadable answer (framing error) and from a gateway failure: gear that
+    does not implement a part of the standard simply stays silent, so for the settings that opt
+    in (`OptionalSetting`) this means "no such feature" instead of a
+    failure. Still a `RuntimeError`, so callers that treat every read error alike need no change.
+    """
+
+
 class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
     # pylint: disable=too-many-locals, too-many-branches
     """A version of DeviceInstanceTypeMapper taking advantage of
@@ -191,7 +201,7 @@ async def query_response(
     logger: Optional[logging.Logger] = None,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> Response:
-    last_error: Optional[str] = None
+    last_error: Optional[RuntimeError] = None
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
         resp = await driver.send(cmd, priority=priority)
         last_error = check_command_failed(cmd, resp)
@@ -202,11 +212,11 @@ async def query_response(
                     attempt,
                     MAX_COMMAND_RETRIES,
                     str(cmd),
-                    resp,
+                    last_error,
                 )
             continue
         return resp
-    raise RuntimeError(f"Error in response for {cmd}: {last_error}")
+    raise _query_failure_error(f"Error in response for {cmd}: {last_error}", [last_error])
 
 
 async def query_responses(
@@ -215,7 +225,7 @@ async def query_responses(
     logger: Optional[logging.Logger] = None,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Response]:
-    last_error: Optional[str] = None
+    last_error: Optional[RuntimeError] = None
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
         responses = await driver.send_commands(cmds, BusTrafficSource.WB, priority)
         for command, resp in zip(cmds, responses):
@@ -227,22 +237,22 @@ async def query_responses(
                         attempt,
                         MAX_COMMAND_RETRIES,
                         [str(cmd) for cmd in cmds],
-                        resp,
+                        last_error,
                     )
                 break
         if last_error is None:
             return responses
-    raise RuntimeError(f"Error in response for {cmds}: {last_error}")
+    raise _query_failure_error(f"Error in response for {cmds}: {last_error}", [last_error])
 
 
 def check_query_response(resp: Optional[Response]) -> None:
     if resp is None:
-        raise RuntimeError("no response")
+        raise NoAnswerError("no response")
     raw_value = resp.raw_value
     error_acceptable = getattr(resp, "_error_acceptable", False) is True
     if not error_acceptable:
         if raw_value is None:
-            raise RuntimeError("no response")
+            raise NoAnswerError("no response")
         if raw_value.error is True:
             raise RuntimeError("framing error")
 
@@ -259,16 +269,28 @@ def has_transmission_error(responses: Sequence[Optional[Response]]) -> bool:
     return any(is_transmission_error_response(resp) for resp in responses)
 
 
-def check_command_failed(cmd: Command, resp: Optional[Response]) -> Optional[str]:
+def check_command_failed(cmd: Command, resp: Optional[Response]) -> Optional[RuntimeError]:
+    """The error the response amounts to, or `None` if the command succeeded.
+
+    The error is returned rather than raised so a caller collecting a whole batch keeps each
+    failure's kind: `NoAnswerError` for gear silence, a plain `RuntimeError` for an unreadable
+    answer or a gateway failure.
+    """
     if is_transmission_error_response(resp):
-        return str(resp)
+        return RuntimeError(str(resp))
     if getattr(cmd, "response", None) is not None:
         try:
             check_query_response(resp)
-            return None
         except RuntimeError as exc:
-            return str(exc)
+            return exc
     return None
+
+
+def _query_failure_error(message: str, failures: Sequence[Optional[RuntimeError]]) -> RuntimeError:
+    """`NoAnswerError` when every failure was gear silence, a plain `RuntimeError` otherwise."""
+    if failures and all(isinstance(failure, NoAnswerError) for failure in failures):
+        return NoAnswerError(message)
+    return RuntimeError(message)
 
 
 async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
@@ -291,7 +313,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
     pending_indexes = list(range(total_count))
     last_failed_index = -1
     last_failed_command: Optional[Command] = None
-    last_failed_reason = "unknown error"
+    last_failed_reason: Optional[RuntimeError] = None
 
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
         responses = await driver.send_commands(pending_commands, source, priority)
@@ -327,10 +349,11 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
                 last_failed_reason,
             )
 
-    raise RuntimeError(
+    raise _query_failure_error(
         "DALI batch retry-from-first failed after "
         f"{MAX_COMMAND_RETRIES} attempts at index {last_failed_index} "
-        f"({last_failed_command}): {last_failed_reason}"
+        f"({last_failed_command}): {last_failed_reason}",
+        [last_failed_reason],
     )
 
 
@@ -348,14 +371,14 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
     full_responses: list[Optional[Response]] = [None] * total_count
     pending_indexes = list(range(total_count))
     pending_commands = list(commands)
-    last_failed_reasons: dict[int, str] = {}
+    last_failed_reasons: dict[int, RuntimeError] = {}
 
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
         responses = await driver.send_commands(pending_commands, source, priority)
 
         next_pending_indexes: list[int] = []
         next_pending_commands: list[Command] = []
-        failed_info: list[tuple[int, str]] = []
+        failed_info: list[tuple[int, RuntimeError]] = []
 
         for index, cmd, resp in zip(pending_indexes, pending_commands, responses):
             fail_reason = check_command_failed(cmd, resp)
@@ -382,9 +405,11 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
             )
 
     commands_str = [str(command) for command in commands]
-    raise RuntimeError(
+    reasons = {index: str(failure) for index, failure in last_failed_reasons.items()}
+    raise _query_failure_error(
         "DALI batch retry-only-failed failed after "
-        f"{MAX_COMMAND_RETRIES} attempts for commands {commands_str}: {last_failed_reasons}"
+        f"{MAX_COMMAND_RETRIES} attempts for commands {commands_str}: {reasons}",
+        list(last_failed_reasons.values()),
     )
 
 

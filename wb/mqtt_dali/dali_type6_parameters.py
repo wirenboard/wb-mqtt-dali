@@ -13,7 +13,7 @@ from dali.gear.led import (
 
 from .common_dali_device import PropertyStartOrder
 from .dali_dimming_curve import DimmingCurveState
-from .dali_parameters import DimmingCurveParam, NumberGearParam, TypeParameters
+from .dali_parameters import DimmingCurveParam, OptionalGearParam, TypeParameters
 from .settings import SettingsParamName
 from .utils import add_enum, add_translations
 from .wbdali import WBDALIDriver
@@ -24,7 +24,7 @@ class Type6DimmingCurveParam(DimmingCurveParam):
     set_command_class = SelectDimmingCurve
 
 
-class FastFadeTimeParam(NumberGearParam):
+class FastFadeTimeParam(OptionalGearParam):
     query_command_class = QueryFastFadeTime
     set_command_class = StoreDTRAsFastFadeTime
 
@@ -37,6 +37,8 @@ class FastFadeTimeParam(NumberGearParam):
         self.property_order = PropertyStartOrder.SPECIFIC.value
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
+        if self.is_absent:
+            return {}
         schema = super().get_schema(group_and_broadcast)
         add_enum(
             schema["properties"][self.property_name],

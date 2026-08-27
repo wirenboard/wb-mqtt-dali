@@ -7,9 +7,15 @@ from dali.gear.general import DTR0
 
 from .common_dali_device import MqttControlBase, PropertyStartOrder
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
-from .settings import NumberSettingsParam, SettingsParamBase, SettingsParamName
+from .settings import (
+    NumberSettingsParam,
+    OptionalSetting,
+    SettingsParamBase,
+    SettingsParamName,
+)
 from .utils import add_enum, add_translations
 from .wbdali import WBDALIDriver
+from .wbdali_utils import NoAnswerError
 from .wbmqtt import TranslatedTitle
 
 
@@ -60,7 +66,44 @@ class TypeParameters:
         """
 
 
+class OptionalGearParam(NumberGearParam, OptionalSetting):
+    """A gear param whose query the device may not implement, and then simply does not answer."""
+
+    def __init__(self, name: SettingsParamName, property_name: str = "") -> None:
+        super().__init__(name, property_name)
+        OptionalSetting.__init__(self)
+
+    async def read(
+        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+    ) -> dict:
+        try:
+            result = await super().read(driver, short_address, logger)
+        except NoAnswerError:
+            if not self.note_absent(short_address, logger):
+                raise
+            return {}
+        self.note_answered()
+        return result
+
+    async def write(
+        self,
+        driver: WBDALIDriver,
+        short_address: Address,
+        value: dict,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict:
+        if self.is_absent:
+            return {}
+        return await super().write(driver, short_address, value, logger)
+
+    def get_schema(self, group_and_broadcast: bool) -> dict:
+        if self.is_absent:
+            return {}
+        return super().get_schema(group_and_broadcast)
+
+
 class DimmingCurveParam(NumberGearParam):
+    """Gear that does not implement the query stays silent, so no answer means the standard curve."""
 
     def __init__(self, dimming_curve_state: DimmingCurveState) -> None:
         super().__init__(SettingsParamName("Dimming curve", "Кривая диммирования"), "dimming_curve")
@@ -71,11 +114,24 @@ class DimmingCurveParam(NumberGearParam):
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:
-        if self._is_read_only:
-            self.value = DimmingCurveType.LOGARITHMIC
-            self._dimming_curve_state.curve_type = DimmingCurveType.LOGARITHMIC
-            return {self.property_name: DimmingCurveType.LOGARITHMIC}
-        res = await super().read(driver, short_address, logger)
+        if self.query_command_class is None:
+            return self._assume_standard_curve()
+        try:
+            res = await super().read(driver, short_address, logger)
+        except NoAnswerError:
+            if self.value is not None and not self._is_read_only:
+                # The gear reported its curve before, so it does implement the query: losing the
+                # answer now is a bus problem, not a feature the gear does not have.
+                raise
+            if self.value is None and logger is not None:
+                # Only the first assumption says so; _assume_standard_curve() sets the value.
+                logger.info(
+                    "Gear at %s does not report its dimming curve; the standard one is assumed",
+                    short_address,
+                )
+            return self._assume_standard_curve()
+        self._is_read_only = False
+        self.description = self._build_description()
         self._dimming_curve_state.curve_type = DimmingCurveType(self.value)
         return res
 
@@ -109,6 +165,13 @@ class DimmingCurveParam(NumberGearParam):
         return schema
 
     # --- Private ---
+
+    def _assume_standard_curve(self) -> dict:
+        self._is_read_only = True
+        self.description = self._build_description()
+        self.value = DimmingCurveType.LOGARITHMIC
+        self._dimming_curve_state.curve_type = DimmingCurveType.LOGARITHMIC
+        return {self.property_name: DimmingCurveType.LOGARITHMIC}
 
     def _build_description(self) -> TranslatedTitle:
         if self._is_read_only:

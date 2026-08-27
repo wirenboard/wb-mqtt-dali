@@ -26,6 +26,45 @@ class SettingsParamName:
     ru: Optional[str] = None
 
 
+class OptionalSetting:
+    """The state of a setting the gear may not implement, and the note that it did not report it.
+
+    Mixed into the closed list of params whose query such gear simply does not answer. A param
+    without it fails on silence, as does an unreadable answer on any param.
+    """
+
+    def __init__(self) -> None:
+        self._is_absent = False
+        self._absence_logged = False
+        self._ever_answered = False
+
+    @property
+    def is_absent(self) -> bool:
+        return self._is_absent
+
+    def note_absent(self, short_address: Address, logger: Optional[logging.Logger]) -> bool:
+        """Whether this silence means the setting is absent, and say so once if it does.
+
+        Gear that answered the query before does implement it, so a lost answer is a bus problem
+        for the caller to raise, and there is nothing to say about a missing setting.
+        """
+        if self._ever_answered:
+            return False
+        self._is_absent = True
+        if not self._absence_logged and logger is not None:
+            self._absence_logged = True
+            logger.info(
+                'Gear at %s does not report "%s"; the setting is not shown',
+                short_address,
+                self.name.en,  # pylint: disable=no-member
+            )
+        return True
+
+    def note_answered(self) -> None:
+        self._is_absent = False
+        self._ever_answered = True
+
+
 class SettingsParamBase:
     requires_mqtt_controls_refresh: bool = False
 

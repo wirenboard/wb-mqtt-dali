@@ -774,6 +774,15 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     def release_quiescent_mode(self) -> None:
         self._one_shot_tasks.add(self._handle_stop_quiescent_mode(), "Stop quiescent mode")
 
+    async def _load_device_info_task(
+        self, device: Union[DaliDevice, Dali2Device], force_reload: bool
+    ) -> None:
+        await device.load_info(self._dev, force_reload)
+        if isinstance(device, DaliDevice):
+            # Group membership turns up on a settings read: the gear may have been silent about
+            # QUERY GROUPS at initialisation, and the group devices are built from it.
+            await self._refresh_group_virtual_devices()
+
     async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
         group_parameter_handlers = []
         group_parameter_types: set[tuple[str, str]] = set()
@@ -1449,8 +1458,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                             await self._run_commissioning_in_child_task()
                             self._poll_scheduler.clear()
                         elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
-                            device, force_reload = item.data
-                            await device.load_info(self._dev, force_reload)
+                            await self._load_device_info_task(*item.data)
                         elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
                             device, new_params = item.data
                             if not item.future.done():

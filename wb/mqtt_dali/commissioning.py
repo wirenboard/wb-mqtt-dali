@@ -29,6 +29,14 @@ log = logging.getLogger("commissioning")
 
 MAX_SHORT_ADDRESS = 63
 
+# Silence is the negative answer to COMPARE, so a lost answer is indistinguishable from
+# "no device here": a conclusion that rests on silence takes this many silent answers.
+SILENT_COMPARE_ATTEMPTS = 2
+
+# A search that confirms nothing, or that finds an address already withdrawn, is a failure:
+# this many in a row and the pass gives up.
+FAILED_SEARCHES_BEFORE_GIVING_UP = 3
+
 
 class CommissioningStage(str, Enum):
     QUERY_SHORT_ADDRESSES = "query_short_addresses"
@@ -112,15 +120,40 @@ class SearchAddress:
 
 
 class BinarySearchAddressFinder:  # pylint: disable=R0903
+    # Not a random address: stands in for a find the search could not confirm.
+    UNCONFIRMED_ADDRESS = -1
+
     def __init__(self, compare_callback: Callable, set_search_addr_callback: Callable):
         self.compare = compare_callback
         self.set_search_addr = set_search_addr_callback
 
     async def find_next_device(self, low: int, high: int) -> Optional[int]:
-        if not await self.compare(high):
+        """The lowest random address in [low, high] a device answers COMPARE at; `None` when
+        nothing answers in the range, `UNCONFIRMED_ADDRESS` when something answers below the
+        address the search converged on and the search has to be repeated."""
+        if not await self._compare_with_retry(high):
             log.info("No device left to address, exiting")
             return None
 
+        found_addr = await self._bisect(low, high)
+
+        if found_addr > 0 and await self._compare_with_retry(found_addr - 1):
+            log.warning(
+                "Something answers COMPARE at 0x%06x, below the address the search "
+                "converged on (0x%06x): the bisection walked past a device",
+                found_addr - 1,
+                found_addr,
+            )
+            return self.UNCONFIRMED_ADDRESS
+
+        # the caller queries and withdraws by search address, the check left it one below
+        await self.set_search_addr(found_addr)
+        return found_addr
+
+    # --- Private ---
+
+    async def _bisect(self, low: int, high: int) -> int:
+        """Narrow the range down to a single address. `high` has answered COMPARE."""
         low_compared = False
         while high - low > 1:
             midpoint = (low + high) // 2
@@ -134,14 +167,25 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
 
         # Check which of the two remaining addresses is the device. `high` has always
         # answered COMPARE, and once the loop moved `low` up it has answered "no" —
-        # asking it again would just repeat a frame on the bus.
+        # re-asking it is the check's job.
         if not low_compared and await self.compare(low):
-            found_addr = low
-        else:
-            found_addr = high
-            await self.set_search_addr(high)
+            return low
+        return high
 
-        return found_addr
+    async def _compare_with_retry(self, addr: int) -> bool:
+        """Whether any device holds a random address at or below `addr`, silence confirmed by
+        repeats — one frame each, the search address does not change between them."""
+        for attempt in range(1, SILENT_COMPARE_ATTEMPTS + 1):
+            if await self.compare(addr):
+                if attempt > 1:
+                    log.warning(
+                        "COMPARE at 0x%06x answered only on attempt %d of %d, the bus loses answers",
+                        addr,
+                        attempt,
+                        SILENT_COMPARE_ATTEMPTS,
+                    )
+                return True
+        return False
 
 
 class Commissioning:  # pylint: disable=too-many-instance-attributes
@@ -560,7 +604,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 low = 0
                 high = 0xFFFFFF
                 last_found_rand_addr: Optional[int] = None
-                same_found_counter = 0
+                failed_searches = 0
                 while low < high:
                     high = 0xFFFFFF
                     found_rand_addr = await self.find_next_device(low, high)
@@ -568,17 +612,23 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                         log.info("No device found, exiting")
                         break
 
-                    if found_rand_addr == last_found_rand_addr:
-                        same_found_counter += 1
-                    else:
-                        same_found_counter = 1
+                    if found_rand_addr not in (
+                        BinarySearchAddressFinder.UNCONFIRMED_ADDRESS,
+                        last_found_rand_addr,
+                    ):
+                        failed_searches = 0
                         last_found_rand_addr = found_rand_addr
+                    else:
+                        failed_searches += 1
+                        if failed_searches >= FAILED_SEARCHES_BEFORE_GIVING_UP:
+                            raise RuntimeError(
+                                f"Binary search stuck above 0x{low:06x}: "
+                                f"{FAILED_SEARCHES_BEFORE_GIVING_UP} searches in a row "
+                                "found nothing new"
+                            )
 
-                    if same_found_counter >= 3:
-                        raise RuntimeError(
-                            "smart_extend stuck: same random address "
-                            f"0x{found_rand_addr:06x} found repeatedly"
-                        )
+                    if found_rand_addr == BinarySearchAddressFinder.UNCONFIRMED_ADDRESS:
+                        continue
 
                     for _ in range(3):
                         resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)
@@ -734,22 +784,26 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             low = 0
             high = 0xFFFFFF
             last_found_rand_addr: Optional[int] = None
-            same_found_counter = 0
+            failed_searches = 0
             while low < high:
                 found_addr = await self.find_next_device(low, high)
                 if found_addr is None:
                     break
 
-                if found_addr == last_found_rand_addr:
-                    same_found_counter += 1
-                else:
-                    same_found_counter = 1
+                if found_addr not in (BinarySearchAddressFinder.UNCONFIRMED_ADDRESS, last_found_rand_addr):
+                    failed_searches = 0
                     last_found_rand_addr = found_addr
+                else:
+                    failed_searches += 1
+                    if failed_searches >= FAILED_SEARCHES_BEFORE_GIVING_UP:
+                        raise RuntimeError(
+                            f"Binary search stuck above 0x{low:06x}: "
+                            f"{FAILED_SEARCHES_BEFORE_GIVING_UP} searches in a row "
+                            "found nothing new"
+                        )
 
-                if same_found_counter >= 3:
-                    raise RuntimeError(
-                        "smart_extend stuck: same random address " f"0x{found_addr:06x} found repeatedly"
-                    )
+                if found_addr == BinarySearchAddressFinder.UNCONFIRMED_ADDRESS:
+                    continue
 
                 for _ in range(3):
                     resp = await send_with_retry(self.driver, self._cmds.QueryShortAddress(), log)

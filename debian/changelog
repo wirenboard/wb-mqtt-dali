@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.21.1) stable; urgency=medium
+
+  * Fix the bus monitor losing frames on a busy bus, and overstating how many were lost.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 28 Aug 2026 08:30:00 +0500
+
 wb-mqtt-dali (1.21.0) stable; urgency=medium
 
   * A device that does not answer a query for one of these settings no longer breaks: groups,

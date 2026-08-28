@@ -26,6 +26,7 @@ from dali.gear.general import (
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
+    SILENT_COMPARE_ATTEMPTS,
     BinarySearchAddressFinder,
     Commissioning,
     CommissioningStage,
@@ -196,11 +197,14 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, device_address)
 
-    async def test_no_address_is_compared_twice(self):
+    async def test_only_the_check_repeats_an_address(self):
         """A device at the top of the range makes the search walk `low` up to
         `high - 1`, so the final check faces an address the loop has already
         compared. It must not ask again: the search address has not changed
         since, so the COMPARE would go out as a bare duplicate frame.
+
+        The check after the bisection does re-ask it, and those repeats tell a
+        lost answer from a real "no".
         """
         device_address = 0xFFFFFF
         compare_calls = []
@@ -216,7 +220,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
-        self.assertCountEqual(compare_calls, set(compare_calls))
+        # The one below the find: the bisection's last step, then the confirmed silence.
+        self.assertEqual(compare_calls.count(device_address - 1), 1 + SILENT_COMPARE_ATTEMPTS)
+        repeated = [addr for addr in set(compare_calls) if compare_calls.count(addr) > 1]
+        self.assertCountEqual(repeated, [device_address - 1])
 
     async def test_lower_bound_is_compared_when_search_never_moves_it(self):
         """A device at the lower bound answers every COMPARE, so the search only
@@ -583,6 +590,10 @@ class TestCommissioning(unittest.TestCase):
                 *search_sequence(SearchaddrH, [127, 63, 31, 15, 23, 19, 17, 18]),
                 *search_sequence(SearchaddrM, [127, 63, 31, 47, 55, 51, 53, 52]),
                 *search_sequence(SearchaddrL, [127, 63, 95, 79, 87, 83, 85, 86]),
+                # Confirmed silence one below the found address, before anything is programmed
+                SearchaddrL(85),
+                *[Compare()] * SILENT_COMPARE_ATTEMPTS,
+                SearchaddrL(86),
                 QueryShortAddress(),
                 Withdraw(),
                 ProgramShortAddress(0),
@@ -590,7 +601,7 @@ class TestCommissioning(unittest.TestCase):
                 SearchaddrH(255),
                 SearchaddrM(255),
                 SearchaddrL(255),
-                Compare(),
+                *[Compare()] * SILENT_COMPARE_ATTEMPTS,
                 Terminate(),
             ]
 
@@ -674,7 +685,7 @@ class TestCommissioning(unittest.TestCase):
                 SearchaddrH(255),
                 SearchaddrM(255),
                 SearchaddrL(255),
-                Compare(),
+                *[Compare()] * SILENT_COMPARE_ATTEMPTS,
                 Terminate(),
             ]
 
@@ -740,7 +751,7 @@ class TestCommissioning(unittest.TestCase):
                 SearchaddrH(255),
                 SearchaddrM(255),
                 SearchaddrL(255),
-                Compare(),
+                *[Compare()] * SILENT_COMPARE_ATTEMPTS,
                 Terminate(),
             ]
 
@@ -1111,7 +1122,7 @@ class TestCommissioning(unittest.TestCase):
 
             commissioning = Commissioning(fake_bus, [])
 
-            with self.assertRaisesRegex(RuntimeError, "same random address"):
+            with self.assertRaisesRegex(RuntimeError, "Binary search stuck"):
                 await commissioning.smart_extend()
 
         asyncio.run(run_test())
@@ -1143,7 +1154,7 @@ class TestCommissioning(unittest.TestCase):
 
             commissioning = Commissioning(fake_bus, [])
 
-            with self.assertRaisesRegex(RuntimeError, "same random address"):
+            with self.assertRaisesRegex(RuntimeError, "Binary search stuck"):
                 await commissioning.smart_extend()
 
             # Terminate must be the last command on the bus after the failure.

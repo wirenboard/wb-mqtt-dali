@@ -1,3 +1,12 @@
+wb-mqtt-dali (1.22.0) stable; urgency=medium
+
+  * Fix the device search on a bus that loses answers: it no longer drops devices from the
+    configuration, nor gives a short address to a device that is not there.
+  * A search that cannot confirm what it found now fails without changing the
+    configuration; run it again to pick the devices up.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 28 Aug 2026 12:10:00 +0500
+
 wb-mqtt-dali (1.21.1) stable; urgency=medium
 
   * Fix the bus monitor losing frames on a busy bus, and overstating how many were lost.

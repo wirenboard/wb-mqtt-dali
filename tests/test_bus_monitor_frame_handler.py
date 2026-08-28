@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import List
 
 import pytest
-from dali.frame import BackwardFrame, BackwardFrameError
+from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame, Frame
 
 from wb.mqtt_dali.bus_traffic import BusTrafficCallbacks, BusTrafficItem
 from wb.mqtt_dali.wbdali import (
@@ -65,6 +65,9 @@ class _Harness:
 
     def dispatched_counters(self) -> List[int]:
         return [item.frame_counter for item in self.received]
+
+    def dispatched_frame(self, frame_counter: int) -> Frame:
+        return next(item.request for item in self.received if item.frame_counter == frame_counter)
 
 
 @pytest.fixture
@@ -150,12 +153,118 @@ def test_consecutive_run_after_gap_does_not_stall(harness, caplog):
     assert "1 frame(s) missed" in warnings[0]
 
 
-def test_forward_jump_beyond_window_warns_and_dispatches(harness, caplog):
-    """A counter that jumps past `WINDOW` slots in one go is a real gap."""
+def test_forward_jump_beyond_window_concedes_only_to_the_ring_edge(harness, caplog):
+    """A counter past `WINDOW` slots in one go means the ring overran. Only the counters
+    it can no longer hold are missed; the rest of the same read pass follows the newest
+    slot and must go out with it in counter order, not be overtaken and dropped.
+    """
+    newest = 100 + BUS_MONITOR_REORDER_WINDOW + 5
+    ring_pass = [newest - offset for offset in reversed(range(BUS_MONITOR_RING_SIZE))]
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        harness.feed(100, 100 + BUS_MONITOR_REORDER_WINDOW + 5)
-    assert harness.dispatched_counters() == [100, 100 + BUS_MONITOR_REORDER_WINDOW + 5]
-    assert len(_warning_messages(caplog)) == 1
+        # The pass is published newest slot first, then the three older ones.
+        harness.feed(100, newest, *ring_pass[:-1])
+    assert harness.dispatched_counters() == [100, *ring_pass]
+    warnings = _warning_messages(caplog)
+    assert len(warnings) == 1
+    assert f"from 100 to {ring_pass[0]}" in warnings[0]
+    assert f"{ring_pass[0] - 101} frame(s) missed" in warnings[0]
+
+
+def test_ring_overrun_keeps_the_frames_that_survived_it(harness, caplog):
+    """The field sequence from stand ABJTKYAJ, 27.08: 1003 and 1004 are overwritten in
+    the ring while the bus outruns the reads, and the next pass publishes its newest
+    slot first — 1008, then 1005, 1006, 1007. Conceding the gap past 1008 used to drop
+    the other three and report five missed frames instead of the two really lost.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(1002, 1008, 1005, 1006, 1007, 1009)
+    assert harness.dispatched_counters() == [1002, 1005, 1006, 1007, 1008, 1009]
+    warnings = _warning_messages(caplog)
+    assert len(warnings) == 1
+    assert "from 1002 to 1005" in warnings[0]
+    assert "2 frame(s) missed" in warnings[0]
+
+
+def test_gap_over_a_buffered_frame_keeps_the_late_one(harness, caplog):
+    """A frame already waiting in the reorder buffer must not drag the concession past
+    the counters the ring still holds: 823 arrives after 826 and has to go out.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(820, 824, 826, 823, 825, 827)
+    assert harness.dispatched_counters() == [820, 823, 824, 825, 826, 827]
+    warnings = _warning_messages(caplog)
+    assert len(warnings) == 1
+    assert "from 820 to 823" in warnings[0]
+    assert "2 frame(s) missed" in warnings[0]
+
+
+def test_buffered_frames_older_than_the_ring_edge_are_dispatched(harness, caplog):
+    """Frames already in hand below the conceded edge are not what the ring lost, so
+    they go out in counter order instead of being flushed away with the gap.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(100, 102, 103, 110, 107, 108, 109)
+    assert harness.dispatched_counters() == [100, 102, 103, 107, 108, 109, 110]
+    warnings = _warning_messages(caplog)
+    assert any("from 100 to 102" in w and "1 frame(s) missed" in w for w in warnings)
+    assert any("from 103 to 107" in w and "3 frame(s) missed" in w for w in warnings)
+
+
+def test_every_hole_in_the_conceded_run_is_reported(harness, caplog):
+    """Counters missing between two buffered frames are lost just like the ones before
+    the conceded edge — the expected position moves past them — so they must be counted
+    too, or the reported number of missed frames understates the loss.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(100, 102, 104, 110)
+    assert harness.dispatched_counters() == [100, 102, 104]
+    warnings = _warning_messages(caplog)
+    # 101 and 103 sit inside the run, 105 and 106 between it and the edge.
+    assert [w.split(", ")[1] for w in warnings] == [
+        "1 frame(s) missed",
+        "1 frame(s) missed",
+        "2 frame(s) missed",
+    ]
+
+
+def test_ring_edge_wraps_with_the_counter(harness, caplog):
+    """The conceded edge is the arriving counter minus the window, so a jump just past
+    the 16-bit wrap puts it back below 0xFFFF. Without modular arithmetic it goes
+    negative and the handler reports a gap that does not exist.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(0xFFFC, 0xFFFE, 0xFFFF, 0x0002, 0x0000, 0x0001, 0x0003)
+    assert harness.dispatched_counters() == [
+        0xFFFC,
+        0xFFFE,
+        0xFFFF,
+        0x0000,
+        0x0001,
+        0x0002,
+        0x0003,
+    ]
+    warnings = _warning_messages(caplog)
+    assert len(warnings) == 1
+    assert "from 65532 to 65534" in warnings[0]
+    assert "1 frame(s) missed" in warnings[0]
+
+
+def test_buffer_releases_itself_when_the_ring_edge_neighbour_never_comes(harness, caplog):
+    """A counter the ring should still hold can go missing anyway — its own publication
+    is lost. The frame waiting for it must not sit in the buffer indefinitely: every
+    later frame moves the edge one counter on, so the buffer drains within `WINDOW`
+    arrivals rather than waiting out the next bus event. Each of those steps concedes
+    exactly one more counter, so the missed frames must be reported once, not re-counted.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(100, 110)  # 110 waits at the ring edge for 107..109
+        assert harness.dispatched_counters() == [100]
+        harness.feed(*range(111, 111 + BUS_MONITOR_REORDER_WINDOW))
+    assert harness.dispatched_counters() == [100, 110, 111, 112, 113]
+    warnings = _warning_messages(caplog)
+    assert len(warnings) == 1 + BUS_MONITOR_REORDER_WINDOW
+    assert "from 100 to 107" in warnings[0] and "6 frame(s) missed" in warnings[0]
+    assert all("1 frame(s) missed" in w for w in warnings[1:])
 
 
 def test_backward_jump_is_dropped_with_warning(harness, caplog):
@@ -209,17 +318,27 @@ def test_forward_jump_flushes_buffered_frames_across_wraparound(harness, caplog)
     """
     # Seed expected=0xFFFE via the first frame, then buffer 0xFFFF/0x0000/0x0001
     # (all within the reorder window ahead of 0xFFFE, with 0xFFFE itself
-    # missing). A frame far enough past the window triggers the flush.
+    # missing). A frame far enough past the window triggers the flush; the rest
+    # of its ring pass (0x000D..0x000F) follows it.
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        harness.feed(0xFFFD, 0xFFFF, 0x0000, 0x0001, 0x0010)
+        harness.feed(0xFFFD, 0xFFFF, 0x0000, 0x0001, 0x0010, 0x000D, 0x000E, 0x000F)
     # The crux of the fix: dispatch order is counter-modular (0xFFFF before
     # 0x0000), not numeric (which would have placed 0x0000/0x0001 first).
-    assert harness.dispatched_counters() == [0xFFFD, 0xFFFF, 0x0000, 0x0001, 0x0010]
+    assert harness.dispatched_counters() == [
+        0xFFFD,
+        0xFFFF,
+        0x0000,
+        0x0001,
+        0x000D,
+        0x000E,
+        0x000F,
+        0x0010,
+    ]
     warnings = _warning_messages(caplog)
     # Two real gaps: one inside the buffered run (missing 0xFFFE), one between
-    # the last buffered frame and the trigger.
+    # the last buffered frame and the ring edge the trigger concedes to.
     assert any("from 65533 to 65535" in w and "1 frame(s) missed" in w for w in warnings)
-    assert any("from 1 to 16" in w and "14 frame(s) missed" in w for w in warnings)
+    assert any("from 1 to 13" in w and "11 frame(s) missed" in w for w in warnings)
 
 
 def test_retained_message_ignored(harness):
@@ -314,15 +433,72 @@ def test_invalid_slot_on_time_advances_the_counter(harness, caplog):
     assert all("no DALI frame" in w for w in _warning_messages(caplog))
 
 
-def test_invalid_slot_outside_the_window_is_dropped_whole(harness, caplog):
-    """An invalid slot's counter is untrustworthy too, so outside the reorder window it
-    goes with the slot: honouring one far ahead would park the expected position out of
-    reach of every real frame, and one far behind would report a backward jump and count
-    towards a resynchronisation.
+def test_broken_slot_with_no_frame_is_dispatched_as_all_ones(harness):
+    """There is nothing to reconstruct from a length byte that is no length, but the record
+    still belongs in the monitor. It goes out as all ones marked a framing error: the mark
+    is what stops every consumer decoding it, and zeros would read as bits really seen.
+    """
+    harness.handler.handle(_MockMessage(_raw(100, frame_length=0, is_broken=True)))
+    frame = harness.dispatched_frame(100)
+    assert isinstance(frame, ForwardFrame)
+    assert (len(frame), frame.as_integer, frame.error) == (16, 0xFFFF, True)
+
+
+def test_broken_backward_slot_with_no_frame_keeps_its_direction(harness):
+    """The direction bit is not in doubt when the length byte is, so a backward slot goes
+    out as a backward framing error rather than a forward one.
+    """
+    harness.handler.handle(_MockMessage(_raw(100, frame_length=0, is_backward=True, is_broken=True)))
+    frame = harness.dispatched_frame(100)
+    assert isinstance(frame, BackwardFrameError)
+    assert (frame.as_integer, frame.error) == (0xFF, True)
+
+
+def test_broken_slot_past_the_window_still_holds_its_position(harness, caplog):
+    """A slot the gateway marks broken is a record it wrote on purpose, so its counter
+    counts however unusable its length is. The stand's marked slots arrive in step with
+    the stream — refusing one just past the reorder window would leave the expected
+    position on a number no frame will ever carry, with the frames that follow waiting
+    behind it for nothing.
+    """
+    past_window = 100 + BUS_MONITOR_REORDER_WINDOW + 2
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(100)
+        harness.handler.handle(_MockMessage(_raw(past_window, frame_length=0, is_broken=True)))
+        harness.feed(102, 103, 104, 106)
+    # 105 is accounted for, so 106 is not left waiting behind it, and the slot itself
+    # takes its turn in counter order as an all-ones framing error.
+    assert harness.dispatched_counters() == [100, 102, 103, 104, 105, 106]
+    assert harness.dispatched_frame(105).error
+    # The mark accounts for the slot, so it is not reported as an unexplained one.
+    assert not any("no DALI frame" in w for w in _warning_messages(caplog))
+
+
+def test_broken_slot_behind_the_ring_counts_towards_a_resync(harness, caplog):
+    """A marked slot is evidence about where the stream stands, exactly like a valid
+    frame: several of them landing behind the expected position mean that position is
+    wrong, and the handler must resynchronise rather than drop the bus for good.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(30000)
+        for fc in range(50, 50 + BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND):
+            harness.handler.handle(_MockMessage(_raw(fc, frame_length=0, is_broken=True)))
+        harness.feed(54, 55)
+    # The slot the stream resynchronises onto goes out like any other, as a framing error.
+    assert harness.dispatched_counters() == [30000, 53, 54, 55]
+    assert any("resynchronising to fc=53" in w for w in _warning_messages(caplog))
+
+
+def test_unmarked_invalid_slot_is_dropped_whole(harness, caplog):
+    """With nothing to account for the length, the counter bytes next to it are as suspect
+    as the length byte itself, so past the reorder window the slot goes whole however
+    plausible its counter looks: honouring one would park the expected position on a
+    number no frame will ever carry, and ones landing behind would drag the stream into a
+    resynchronisation onto a counter the bus never carried.
     """
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         harness.feed(100)
-        harness.handler.handle(_MockMessage(_raw(30000, frame_length=255)))  # far ahead
+        harness.handler.handle(_MockMessage(_raw(105, frame_length=255)))  # just past it
         harness.feed(101, 102)
         for _ in range(BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND):
             harness.handler.handle(_MockMessage(_raw(50, frame_length=255)))  # far behind
@@ -331,9 +507,9 @@ def test_invalid_slot_outside_the_window_is_dropped_whole(harness, caplog):
     assert all("no DALI frame" in w for w in _warning_messages(caplog))
 
 
-def test_invalid_slot_does_not_seed_counter(harness, caplog):
-    """With no stream yet there is nothing to judge a counter against, so the
-    first valid frame seeds it, not an invalid slot.
+def test_unaccountable_slot_does_not_seed_counter(harness, caplog):
+    """With no stream yet there is nothing to judge a counter against, so a slot nothing
+    accounts for cannot start one — the first frame whose counter is worth acting on does.
     """
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         harness.handler.handle(_MockMessage(_raw(30000, frame_length=255)))
@@ -344,10 +520,27 @@ def test_invalid_slot_does_not_seed_counter(harness, caplog):
     assert "no DALI frame" in warnings[0]
 
 
+def test_broken_slot_seeds_the_counter_like_any_frame(harness, caplog):
+    """Its counter is trusted everywhere else, so refusing it here would swallow the first
+    record after start-up whole — neither published nor counted — and leave the stream
+    waiting for a frame it had already been handed.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.handler.handle(_MockMessage(_raw(100, frame_length=0, is_broken=True)))
+        harness.feed(101, 102)
+    assert harness.dispatched_counters() == [100, 101, 102]
+    assert harness.dispatched_frame(100).error
+    assert _warning_messages(caplog) == []
+
+
 def test_stream_resyncs_after_bogus_forward_jump(harness, caplog):
     """A corrupted counter drags the expected position far ahead of the real
     stream, where every following frame reads as "behind" and gets dropped. Enough
     of them must resynchronise the stream instead of waiting out a 16-bit counter wrap.
+
+    The frame that carried the corrupted counter goes with the abandoned position: it
+    waits at the ring edge below it for slots that will never come, and the resync
+    clears the buffer.
     """
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         harness.feed(100)
@@ -356,7 +549,7 @@ def test_stream_resyncs_after_bogus_forward_jump(harness, caplog):
         harness.feed(*range(101, 101 + BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND))
         harness.feed(105, 106)
     resync_fc = 100 + BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND
-    assert harness.dispatched_counters() == [100, 30000, resync_fc, 105, 106]
+    assert harness.dispatched_counters() == [100, resync_fc, 105, 106]
     warnings = _warning_messages(caplog)
     # The frame that reached the threshold is reported as the resync, not as one more drop.
     assert len([w for w in warnings if "backwards" in w]) == BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND - 1
@@ -373,7 +566,7 @@ def test_reordered_stream_resyncs_after_bogus_forward_jump(harness, caplog):
         harness.feed(30000)  # plausible length, corrupted counter
         harness.feed(101, 103, 102, 104)  # the real stream, reordered as on the stand
         harness.feed(106, 105)  # the reorder buffer works again from the new position
-    assert harness.dispatched_counters() == [100, 30000, 104, 105, 106]
+    assert harness.dispatched_counters() == [100, 104, 105, 106]
     assert len([w for w in _warning_messages(caplog) if "resynchronising to fc=104" in w]) == 1
 
 
@@ -451,8 +644,10 @@ def test_far_behind_frames_discarded_by_forward_jump(harness, caplog):
         harness.feed(30000)
         for far, jump in enumerate(jumps, start=100):
             harness.feed(far)  # far behind, a counter not seen before
-            harness.feed(jump)  # jump beyond the window — dispatched, discards them
-    assert harness.dispatched_counters() == [30000, *jumps]
+            harness.feed(jump)  # jump beyond the window — discards them
+    # Each jump waits at the ring edge below it and is released by the next one, so the
+    # last one is still buffered — what matters here is that no far-behind frame surfaced.
+    assert harness.dispatched_counters() == [30000, *jumps[:-1]]
     assert not any("resynchronising" in w for w in _warning_messages(caplog))
 
 
@@ -467,7 +662,7 @@ def test_resync_across_wraparound(harness, caplog):
         harness.feed(*behind)
         harness.feed(0x0002, 0x0003)
     resync_fc = behind[-1]
-    assert harness.dispatched_counters() == [0xFFFD, 0x7000, resync_fc, 0x0002, 0x0003]
+    assert harness.dispatched_counters() == [0xFFFD, resync_fc, 0x0002, 0x0003]
     assert any(f"resynchronising to fc={resync_fc}" in w for w in _warning_messages(caplog))
 
 
@@ -481,8 +676,23 @@ def test_republish_order_change_does_not_resync(harness, caplog):
         harness.feed(*ring)
         harness.feed(100, 140, 220, 180)
         harness.feed(100, 140, 180, 220)
-    assert harness.dispatched_counters() == ring
+    # The newest counter of the burst is the one that concedes the gap, so it waits at
+    # the ring edge below it — the republished ones behind it must not surface anyway.
+    assert harness.dispatched_counters() == ring[:-1]
     assert not any("resynchronising" in w for w in _warning_messages(caplog))
+
+
+def test_resync_names_the_frames_it_discards(harness, caplog):
+    """The frame that triggered the jump waits in the buffer for neighbours a corrupted
+    counter will never bring, and the resync throws the buffer away. Unless the log names
+    what went with it, it shows a stream moving on with nothing to say a frame was lost.
+    """
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        harness.feed(100, 101, 30000, 102, 103, 104, 105)
+    assert harness.dispatched_counters() == [100, 101, 105]
+    discards = [w for w in _warning_messages(caplog) if "discarding" in w]
+    assert len(discards) == 1
+    assert "1 buffered frame(s)" in discards[0] and "[30000]" in discards[0]
 
 
 def test_resync_clears_buffer_and_far_behind_frames(harness, caplog):
@@ -499,7 +709,7 @@ def test_resync_clears_buffer_and_far_behind_frames(harness, caplog):
         harness.feed(50)  # a lone far-behind frame must not resync by itself
         harness.feed(130)  # forward jump: nothing stale may surface with it
     resync_fc = behind[-1]
-    assert harness.dispatched_counters() == [100, 30000, resync_fc, 130]
+    assert harness.dispatched_counters() == [100, resync_fc]
     assert len([w for w in _warning_messages(caplog) if "resynchronising" in w]) == 1
 
 
@@ -590,7 +800,7 @@ def test_callback_exception_does_not_drop_the_rest_of_a_batch(caplog):
     assert len([r for r in caplog.records if r.levelno >= logging.ERROR]) == 1
 
 
-def test_broken_slot_in_reorder_buffer_does_not_wedge_handler(harness, caplog):
+def test_malformed_slot_in_reorder_buffer_does_not_wedge_handler(harness, caplog):
     """Regression for the field failure (SOFT-7351): a valid and an unparsable slot both sit
     in the reorder buffer, then a frame past the window flushes it. The old handler raised
     mid-flush and from then on replayed the same buffered frame while dropping every new one.
@@ -599,9 +809,13 @@ def test_broken_slot_in_reorder_buffer_does_not_wedge_handler(harness, caplog):
         harness.feed(218)
         harness.handler.handle(_MockMessage(_FIELD_INVALID_SLOT))  # fc 220, length 255
         harness.handler.handle(_MockMessage(_raw(221, frame_length=0)))
-        harness.feed(225, 226)
-    # 220 and 221 are dropped, everything valid goes out exactly once and in order.
-    assert harness.dispatched_counters() == [218, 225, 226]
-    warnings = _warning_messages(caplog)
-    assert any("from 218 to 220" in w for w in warnings)
-    assert any("from 221 to 225" in w for w in warnings)
+        harness.feed(225)  # past the window — flushes both buffered slots
+        harness.feed(222, 223, 224, 226)  # the rest of the pass, then the next frame
+    # Neither 220 nor 221 carries the gateway's mark, so nothing accounts for them and
+    # they are dropped; everything valid goes out exactly once and in order.
+    assert harness.dispatched_counters() == [218, 222, 223, 224, 225, 226]
+    # The buffered run ends exactly on the conceded edge, so the gap before 220 is the
+    # only one there is — no second, empty report between 221 and the frames that came.
+    jumps = [w for w in _warning_messages(caplog) if "jump" in w]
+    assert len(jumps) == 1
+    assert "from 218 to 220" in jumps[0]

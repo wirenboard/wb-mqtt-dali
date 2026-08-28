@@ -101,6 +101,8 @@ BACKWARD_FRAME_BIT_LENGTH = 8
 # Forward-frame sizes `dali.command.from_frame` can decode; FF25 has no decoding.
 DECODABLE_FRAME_BIT_LENGTHS = frozenset((16, 24))
 
+UNREADABLE_FRAME_BIT_LENGTH = 16
+
 
 def get_int_payload(message: aiomqtt.Message) -> int:
     """Parse a message payload as an integer; every failure comes out as `ValueError`."""
@@ -164,6 +166,10 @@ class BusMonitorSlot:
 
     @property
     def is_valid(self) -> bool:
+        return self.has_readable_frame or self.is_broken
+
+    @property
+    def has_readable_frame(self) -> bool:
         if self.is_backward:
             return self.frame_length == BACKWARD_FRAME_BIT_LENGTH
         return self.frame_length in FORWARD_FRAME_BIT_LENGTHS
@@ -171,9 +177,14 @@ class BusMonitorSlot:
     def build_frame(self) -> Frame:
         if self.is_backward:
             if self.is_broken:
-                return BackwardFrameError(self.frame_data)
+                if self.has_readable_frame:
+                    return BackwardFrameError(self.frame_data)
+                return BackwardFrameError((1 << BACKWARD_FRAME_BIT_LENGTH) - 1)
             return BackwardFrame(self.frame_data)
-        frame = ForwardFrame(self.frame_length, self.frame_data)
+        if self.has_readable_frame:
+            frame = ForwardFrame(self.frame_length, self.frame_data)
+        else:
+            frame = ForwardFrame(UNREADABLE_FRAME_BIT_LENGTH, (1 << UNREADABLE_FRAME_BIT_LENGTH) - 1)
         if self.is_broken:
             frame._error = True  # pylint: disable=protected-access
         return frame
@@ -182,28 +193,27 @@ class BusMonitorSlot:
 class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
     """Decode and reorder sporadic-frame bus_monitor publications.
 
-    wb-mqtt-serial reads the gateway's 4-slot bus_monitor ring and publishes
-    each frame on `bus_<N>_monitor_sporadic_frame_{1..4}`. Reads do not always
-    happen in counter order — a frame written to the ring later can be read
-    (and published) earlier than its predecessor. We keep an ordered buffer
-    of up to `BUS_MONITOR_REORDER_WINDOW` frames whose `frame_counter` is
-    ahead of what we expect next, and dispatch them as soon as the gap
-    closes. Frames are dispatched to callbacks in counter order. A
-    warning is emitted when a frame's counter jumps forward beyond the
-    reorder window (= a real gap on the wire). A frame whose counter falls
-    behind the expected one (already overtaken in the dispatch stream) is
-    treated as a gateway anomaly (republished frame or oversized
-    wb-mqtt-serial reorder) — it is dropped with a warning rather than
-    spliced out of order into the dispatch stream. Once frames with
-    `BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND` distinct counters land further
-    behind than the ring can hold, the expected counter itself is taken to
-    be wrong and the stream resynchronises to the last of them — the only
-    case where the dispatched counter restarts lower.
+    wb-mqtt-serial reads the gateway's 4-slot ring and publishes each slot on
+    `bus_<N>_monitor_sporadic_frame_{1..4}` — in slot order, not counter order, so a
+    frame written later can arrive before its predecessor. Frames reach the callbacks
+    in counter order, buffered until the gap in front of them closes.
 
-    A slot that does not describe a DALI frame — length not 16/24/25 forward, not 8
-    backward — is reported and never published. Its counter is honoured only where an
-    error in it is harmless: on the expected number or inside the reorder window, where
-    it costs at most one ring position. An empty slot is ignored outright.
+    What an arriving counter can be, relative to the one expected next:
+
+    - ahead by up to `BUS_MONITOR_REORDER_WINDOW`: buffered until its predecessors come.
+    - further ahead: the ring overran. Only the counters older than the ring edge are
+      reported missed; the frame waits at that edge for its neighbours, which the same
+      read pass delivers. Nothing but later traffic releases it.
+    - behind: a gateway anomaly — a republished frame, or a reorder wider than the ring.
+      Dropped with a warning rather than spliced back into the stream out of order.
+    - behind further than the ring can hold, `BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND`
+      distinct counters of them (one landing nearer resets the count): the expected
+      counter itself is wrong, so the stream resynchronises to the last of them. The
+      only case where the dispatched counter restarts lower.
+
+    A slot with no readable frame goes out as an all-ones framing error, its counter
+    counting like any other. One that is not `is_valid` gets a warning instead, and past
+    the reorder window it is dropped whole. An empty slot is ignored.
     """
 
     def __init__(
@@ -288,13 +298,15 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
             return
 
         if distance < FRAME_COUNTER_MODULO // 2:
-            # Forward jump beyond the reorder window — earlier frames are gone
+            # Frames were lost, but only up to the ring edge: this frame's neighbours
+            # are still in the ring and come in the same read pass, so it waits for them.
             self._far_behind_fcs.clear()
-            ready = self._take_all_after_gap(self._next_expected_fc)
-            if slot.frame_counter != self._next_expected_fc:
-                self._log_counter_jump(self._next_expected_fc, slot.frame_counter)
-            ready.append(slot)
-            self._next_expected_fc = (slot.frame_counter + 1) % FRAME_COUNTER_MODULO
+            self._buffer[slot.frame_counter] = slot
+            ring_edge = (slot.frame_counter - BUS_MONITOR_REORDER_WINDOW) % FRAME_COUNTER_MODULO
+            conceded_from = self._next_expected_fc
+            ready = self._drain_to(ring_edge)
+            self._log_counter_jumps(conceded_from, ready, ring_edge)
+            ready.extend(self._take_contiguous(ring_edge))
             self._publish(ready)
             return
 
@@ -321,6 +333,12 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
             len(self._far_behind_fcs),
             self._next_expected_fc,
         )
+        if self._buffer:
+            self._logger.warning(
+                "Bus monitor discarding %d buffered frame(s) on resynchronisation: fc=%s",
+                len(self._buffer),
+                sorted(self._buffer),
+            )
         self._far_behind_fcs.clear()
         self._buffer.clear()
         self._next_expected_fc = (slot.frame_counter + 1) % FRAME_COUNTER_MODULO
@@ -337,29 +355,37 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
         self._next_expected_fc = expected
         return taken
 
-    def _take_all_after_gap(self, expected: int) -> list[BusMonitorSlot]:
-        """Forward jump beyond the window — concede the gap, take every buffered
-        slot in counter order and commit the counter past them.
+    def _drain_to(self, limit: int) -> list[BusMonitorSlot]:
+        """Take the buffered slots older than `limit` in counter order and park the expected
+        position on `limit`. Slots at or past `limit` stay buffered — the ring can still
+        deliver their predecessors.
         """
-        if not self._buffer:
-            return []
+        expected = self._next_expected_fc
+
+        def offset(frame_counter: int) -> int:
+            return (frame_counter - expected) % FRAME_COUNTER_MODULO
+
         ordered = sorted(
-            self._buffer.values(),
-            key=lambda slot: (slot.frame_counter - expected) % FRAME_COUNTER_MODULO,
+            (slot for slot in self._buffer.values() if offset(slot.frame_counter) < offset(limit)),
+            key=lambda slot: offset(slot.frame_counter),
         )
-        if ordered[0].frame_counter != expected:
-            self._log_counter_jump(expected, ordered[0].frame_counter)
-        self._buffer.clear()
-        self._next_expected_fc = (ordered[-1].frame_counter + 1) % FRAME_COUNTER_MODULO
+        for slot in ordered:
+            del self._buffer[slot.frame_counter]
+        self._next_expected_fc = limit
         return ordered
 
-    def _log_counter_jump(self, expected: int, frame_counter: int) -> None:
-        self._logger.warning(
-            "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
-            (expected - 1) % FRAME_COUNTER_MODULO,
-            frame_counter,
-            (frame_counter - expected) % FRAME_COUNTER_MODULO,
-        )
+    def _log_counter_jumps(self, expected: int, drained: list[BusMonitorSlot], limit: int) -> None:
+        """Warn about every counter from `expected` up to `limit` that `drained` does not cover."""
+        gap_start = expected
+        for gap_end in [slot.frame_counter for slot in drained] + [limit]:
+            if gap_end != gap_start:
+                self._logger.warning(
+                    "Bus monitor frame counter jump from %d to %d, %d frame(s) missed",
+                    (gap_start - 1) % FRAME_COUNTER_MODULO,
+                    gap_end,
+                    (gap_end - gap_start) % FRAME_COUNTER_MODULO,
+                )
+            gap_start = (gap_end + 1) % FRAME_COUNTER_MODULO
 
     def _publish(self, slots: list[BusMonitorSlot]) -> None:
         for slot in slots:

@@ -13,7 +13,9 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from dali.address import InstanceNumber
 from dali.command import Response
+from dali.device import light
 from dali.frame import BackwardFrame, ForwardFrame
 from dali.gear.general import DAPC, Off, QueryActualLevel
 
@@ -24,6 +26,7 @@ from wb.mqtt_dali.application_controller import (
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.common_dali_device import ControlPollResult
 from wb.mqtt_dali.control_ids import SET_RGB, WANTED_LEVEL
+from wb.mqtt_dali.dali2_device import InstanceParameters
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
@@ -362,3 +365,63 @@ def test_sniffed_foreign_frame_is_applied():
     controller._event_sync.apply_commands.assert_called_once()
     applied = controller._event_sync.apply_commands.call_args.args[0]
     assert len(applied) == 1 and isinstance(applied[0], DAPC)
+
+
+def _dali2_with_light_instance(short: int, instance_number: int, mqtt_id: str):
+    device = MagicMock()
+    device.address.short = short
+    device.mqtt_id = mqtt_id
+    device.instances = {
+        instance_number: InstanceParameters(InstanceNumber(instance_number), light.instance_type)
+    }
+    return device
+
+
+def _published_event_tasks(controller) -> list:
+    # pylint: disable=protected-access
+    return [
+        call.args[0]
+        for call in controller._one_shot_tasks.add.call_args_list
+        if call.args[1] == "Publish DALI 2 event to MQTT"
+    ]
+
+
+def test_instance_scheme_event_attributed_through_sole_instance():
+    """An "Instance"-scheme event (type + number, no short address) reaches publication
+    when exactly one registered DALI-2 device carries such an instance (SOFT-7398)."""
+    # pylint: disable=protected-access
+    controller = _monitor_controller()
+    controller._device_registry.set_dali2_devices([_dali2_with_light_instance(3, 1, "sensor")])
+
+    item = BusTrafficItem(
+        request=_ff(light.LightEvent(instance_number=1, data=422)),
+        response=None,
+        request_source=BusTrafficSource.BUS,
+        frame_counter=1,
+    )
+    controller._handle_bus_traffic_frame(item)
+
+    published = _published_event_tasks(controller)
+    assert len(published) == 1
+    for coro in published:
+        coro.close()
+
+
+def test_instance_scheme_event_with_two_matching_devices_stays_unattributed():
+    """The same event is dropped from publication when two devices carry the instance —
+    the attribution must never guess."""
+    # pylint: disable=protected-access
+    controller = _monitor_controller()
+    controller._device_registry.set_dali2_devices(
+        [_dali2_with_light_instance(3, 1, "one"), _dali2_with_light_instance(4, 1, "two")]
+    )
+
+    item = BusTrafficItem(
+        request=_ff(light.LightEvent(instance_number=1, data=422)),
+        response=None,
+        request_source=BusTrafficSource.BUS,
+        frame_counter=1,
+    )
+    controller._handle_bus_traffic_frame(item)
+
+    assert _published_event_tasks(controller) == []

@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.23.0) stable; urgency=medium
+
+  * DALI-2 events sent with the "Instance" addressing scheme (the factory default on
+    e.g. Tridonic MSensor) now update the device's controls when exactly one device
+    on the bus carries the matching instance; they used to be silently dropped.
+
+ -- Evgeny Boger <boger@wirenboard.com>  Sun, 30 Aug 2026 23:20:00 +0500
+
 wb-mqtt-dali (1.22.0) stable; urgency=medium
 
   * Fix the device search on a bus that loses answers: it no longer drops devices from the

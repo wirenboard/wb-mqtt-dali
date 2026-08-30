@@ -47,6 +47,23 @@ class DeviceRegistry:
     def dali2_device_by_short(self, short_address: ShortAddress) -> Optional[Dali2Device]:
         return self._dali2_by_short.get(short_address)
 
+    def sole_dali2_device_with_instance(
+        self, instance_type: int, instance_number: int
+    ) -> Optional[Dali2Device]:
+        """The only DALI-2 device carrying this instance, or None if absent or ambiguous.
+
+        Events sent with the "Instance" addressing scheme name their sender by
+        instance type and number alone; when exactly one known device carries
+        such an instance the event is still attributable.
+        """
+        matches = [
+            device
+            for device in self._dali2_by_short.values()
+            if (instance := device.instances.get(instance_number)) is not None
+            and instance.instance_type == instance_type
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     def resolve(self, destination: GearDestination) -> list[DaliDevice]:
         """Gear targeted by a python-dali gear destination.
 

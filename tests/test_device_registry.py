@@ -1,9 +1,16 @@
 from unittest.mock import MagicMock
 
-from dali.address import DeviceBroadcast, GearBroadcast, GearGroup, GearShort
+from dali.address import (
+    DeviceBroadcast,
+    GearBroadcast,
+    GearGroup,
+    GearShort,
+    InstanceNumber,
+)
+from dali.device import light, occupancy
 
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
-from wb.mqtt_dali.dali2_device import Dali2Device
+from wb.mqtt_dali.dali2_device import Dali2Device, InstanceParameters
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 
@@ -166,3 +173,31 @@ def test_add_remove_route_by_device_kind():
     assert registry.dali2_device_by_short(4) is None
     # Removing the DALI-2 device leaves the gear at the same short untouched.
     assert registry.resolve(GearShort(4)) == [gear]
+
+
+def _with_instance(short: int, instance_number: int, instance_type: int) -> Dali2Device:
+    device = _dali2(short)
+    device.instances[instance_number] = InstanceParameters(InstanceNumber(instance_number), instance_type)
+    return device
+
+
+def test_sole_dali2_device_with_instance_attributes_the_only_match():
+    """One device carrying the (type, number) instance is returned; type must match too."""
+    sensor = _with_instance(3, 1, light.instance_type)
+    other = _with_instance(4, 1, occupancy.instance_type)
+    registry = DeviceRegistry()
+    registry.set_dali2_devices([sensor, other])
+
+    assert registry.sole_dali2_device_with_instance(light.instance_type, 1) is sensor
+    assert registry.sole_dali2_device_with_instance(occupancy.instance_type, 1) is other
+
+
+def test_sole_dali2_device_with_instance_refuses_ambiguity_and_absence():
+    """Two devices with the same instance, or none at all, both yield None."""
+    first = _with_instance(3, 1, light.instance_type)
+    second = _with_instance(4, 1, light.instance_type)
+    registry = DeviceRegistry()
+    registry.set_dali2_devices([first, second])
+
+    assert registry.sole_dali2_device_with_instance(light.instance_type, 1) is None
+    assert registry.sole_dali2_device_with_instance(light.instance_type, 2) is None

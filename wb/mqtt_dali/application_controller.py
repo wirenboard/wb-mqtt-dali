@@ -1648,12 +1648,20 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 except Exception:  # pylint: disable=broad-exception-caught
                     pass  # Ignore errors in bus traffic handling
 
-            if (
-                isinstance(incoming_command, _Event)
-                and incoming_command.instance_number is not None
-                and incoming_command.short_address is not None
-            ):
-                device = self._device_registry.dali2_device_by_short(incoming_command.short_address.address)
+            if isinstance(incoming_command, _Event) and incoming_command.instance_number is not None:
+                if incoming_command.short_address is not None:
+                    device = self._device_registry.dali2_device_by_short(
+                        incoming_command.short_address.address
+                    )
+                else:
+                    # The "Instance" event scheme — the factory default on e.g.
+                    # Tridonic MSensor — names the sender by instance type and
+                    # number alone. Attribute the event when exactly one known
+                    # device carries such an instance; otherwise it stays a
+                    # monitor-only frame as before (SOFT-7398).
+                    device = self._device_registry.sole_dali2_device_with_instance(
+                        incoming_command.instance_type, incoming_command.instance_number
+                    )
                 if device is not None:
                     instance = device.instances.get(incoming_command.instance_number)
                     if instance is not None:

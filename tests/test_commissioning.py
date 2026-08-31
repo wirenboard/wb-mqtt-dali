@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 from typing import Optional, cast
 from unittest.mock import MagicMock, Mock
 
@@ -32,8 +33,10 @@ from wb.mqtt_dali.commissioning import (
     CommissioningStage,
     ProgressReporter,
     SearchAddress,
+    SearchAddressWriter,
     _binary_search_local_progress,
 )
+from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
 from wb.mqtt_dali.wbdali import WBDALIDriver
 
@@ -74,7 +77,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(addr):
             set_search_calls.append(addr)
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -93,7 +98,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -109,7 +116,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(addr):
             set_search_calls.append(addr)
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -124,7 +133,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertIsNone(result)
@@ -139,7 +150,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x00000F, 0x000011)
 
         self.assertEqual(result, device_address)
@@ -156,7 +169,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -175,7 +190,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -192,7 +209,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -216,7 +235,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -240,7 +261,9 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
         result = await finder.find_next_device(0x000000, 0xFFFFFF)
 
         self.assertEqual(result, device_address)
@@ -463,10 +486,10 @@ class TestCommissioning(unittest.TestCase):
 
     def test_set_search_addr(self):
         """Test setting search address."""
-        commissioning = Commissioning(self.mock_driver, [])
-        self.assertEqual(commissioning.last_search_addr, SearchAddress(None, None, None))
+        writer = SearchAddressWriter(self.mock_driver, DaliCommandsCompatibilityLayer())
+        self.assertEqual(writer.current, SearchAddress(None, None, None))
 
-        commands = list(commissioning._set_search_addr(0x123456))  # pylint: disable=W0212
+        commands = writer.commands(0x123456)
 
         self.assertEqual(len(commands), 3)
 
@@ -475,7 +498,16 @@ class TestCommissioning(unittest.TestCase):
         self.assertIsInstance(commands[2], SetSearchAddrL)
 
         expected_addr = SearchAddress(high=0x12, medium=0x34, low=0x56)
-        self.assertEqual(commissioning.last_search_addr, expected_addr)
+        self.assertEqual(writer.current, expected_addr)
+
+    def test_set_search_addr_sends_only_the_parts_that_changed(self):
+        """The remembered address is what keeps a bisection step cheap: a second address sharing
+        the high byte with the first costs two commands, and repeating an address costs none."""
+        writer = SearchAddressWriter(self.mock_driver, DaliCommandsCompatibilityLayer())
+        writer.commands(0x123456)
+
+        self.assertEqual(len(writer.commands(0x127856)), 1)
+        self.assertEqual(writer.commands(0x127856), [])
 
     def test_smart_extend_simple_case(self):
         """Test smart_extend with a simple case of two devices.

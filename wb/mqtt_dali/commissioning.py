@@ -3,10 +3,10 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Protocol, Union
 
 from dali.address import DeviceBroadcast, DeviceShort, GearShort
-from dali.command import Response
+from dali.command import Command, Response
 from dali.device import general as control_device
 from dali.gear import general as control_gear
 
@@ -28,6 +28,10 @@ from .wbdali_utils import (
 log = logging.getLogger("commissioning")
 
 MAX_SHORT_ADDRESS = 63
+MAX_RANDOM_ADDRESS = 0xFFFFFF
+UNSET_RANDOM_ADDRESS = MAX_RANDOM_ADDRESS
+# 62386-102-2022 11.7.4: a new random address is available 100 ms after RANDOMISE
+RANDOMISE_SETTLE_TIME_S = 0.1
 
 # Silence is the negative answer to COMPARE, so a lost answer is indistinguishable from
 # "no device here": a conclusion that rests on silence takes this many silent answers.
@@ -119,13 +123,60 @@ class SearchAddress:
         )
 
 
+class SearchAddressWriter:
+    """The search address the bus holds, and the two operations the device search needs on it.
+
+    Remembering the address is what keeps a bisection step down to one frame: only the parts
+    that changed are sent.
+    """
+
+    def __init__(
+        self,
+        driver: WBDALIDriver,
+        cmds: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+    ) -> None:
+        self.driver = driver
+        self.current = SearchAddress()
+        self._cmds = cmds
+
+    def commands(self, addr: int) -> list[Command]:
+        log.debug("Setting search address 0x%06x", addr)
+        new_addr = SearchAddress.from_int(addr)
+        parts = []
+        if self.current.high != new_addr.high:
+            parts.append(self._cmds.SetSearchAddrH(new_addr.high))
+        if self.current.medium != new_addr.medium:
+            parts.append(self._cmds.SetSearchAddrM(new_addr.medium))
+        if self.current.low != new_addr.low:
+            parts.append(self._cmds.SetSearchAddrL(new_addr.low))
+        self.current = new_addr
+        return parts
+
+    async def set_search_addr(self, addr: int) -> None:
+        await asyncio.gather(*(send_with_retry(self.driver, cmd, log) for cmd in self.commands(addr)))
+
+    async def compare(self, addr: int) -> bool:
+        """Whether a device answered COMPARE at `addr` — a framing error counts as an answer."""
+        responses = await send_commands_with_retry(
+            self.driver, [*self.commands(addr), self._cmds.Compare()], logger=log
+        )
+        return responses[-1].value is True
+
+
+class SearchAddressSelector(Protocol):
+    """What the device search needs of the bus: a search address on it, and COMPARE."""
+
+    async def set_search_addr(self, addr: int) -> None: ...
+
+    async def compare(self, addr: int) -> bool: ...
+
+
 class BinarySearchAddressFinder:  # pylint: disable=R0903
     # Not a random address: stands in for a find the search could not confirm.
     UNCONFIRMED_ADDRESS = -1
 
-    def __init__(self, compare_callback: Callable, set_search_addr_callback: Callable):
-        self.compare = compare_callback
-        self.set_search_addr = set_search_addr_callback
+    def __init__(self, selector: SearchAddressSelector):
+        self.selector = selector
 
     async def find_next_device(self, low: int, high: int) -> Optional[int]:
         """The lowest random address in [low, high] a device answers COMPARE at; `None` when
@@ -147,7 +198,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
             return self.UNCONFIRMED_ADDRESS
 
         # the caller queries and withdraws by search address, the check left it one below
-        await self.set_search_addr(found_addr)
+        await self.selector.set_search_addr(found_addr)
         return found_addr
 
     # --- Private ---
@@ -157,7 +208,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         low_compared = False
         while high - low > 1:
             midpoint = (low + high) // 2
-            if await self.compare(midpoint):
+            if await self.selector.compare(midpoint):
                 # Device responds - search lower half
                 high = midpoint
             else:
@@ -168,7 +219,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         # Check which of the two remaining addresses is the device. `high` has always
         # answered COMPARE, and once the loop moved `low` up it has answered "no" —
         # re-asking it is the check's job.
-        if not low_compared and await self.compare(low):
+        if not low_compared and await self.selector.compare(low):
             return low
         return high
 
@@ -176,7 +227,7 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
         """Whether any device holds a random address at or below `addr`, silence confirmed by
         repeats — one frame each, the search address does not change between them."""
         for attempt in range(1, SILENT_COMPARE_ATTEMPTS + 1):
-            if await self.compare(addr):
+            if await self.selector.compare(addr):
                 if attempt > 1:
                     log.warning(
                         "COMPARE at 0x%06x answered only on attempt %d of %d, the bus loses answers",
@@ -197,57 +248,25 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         progress_cb: Optional[ProgressCallback] = None,
     ) -> None:
         self.driver: WBDALIDriver = driver
-        self.last_search_addr = SearchAddress()
         self.found_devices: dict[int, int] = {}  # found this run, not in old_devices
         self.old_devices: dict[int, int] = {}  # loaded from previous state
         for dev in old_devices:
             self.old_devices[dev.short] = dev.random
         self.available_addresses: list[int] = []
-        self.binary_search_finder = BinarySearchAddressFinder(
-            compare_callback=self.compare, set_search_addr_callback=self.set_search_addr
-        )
         self._polled_short_to_rand: dict[int, int] = {}  # short addr -> random addr read cleanly at poll
         self._is_dali2 = dali2
         if dali2:
             self._cmds = Dali2CommandsCompatibilityLayer()
         else:
             self._cmds = DaliCommandsCompatibilityLayer()
+        self.search_address = SearchAddressWriter(driver, self._cmds)
+        self.binary_search_finder = BinarySearchAddressFinder(self.search_address)
         self._reporter: ProgressReporter = ProgressReporter(progress_cb)
 
     def _add_device(self, short_addr: int, rand_addr: int) -> None:
         log.debug("Adding device: short %d, random 0x%06x", short_addr, rand_addr)
         self.found_devices[short_addr] = rand_addr
         self._reporter.notify_device()
-
-    def _set_search_addr(self, addr: int):
-        log.debug("Setting search address 0x%06x", addr)
-
-        new_addr = SearchAddress.from_int(addr)
-
-        if self.last_search_addr.high != new_addr.high:
-            yield self._cmds.SetSearchAddrH(new_addr.high)
-        if self.last_search_addr.medium != new_addr.medium:
-            yield self._cmds.SetSearchAddrM(new_addr.medium)
-        if self.last_search_addr.low != new_addr.low:
-            yield self._cmds.SetSearchAddrL(new_addr.low)
-        self.last_search_addr = new_addr
-
-    async def set_search_addr(self, addr: int) -> None:
-        await asyncio.gather(
-            *(send_with_retry(self.driver, cmd, log) for cmd in self._set_search_addr(addr)),
-        )
-
-    async def compare(self, addr: int) -> bool:
-        """
-        Perform a compare command with the given address,
-        only sending cmd SEARCHADDR if the corresponding address part has changed.
-
-        Returns True if a device responded or framing error occurred, False otherwise.
-        """
-
-        commands = [*self._set_search_addr(addr), self._cmds.Compare()]
-        responses = await send_commands_with_retry(self.driver, commands, logger=log)
-        return responses[-1].value is True
 
     def _pick_new_short_address(self, found_addr: int) -> Optional[int]:
         if self.available_addresses:
@@ -325,7 +344,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         await send_with_retry(self.driver, self._cmds.Terminate(), log)
         await send_with_retry(self.driver, self._cmds.Initialise(short_addr), log)
         await send_with_retry(self.driver, self._cmds.Randomise(), log)
-        await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
+        await asyncio.sleep(RANDOMISE_SETTLE_TIME_S)
 
     async def _process_found_device(  # pylint: disable=too-many-branches,too-many-statements
         self, found_addr: int, query_short_resp: Response
@@ -367,14 +386,14 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     "Mark 0x%06x for readdressing by resetting its short address",
                     found_addr,
                 )
-                await self.set_search_addr(found_addr)
+                await self.search_address.set_search_addr(found_addr)
                 await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
             shorts_with_random_address_conflicts.add(
                 None
             )  # None means "unset short address", so we can use it to mark devices with unset short address
 
         elif short_addr == MASK:
-            if found_addr == 0xFFFFFF:
+            if found_addr == UNSET_RANDOM_ADDRESS:
                 log.info(
                     "Device with unset random address (0x%06x) and with unset short address. "
                     "Mark it for readdressing (leave short address unset)",
@@ -387,7 +406,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     "Assigning new short address from available addresses",
                     found_addr,
                 )
-                await self.set_search_addr(found_addr)
+                await self.search_address.set_search_addr(found_addr)
                 new_short_addr = await self._assign_short_address(found_addr)
                 self._add_device(new_short_addr, found_addr)
 
@@ -398,13 +417,13 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 short_addr,
                 found_addr,
             )
-            await self.set_search_addr(found_addr)
+            await self.search_address.set_search_addr(found_addr)
             await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
             shorts_with_random_address_conflicts.add(None)
         else:
             if short_addr in self.found_devices:
-                await self.set_search_addr(found_addr)
-                if found_addr == 0xFFFFFF:
+                await self.search_address.set_search_addr(found_addr)
+                if found_addr == UNSET_RANDOM_ADDRESS:
                     log.warning(
                         "Device found with unset random address (0x%06x) and with short address %d, "
                         "which is already assigned to another device.",
@@ -431,7 +450,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     new_short_addr = await self._assign_short_address(found_addr)
                     self._add_device(new_short_addr, found_addr)
             else:
-                if found_addr == 0xFFFFFF:
+                if found_addr == UNSET_RANDOM_ADDRESS:
                     # тут надо понимать, что мы не можем точно различить два устройства
                     # с одним random address по ответу на QUERY SHORT ADDRESS, потому что
                     # они могли ответить одновременно и frame error не было.
@@ -459,7 +478,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         confirmed it at poll, return its short address: the duplicate then has
         no short address, and the between-pass RANDOMISE re-rolls only it.
         Otherwise return None — all holders get reset as usual."""
-        if rand_addr == 0xFFFFFF:
+        if rand_addr == UNSET_RANDOM_ADDRESS:
             return None
         matching_short_addrs = [
             short
@@ -509,7 +528,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     freq,
                     short,
                 )
-            elif rand == 0xFFFFFF:
+            elif rand == UNSET_RANDOM_ADDRESS:
                 log.warning(
                     "Device with short addr %d has unset random address (0xffffff). Send Randomise",
                     short,
@@ -524,7 +543,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             await send_with_retry(self.driver, self._cmds.Randomise(), log)
 
         if short_sent_randomise:
-            await asyncio.sleep(0.1)  # wait for new random addresses to be generated
+            await asyncio.sleep(RANDOMISE_SETTLE_TIME_S)
             log.info("Querying new random addresses for devices that we sent Randomise to")
             rand_addresses = await asyncio.gather(
                 *[get_random_address(x, self._cmds, self.driver) for x in short_sent_randomise]
@@ -576,7 +595,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             query_cmd_indicies = []
             for short, rand_addr in known_rand_addrs:
                 # note: number of search cmds can be less than 3, if some of the parts is the same as before
-                cmds.extend(list(self._set_search_addr(rand_addr)))
+                cmds.extend(self.search_address.commands(rand_addr))
                 query_cmd_indicies.append(len(cmds))
                 cmds.append(self._cmds.QueryShortAddress())
                 cmds.append(self._cmds.Withdraw())
@@ -602,11 +621,11 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
 
                 log.info("Start binary search (%d)", binary_search_counter)
                 low = 0
-                high = 0xFFFFFF
+                high = MAX_RANDOM_ADDRESS
                 last_found_rand_addr: Optional[int] = None
                 failed_searches = 0
                 while low < high:
-                    high = 0xFFFFFF
+                    high = MAX_RANDOM_ADDRESS
                     found_rand_addr = await self.find_next_device(low, high)
                     if found_rand_addr is None:
                         log.info("No device found, exiting")
@@ -754,7 +773,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 random_addr,
             )
         elif short_addr == MASK:
-            if random_addr == 0xFFFFFF:
+            if random_addr == UNSET_RANDOM_ADDRESS:
                 log.info(
                     "Device with unset random address (0x%06x) and with unset short address.",
                     random_addr,
@@ -782,7 +801,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 ]
             )
             low = 0
-            high = 0xFFFFFF
+            high = MAX_RANDOM_ADDRESS
             last_found_rand_addr: Optional[int] = None
             failed_searches = 0
             while low < high:
@@ -865,7 +884,7 @@ async def search_short(  # pylint: disable=too-many-branches
                 if addr != last_short_addr:
                     random_address = await get_random_address(addr, cmds, driver)
                     device_address = DaliDeviceAddress(
-                        addr, random_address if random_address is not None else 0xFFFFFF
+                        addr, random_address if random_address is not None else UNSET_RANDOM_ADDRESS
                     )
                     res.append(device_address)
                     if random_address is None:
@@ -882,7 +901,7 @@ async def search_short(  # pylint: disable=too-many-branches
                 if resp and resp.value:
                     random_address = await get_random_address(i, cmds, driver)
                     device_address = DaliDeviceAddress(
-                        i, random_address if random_address is not None else 0xFFFFFF
+                        i, random_address if random_address is not None else UNSET_RANDOM_ADDRESS
                     )
                     res.append(device_address)
                     if random_address is None:

@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.24.0) stable; urgency=medium
+
+  * A new tool, wb-mqtt-dali-address-with-randomise, addresses the gear that answers the
+    device search only after a RANDOMISE sent to all devices on the bus: it hands out free
+    short addresses to the ones that have none and brings the configuration in line with
+    the bus. Run it by hand, with the service stopped, on a bus that holds no other devices
+    — the RANDOMISE it sends re-rolls the random address of every conforming device.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 31 Aug 2026 20:40:59 +0500
+
 wb-mqtt-dali (1.23.1) stable; urgency=medium
 
   * Fix two sections both titled "Scenes" on the settings page of a DT8 device, and of a bus

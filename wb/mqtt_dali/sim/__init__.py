@@ -23,6 +23,16 @@ layers import must not be pulled in while that shim is still loading.
 """
 
 from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # static tools see the names; at runtime they resolve lazily below
+    from .broker import Broker, Client
+    from .control_gear import SimulatedControlDevice, SimulatedControlGear
+    from .dali_bus import SimulatedDaliBus
+    from .gateway import VirtualWbDaliGateway
+    from .network import SimulatedModbusNetwork
+    from .scenario import build_network, default_scenario, serial_config
+    from .serial_service import FakeWbMqttSerial, default_serial_config
 
 _EXPORTS = {
     "Broker": ".broker",

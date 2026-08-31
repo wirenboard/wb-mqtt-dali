@@ -1,3 +1,15 @@
+wb-mqtt-dali (1.27.0) stable; urgency=medium
+
+  * Seams for hosts other than the controller: a bus driver factory on Gateway and
+    ApplicationController, the bus monitor flag and the bus population forwarded to the
+    driver, group membership seedable before the first read, the data directory relocatable
+    through WB_MQTT_DALI_DATA_DIR, and awaitables for the first initialization attempts,
+    the end of a commissioning run and every configuration write.
+  * The configured bus monitor state reaches the driver at startup, not only when
+    the toggle is next flipped — a restored installation paces its ring right away
+
+ -- Evgeny Boger <boger@wirenboard.com>  Mon, 31 Aug 2026 20:10:00 +0500
+
 wb-mqtt-dali (1.26.0) stable; urgency=medium
 
   * The bus driver reaches its WB-DALI module through a gateway link: the controller's

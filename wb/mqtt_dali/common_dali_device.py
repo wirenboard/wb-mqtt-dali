@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import uuid
 from copy import deepcopy
@@ -652,8 +653,22 @@ class GeneralMemoryParams(SettingsParamBase):
                 dst[param] = value
 
 
+DATA_DIR_ENV = "WB_MQTT_DALI_DATA_DIR"
+DEFAULT_DATA_DIR = "/usr/share/wb-mqtt-dali"
+
+
+def data_dir() -> str:
+    """Where the package's schemas and product data live; a host may relocate them."""
+    return os.environ.get(DATA_DIR_ENV, DEFAULT_DATA_DIR)
+
+
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
     _common_schema = {}
+
+    @classmethod
+    def set_common_schema(cls, schema: dict) -> None:
+        """Hand in the common device schema instead of reading it from the data dir."""
+        DaliDeviceBase._common_schema = schema
 
     def __init__(
         self,
@@ -694,9 +709,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self._compat = compat
 
         if not self._common_schema:
-            schema_path = Path("/usr/share/wb-mqtt-dali/schemas/common_device.schema.json")
+            schema_path = Path(data_dir()) / "schemas" / "common_device.schema.json"
             with open(schema_path, "r", encoding="utf-8") as f:
-                self._common_schema = json.load(f)
+                DaliDeviceBase.set_common_schema(json.load(f))
 
         self._gtin_db = gtin_db
 

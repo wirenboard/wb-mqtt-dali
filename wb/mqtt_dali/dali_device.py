@@ -185,6 +185,10 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
     def groups(self) -> set[int]:
         return self._groups_parameter.groups
 
+    def seed_groups(self, indexes) -> None:
+        """Membership known before the first read, e.g. restored by the host from a snapshot."""
+        self._groups_parameter.seed(indexes)
+
     @property
     def dt8_colour_type(self) -> Optional[ColourType]:
         return self._type8_handler.default_colour_type if self._type8_handler is not None else None

@@ -16,6 +16,7 @@ from dali.address import (
 )
 from dali.command import Command, Response, YesNoResponse, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
+from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.exceptions import ResponseError
 from dali.frame import ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
@@ -80,6 +81,13 @@ class CommissioningStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+# How a host builds the bus driver: the controller takes the default (WBDALIDriver
+# over the MQTT link); a host that owns the Modbus side hands in its own.
+DriverFactory = Callable[
+    [WBDALIConfig, MQTTDispatcher, logging.Logger, DeviceInstanceTypeMapper], WBDALIDriver
+]
 
 
 class CommissioningStartResult(str, Enum):
@@ -409,6 +417,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
         gtin_db: DaliDatabase,
+        driver_factory: Optional[DriverFactory] = None,
     ) -> None:
         self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
         self.bus_name = f"Bus {config.bus}"
@@ -436,7 +445,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             device_name=config.gateway_mqtt_device_id,
             bus=config.bus,
         )
-        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+        self._dev = (driver_factory or WBDALIDriver)(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+        self._first_attempts_done = asyncio.Event()
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
@@ -497,6 +507,27 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
     def set_bus_monitor_enabled(self, enabled: bool) -> None:
         self._bus_monitor_enabled = enabled
+        # A link that has to read the ring itself paces that by whether
+        # anyone is watching; the controller's link ignores it.
+        self._dev.set_bus_monitor_enabled(enabled)
+
+    def _notify_bus_population(self) -> None:
+        """Tell the driver whether anything on this bus speaks unprompted."""
+        self._dev.set_has_control_devices(bool(self.dali2_devices))
+
+    def _first_attempts_event(self) -> asyncio.Event:
+        # Set once every configured device has had its first initialization
+        # attempt — what a host waits for before trusting the device list.
+        # Created on demand: tests build controllers without __init__.
+        event = getattr(self, "_first_attempts_done", None)
+        if event is None:
+            event = asyncio.Event()
+            self._first_attempts_done = event
+        return event
+
+    async def wait_first_init_attempts(self) -> None:
+        """Wait until every configured device has been tried once (success or failure)."""
+        await self._first_attempts_event().wait()
 
     def set_bus_monitor_syslog_enabled(self, enabled: bool) -> None:
         self._bus_monitor_syslog_enabled = enabled
@@ -543,6 +574,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         async with self._state_lock:
             self._state = ApplicationControllerState.READY
+
+        # The driver starts from cautious defaults; hand it what the config
+        # already knows, or a restored bus paces its ring wrong until the
+        # operator happens to touch the toggle or run a commissioning.
+        self._dev.set_bus_monitor_enabled(self._bus_monitor_enabled)
+        self._notify_bus_population()
 
         self._polling_task = asyncio.create_task(self._polling_loop())
 
@@ -1160,6 +1197,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self.dali2_devices.sort(key=lambda d: d.address.short)
         self._devices_by_mqtt_id.update({d.mqtt_id: d for d in created_devices})
         self._device_registry.set_dali2_devices(self.dali2_devices)
+        self._notify_bus_population()
 
     def _run_on_topic_handler(self, message: aiomqtt.Message) -> None:
         self._one_shot_tasks.add(self._handle_on_topic(message), f"handle_on_topic for {message.topic}")
@@ -1350,6 +1388,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             for mqtt_id in first_attempt_ids:
                 await self._do_init_device(mqtt_id, current_time)
             return 0.001
+        if not self._init_scheduler.has_first_attempts_pending():
+            self._first_attempts_event().set()
 
         if self._poll_scheduler.poll_turn:
             # Poll tick.

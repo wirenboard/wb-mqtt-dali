@@ -682,7 +682,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
 
     def _write_configuration(self) -> None:
         save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
-        for callback in list(self._config_listeners):
+        for callback in list(getattr(self, "_config_listeners", ())):
             try:
                 callback()
             except Exception:  # pylint: disable=broad-exception-caught
@@ -694,11 +694,16 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         return lambda: self._config_listeners.remove(callback)
 
     def _commissioning_event(self, bus_uid: str) -> asyncio.Event:
-        event = self._commissioning_finished.get(bus_uid)
+        # Created on demand: tests build gateways without __init__.
+        events = getattr(self, "_commissioning_finished", None)
+        if events is None:
+            events = {}
+            self._commissioning_finished = events
+        event = events.get(bus_uid)
         if event is None:
             event = asyncio.Event()
             event.set()  # nothing running yet
-            self._commissioning_finished[bus_uid] = event
+            events[bus_uid] = event
         return event
 
     def _note_commissioning_state(self, bus_uid: str, status: CommissioningStatus) -> None:
@@ -748,7 +753,10 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 for bus_index in range(1, bus_count + 1):
                     apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
                     apc = ApplicationController(
-                        apc_conf, self._mqtt_dispatcher, self._gtin_db, driver_factory=self._driver_factory
+                        apc_conf,
+                        self._mqtt_dispatcher,
+                        self._gtin_db,
+                        driver_factory=getattr(self, "_driver_factory", None),
                     )
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)

@@ -446,8 +446,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             bus=config.bus,
         )
         self._dev = (driver_factory or WBDALIDriver)(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
-        # Set once every configured device has had its first initialization
-        # attempt — what a host waits for before trusting the device list.
         self._first_attempts_done = asyncio.Event()
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
@@ -517,9 +515,19 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         """Tell the driver whether anything on this bus speaks unprompted."""
         self._dev.set_has_control_devices(bool(self.dali2_devices))
 
+    def _first_attempts_event(self) -> asyncio.Event:
+        # Set once every configured device has had its first initialization
+        # attempt — what a host waits for before trusting the device list.
+        # Created on demand: tests build controllers without __init__.
+        event = getattr(self, "_first_attempts_done", None)
+        if event is None:
+            event = asyncio.Event()
+            self._first_attempts_done = event
+        return event
+
     async def wait_first_init_attempts(self) -> None:
         """Wait until every configured device has been tried once (success or failure)."""
-        await self._first_attempts_done.wait()
+        await self._first_attempts_event().wait()
 
     def set_bus_monitor_syslog_enabled(self, enabled: bool) -> None:
         self._bus_monitor_syslog_enabled = enabled
@@ -1375,7 +1383,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 await self._do_init_device(mqtt_id, current_time)
             return 0.001
         if not self._init_scheduler.has_first_attempts_pending():
-            self._first_attempts_done.set()
+            self._first_attempts_event().set()
 
         if self._poll_scheduler.poll_turn:
             # Poll tick.

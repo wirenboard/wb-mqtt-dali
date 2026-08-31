@@ -30,6 +30,10 @@ from typing import Dict, Iterator, List, Optional, Set, Union
 
 Payload = Union[str, bytes, bytearray, int, float, None]
 
+from ..mqtt_dispatcher import (  # noqa: E402  # one decoder for daemon and broker
+    get_str_payload as get_payload_str,
+)
+
 logger = logging.getLogger("wb.mqtt_dali.sim.broker")
 
 
@@ -131,15 +135,6 @@ def _filter_to_regex(pattern: str) -> str:
         if last:
             break
     return "^" + "".join(parts) + "$"
-
-
-def get_payload_str(message: Message) -> str:
-    """Decode a message payload the way the daemon's `get_str_payload` does."""
-    if message.payload is None:
-        return ""
-    if isinstance(message.payload, (bytes, bytearray)):
-        return message.payload.decode()
-    return str(message.payload)
 
 
 class Broker:

@@ -107,10 +107,7 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
         """Stop serving and polling."""
         for task in self._tasks:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
         await self.client.__aexit__(None, None, None)  # pylint: disable=unnecessary-dunder-call
 

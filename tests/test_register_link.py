@@ -15,17 +15,22 @@ import pytest_asyncio
 from dali.address import GearBroadcast, GearShort
 from dali.gear.general import DAPC, Off, QueryActualLevel, QueryControlGearPresent
 
-from wb.mqtt_dali.gateway_link import RegisterLink
+from wb.mqtt_dali.gateway_link import RegisterLink, _frame_counter_order
 from wb.mqtt_dali.sim.control_gear import SimulatedControlGear
 from wb.mqtt_dali.sim.dali_bus import SimulatedDaliBus
 from wb.mqtt_dali.sim.network import SimulatedModbusNetwork
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway
 from wb.mqtt_dali.wbdali_registers import (
+    FRAME_COUNTER_MODULO,
     MONITOR_BASE,
+    MONITOR_RING_SIZE,
     TransmissionStatus,
     encode_frame,
+    encode_monitor_slot,
+    monitor_address,
     queue_slot_address,
+    to_monitor_registers,
     to_registers,
 )
 
@@ -221,3 +226,114 @@ async def test_a_batch_is_one_write_and_one_bulk_read(stack):
         assert all(read == (1509, 1) for read in reads[:-1])
     finally:
         await instance.deinitialize()
+
+
+class _SlowTransport:
+    """Every register exchange costs a USB round trip — a WebSerial port, not a controller."""
+
+    def __init__(self, inner, delay_s: float):
+        self.inner = inner
+        self.delay_s = delay_s
+
+    async def read_input(self, device_id, address, count):
+        await asyncio.sleep(self.delay_s)
+        return await self.inner.read_input(device_id, address, count)
+
+    async def write_holding(self, device_id, address, values):
+        await asyncio.sleep(self.delay_s)
+        await self.inner.write_holding(device_id, address, values)
+
+
+@pytest.mark.asyncio
+async def test_the_reply_clock_covers_the_register_exchanges_of_a_slow_port(stack):
+    """Seen on hardware: a 3-frame batch needs five exchanges of ~280 ms each
+    over WebSerial, and the driver — its clock armed before the first of them,
+    from the bus time alone — reported every frame unanswered."""
+    transport = _SlowTransport(stack.network, delay_s=0.05)
+    instance = stack.driver(transport=transport)
+    instance.response_timeout = 0.1  # The bus time alone: less than the exchanges cost.
+    await instance.initialize()
+    try:
+        for _ in range(3):
+            response = await instance.send(QueryActualLevel(GearShort(0)))
+            assert not isinstance(response, NoResponseFromGateway)
+            assert response.value == 0
+        link = instance._link  # pylint: disable=protected-access
+        assert link.round_trip_s >= 0.04
+        assert link.reply_timeout(1, 0.1) > 0.1 + 5 * 0.04
+    finally:
+        await instance.deinitialize()
+
+
+@pytest.mark.asyncio
+async def test_deinitialize_returns_while_a_batch_is_in_flight_on_a_slow_port(stack):
+    """Shutting down mid-batch used to hang: the sender's cancellation was lost in
+    a `finally: continue` and deinitialize() waited on a task that kept running."""
+    transport = _SlowTransport(stack.network, delay_s=0.3)
+    instance = stack.driver(transport=transport)
+    await instance.initialize()
+    pending = asyncio.ensure_future(instance.send(QueryActualLevel(GearShort(0))))
+    await asyncio.sleep(0.4)  # The batch is inside its register exchanges now.
+    await asyncio.wait_for(instance.deinitialize(), timeout=2.0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+
+class _RingTransport:
+    """A module whose ring holds whatever the test puts there; nothing else answers."""
+
+    def __init__(self, ring):
+        self.ring = ring
+
+    async def read_input(self, device_id, address, count):
+        del device_id
+        registers = []
+        for slot in self.ring:
+            registers.extend(to_monitor_registers(slot))
+        offset = address - monitor_address(1, 0)
+        return registers[offset : offset + count]
+
+    async def write_holding(self, device_id, address, values):
+        pass
+
+
+class _Listener:
+    def __init__(self):
+        self.slots = []
+
+    def on_reply(self, index, value):
+        pass
+
+    def on_monitor_slot(self, raw):
+        self.slots.append((raw >> 48) & 0xFFFF)
+
+    def on_gateway_error_payload(self, payload):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_frames_found_in_one_poll_arrive_in_bus_order():
+    """The ring is circular: after a wrap the newest frame sits in slot 0 and the
+    older ones follow. Delivered by slot, the handler saw the counter go
+    backwards and dropped three of four frames."""
+    counters_by_slot = [3657, 3654, 3655, 3656]
+    ring = [0] * MONITOR_RING_SIZE
+    transport = _RingTransport(ring)
+    link = RegisterLink(WBDALIConfig(device_name=MODULE, bus=1), transport, logging.getLogger("test.ring"))
+    listener = _Listener()
+    await link.start(listener)
+    link.set_bus_monitor_enabled(True)
+    try:
+        for slot, counter in enumerate(counters_by_slot):
+            ring[slot] = encode_monitor_slot(counter, 16, 0xFF00, False, False)
+        await asyncio.sleep(0.3)
+        assert listener.slots == [3654, 3655, 3656, 3657]
+    finally:
+        await link.stop()
+
+
+def test_frame_counter_order_survives_the_counter_wrapping():
+    raws = [counter << 48 for counter in (1, FRAME_COUNTER_MODULO - 2, 0, FRAME_COUNTER_MODULO - 1)]
+    ordered = [(raw >> 48) & 0xFFFF for raw in sorted(raws, key=_frame_counter_order(raws))]
+    assert ordered == [FRAME_COUNTER_MODULO - 2, FRAME_COUNTER_MODULO - 1, 0, 1]

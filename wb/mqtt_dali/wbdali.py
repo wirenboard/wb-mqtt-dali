@@ -1023,13 +1023,17 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 try:
                     item = await asyncio.wait_for(self._send_queue.get(), timeout)
                 except asyncio.TimeoutError:
+                    # Not `continue` inside the `finally`: that discards whatever
+                    # the send raised — including the cancellation deinitialize()
+                    # sends while a batch is still in flight on a slow link, which
+                    # left the sender running and deinitialize() waiting forever.
                     try:
                         await self._send_to_gateway(batch, self._batch_start_index)
                     finally:
                         batch = []
                         self._batch_start_index = self._next_queue_index
                         timeout = None
-                        continue
+                    continue
 
                 self.logger.debug("Processing queue item: %s", LazyCommandExpression(item.command))
                 timeout = WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S

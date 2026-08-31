@@ -34,6 +34,7 @@ import aiomqtt
 
 from .mqtt_dispatcher import MQTTDispatcher, get_int_payload, get_str_payload
 from .wbdali_registers import (
+    FRAME_COUNTER_MODULO,
     MONITOR_REGISTERS_PER_SLOT,
     MONITOR_RING_SIZE,
     TransmissionStatus,
@@ -53,6 +54,15 @@ WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 # lazily on a bus of plain gear.
 REPLY_POLL_INTERVAL_S = 0.005
 REPLY_TIME_PER_EXTRA_FRAME_S = 0.2
+# A batch is a rewind, a slot write, at least one poll and the bulk read, and
+# it may first wait for a ring poll to release the module. On a controller
+# these are sub-millisecond; over WebSerial each is a USB round trip (tens of
+# milliseconds, more when three buses share the port), and the driver's reply
+# clock — armed before the exchange starts — has to cover them.
+REGISTER_EXCHANGES_PER_BATCH = 5
+ROUND_TRIP_HEADROOM = 2.0
+INITIAL_ROUND_TRIP_S = 0.02
+ROUND_TRIP_SMOOTHING = 0.25
 MONITOR_POLL_INTERVAL_S = 0.1
 MONITOR_IDLE_POLL_INTERVAL_S = 0.25
 MONITOR_QUIET_POLL_INTERVAL_S = 1.0
@@ -299,19 +309,40 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
         # cautious default costs a few register reads, the other loses events.
         self._has_control_devices = True
         self._monitor_interval = self._pick_monitor_interval()
+        self._round_trip_s = INITIAL_ROUND_TRIP_S
 
     @property
     def device_id(self) -> str:
         return self.config.device_name
 
+    @property
+    def round_trip_s(self) -> float:
+        """A smoothed measure of one register exchange, waiting for the port included."""
+        return self._round_trip_s
+
+    async def _read(self, address: int, count: int) -> List[int]:
+        started = asyncio.get_running_loop().time()
+        try:
+            return await self._transport.read_input(self.device_id, address, count)
+        finally:
+            self._observe_round_trip(asyncio.get_running_loop().time() - started)
+
+    async def _write(self, address: int, values: List[int]) -> None:
+        started = asyncio.get_running_loop().time()
+        try:
+            await self._transport.write_holding(self.device_id, address, values)
+        finally:
+            self._observe_round_trip(asyncio.get_running_loop().time() - started)
+
+    def _observe_round_trip(self, elapsed: float) -> None:
+        self._round_trip_s += ROUND_TRIP_SMOOTHING * (elapsed - self._round_trip_s)
+
     async def start(self, listener: GatewayListener) -> None:
         self._listener = listener
         try:
             async with self._lock:
-                registers = await self._transport.read_input(
-                    self.device_id,
-                    monitor_address(self.config.bus, 0),
-                    MONITOR_RING_SIZE * MONITOR_REGISTERS_PER_SLOT,
+                registers = await self._read(
+                    monitor_address(self.config.bus, 0), MONITOR_RING_SIZE * MONITOR_REGISTERS_PER_SLOT
                 )
             self._monitor_seen = [
                 from_monitor_registers(
@@ -338,12 +369,17 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
             await self._write_pointer(0)
 
     async def _write_pointer(self, slot: int) -> None:
-        await self._transport.write_holding(self.device_id, queue_pointer_address(self.config.bus), [slot])
+        await self._write(queue_pointer_address(self.config.bus), [slot])
 
     def reply_timeout(self, frames: int, base: float) -> float:
         # The link gives up polling a little before the driver's own clock
-        # runs out, so an unanswered slot is reported once, by the driver.
-        return self._poll_deadline(frames, base) + REPLY_POLL_INTERVAL_S * 4
+        # runs out, so an unanswered slot is reported once, by the driver —
+        # after the register exchanges the batch costs on this transport.
+        return (
+            self._poll_deadline(frames, base)
+            + REPLY_POLL_INTERVAL_S * 4
+            + REGISTER_EXCHANGES_PER_BATCH * self._round_trip_s * ROUND_TRIP_HEADROOM
+        )
 
     @staticmethod
     def _poll_deadline(frames: int, base: float) -> float:
@@ -362,7 +398,7 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
                 # Rewind first: the module only ever transmits the slot its
                 # pointer is on, so this is what guarantees the frames go out.
                 await self._write_pointer(0)
-                await self._transport.write_holding(self.device_id, queue_slot_address(bus, 0), registers)
+                await self._write(queue_slot_address(bus, 0), registers)
                 if (
                     await self._poll_reply(len(frames) - 1, self._poll_deadline(len(frames), reply_timeout))
                     is None
@@ -370,7 +406,7 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
                     self.logger.error("No reply for a batch of %d frames", len(frames))
                 # Earlier slots may have been consumed before a stall; report
                 # what actually happened, slot by slot.
-                values = await self._transport.read_input(self.device_id, reply_address(bus, 0), len(frames))
+                values = await self._read(reply_address(bus, 0), len(frames))
             except Exception as error:  # pylint: disable=broad-exception-caught
                 self.logger.error("DALI transaction failed: %s", error)
         if self._listener is None:
@@ -383,7 +419,7 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
         address = reply_address(self.config.bus, slot)
         deadline = asyncio.get_running_loop().time() + deadline_s
         while True:
-            value = (await self._transport.read_input(self.device_id, address, 1))[0]
+            value = (await self._read(address, 1))[0]
             if value >> 8 != TransmissionStatus.NO_TRANSMISSION:
                 return value
             if asyncio.get_running_loop().time() >= deadline:
@@ -427,12 +463,13 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
             await asyncio.sleep(self._monitor_interval)
             try:
                 async with self._lock:
-                    registers = await self._transport.read_input(self.device_id, base, count)
+                    registers = await self._read(base, count)
             except Exception as error:  # pylint: disable=broad-exception-caught
                 self.logger.warning("Reading the bus monitor failed: %s", error)
                 continue
             # A slot keeps its value until the ring wraps onto it again, so the
             # previous read is what tells a new frame from one already reported.
+            fresh: List[int] = []
             for slot in range(MONITOR_RING_SIZE):
                 raw = from_monitor_registers(
                     registers[slot * MONITOR_REGISTERS_PER_SLOT : (slot + 1) * MONITOR_REGISTERS_PER_SLOT]
@@ -440,5 +477,25 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
                 if raw in (0, self._monitor_seen[slot]):
                     continue
                 self._monitor_seen[slot] = raw
-                if self._listener is not None:
-                    self._listener.on_monitor_slot(raw)
+                fresh.append(raw)
+            if self._listener is None:
+                continue
+            # One poll can find several new frames, and the ring's slot order
+            # is not their order on the bus: wb-mqtt-serial publishes slots one
+            # change at a time, so the handler expects them by frame counter.
+            for raw in sorted(fresh, key=_frame_counter_order(fresh)):
+                self._listener.on_monitor_slot(raw)
+
+
+def _frame_counter_order(raws: List[int]):
+    """A sort key by frame counter that survives the counter wrapping inside one poll."""
+    counters = [(raw >> 48) & 0xFFFF for raw in raws]
+    wrapped = counters and max(counters) - min(counters) > FRAME_COUNTER_MODULO // 2
+
+    def key(raw: int) -> int:
+        counter = (raw >> 48) & 0xFFFF
+        if wrapped and counter < FRAME_COUNTER_MODULO // 2:
+            counter += FRAME_COUNTER_MODULO
+        return counter
+
+    return key

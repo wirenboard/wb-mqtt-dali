@@ -65,7 +65,7 @@ class CompareFaults:
 
 
 class LossySearchProbe:
-    """The two callbacks the finder works through; the search address is not tracked here."""
+    """What the finder selects through; the search address is not tracked here."""
 
     def __init__(self, devices: Sequence[int], faults: Optional[CompareFaults] = None) -> None:
         self.devices = list(devices)
@@ -101,7 +101,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         """The answer to the first COMPARE is lost — the one whose silence means "no devices
         left". The repeat gets through, so the pass goes on and finds the device."""
         probe = LossySearchProbe([DEVICE_ADDR], CompareFaults(lost=[Ask(TOP)]))
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
         with self.assertLogs("commissioning", "WARNING") as logs:
             found = await finder.find_next_device(0, TOP)
@@ -122,7 +122,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         nobody holds. The device the search walked past answers below it, so the run reports
         it could not confirm the find."""
         probe = LossySearchProbe([DEVICE_ADDR], CompareFaults(lost=[Ask(FIRST_MIDPOINT)]))
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
         found = await finder.find_next_device(0, TOP)
 
@@ -135,7 +135,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         probe = LossySearchProbe(
             [DEVICE_ADDR], CompareFaults(lost=[Ask(FIRST_MIDPOINT), Ask(FALSE_ADDR - 1, 2)])
         )
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
         found = await finder.find_next_device(0, TOP)
 
@@ -145,7 +145,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
     async def test_search_converged_at_zero_needs_no_lower_check(self):
         """A device at random address 0 leaves nothing to ask below it: no COMPARE at -1."""
         probe = LossySearchProbe([0])
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
         found = await finder.find_next_device(0, TOP)
 

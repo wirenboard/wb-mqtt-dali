@@ -1,4 +1,5 @@
 import logging
+from timeit import default_timer
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -549,8 +550,6 @@ class TestGroupInfoPrioritizesInit:
         out a grown retry backoff (which member it is is unknown before QUERY
         GROUPS answers)."""
         # pylint: disable=protected-access
-        from timeit import default_timer
-
         controller = ApplicationController.__new__(ApplicationController)
         controller._init_scheduler = DeviceInitScheduler()
         waiting = SimpleNamespace(is_initialized=False, groups=set(), mqtt_id="dev_wait")
@@ -570,8 +569,6 @@ class TestGroupInfoPrioritizesInit:
         """With one member initialized the answer is non-empty and no init attempt
         is rescheduled."""
         # pylint: disable=protected-access
-        from timeit import default_timer
-
         controller = ApplicationController.__new__(ApplicationController)
         controller._init_scheduler = DeviceInitScheduler()
         handler = MagicMock()

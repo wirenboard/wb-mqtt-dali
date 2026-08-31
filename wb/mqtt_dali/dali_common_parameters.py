@@ -270,6 +270,11 @@ class GroupsParam(SettingsParamBase, OptionalSetting):
         self._groups = [False for _ in range(GROUPS_TOTAL)]
         self._group_indexes = set()
 
+    def seed(self, indexes) -> None:
+        """Take group membership as known — from a saved snapshot — until the gear is read."""
+        self._group_indexes = {index for index in indexes if 0 <= index < GROUPS_TOTAL}
+        self._groups = [index in self._group_indexes for index in range(GROUPS_TOTAL)]
+
     async def read(
         self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
     ) -> dict:

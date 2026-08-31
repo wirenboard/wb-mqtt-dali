@@ -28,6 +28,10 @@ class DeviceInitScheduler:
     def has_pending(self) -> bool:
         return bool(self._pending)
 
+    def has_first_attempts_pending(self) -> bool:
+        """Whether some scheduled device has not had its first initialization attempt yet."""
+        return any(state.retry_count == 0 for state in self._pending.values())
+
     def schedule(self, mqtt_id: str, current_time: float, delay: float = 0.0) -> None:
         if mqtt_id not in self._pending:
             self._pending[mqtt_id] = DeviceInitState(next_retry_time=current_time + delay)

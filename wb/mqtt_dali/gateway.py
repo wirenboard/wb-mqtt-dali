@@ -4,13 +4,15 @@ import logging
 import os
 import tempfile
 from itertools import chain
-from typing import Dict, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 from .application_controller import (
     ApplicationController,
     ApplicationControllerConfig,
+    CommissioningStartResult,
     CommissioningState,
     CommissioningStatus,
+    DriverFactory,
 )
 from .common_dali_device import DaliDeviceAddress
 from .dali2_device import Dali2Device
@@ -149,12 +151,13 @@ def check_mqtt_id_conflict(
                 raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
 
 
-def bus_from_json(
+def bus_from_json(  # pylint: disable=too-many-arguments, R0917
     gateway_mqtt_device_id: str,
     bus_index: int,
     data: dict,
     mqtt_dispatcher: MQTTDispatcher,
     gtin_db: DaliDatabase,
+    driver_factory: Optional[DriverFactory] = None,
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
     dali2_devices: list[Dali2Device] = []
@@ -188,7 +191,7 @@ def bus_from_json(
         data.get("bus_monitor_syslog_enabled", False),
     )
 
-    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
+    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db, driver_factory=driver_factory)
     return res
 
 
@@ -221,9 +224,16 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         config_path: str,
         gtin_db: DaliDatabase,
         command_registry: Optional[Dict[str, CommandInfo]] = None,
+        driver_factory: Optional[DriverFactory] = None,
     ) -> None:
         if command_registry is None:
             command_registry = build_command_registry()
+        self._driver_factory = driver_factory
+        # Hosts that keep a copy of the config (the WASM editor persists it
+        # across page loads) hear about every write here.
+        self._config_listeners: list[Callable[[], None]] = []
+        # Per bus: set while no commissioning run is in progress.
+        self._commissioning_finished: Dict[str, asyncio.Event] = {}
         self.rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
         self.wb_dali_gateways: list[WbDaliGateway] = list(
             map(
@@ -232,7 +242,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                     buses=list(
                         map(
                             lambda bus: bus_from_json(
-                                gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher, gtin_db
+                                gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher, gtin_db, driver_factory
                             ),
                             enumerate(gw_conf.get("buses", []), 1),
                         )
@@ -445,6 +455,9 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     async def rescan_bus_rpc_handler(self, params: dict):
         bus = self._find_bus(params.get("busId"))
         result = await bus.start_commissioning(on_state_changed=self._make_commissioning_state_cb(bus.uid))
+        if result is CommissioningStartResult.STARTED:
+            # Accepted means in progress, even before the first state callback.
+            self._commissioning_event(bus.uid).clear()
         return {
             "status": result.value,
             "progressTopic": commissioning_topic(bus.uid),
@@ -459,6 +472,8 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         topic = commissioning_topic(bus_uid)
 
         def _cb(state: CommissioningState):
+            self._note_commissioning_state(bus_uid, state.status)
+
             async def _publish_and_save() -> None:
                 payload = json.dumps(state.to_dict())
                 try:
@@ -619,7 +634,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 raise ValueError(f"WebSocket port {new_port} is already in use")
 
             await gw.apply_websocket_config(new_enabled, new_port)
-            save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
+            self._write_configuration()
             return {
                 "websocket_enabled": gw.websocket_enabled,
                 "websocket_port": gw.websocket_port,
@@ -663,7 +678,44 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
 
     async def _save_configuration(self) -> None:
         async with self._config_lock:
-            save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
+            self._write_configuration()
+
+    def _write_configuration(self) -> None:
+        save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
+        for callback in list(self._config_listeners):
+            try:
+                callback()
+            except Exception:  # pylint: disable=broad-exception-caught
+                logging.exception("A configuration listener failed")
+
+    def on_config_saved(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Call ``callback`` after every configuration write; returns the unregister function."""
+        self._config_listeners.append(callback)
+        return lambda: self._config_listeners.remove(callback)
+
+    def _commissioning_event(self, bus_uid: str) -> asyncio.Event:
+        event = self._commissioning_finished.get(bus_uid)
+        if event is None:
+            event = asyncio.Event()
+            event.set()  # nothing running yet
+            self._commissioning_finished[bus_uid] = event
+        return event
+
+    def _note_commissioning_state(self, bus_uid: str, status: CommissioningStatus) -> None:
+        event = self._commissioning_event(bus_uid)
+        if status in (
+            CommissioningStatus.QUEUED,
+            CommissioningStatus.QUERY_SHORT_ADDRESSES,
+            CommissioningStatus.BINARY_SEARCH,
+            CommissioningStatus.READ_DEVICE_INFO,
+        ):
+            event.clear()
+        else:
+            event.set()
+
+    async def wait_commissioning(self, bus_uid: str) -> None:
+        """Wait until no commissioning run is in progress on the bus."""
+        await self._commissioning_event(bus_uid).wait()
 
     async def _update_gateways(self) -> None:
         device_ids = set()
@@ -695,7 +747,9 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 bus_count = 3
                 for bus_index in range(1, bus_count + 1):
                     apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
-                    apc = ApplicationController(apc_conf, self._mqtt_dispatcher, self._gtin_db)
+                    apc = ApplicationController(
+                        apc_conf, self._mqtt_dispatcher, self._gtin_db, driver_factory=self._driver_factory
+                    )
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)
                 new_gateways.append(gw)

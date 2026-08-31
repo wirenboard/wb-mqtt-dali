@@ -23,7 +23,6 @@ from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
 from .gateway_link import GatewayLink, MqttSerialLink
-from .memory_cache import MemoryCache
 from .mqtt_dispatcher import (  # noqa: F401
     MQTTDispatcher,
     get_int_payload,
@@ -484,11 +483,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     """One DALI bus of one WB-DALI module.
 
     The DALI side — queueing, matching answers to frames, decoding them,
-    sequences, the memo — lives here; the module is reached through a
+    sequences — lives here; the module is reached through a
     :class:`~wb.mqtt_dali.gateway_link.GatewayLink`. With no ``link`` given the
     controller's is built: wb-mqtt-serial in between, over ``mqtt_dispatcher``.
-    ``memory`` is the optional identity-and-settings memo; a controller runs
-    without one.
     """
 
     def __init__(  # pylint: disable=too-many-arguments, R0917
@@ -498,7 +495,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
         link: Optional[GatewayLink] = None,
-        memory: Optional[MemoryCache] = None,
     ) -> None:
         self.logger = logger.getChild(f"{config.device_name}_bus{config.bus}")
         self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
@@ -528,7 +524,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 raise ValueError("WBDALIDriver needs a gateway link or an MQTT dispatcher to build one")
             link = MqttSerialLink(config, mqtt_dispatcher, self.logger)
         self._link = link
-        self._memory = memory
 
         # The start index in the gateway queue of the current batch being sent
         self._batch_start_index = 0
@@ -562,10 +557,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     @property
     def link(self) -> GatewayLink:
         return self._link
-
-    @property
-    def memory(self) -> Optional[MemoryCache]:
-        return self._memory
 
     @property
     def rpc_client_id(self) -> str:
@@ -1132,10 +1123,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 commands_to_send.append(EnableDeviceType(cmd.devicetype))
             commands_to_send.append(cmd)
         priorities = _compute_frame_priorities(commands_to_send, priority)
-        if self._memory is None:
-            responses = await self._send_expanded(commands_to_send, priorities, source, lock_queue)
-        else:
-            responses = await self._send_through_memory(commands_to_send, priorities, source, lock_queue)
+        responses = await self._send_expanded(commands_to_send, priorities, source, lock_queue)
         filtered_responses: list[Response] = []
         i = 0
         for cmd in commands:
@@ -1167,80 +1155,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             if lock_queue:
                 self._send_queue_lock.release()
         return await asyncio.gather(*response_futures)
-
-    async def _send_through_memory(  # pylint: disable=too-many-locals
-        self,
-        expanded: Sequence[Command],
-        priorities: Sequence[FramePriority],
-        source: BusTrafficSource,
-        lock_queue: bool,
-    ) -> list[Response]:
-        """Answer memory-bank and settings reads from the memo where it can; see memory_cache.
-
-        A restored memo entry is only used once the device at that short
-        address has confirmed its random address on the wire. A batch whose
-        reads are all remembered sends only its DTR writes; any miss sends the
-        whole batch and the memo learns from the answers.
-        """
-        memory = self._memory
-        assert memory is not None
-        for key in memory.untrusted_keys(expanded):
-            random_address = await self._query_random_address(memory, key, source, lock_queue)
-            if memory.confirm(key, random_address):
-                self.logger.info("Memory bank memo confirmed for %s %d", *key)
-            else:
-                self.logger.info("Memory bank memo dropped for %s %d: device changed", *key)
-
-        served = memory.plan(expanded)
-        if served is None:
-            answers = await self._send_expanded(expanded, priorities, source, lock_queue)
-            for cmd, answer in zip(expanded, answers):
-                memory.observe(cmd, answer, delivered=not isinstance(answer, WbGatewayTransmissionError))
-            # A device whose banks were just learned must also tell us its
-            # random address, or the memo cannot be verified — or kept — next
-            # session. Three frames, once.
-            for cmd in expanded:
-                key = memory.kind_and_short(cmd) or memory.settings_key(cmd)
-                if key is not None and memory.needs_random_address(key):
-                    memory.set_random_address(
-                        key, await self._query_random_address(memory, key, source, lock_queue)
-                    )
-            return answers
-
-        # The unserved remainder — DTR writes, EnableDeviceType prefixes, and
-        # any query the memo does not carry — always goes to the wire: the
-        # daemon's DT8 reads depend on it across batches (a QueryContentDTR0 in
-        # the next batch verifies device-side state this batch's writes set up).
-        wire = [
-            (cmd, prio) for index, (cmd, prio) in enumerate(zip(expanded, priorities)) if index not in served
-        ]
-        wire_answers = iter(
-            await self._send_expanded(
-                [cmd for cmd, _ in wire], [prio for _, prio in wire], source, lock_queue
-            )
-            if wire
-            else []
-        )
-        memory.apply_served(expanded)
-        answers: list[Response] = []
-        for index, cmd in enumerate(expanded):
-            if index in served:
-                byte = served[index]
-                answers.append(cmd.response(BackwardFrame(byte)) if byte is not None else cmd.response(None))
-            else:
-                answers.append(next(wire_answers))
-        return answers
-
-    async def _query_random_address(self, memory, key, source, lock_queue: bool) -> Optional[int]:
-        replies = await self._send_expanded(
-            memory.random_queries(*key), [FramePriority.CONFIGURATION] * 3, source, lock_queue
-        )
-        # MemoryCache.raw_of, not a bare getattr: a gateway error response
-        # raises from its raw_value property.
-        values = [memory.raw_of(reply) for reply in replies]
-        if not all(value is not None and not value.error for value in values):
-            return None
-        return (values[0].as_integer << 16) | (values[1].as_integer << 8) | values[2].as_integer
 
 
 def _is_dtr_set(cmd: Command) -> bool:

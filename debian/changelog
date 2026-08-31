@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.26.0) stable; urgency=medium
+
+  * The bus driver reaches its WB-DALI module through a gateway link: the controller's
+    (wb-mqtt-serial in between) or a direct register link for hosts that own the Modbus
+    side — the WASM device editor, the simulator. One driver, one queue, one decoder.
+  * An optional memo remembers device identity (memory banks) and settings-shaped answers
+    keyed by the device's random address; off by default, a controller runs without it.
+
+ -- Evgeny Boger <boger@wirenboard.com>  Mon, 31 Aug 2026 18:30:00 +0500
+
 wb-mqtt-dali (1.25.0) stable; urgency=medium
 
   * A simulated DALI installation ships in the package (wb.mqtt_dali.sim): WB-DALI

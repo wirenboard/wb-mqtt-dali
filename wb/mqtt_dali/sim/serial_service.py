@@ -18,9 +18,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from .broker import Broker, Client, Message, get_payload_str
-from .network import SimulatedModbusNetwork
-from .registers import (
+from ..wbdali_registers import (
     BUS_ADDRESS_OFFSET,
     MONITOR_REGISTERS_PER_SLOT,
     MONITOR_RING_SIZE,
@@ -30,6 +28,8 @@ from .registers import (
     monitor_address,
     reply_address,
 )
+from .broker import Broker, Client, Message, get_payload_str
+from .network import SimulatedModbusNetwork
 
 logger = logging.getLogger("wb.mqtt_dali.sim.serial_service")
 

@@ -13,8 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, Iterable, List, Optional
 
-from .dali_bus import SimulatedDaliBus
-from .registers import (
+from ..wbdali_registers import (
     BUS_ADDRESS_OFFSET,
     FRAME_COUNTER_MODULO,
     MONITOR_BASE,
@@ -30,6 +29,7 @@ from .registers import (
     from_registers,
     to_monitor_registers,
 )
+from .dali_bus import SimulatedDaliBus
 
 logger = logging.getLogger("wb.mqtt_dali.sim.gateway")
 

@@ -1,4 +1,4 @@
-wb-mqtt-dali (1.23.2) stable; urgency=medium
+wb-mqtt-dali (1.24.0) stable; urgency=medium
 
   * A new tool, wb-mqtt-dali-address-with-randomise, addresses the gear that answers the
     device search only after a RANDOMISE sent to all devices on the bus: it hands out free

@@ -52,6 +52,8 @@ def _hex_from_registers(registers: List[int]) -> str:
 class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
     """Serves the daemon's wb-mqtt-serial RPCs from the simulated network.
 
+    :param network: the simulated modules ``port/Load`` writes go to; ``None`` serves
+        ``config/Load`` only — for a host whose driver reaches real modules itself
     :param serial_config: what ``config/Load`` answers — the daemon discovers
         its WB-DALI modules from it (see :func:`~wb.mqtt_dali.sim.scenario.serial_config`)
     :param poll_interval_s: how often the monitor rings are read, like the
@@ -61,7 +63,7 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
     def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         broker: Broker,
-        network: SimulatedModbusNetwork,
+        network: Optional[SimulatedModbusNetwork],
         serial_config: Dict[str, Any],
         poll_interval_s: float = 0.05,
         client_id: str = "wb-mqtt-serial",
@@ -96,13 +98,13 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
         self.broker.publish(PORT_LOAD_TOPIC, "1", qos=1, retain=True)
         # wb-mqtt-serial publishes every control once at start; a daemon that
         # subscribes later sees those as retained replay and ignores them.
+        self._tasks = [asyncio.create_task(self._serve(), name="wb-mqtt-serial-rpc")]
+        if self.network is None:
+            return
         for device_id in self.device_ids:
             for bus in BUS_NUMBERS:
                 await self._publish_replies(device_id, reply_address(bus, 0), 0)
-        self._tasks = [
-            asyncio.create_task(self._serve(), name="wb-mqtt-serial-rpc"),
-            asyncio.create_task(self._poll_monitor_rings(), name="wb-mqtt-serial-monitor"),
-        ]
+        self._tasks.append(asyncio.create_task(self._poll_monitor_rings(), name="wb-mqtt-serial-monitor"))
 
     async def stop(self) -> None:
         """Stop serving and polling."""
@@ -131,6 +133,13 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
         if topic.startswith(CONFIG_LOAD_TOPIC + "/"):
             result: Dict[str, Any] = {"config": self.serial_config}
         elif topic.startswith(PORT_LOAD_TOPIC + "/"):
+            if self.network is None:
+                self.broker.publish(
+                    topic + "/reply",
+                    json.dumps({"id": request.get("id"), "error": {"code": -32000, "message": "no serial"}}),
+                    qos=2,
+                )
+                return
             result = await self._port_load(request.get("params") or {})
         else:
             return
@@ -168,6 +177,7 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
         if QUEUE_BASE <= local < QUEUE_BASE + QUEUE_SIZE * 2:
             first_slot = (local - QUEUE_BASE) // 2
             written = set(range(first_slot, min(first_slot + max(1, register_count // 2), QUEUE_SIZE)))
+        assert self.network is not None
         replies = await self.network.read_input(device_id, reply_address(bus, 0), QUEUE_SIZE)
         for slot, value in enumerate(replies):
             key = (device_id, bus, slot)
@@ -182,6 +192,7 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
             )
 
     async def _poll_monitor_rings(self) -> None:
+        assert self.network is not None
         count = MONITOR_RING_SIZE * MONITOR_REGISTERS_PER_SLOT
         while True:
             await asyncio.sleep(self.poll_interval_s)

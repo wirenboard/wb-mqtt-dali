@@ -1,6 +1,8 @@
+beautifulsoup4==4.15.0
 black==24.2.0
 isort==5.13.2
 pylint==3.3.9
 pytest==8.3.5
 pytest-asyncio==0.25.1
 pytest-cov==5.0.0
+requests==2.34.2

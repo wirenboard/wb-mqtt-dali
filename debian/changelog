@@ -15,8 +15,6 @@ wb-mqtt-dali (1.26.0) stable; urgency=medium
   * The bus driver reaches its WB-DALI module through a gateway link: the controller's
     (wb-mqtt-serial in between) or a direct register link for hosts that own the Modbus
     side — the WASM device editor, the simulator. One driver, one queue, one decoder.
-  * An optional memo remembers device identity (memory banks) and settings-shaped answers
-    keyed by the device's random address; off by default, a controller runs without it.
   * The register link sizes the driver's reply clock from the measured cost of its
     register exchanges, delivers ring slots found in one poll in frame-counter order,
     and the send queue no longer swallows its cancellation mid-batch.

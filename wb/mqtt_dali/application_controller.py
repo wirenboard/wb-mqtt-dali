@@ -708,6 +708,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 handlers = device.get_group_parameter_handlers()
                 for handler in handlers:
                     merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
+        if not res:
+            # Someone is looking at this group while no member has finished
+            # initializing — which member it is cannot be known before the gear
+            # answers QUERY GROUPS, so pull every uninitialized gear's next init
+            # attempt to now instead of leaving the viewer to wait out a grown
+            # backoff. Bounded by the asker: once one member is up, the answer
+            # is non-empty and the page stops asking.
+            current_time = default_timer()
+            for device in self.dali_devices:
+                if not device.is_initialized:
+                    self._init_scheduler.prioritize(device.mqtt_id, current_time)
         return res
 
     async def apply_group_parameters(self, group_index: int, new_params: dict) -> None:

@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.24.0) stable; urgency=medium
+
+  * A group or device page opened while its devices are still being initialized no longer
+    waits out the full retry backoff: asking about an uninitialized device pulls its next
+    initialization attempt forward, so the page fills in as soon as the bus allows.
+
+ -- Evgeny Boger <boger@wirenboard.com>  Mon, 31 Aug 2026 12:40:00 +0500
+
 wb-mqtt-dali (1.23.0) stable; urgency=medium
 
   * Refresh the product database from the DALI Alliance registry: 986 devices that used to be

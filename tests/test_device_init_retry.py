@@ -516,3 +516,79 @@ class TestPollStep:
         timeout = await ctrl._poll_step(t0 + 2.0)
         assert ctrl._poll_scheduler.poll_turn is True
         assert timeout <= 0.01
+
+
+class TestInitPrioritize:
+    def test_prioritize_pulls_a_backed_off_retry_to_now(self):
+        """A device deep in backoff becomes due immediately when someone asks for it."""
+        scheduler = DeviceInitScheduler()
+        scheduler.schedule("dev_1", current_time=100.0)
+        scheduler.record_failure("dev_1", current_time=100.0)
+        scheduler.record_failure("dev_1", current_time=105.0)
+        assert scheduler.get_one_retry_ready(106.0) is None
+
+        assert scheduler.prioritize("dev_1", current_time=106.0) is True
+        assert scheduler.get_one_retry_ready(106.0) == "dev_1"
+        # The retry count survives: a failure after the pulled-in attempt
+        # backs off again instead of restarting from the initial delay.
+        assert scheduler.get_retry_count("dev_1") == 2
+
+    def test_prioritize_leaves_a_due_or_unknown_entry_alone(self):
+        """An attempt already due, or a device not pending at all, is not touched."""
+        scheduler = DeviceInitScheduler()
+        scheduler.schedule("dev_1", current_time=100.0)
+        assert scheduler.prioritize("dev_1", current_time=100.0) is False
+        assert scheduler.prioritize("dev_absent", current_time=100.0) is False
+
+
+class TestGroupInfoPrioritizesInit:
+    @pytest.mark.asyncio
+    async def test_empty_group_answer_pulls_uninitialized_gear_forward(self):
+        """A GetGroup that finds no initialized member makes every uninitialized
+        gear's init attempt due now — the viewer of that group should not wait
+        out a grown retry backoff (which member it is is unknown before QUERY
+        GROUPS answers)."""
+        # pylint: disable=protected-access
+        from timeit import default_timer
+
+        controller = ApplicationController.__new__(ApplicationController)
+        controller._init_scheduler = DeviceInitScheduler()
+        waiting = SimpleNamespace(is_initialized=False, groups=set(), mqtt_id="dev_wait")
+        controller.dali_devices = [waiting]
+        now = default_timer()
+        controller._init_scheduler.schedule("dev_wait", current_time=now)
+        controller._init_scheduler.record_failure("dev_wait", current_time=now)
+        assert controller._init_scheduler.get_one_retry_ready(default_timer()) is None
+
+        result = await controller.load_group_info(3)
+
+        assert result == {}
+        assert controller._init_scheduler.get_one_retry_ready(default_timer()) == "dev_wait"
+
+    @pytest.mark.asyncio
+    async def test_group_answer_from_an_initialized_member_prioritizes_nothing(self):
+        """With one member initialized the answer is non-empty and no init attempt
+        is rescheduled."""
+        # pylint: disable=protected-access
+        from timeit import default_timer
+
+        controller = ApplicationController.__new__(ApplicationController)
+        controller._init_scheduler = DeviceInitScheduler()
+        handler = MagicMock()
+        handler.get_schema.return_value = {"properties": {"min_level": {}}}
+        member = SimpleNamespace(
+            is_initialized=True,
+            groups={3},
+            mqtt_id="dev_up",
+            get_group_parameter_handlers=lambda: [handler],
+        )
+        waiting = SimpleNamespace(is_initialized=False, groups=set(), mqtt_id="dev_wait")
+        controller.dali_devices = [member, waiting]
+        now = default_timer()
+        controller._init_scheduler.schedule("dev_wait", current_time=now)
+        controller._init_scheduler.record_failure("dev_wait", current_time=now)
+
+        result = await controller.load_group_info(3)
+
+        assert "min_level" in result.get("properties", {})
+        assert controller._init_scheduler.get_one_retry_ready(default_timer()) is None

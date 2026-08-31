@@ -48,6 +48,21 @@ class DeviceInitScheduler:
                 return mqtt_id
         return None
 
+    def prioritize(self, mqtt_id: str, current_time: float) -> bool:
+        """Make the device's next init attempt due now. Returns whether anything moved.
+
+        For the device someone is actually looking at: a page asking about an
+        uninitialized device should not sit out that device's grown backoff.
+        Only an attempt scheduled for later is pulled in — an entry already due
+        (or unknown, or initialized) is left alone, so repeated calls while the
+        attempt is still queued or running stay no-ops.
+        """
+        state = self._pending.get(mqtt_id)
+        if state is None or state.next_retry_time <= current_time:
+            return False
+        state.next_retry_time = current_time
+        return True
+
     def record_success(self, mqtt_id: str) -> None:
         self._pending.pop(mqtt_id, None)
 

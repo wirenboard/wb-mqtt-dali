@@ -14,14 +14,9 @@ from dali.gear.general import DAPC, QueryActualLevel
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.sim import (
-    Broker,
-    Client,
-    FakeWbMqttSerial,
-    build_network,
-    default_scenario,
-    serial_config,
-)
+from wb.mqtt_dali.sim.broker import Broker, Client
+from wb.mqtt_dali.sim.scenario import build_network, default_scenario, serial_config
+from wb.mqtt_dali.sim.serial_service import FakeWbMqttSerial
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 
 MODULE = "wb-mdali_1"

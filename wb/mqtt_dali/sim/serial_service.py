@@ -18,7 +18,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from .broker import Broker, Client, Message, get_payload_str
+from ..mqtt_dispatcher import get_str_payload
+from .broker import Broker, Client, Message
 from .network import SimulatedModbusNetwork
 from .registers import (
     BUS_ADDRESS_OFFSET,
@@ -123,7 +124,7 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
     async def _answer(self, message: Message) -> None:
         topic = message.topic.value
         try:
-            request = json.loads(get_payload_str(message))
+            request = json.loads(get_str_payload(message))
         except ValueError:
             logger.error("Malformed request on %s: %r", topic, message.payload)
             return

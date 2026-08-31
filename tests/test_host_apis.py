@@ -6,14 +6,16 @@ and poking private state; each has a public counterpart now.
 
 import asyncio
 import json
+import logging
 from timeit import default_timer
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from wb.mqtt_dali.application_controller import (
     ApplicationController,
     ApplicationControllerConfig,
+    ApplicationControllerState,
     CommissioningStatus,
 )
 from wb.mqtt_dali.common_dali_device import (
@@ -117,3 +119,36 @@ def test_the_data_dir_can_be_relocated(monkeypatch, tmp_path):
     DaliDevice(DaliDeviceAddress(short=1, random=0), "bus", MagicMock())
     assert DaliDeviceBase._common_schema == {"title": "relocated"}  # pylint: disable=protected-access
     DaliDeviceBase.set_common_schema({"title": "test-schema"})
+
+
+@pytest.mark.asyncio
+async def test_start_hands_the_driver_the_configured_monitor_state():
+    """A restored config with the monitor on (and no DALI-2 devices) must reach
+    the driver at startup, not only when someone later flips the toggle."""
+    driver = MagicMock()
+    driver.initialize = AsyncMock()
+    controller = ApplicationController.__new__(ApplicationController)
+    controller.logger = logging.getLogger("test.host_apis.start")
+    controller._dev = driver  # pylint: disable=protected-access
+    controller._bus_monitor_enabled = True  # pylint: disable=protected-access
+    controller._state = ApplicationControllerState.UNINITIALIZED  # pylint: disable=protected-access
+    controller._state_lock = asyncio.Lock()  # pylint: disable=protected-access
+    controller._device_publisher = MagicMock()  # pylint: disable=protected-access
+    controller._device_publisher.initialize = AsyncMock()  # pylint: disable=protected-access
+    controller._publish_virtual_device = AsyncMock()  # pylint: disable=protected-access
+    controller._broadcast_device = MagicMock(mqtt_id="bcast")  # pylint: disable=protected-access
+    controller.dali_devices = []
+    controller.dali2_devices = []
+    controller._devices_by_mqtt_id = {}  # pylint: disable=protected-access
+    controller._init_scheduler = MagicMock()  # pylint: disable=protected-access
+    controller._polling_loop = MagicMock(return_value=_never())  # pylint: disable=protected-access
+    await controller.start()
+    try:
+        driver.set_bus_monitor_enabled.assert_called_once_with(True)
+        driver.set_has_control_devices.assert_called_once_with(False)
+    finally:
+        controller._polling_task.cancel()  # pylint: disable=protected-access
+
+
+async def _never():
+    await asyncio.Event().wait()

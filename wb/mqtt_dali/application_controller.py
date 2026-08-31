@@ -575,6 +575,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         async with self._state_lock:
             self._state = ApplicationControllerState.READY
 
+        # The driver starts from cautious defaults; hand it what the config
+        # already knows, or a restored bus paces its ring wrong until the
+        # operator happens to touch the toggle or run a commissioning.
+        self._dev.set_bus_monitor_enabled(self._bus_monitor_enabled)
+        self._notify_bus_population()
+
         self._polling_task = asyncio.create_task(self._polling_loop())
 
     async def stop(self) -> None:

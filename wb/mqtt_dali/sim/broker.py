@@ -59,7 +59,7 @@ class Topic:
         return topic_matches(pattern, self.value)
 
 
-class Message:
+class Message:  # pylint: disable=too-few-public-methods
     """Stand-in for ``aiomqtt.Message``.
 
     ``payload`` is always ``bytes`` — that is what paho delivers and what
@@ -68,7 +68,7 @@ class Message:
 
     __slots__ = ("topic", "payload", "qos", "retain", "mid", "properties")
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         topic: str,
         payload: bytes,
@@ -180,7 +180,7 @@ class Broker:
         return self._retained.get(topic)
 
 
-class _PahoStub:
+class _PahoStub:  # pylint: disable=too-few-public-methods
     """Satisfies ``MQTTDispatcher.client_id``, which reads ``client._client._client_id``."""
 
     def __init__(self, client_id: str) -> None:
@@ -235,7 +235,7 @@ class Client:
     def remove_filter(self, topic: str) -> None:
         self._filters.discard(topic)
 
-    async def subscribe(self, topic: str, qos: int = 0, **_kwargs) -> None:
+    async def subscribe(self, topic: str, _qos: int = 0, **_kwargs) -> None:
         self.add_filter(topic)
 
     async def unsubscribe(self, topic: str, **_kwargs) -> None:

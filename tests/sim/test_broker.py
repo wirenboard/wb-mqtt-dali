@@ -1,3 +1,5 @@
+"""The in-process broker: retained replay, wildcards, the aiomqtt-shaped client."""
+
 import asyncio
 
 import pytest
@@ -101,5 +103,5 @@ async def test_unsubscribe_stops_delivery():
 async def test_client_id_matches_mqtt_dispatcher_expectation():
     broker = Broker()
     client = Client(broker, "wb-mqtt-dali-browser")
-    # MQTTDispatcher.client_id reads client._client._client_id
+    # MQTTDispatcher.client_id reads client._client._client_id  # pylint: disable=protected-access  # aiomqtt reads it there
     assert client._client._client_id.decode() == "wb-mqtt-dali-browser"

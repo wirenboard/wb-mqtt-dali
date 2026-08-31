@@ -62,7 +62,7 @@ DEFAULT_FADE_RATE = 7
 DEFAULT_FAST_FADE_TIME = 0
 
 
-class SimulatedControlGear(fakes.Gear):
+class SimulatedControlGear(fakes.Gear):  # pylint: disable=too-many-instance-attributes
     """One DALI control gear unit — a ballast or LED driver.
 
     :param shortaddr: short address 0..63, or ``None`` for an unaddressed unit
@@ -94,7 +94,7 @@ class SimulatedControlGear(fakes.Gear):
         self.fast_fade_time = DEFAULT_FAST_FADE_TIME
         self.dimming_curve = 0  # 0 standard (logarithmic), 1 linear
 
-    def send(self, cmd):
+    def send(self, cmd):  # pylint: disable=too-many-return-statements, too-many-branches
         # QUERY COLOUR VALUE selects what to read through DTR0, and the fake
         # overwrites DTR0 with the value it returns — so the selector has to be
         # read before the fake gets the command.
@@ -221,7 +221,7 @@ DEFAULT_STUCK_TIMER = 20
 NO_GROUP = 0xFF
 
 
-class _InstanceSettings:
+class _InstanceSettings:  # pylint: disable=too-many-instance-attributes, too-few-public-methods
     """The configurable state of one instance of a control device."""
 
     def __init__(self, inst_type: int) -> None:
@@ -240,7 +240,7 @@ class _InstanceSettings:
         self.stuck_timer = DEFAULT_STUCK_TIMER
 
 
-class SimulatedControlDevice(fakes.Device):
+class SimulatedControlDevice(fakes.Device):  # pylint: disable=too-many-instance-attributes
     """One DALI-2 control device — a wall switch, presence or light sensor.
 
     :param shortaddr: short address 0..63, or ``None`` for an unaddressed device
@@ -295,7 +295,7 @@ class SimulatedControlDevice(fakes.Device):
             return answer
         return self._commission(cmd)
 
-    def _instance_command(self, cmd):  # pylint: disable=too-many-return-statements
+    def _instance_command(self, cmd):  # pylint: disable=too-many-return-statements, too-many-branches
         """Per-instance settings of IEC 62386-103 §9 and -301 §9.
 
         `fakes.Device` answers the instance type, scheme and event filter but
@@ -364,7 +364,7 @@ class SimulatedControlDevice(fakes.Device):
             return None
         return self._instance_settings[number]
 
-    def _commission(self, cmd):  # pylint: disable=too-many-return-statements
+    def _commission(self, cmd):  # pylint: disable=too-many-return-statements, too-many-branches
         """The addressing commands of IEC 62386-103 §11.
 
         Deliberately mirrors `fakes.Gear`'s control-gear equivalent, including

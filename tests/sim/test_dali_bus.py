@@ -1,3 +1,5 @@
+"""A simulated DALI bus answers frames the way real gear does."""
+
 from dali.address import GearBroadcast, GearShort
 from dali.gear.general import (
     DAPC,

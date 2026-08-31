@@ -27,7 +27,7 @@ from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 MODULE = "wb-mdali_1"
 
 
-class _Stack:
+class _Stack:  # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
         self.scenario = default_scenario()
         # An addressed wall switch: an unaddressed one has no short address to

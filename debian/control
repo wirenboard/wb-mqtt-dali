@@ -7,11 +7,13 @@ Build-Depends: debhelper-compat (= 13),
                dh-sequence-python3,
                python3-all,
                python3-asyncio-mqtt,
+               python3-bs4,
                python3-dali (>= 0.11-wb100~~),
                python3-jsonschema,
                python3-mqttrpc,
                python3-pytest,
                python3-pytest-asyncio,
+               python3-requests,
                python3-wb-common (>= 2.1.0~~),
                python3-websockets
 Homepage: https://github.com/wirenboard/wb-mqtt-dali

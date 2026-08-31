@@ -24,7 +24,7 @@ from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.frame import ForwardFrame
 from dali.gear.general import EnableDeviceType
 
-from .registers import TransmissionStatus
+from ..wbdali_registers import TransmissionStatus
 
 logger = logging.getLogger("wb.mqtt_dali.sim.bus")
 

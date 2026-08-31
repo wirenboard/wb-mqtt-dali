@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import random
-import string
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Sequence, Union
@@ -25,7 +22,13 @@ from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
-from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
+from .gateway_link import GatewayLink, MqttSerialLink
+from .memory_cache import MemoryCache
+from .mqtt_dispatcher import (  # noqa: F401
+    MQTTDispatcher,
+    get_int_payload,
+    get_str_payload,
+)
 from .overheat_rate_limiter import OverheatRateLimiter
 from .send_command import LazyCommandExpression, format_command_expression
 from .wbdali_error_response import (
@@ -71,7 +74,10 @@ class FramePriority(Enum):
 # pylint: disable=duplicate-code
 
 
-WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
+from .gateway_link import (  # noqa: E402  # pylint: disable=wrong-import-position
+    WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
+)
+
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
@@ -104,22 +110,6 @@ DECODABLE_FRAME_BIT_LENGTHS = frozenset((16, 24))
 UNREADABLE_FRAME_BIT_LENGTH = 16
 
 
-def get_int_payload(message: aiomqtt.Message) -> int:
-    """Parse a message payload as an integer; every failure comes out as `ValueError`."""
-    try:
-        if message.payload is None:
-            raise ValueError("payload is empty")
-        if isinstance(message.payload, (bytes, bytearray)):
-            return int(message.payload.decode().strip(), 0)
-        if isinstance(message.payload, memoryview):
-            return int(message.payload.tobytes().decode().strip(), 0)
-        if isinstance(message.payload, str):
-            return int(message.payload.strip(), 0)
-        return int(message.payload)
-    except (AttributeError, TypeError) as exc:
-        raise ValueError(f"unsupported payload type {type(message.payload).__name__}: {exc}") from exc
-
-
 @dataclass
 class WBDALIConfig:
     """Configuration for WBDALIDriver."""
@@ -146,7 +136,11 @@ class BusMonitorSlot:
     @classmethod
     def from_raw(cls, message: aiomqtt.Message) -> BusMonitorSlot:
         """Decode a slot publication; raises `ValueError` if the payload is not a slot value."""
-        raw_value = get_int_payload(message)
+        return cls.from_value(get_int_payload(message))
+
+    @classmethod
+    def from_value(cls, raw_value: int) -> BusMonitorSlot:
+        """Decode a slot register value; raises `ValueError` if it does not fit the register."""
         if raw_value >> 64:
             raise ValueError(f"does not fit the slot register: {raw_value.bit_length()} bit(s)")
         frame_length = (raw_value >> 32) & 0xFF
@@ -234,7 +228,7 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
             return
 
         try:
-            slot = BusMonitorSlot.from_raw(message)
+            raw = get_int_payload(message)
         except ValueError as exc:
             self._logger.error(
                 "Failed to parse bus monitor payload '%s' from topic '%s': %s",
@@ -243,9 +237,18 @@ class BusMonitorFrameHandler:  # pylint: disable=too-few-public-methods
                 exc,
             )
             return
+        self.handle_raw(raw)
+
+    def handle_raw(self, raw: int) -> None:
+        """One ring slot's value, however it reached us — a publication or a register read."""
+        try:
+            slot = BusMonitorSlot.from_value(raw)
+        except ValueError as exc:
+            self._logger.error("Bus monitor value 0x%x is not a slot: %s", raw, exc)
+            return
 
         if slot.is_empty:
-            self._logger.debug("Empty bus monitor slot on topic '%s'", message.topic)
+            self._logger.debug("Empty bus monitor slot")
             return
 
         if not slot.is_valid:
@@ -478,12 +481,24 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FrameP
 
 
 class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
-    def __init__(
+    """One DALI bus of one WB-DALI module.
+
+    The DALI side — queueing, matching answers to frames, decoding them,
+    sequences, the memo — lives here; the module is reached through a
+    :class:`~wb.mqtt_dali.gateway_link.GatewayLink`. With no ``link`` given the
+    controller's is built: wb-mqtt-serial in between, over ``mqtt_dispatcher``.
+    ``memory`` is the optional identity-and-settings memo; a controller runs
+    without one.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         config: WBDALIConfig,
-        mqtt_dispatcher: MQTTDispatcher,
+        mqtt_dispatcher: Optional[MQTTDispatcher],
         logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
+        link: Optional[GatewayLink] = None,
+        memory: Optional[MemoryCache] = None,
     ) -> None:
         self.logger = logger.getChild(f"{config.device_name}_bus{config.bus}")
         self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
@@ -508,9 +523,12 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._mqtt_dispatcher = mqtt_dispatcher
         self._overheat_rate_limiter = OverheatRateLimiter()
 
-        client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-        self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
-        self._rpc_id_counter = 0
+        if link is None:
+            if mqtt_dispatcher is None:
+                raise ValueError("WBDALIDriver needs a gateway link or an MQTT dispatcher to build one")
+            link = MqttSerialLink(config, mqtt_dispatcher, self.logger)
+        self._link = link
+        self._memory = memory
 
         # The start index in the gateway queue of the current batch being sent
         self._batch_start_index = 0
@@ -523,7 +541,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         # The index of the next item to send to the gateway, used for bus monitor tracking
         self._send_queue_item_index = 0
 
-        self._meta_error_topic = f"/devices/{self.config.device_name}/meta/error"
         self._gateway_unavailable = False
         self._pending_resync = False
 
@@ -543,12 +560,21 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._response_timeout = timeout
 
     @property
+    def link(self) -> GatewayLink:
+        return self._link
+
+    @property
+    def memory(self) -> Optional[MemoryCache]:
+        return self._memory
+
+    @property
     def rpc_client_id(self) -> str:
-        return self._rpc_client_id
+        """The MQTT link's RPC client id; empty for a link that speaks no RPC."""
+        return getattr(self._link, "rpc_client_id", "")
 
     @property
     def rpc_id_counter(self) -> int:
-        return self._rpc_id_counter
+        return getattr(self._link, "rpc_id_counter", 0)
 
     @property
     def batch_start_index(self) -> int:
@@ -562,28 +588,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
     async def initialize(self) -> None:
         self.logger.debug("Initializing...")
-
         self._queue_sender_task = asyncio.create_task(self._queue_sender())
-
-        await self._reset_queue_in_gateway()
-
-        # Subscribe to all reply topics
-        self.logger.debug("Subscribing to reply topics...")
-        for i in range(self.config.queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}"
-            await self._mqtt_dispatcher.subscribe(topic, self._handle_reply_message)
-
-        # Subscribe to FF24 topic
-        self.logger.debug("Subscribing to FF24 topic...")
-        for i in range(1, BUS_MONITOR_RING_SIZE + 1):
-            await self._mqtt_dispatcher.subscribe(
-                f"/devices/{self.config.device_name}/controls/"
-                f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
-                self._bus_monitor_frame_handler.handle,
-            )
-
-        await self._mqtt_dispatcher.subscribe(self._meta_error_topic, self._handle_meta_error_message)
-
+        await self._link.resync()
+        await self._link.start(self)
         self.logger.debug("Initialized successfully")
 
     async def deinitialize(self) -> None:
@@ -603,67 +610,24 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.send_item.future.set_result(TransmissionCancelled())
         self._waiting_for_responses.clear()
 
-        # Unsubscribe from all reply topics
-        for i in range(self.config.queue_size):
-            topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}"
-            if self._mqtt_dispatcher.is_running:
-                await self._mqtt_dispatcher.unsubscribe(topic)
-
-        # Unsubscribe from FF24 topic
-        if self._mqtt_dispatcher.is_running:
-            for i in range(1, BUS_MONITOR_RING_SIZE + 1):
-                await self._mqtt_dispatcher.unsubscribe(
-                    f"/devices/{self.config.device_name}/controls/"
-                    f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
-                )
-            await self._mqtt_dispatcher.unsubscribe(self._meta_error_topic)
+        await self._link.stop()
         self.logger.debug("Deinitialized successfully")
 
-    async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
-        """Send a Modbus RPC command without expecting a response."""
-        self.logger.debug(
-            "Sending Modbus RPC command: function=%d, address=%d, count=%d, msg=%s",
-            function,
-            address,
-            count,
-            msg,
-        )
+    def set_bus_monitor_enabled(self, enabled: bool) -> None:
+        """Tell the link whether the bus monitor is being watched."""
+        self._link.set_bus_monitor_enabled(enabled)
 
-        self._rpc_id_counter += 1
-        await self._mqtt_dispatcher.client.publish(
-            f"/rpc/v1/wb-mqtt-serial/port/Load/{self._rpc_client_id}",
-            json.dumps(
-                {
-                    "params": {
-                        "device_id": self.config.device_name,
-                        "function": function,
-                        "address": address,
-                        "count": count,
-                        # "response_timeout": 8,
-                        "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
-                        "frame_timeout": 0,
-                        "format": "HEX",
-                        "msg": msg,
-                    },
-                    "id": self.rpc_id_counter,
-                }
-            ),
-        )
+    def set_has_control_devices(self, present: bool) -> None:
+        """Tell the link whether DALI-2 control devices are configured on this bus."""
+        self._link.set_has_control_devices(present)
+
+    async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
+        """Send a Modbus RPC command through the MQTT link (kept for callers that speak RPC)."""
+        link = self._link  # the MQTT link; a register link has no RPC to speak
+        await link.send_modbus_rpc_no_response(function, address, count, msg)  # type: ignore[attr-defined]
 
     async def _reset_queue_in_gateway(self) -> None:
-        self.logger.debug("Resetting message queue in gateway")
-
-        pointer_address = (
-            self.config.queue_bulk_send_pointer_modbus_address
-            + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
-        )
-
-        await self.send_modbus_rpc_no_response(
-            function=6,
-            address=pointer_address,
-            count=1,
-            msg="0000",
-        )
+        await self._link.resync()
 
     def _handle_meta_error_message(self, message: aiomqtt.Message) -> None:
         try:
@@ -671,7 +635,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         except (AttributeError, UnicodeDecodeError) as exc:
             self.logger.error("Failed to parse /meta/error payload: %s", exc)
             return
+        self.on_gateway_error_payload(payload)
 
+    def on_gateway_error_payload(self, payload: str) -> None:
+        """wb-mqtt-serial's `/meta/error` for the module: `r` fails pending traffic, `` resyncs."""
         if payload == GatewayMetaErrorPayload.UNREACHABLE.value:
             should_unavailable = True
         elif payload == GatewayMetaErrorPayload.OK.value:
@@ -728,27 +695,14 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 )
                 self._send_queue_item_index += 1
 
-    def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
-        self, message: aiomqtt.Message
-    ) -> None:
-        """Handle reply message from the DALI bus.
-
-        Message payload format:
-        [7..0]   - Backward Frame (8 bit)
-        [15..8]  - status:
-                   0 - no transmission
-                   1 - transmission with backward response
-                   2 - transmission without response
-                   3 - broken response
-                   4 - transmission impossible (no power on bus)
-                   5 - gateway overheat
-        """
+    def _handle_reply_message(self, message: aiomqtt.Message) -> None:
+        """A reply register publication from wb-mqtt-serial (see the MQTT link)."""
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
             return  # Ignore retained messages
 
         try:
-            resp = get_int_payload(message)
+            resp: Optional[int] = get_int_payload(message)
         except ValueError as exc:
             self.logger.error(
                 "Failed to parse reply payload '%s' from topic '%s': %s",
@@ -758,13 +712,33 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             )
             resp = None
 
-        # Process the message as needed
         resp_pointer = int(
             str(message.topic)
             .rsplit("/", maxsplit=1)[-1]
             .replace(f"bus_{self.config.bus}_bulk_send_reply_", "")
         )
+        self.on_reply(resp_pointer, resp)
 
+    def on_monitor_slot(self, raw: int) -> None:
+        """A bus monitor ring slot from the link."""
+        self._bus_monitor_frame_handler.handle_raw(raw)
+
+    def on_reply(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
+        self, resp_pointer: int, resp: Optional[int]
+    ) -> None:
+        """The reply register of queue index ``resp_pointer`` holds ``resp``.
+
+        Reply register format:
+        [7..0]   - Backward Frame (8 bit)
+        [15..8]  - status:
+                   0 - no transmission
+                   1 - transmission with backward response
+                   2 - transmission without response
+                   3 - broken response
+                   4 - transmission impossible (no power on bus)
+                   5 - gateway overheat
+        ``None`` is an unreadable publication.
+        """
         resp_waiter = self._waiting_for_responses.get(resp_pointer)
         if resp_waiter is None:
             self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
@@ -1049,13 +1023,17 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 try:
                     item = await asyncio.wait_for(self._send_queue.get(), timeout)
                 except asyncio.TimeoutError:
+                    # Not `continue` inside the `finally`: that discards whatever
+                    # the send raised — including the cancellation deinitialize()
+                    # sends while a batch is still in flight on a slow link, which
+                    # left the sender running and deinitialize() waiting forever.
                     try:
                         await self._send_to_gateway(batch, self._batch_start_index)
                     finally:
                         batch = []
                         self._batch_start_index = self._next_queue_index
                         timeout = None
-                        continue
+                    continue
 
                 self.logger.debug("Processing queue item: %s", LazyCommandExpression(item.command))
                 timeout = WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S
@@ -1119,7 +1097,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         )
 
                 timeout_handler = asyncio.get_running_loop().call_later(
-                    self._response_timeout,
+                    self._link.reply_timeout(len(items), self._response_timeout),
                     timeout_callback,
                 )
                 self._waiting_for_responses[current_index] = WaitResponseItem(
@@ -1130,18 +1108,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 regs_32bit.append(result)
                 self._send_queue_item_index += 1
 
-            msg = "".join([f"{((reg & 0xFFFF) << 16) | ((reg >> 16) & 0xFFFF):08x}" for reg in regs_32bit])
-            buffer_address = (
-                self.config.queue_start_modbus_address
-                + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
-                + start_index * 2
-            )
-            await self.send_modbus_rpc_no_response(
-                function=16,
-                address=buffer_address,
-                count=len(regs_32bit) * 2,
-                msg=msg,
-            )
+            await self._link.send_slots(start_index, regs_32bit, self._response_timeout)
 
     async def _send_commands_internal(
         self,
@@ -1165,19 +1132,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 commands_to_send.append(EnableDeviceType(cmd.devicetype))
             commands_to_send.append(cmd)
         priorities = _compute_frame_priorities(commands_to_send, priority)
-        response_futures: list[asyncio.Future] = []
-        if lock_queue:
-            await self._send_queue_lock.acquire()
-        try:
-            for cmd, frame_priority in zip(commands_to_send, priorities):
-                fut = asyncio.get_running_loop().create_future()
-                response_futures.append(fut)
-                await self._send_queue.put(SendQueueItem(fut, cmd, source, frame_priority))
-        finally:
-            if lock_queue:
-                self._send_queue_lock.release()
-
-        responses = await asyncio.gather(*response_futures)
+        if self._memory is None:
+            responses = await self._send_expanded(commands_to_send, priorities, source, lock_queue)
+        else:
+            responses = await self._send_through_memory(commands_to_send, priorities, source, lock_queue)
         filtered_responses: list[Response] = []
         i = 0
         for cmd in commands:
@@ -1188,6 +1146,101 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             i += 1
 
         return filtered_responses
+
+    async def _send_expanded(
+        self,
+        commands: Sequence[Command],
+        priorities: Sequence[FramePriority],
+        source: BusTrafficSource,
+        lock_queue: bool,
+    ) -> list[Response]:
+        """Queue every frame and wait for its answer; the wire, as opposed to the memo."""
+        response_futures: list[asyncio.Future] = []
+        if lock_queue:
+            await self._send_queue_lock.acquire()
+        try:
+            for cmd, frame_priority in zip(commands, priorities):
+                fut = asyncio.get_running_loop().create_future()
+                response_futures.append(fut)
+                await self._send_queue.put(SendQueueItem(fut, cmd, source, frame_priority))
+        finally:
+            if lock_queue:
+                self._send_queue_lock.release()
+        return await asyncio.gather(*response_futures)
+
+    async def _send_through_memory(  # pylint: disable=too-many-locals
+        self,
+        expanded: Sequence[Command],
+        priorities: Sequence[FramePriority],
+        source: BusTrafficSource,
+        lock_queue: bool,
+    ) -> list[Response]:
+        """Answer memory-bank and settings reads from the memo where it can; see memory_cache.
+
+        A restored memo entry is only used once the device at that short
+        address has confirmed its random address on the wire. A batch whose
+        reads are all remembered sends only its DTR writes; any miss sends the
+        whole batch and the memo learns from the answers.
+        """
+        memory = self._memory
+        assert memory is not None
+        for key in memory.untrusted_keys(expanded):
+            random_address = await self._query_random_address(memory, key, source, lock_queue)
+            if memory.confirm(key, random_address):
+                self.logger.info("Memory bank memo confirmed for %s %d", *key)
+            else:
+                self.logger.info("Memory bank memo dropped for %s %d: device changed", *key)
+
+        served = memory.plan(expanded)
+        if served is None:
+            answers = await self._send_expanded(expanded, priorities, source, lock_queue)
+            for cmd, answer in zip(expanded, answers):
+                memory.observe(cmd, answer, delivered=not isinstance(answer, WbGatewayTransmissionError))
+            # A device whose banks were just learned must also tell us its
+            # random address, or the memo cannot be verified — or kept — next
+            # session. Three frames, once.
+            for cmd in expanded:
+                key = memory.kind_and_short(cmd) or memory.settings_key(cmd)
+                if key is not None and memory.needs_random_address(key):
+                    memory.set_random_address(
+                        key, await self._query_random_address(memory, key, source, lock_queue)
+                    )
+            return answers
+
+        # The unserved remainder — DTR writes, EnableDeviceType prefixes, and
+        # any query the memo does not carry — always goes to the wire: the
+        # daemon's DT8 reads depend on it across batches (a QueryContentDTR0 in
+        # the next batch verifies device-side state this batch's writes set up).
+        wire = [
+            (cmd, prio) for index, (cmd, prio) in enumerate(zip(expanded, priorities)) if index not in served
+        ]
+        wire_answers = iter(
+            await self._send_expanded(
+                [cmd for cmd, _ in wire], [prio for _, prio in wire], source, lock_queue
+            )
+            if wire
+            else []
+        )
+        memory.apply_served(expanded)
+        answers: list[Response] = []
+        for index, cmd in enumerate(expanded):
+            if index in served:
+                byte = served[index]
+                answers.append(cmd.response(BackwardFrame(byte)) if byte is not None else cmd.response(None))
+            else:
+                answers.append(next(wire_answers))
+        return answers
+
+    async def _query_random_address(self, memory, key, source, lock_queue: bool) -> Optional[int]:
+        replies = await self._send_expanded(
+            memory.random_queries(*key), [FramePriority.CONFIGURATION] * 3, source, lock_queue
+        )
+        # MemoryCache.raw_of, not a bare getattr: a gateway error response
+        # raises from its raw_value property.
+        values = [memory.raw_of(reply) for reply in replies]
+        if not all(value is not None and not value.error for value in values):
+            return None
+        return (values[0].as_integer << 16) | (values[1].as_integer << 8) | values[2].as_integer
 
 
 def _is_dtr_set(cmd: Command) -> bool:

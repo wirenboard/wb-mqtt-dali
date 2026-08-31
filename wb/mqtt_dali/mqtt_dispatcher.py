@@ -134,3 +134,19 @@ def get_str_payload(message: aiomqtt.Message) -> str:
     if isinstance(message.payload, (bytes, bytearray)):
         return message.payload.decode()
     return str(message.payload)
+
+
+def get_int_payload(message: aiomqtt.Message) -> int:
+    """Parse a message payload as an integer; every failure comes out as `ValueError`."""
+    try:
+        if message.payload is None:
+            raise ValueError("payload is empty")
+        if isinstance(message.payload, (bytes, bytearray)):
+            return int(message.payload.decode().strip(), 0)
+        if isinstance(message.payload, memoryview):
+            return int(message.payload.tobytes().decode().strip(), 0)
+        if isinstance(message.payload, str):
+            return int(message.payload.strip(), 0)
+        return int(message.payload)
+    except (AttributeError, TypeError) as exc:
+        raise ValueError(f"unsupported payload type {type(message.payload).__name__}: {exc}") from exc

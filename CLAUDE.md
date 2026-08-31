@@ -24,9 +24,9 @@ Always use tools from `.venv/bin/...`.
 ## Mandatory Verification Pipeline (after any code change)
 
 ```bash
-.venv/bin/isort --profile black wb/ tests/ e2e/ bin/wb-mqtt-dali
-.venv/bin/black wb/ tests/ e2e/ bin/wb-mqtt-dali
-.venv/bin/pylint --rcfile=pyproject.toml wb/ tests/ e2e/ bin/wb-mqtt-dali
+.venv/bin/isort --profile black wb/ tests/ e2e/ scripts/ bin/wb-mqtt-dali
+.venv/bin/black wb/ tests/ e2e/ scripts/ bin/wb-mqtt-dali
+.venv/bin/pylint --rcfile=pyproject.toml wb/ tests/ e2e/ scripts/ bin/wb-mqtt-dali
 .venv/bin/pytest
 ```
 

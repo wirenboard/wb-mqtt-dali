@@ -1,4 +1,4 @@
-wb-mqtt-dali (1.22.1) stable; urgency=medium
+wb-mqtt-dali (1.23.1) stable; urgency=medium
 
   * Fix two sections both titled "Scenes" on the settings page of a DT8 device, and of a bus
     or group with DT8 gear: the light-level scenes and the colour scenes looked the same,
@@ -6,6 +6,19 @@ wb-mqtt-dali (1.22.1) stable; urgency=medium
     colour ones are now titled "Colour scenes" / «Цветовые сцены».
 
  -- Evgeny Boger <wb-claude-mail-00001-7@proton.me>  Sat, 29 Aug 2026 21:48:46 +0000
+
+wb-mqtt-dali (1.23.0) stable; urgency=medium
+
+  * Refresh the product database from the DALI Alliance registry: 986 devices that used to be
+    unknown are now named in MQTT, and 1164 known ones got their data corrected.
+  * Manufacturer names are no longer cut short: a device that used to publish
+    "Shenzhen Rico Lighting Co.,..." now publishes "Shenzhen Rico Lighting Co., Ltd".
+  * Part numbers keep the characters that used to be dropped from them, "LBULKM-D2 (IEC)"
+    instead of "LBULKM-D2 IEC".
+  * Devices the registry has stopped listing stay in the database, so gear that is out of
+    production keeps its manufacturer and model in MQTT.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 31 Aug 2026 14:00:00 +0500
 
 wb-mqtt-dali (1.22.0) stable; urgency=medium
 

@@ -18,6 +18,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..mqtt_dispatcher import get_str_payload
 from ..wbdali_registers import (
     BUS_ADDRESS_OFFSET,
     MONITOR_REGISTERS_PER_SLOT,
@@ -28,7 +29,7 @@ from ..wbdali_registers import (
     monitor_address,
     reply_address,
 )
-from .broker import Broker, Client, Message, get_payload_str
+from .broker import Broker, Client, Message
 from .network import SimulatedModbusNetwork
 
 logger = logging.getLogger("wb.mqtt_dali.sim.serial_service")
@@ -123,7 +124,7 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
     async def _answer(self, message: Message) -> None:
         topic = message.topic.value
         try:
-            request = json.loads(get_payload_str(message))
+            request = json.loads(get_str_payload(message))
         except ValueError:
             logger.error("Malformed request on %s: %r", topic, message.payload)
             return

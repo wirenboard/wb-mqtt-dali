@@ -419,7 +419,7 @@ class SceneSettings(ColourState):
 
 class ScenesSettings(SettingsParamBase):
     def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
-        super().__init__(SettingsParamName("Scenes", "Сцены"))
+        super().__init__(SettingsParamName("Colour scenes", "Цветовые сцены"))
 
         self.property_name = f"scenes_{default_colour_type.value}"
         self._scenes = [SceneSettings(i, default_colour_type, limits) for i in range(SCENES_TOTAL)]
@@ -544,7 +544,7 @@ class ScenesSettings(SettingsParamBase):
 class ColourGroupScenesSettings(ColourState):
     def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
-            SettingsParamName("Scenes", "Сцены"),
+            SettingsParamName("Colour scenes", "Цветовые сцены"),
             f"scene_{default_colour_type.value}",
             QuerySceneLevel,
             SetScene,

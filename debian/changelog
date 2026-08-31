@@ -1,10 +1,23 @@
-wb-mqtt-dali (1.23.0) stable; urgency=medium
+wb-mqtt-dali (1.24.0) stable; urgency=medium
 
   * DALI-2 events sent with the "Instance" addressing scheme (the factory default on
     e.g. Tridonic MSensor) now update the device's controls when exactly one device
     on the bus carries the matching instance; they used to be silently dropped.
 
  -- Evgeny Boger <boger@wirenboard.com>  Sun, 30 Aug 2026 23:20:00 +0500
+
+wb-mqtt-dali (1.23.0) stable; urgency=medium
+
+  * Refresh the product database from the DALI Alliance registry: 986 devices that used to be
+    unknown are now named in MQTT, and 1164 known ones got their data corrected.
+  * Manufacturer names are no longer cut short: a device that used to publish
+    "Shenzhen Rico Lighting Co.,..." now publishes "Shenzhen Rico Lighting Co., Ltd".
+  * Part numbers keep the characters that used to be dropped from them, "LBULKM-D2 (IEC)"
+    instead of "LBULKM-D2 IEC".
+  * Devices the registry has stopped listing stay in the database, so gear that is out of
+    production keeps its manufacturer and model in MQTT.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 31 Aug 2026 14:00:00 +0500
 
 wb-mqtt-dali (1.22.0) stable; urgency=medium
 

@@ -344,7 +344,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
         await send_with_retry(self.driver, self._cmds.Terminate(), log)
         await send_with_retry(self.driver, self._cmds.Initialise(short_addr), log)
         await send_with_retry(self.driver, self._cmds.Randomise(), log)
-        await asyncio.sleep(0.1)  # 100ms per 62386-102-2022 11.7.4
+        await asyncio.sleep(RANDOMISE_SETTLE_TIME_S)
 
     async def _process_found_device(  # pylint: disable=too-many-branches,too-many-statements
         self, found_addr: int, query_short_resp: Response
@@ -543,7 +543,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             await send_with_retry(self.driver, self._cmds.Randomise(), log)
 
         if short_sent_randomise:
-            await asyncio.sleep(0.1)  # wait for new random addresses to be generated
+            await asyncio.sleep(RANDOMISE_SETTLE_TIME_S)
             log.info("Querying new random addresses for devices that we sent Randomise to")
             rand_addresses = await asyncio.gather(
                 *[get_random_address(x, self._cmds, self.driver) for x in short_sent_randomise]

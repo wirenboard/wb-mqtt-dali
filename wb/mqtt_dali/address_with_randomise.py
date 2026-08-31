@@ -60,6 +60,7 @@ class AddressingOptions:
     gateway: str
     bus: int
     config_path: str = CONFIG_FILEPATH
+    search_only: bool = False
 
 
 class AddressingAborted(RuntimeError):
@@ -70,10 +71,13 @@ async def address_with_randomise(driver: WBDALIDriver, options: AddressingOption
     """Address the bus, then bring the configuration in line with what the pass found."""
     free_shorts = await free_short_addresses(driver)
     try:
-        bus_gear = await address_bus(driver, free_shorts)
+        bus_gear = await address_bus(driver, free_shorts, options.search_only)
     except AddressingAborted as error:
         log.error("%s. The configuration is left untouched", error)
         return ExitCode.ADDRESSING_ABORTED
+
+    if options.search_only:
+        return ExitCode.SUCCESS
 
     if not bus_gear:
         log.warning("The search found no gear, the configuration is left untouched")
@@ -104,8 +108,11 @@ async def gear_present(driver: WBDALIDriver, short: int) -> bool:
     return response.value is True
 
 
-async def address_bus(driver: WBDALIDriver, free_shorts: list[int]) -> list[DaliDeviceAddress]:
+async def address_bus(
+    driver: WBDALIDriver, free_shorts: list[int], search_only: bool = False
+) -> list[DaliDeviceAddress]:
     """Enumerate the bus after a RANDOMISE addressed to all devices, addressing what it finds.
+    With `search_only` the pass reports every device it finds and programs nothing.
 
     The search comes from `BinarySearchAddressFinder`: it confirms silence on COMPARE with a
     repeat and checks the address below the one the bisection converged on, both of which gear
@@ -137,9 +144,13 @@ async def address_bus(driver: WBDALIDriver, free_shorts: list[int]) -> list[Dali
                 continue
             failed_searches = 0
             last_found = found
-            bus_gear.append(
-                DaliDeviceAddress(await address_found_gear(driver, cmds, found, free_shorts), found)
-            )
+            if search_only:
+                short = await read_short_address(driver, cmds)
+                log.info("Gear at 0x%06x, short address %s", found, "none" if short is None else short)
+            else:
+                bus_gear.append(
+                    DaliDeviceAddress(await address_found_gear(driver, cmds, found, free_shorts), found)
+                )
             await send_with_retry(driver, cmds.Withdraw(), log)
             low = found
     finally:
@@ -316,6 +327,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--bus", type=int, default=1, choices=(1, 2, 3), help="Bus number to address (default: 1)"
     )
+    parser.add_argument(
+        "--search-only",
+        action="store_true",
+        help=(
+            "Report what the search finds and program nothing, leaving the configuration "
+            "alone. RANDOMISE is still sent, so the random address of every conforming "
+            "device is re-rolled."
+        ),
+    )
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv[1:])
 
@@ -327,7 +347,7 @@ async def main(argv: list[str]) -> ExitCode:
     )
     logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
-    options = AddressingOptions(args.gateway, args.bus)
+    options = AddressingOptions(args.gateway, args.bus, search_only=args.search_only)
     async with connected_driver(args.gateway, args.bus) as driver:
         return await address_with_randomise(driver, options)
 

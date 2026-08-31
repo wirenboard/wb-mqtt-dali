@@ -436,6 +436,14 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     )
                     await send_with_retry(self.driver, self._cmds.ProgramShortAddress(MASK), log)
                     shorts_with_random_address_conflicts.add(None)
+                elif self.found_devices[short_addr] == found_addr:
+                    log.warning(
+                        "Device found at 0x%06x with short address %d, which this run already "
+                        "recorded for it: it did not leave the device search after WITHDRAW. "
+                        "Keeping its short address",
+                        found_addr,
+                        short_addr,
+                    )
                 else:
                     log.warning(
                         "Device found at 0x%06x with short address %d, "

@@ -374,3 +374,38 @@ flowchart TD
 ### Служебные RPC
 
 Служебные RPC используются веб-редактором и могут меняться без гарантий обратной совместимости. Они вынесены в отдельный документ: [docs/editor_rpc.md](docs/editor_rpc.md).
+
+## Симулятор
+
+Пакет `wb.mqtt_dali.sim` — установка DALI без железа: модули WB-DALI с их картой
+регистров (очередь с указателем, регистры ответов, кольцо монитора — так, как ведёт
+себя прошивка), балласты и устройства DALI-2, отвечающие на настоящие кадры
+(коммишенинг, группы, сцены, цвет DT8, события кнопок), внутрипроцессный MQTT-брокер
+и заглушка wb-mqtt-serial. Немодифицированный демон и его `WBDALIDriver` работают
+поверх всего этого end-to-end.
+
+```python
+import asyncio, logging
+from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.sim import Broker, Client, FakeWbMqttSerial, build_network, default_scenario, serial_config
+from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+
+async def main():
+    scenario = default_scenario()                 # или json.load(...) со своей установкой
+    network = build_network(scenario)             # frameDelaySeconds в сценарии — темп шины
+    broker = Broker()
+    serial = FakeWbMqttSerial(broker, network, serial_config(scenario))
+    await serial.start()
+    async with Client(broker, "wb-mqtt-dali") as client:
+        dispatcher = MQTTDispatcher(client)
+        task = asyncio.create_task(dispatcher.run())
+        driver = WBDALIDriver(WBDALIConfig(device_name="wb-mdali_1", bus=1), dispatcher, logging.getLogger("sim"))
+        await driver.initialize()
+        ...
+```
+
+Сценарий — простые данные (см. `default_scenario()`): модули, балласты с короткими
+и случайными адресами, типами устройств и группами, DALI-2-устройства, которые могут
+нажимать себя сами (`pressIntervalSeconds`), и `frameDelaySeconds` — стоимость кадра
+на шине, чтобы воспроизводить состояния «шина ещё занята». Сценарий из отчёта об
+ошибке — воспроизводимый тест.

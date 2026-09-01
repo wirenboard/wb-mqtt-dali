@@ -130,7 +130,7 @@ async def address_bus(
         last_found: Optional[int] = None
         failed_searches = 0
         while low < MAX_RANDOM_ADDRESS:
-            found = await finder.find_next_device(low, MAX_RANDOM_ADDRESS)
+            found = await finder.find_next_device(low)
             if found is None:
                 break
             if found in (BinarySearchAddressFinder.UNCONFIRMED_ADDRESS, last_found):

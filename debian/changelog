@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.27.0) stable; urgency=medium
+
+  * Values, errors and meta now go to the broker at QoS 2.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 03 Sep 2026 10:35:30 +0500
+
 wb-mqtt-dali (1.26.0) stable; urgency=medium
 
   * Commissioning takes less time when the bus has many unaddressed devices.

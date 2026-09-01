@@ -11,6 +11,7 @@ from wb.mqtt_dali.wbmqtt import (
     ControlMeta,
     ControlState,
     Device,
+    PublishPolicy,
     TranslatedTitle,
     remove_topics_by_driver,
     retain_hack,
@@ -155,6 +156,9 @@ class TestControlState:
         assert state.error == ControlError(0)
         assert not state.error
 
+    def test_default_publish_policy_is_on_change(self):
+        assert ControlState(ControlMeta(), "value").publish_policy is PublishPolicy.ON_CHANGE
+
 
 class TestControlError:
     def test_to_mqtt(self):
@@ -227,7 +231,7 @@ class TestDevice:
 
         assert device._controls["ctrl1"].value == "updated"
         mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/ctrl1", "updated", retain=True
+            "/devices/test_device/controls/ctrl1", "updated", qos=2, retain=True
         )
 
     @pytest.mark.asyncio
@@ -255,7 +259,7 @@ class TestDevice:
         await device.set_control_value("ctrl1", "value", force=True)
 
         mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/ctrl1", "value", retain=True
+            "/devices/test_device/controls/ctrl1", "value", qos=2, retain=True
         )
 
     @pytest.mark.asyncio
@@ -269,6 +273,70 @@ class TestDevice:
 
         mock_client.publish.assert_not_called()
         assert "Can't set value of undeclared control" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_set_control_state_drops_repeated_value(self, mock_client):
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(control_type="switch"), "0")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", "1", ControlError.NONE)
+        mock_client.publish.assert_called_once_with(
+            "/devices/test_device/controls/ctrl1", "1", qos=2, retain=True
+        )
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", "1", ControlError.NONE)
+
+        mock_client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_control_state_republishes_repeated_value_when_policy_is_always(self, mock_client):
+        """The repeat goes out and stays retained: the policy and retain are separate axes."""
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control(
+            "long_press1", ControlMeta(control_type="switch"), "0", PublishPolicy.ALWAYS
+        )
+        await device.set_control_state("long_press1", "1", ControlError.NONE)
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("long_press1", "1", ControlError.NONE)
+
+        mock_client.publish.assert_called_once_with(
+            "/devices/test_device/controls/long_press1", "1", qos=2, retain=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_control_value_republishes_repeated_value_when_policy_is_always(self, mock_client):
+        """The policy governs the plain value path too, with no force from the caller."""
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "value", PublishPolicy.ALWAYS)
+        mock_client.publish.reset_mock()
+
+        await device.set_control_value("ctrl1", "value")
+
+        mock_client.publish.assert_called_once_with(
+            "/devices/test_device/controls/ctrl1", "value", qos=2, retain=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_pushbutton_publishes_every_update_unretained_without_a_policy(self, mock_client):
+        """A pushbutton's type alone sends the repeat out, unretained and with no policy."""
+        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("short_press1", ControlMeta(control_type="pushbutton"), "0")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("short_press1", "1", ControlError.NONE)
+        await device.set_control_state("short_press1", "1", ControlError.NONE)
+
+        assert (
+            mock_client.publish.call_args_list
+            == [(("/devices/test_device/controls/short_press1", "1"), {"qos": 2, "retain": False})] * 2
+        )
 
     @pytest.mark.asyncio
     async def test_set_control_read_only(self, mock_client):
@@ -414,11 +482,13 @@ class TestDevice:
 
         assert "ctrl1" not in device._controls
         assert mock_client.publish.call_count == 3
-        mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, retain=True)
+        mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, qos=2, retain=True)
         mock_client.publish.assert_any_call(
-            "/devices/test_device/controls/ctrl1/meta/error", None, retain=True
+            "/devices/test_device/controls/ctrl1/meta/error", None, qos=2, retain=True
         )
-        mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1/meta", None, retain=True)
+        mock_client.publish.assert_any_call(
+            "/devices/test_device/controls/ctrl1/meta", None, qos=2, retain=True
+        )
 
     @pytest.mark.asyncio
     async def test_remove_control_nonexistent(self, mock_client):

@@ -104,7 +104,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         finder = BinarySearchAddressFinder(probe)
 
         with self.assertLogs("commissioning", "WARNING") as logs:
-            found = await finder.find_next_device(0, TOP)
+            found = await finder.find_next_device(0)
 
         self.assertEqual(found, DEVICE_ADDR)
 
@@ -124,7 +124,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         probe = LossySearchProbe([DEVICE_ADDR], CompareFaults(lost=[Ask(FIRST_MIDPOINT)]))
         finder = BinarySearchAddressFinder(probe)
 
-        found = await finder.find_next_device(0, TOP)
+        found = await finder.find_next_device(0)
 
         self.assertEqual(found, BinarySearchAddressFinder.UNCONFIRMED_ADDRESS)
         self.assertIn(FALSE_ADDR, probe.calls)
@@ -137,7 +137,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         )
         finder = BinarySearchAddressFinder(probe)
 
-        found = await finder.find_next_device(0, TOP)
+        found = await finder.find_next_device(0)
 
         self.assertEqual(found, BinarySearchAddressFinder.UNCONFIRMED_ADDRESS)
         self.assertTrue(probe.faults.all_injected())
@@ -147,7 +147,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         probe = LossySearchProbe([0])
         finder = BinarySearchAddressFinder(probe)
 
-        found = await finder.find_next_device(0, TOP)
+        found = await finder.find_next_device(0)
 
         self.assertEqual(found, 0)
         self.assertNotIn(-1, probe.calls)

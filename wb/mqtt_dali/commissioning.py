@@ -178,15 +178,15 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
     def __init__(self, selector: SearchAddressSelector):
         self.selector = selector
 
-    async def find_next_device(self, low: int, high: int) -> Optional[int]:
-        """The lowest random address in [low, high] a device answers COMPARE at; `None` when
+    async def find_next_device(self, low: int) -> Optional[int]:
+        """The lowest random address in [low, 0xFFFFFF] a device answers COMPARE at; `None` when
         nothing answers in the range, `UNCONFIRMED_ADDRESS` when something answers below the
         address the search converged on and the search has to be repeated."""
-        if not await self._compare_with_retry(high):
+        if not await self._compare_with_retry(MAX_RANDOM_ADDRESS):
             log.info("No device left to address, exiting")
             return None
 
-        found_addr = await self._bisect(low, high)
+        found_addr = await self._bisect(low)
 
         if found_addr > 0 and await self._compare_with_retry(found_addr - 1):
             log.warning(
@@ -203,25 +203,21 @@ class BinarySearchAddressFinder:  # pylint: disable=R0903
 
     # --- Private ---
 
-    async def _bisect(self, low: int, high: int) -> int:
-        """Narrow the range down to a single address. `high` has answered COMPARE."""
-        low_compared = False
-        while high - low > 1:
-            midpoint = (low + high) // 2
-            if await self.selector.compare(midpoint):
-                # Device responds - search lower half
-                high = midpoint
-            else:
-                # No response - search upper half
-                low = midpoint
-                low_compared = True
-
-        # Check which of the two remaining addresses is the device. `high` has always
-        # answered COMPARE, and once the loop moved `low` up it has answered "no" —
-        # re-asking it is the check's job.
-        if not low_compared and await self.selector.compare(low):
-            return low
-        return high
+    async def _bisect(self, low: int) -> int:
+        """Read out the lowest answering address bit by bit, MSB first. Probe each bit at
+        zero with all lower bits at one: an answer keeps the bit at zero, silence makes it
+        one. First probe 0x7FFFFF; answered — 0x3FFFFF goes next, silent — 0xBFFFFF.
+        0xFFFFFF is never probed: with no bit at zero it asks nothing, and find_next_device
+        has already checked it before calling here."""
+        found = 0
+        for bit in reversed(range(MAX_RANDOM_ADDRESS.bit_length())):
+            mask = 1 << bit
+            probe = found | (mask - 1)
+            # a probe below `low` is guaranteed silent — nothing answers below the
+            # bound, everything the search found there has been withdrawn
+            if probe < low or not await self.selector.compare(probe):
+                found |= mask
+        return found
 
     async def _compare_with_retry(self, addr: int) -> bool:
         """Whether any device holds a random address at or below `addr`, silence confirmed by
@@ -328,8 +324,8 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
             f"neither VERIFY SHORT ADDRESS nor QUERY SHORT ADDRESS confirmed the write"
         )
 
-    async def find_next_device(self, low: int, high: int) -> Optional[int]:
-        return await self.binary_search_finder.find_next_device(low, high)
+    async def find_next_device(self, low: int) -> Optional[int]:
+        return await self.binary_search_finder.find_next_device(low)
 
     async def _randomise_by_short(self, short_addr: Optional[int]) -> None:
         """Randomise the devices with the given short address."""
@@ -629,12 +625,10 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
 
                 log.info("Start binary search (%d)", binary_search_counter)
                 low = 0
-                high = MAX_RANDOM_ADDRESS
                 last_found_rand_addr: Optional[int] = None
                 failed_searches = 0
-                while low < high:
-                    high = MAX_RANDOM_ADDRESS
-                    found_rand_addr = await self.find_next_device(low, high)
+                while low < MAX_RANDOM_ADDRESS:
+                    found_rand_addr = await self.find_next_device(low)
                     if found_rand_addr is None:
                         log.info("No device found, exiting")
                         break
@@ -809,11 +803,10 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 ]
             )
             low = 0
-            high = MAX_RANDOM_ADDRESS
             last_found_rand_addr: Optional[int] = None
             failed_searches = 0
-            while low < high:
-                found_addr = await self.find_next_device(low, high)
+            while low < MAX_RANDOM_ADDRESS:
+                found_addr = await self.find_next_device(low)
                 if found_addr is None:
                     break
 

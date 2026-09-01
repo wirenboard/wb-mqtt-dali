@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.26.0) stable; urgency=medium
+
+  * Commissioning takes less time when the bus has many unaddressed devices.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 01 Sep 2026 11:23:58 +0500
+
 wb-mqtt-dali (1.25.0) stable; urgency=medium
 
   * Some control gear keeps answering the device search after a WITHDRAW. Commissioning gave

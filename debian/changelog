@@ -1,3 +1,14 @@
+wb-mqtt-dali (1.25.0) stable; urgency=medium
+
+  * Some control gear keeps answering the device search after a WITHDRAW. Commissioning gave
+    such gear a new short address on every run, and the configuration collected several
+    entries for one device. Now the run stops with an error naming that gear, and the
+    configuration stays as it was: the bus cannot be enumerated past such gear.
+  * wb-mqtt-dali-address-with-randomise takes --search-only: it reports what is on the bus
+    and writes nothing to it.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 31 Aug 2026 20:59:21 +0500
+
 wb-mqtt-dali (1.24.0) stable; urgency=medium
 
   * A new tool, wb-mqtt-dali-address-with-randomise, addresses the gear that answers the

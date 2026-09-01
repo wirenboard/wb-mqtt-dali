@@ -196,9 +196,9 @@ class RandomiseOnlyFakeBus:
         return (self._search_addr[0] << 16) | (self._search_addr[1] << 8) | self._search_addr[2]
 
 
-async def run_tool(bus: RandomiseOnlyFakeBus, config_path: str) -> ExitCode:
+async def run_tool(bus: RandomiseOnlyFakeBus, config_path: str, search_only: bool = False) -> ExitCode:
     """Run one pass against the configuration at `config_path`."""
-    return await address_with_randomise(bus, AddressingOptions(GATEWAY, BUS, config_path))
+    return await address_with_randomise(bus, AddressingOptions(GATEWAY, BUS, config_path, search_only))
 
 
 def write_config(config_path: str, devices: list[dict]) -> None:
@@ -374,3 +374,35 @@ class TestConfigurationAfterThePass(ToolTestCase):
 
         self.assertEqual(read_devices(self.config_path), after_first_run)
         self.assertEqual(bus.programmed_shorts(), [])
+
+
+class TestSearchOnly(ToolTestCase):
+    async def test_gear_is_reported_and_nothing_is_programmed(self):
+        """Gear without a short address is found and reported as having none; the pass programs
+        nothing and leaves the configuration alone."""
+        gear = FakeGear(random=0x1235CF)
+        bus = RandomiseOnlyFakeBus([gear])
+        write_config(self.config_path, [{"short": 7, "random": 0x300000}])
+
+        with self.assertLogs(LOGGER, "INFO") as logs:
+            self.assertEqual(await run_tool(bus, self.config_path, search_only=True), ExitCode.SUCCESS)
+
+        self.assertIsNone(gear.short)
+        self.assertEqual(bus.programmed_shorts(), [])
+        self.assertEqual(read_devices(self.config_path), [{"short": 7, "random": 0x300000}])
+        self.assertTrue(any("0x1235cf, short address none" in line for line in logs.output), logs.output)
+
+    async def test_every_device_is_reported_with_the_short_it_has(self):
+        """The search walks past each device as usual, so all of them are reported, and the ones
+        holding a short address are reported with it."""
+        addressed = FakeGear(random=0x300000, short=5)
+        unaddressed = FakeGear(random=0x400000)
+        bus = RandomiseOnlyFakeBus([addressed, unaddressed])
+
+        with self.assertLogs(LOGGER, "INFO") as logs:
+            self.assertEqual(await run_tool(bus, self.config_path, search_only=True), ExitCode.SUCCESS)
+
+        self.assertEqual((addressed.short, unaddressed.short), (5, None))
+        self.assertEqual(bus.programmed_shorts(), [])
+        self.assertTrue(any("0x300000, short address 5" in line for line in logs.output), logs.output)
+        self.assertTrue(any("0x400000, short address none" in line for line in logs.output), logs.output)

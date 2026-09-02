@@ -1,9 +1,11 @@
 wb-mqtt-dali (1.25.0) stable; urgency=medium
 
-  * A simulated DALI installation ships in the package (wb.mqtt_dali.sim): WB-DALI
-    modules with their register map, control gear and DALI-2 devices that answer real
-    frames, an in-process MQTT broker and a stand-in for wb-mqtt-serial — the unmodified
-    daemon runs against it with no hardware, for tests, bug reports and demos.
+  * A simulated DALI installation is available in the source tree (wb/mqtt_dali/sim):
+    WB-DALI modules with their register map, control gear and DALI-2 devices that answer
+    real frames, an in-process MQTT broker and a stand-in for wb-mqtt-serial — the
+    unmodified daemon runs against it with no hardware, for tests, bug reports and demos.
+    It is not installed by this package: it is used by the test suite and by hosts that
+    build from the sources.
 
  -- Evgeny Boger <boger@wirenboard.com>  Mon, 31 Aug 2026 15:30:00 +0500
 

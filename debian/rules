@@ -6,3 +6,12 @@
 
 override_dh_installsystemd:
 	dh_installsystemd --name=wb-mqtt-dali
+
+
+# The simulator is a development tool: it builds and is tested, but is not
+# installed. The guard fails the build if the layout moves, so it cannot
+# silently come back.
+override_dh_auto_install:
+	dh_auto_install
+	test -d debian/wb-mqtt-dali/usr/lib/python3/dist-packages/wb/mqtt_dali/sim
+	rm -r debian/wb-mqtt-dali/usr/lib/python3/dist-packages/wb/mqtt_dali/sim

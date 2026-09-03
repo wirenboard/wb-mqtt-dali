@@ -159,6 +159,16 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_error(control_id, error)
 
+    async def publish_control_state(
+        self, device_id: str, control_id: str, value: Optional[str], error: ControlError
+    ) -> None:
+        async with self._lock:
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+
+            await self._devices[device_id].set_control_state(control_id, value, error)
+
     async def register_control_handler(
         self, device_id: str, control_id: str, callback: MessageCallback
     ) -> None:
@@ -258,7 +268,9 @@ class DevicePublisher:
 
     async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
         value = control_info.state.value if control_info.state.value is not None else ""
-        await device.create_control(control_info.id, control_info.state.meta, value)
+        await device.create_control(
+            control_info.id, control_info.state.meta, value, control_info.state.publish_policy
+        )
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

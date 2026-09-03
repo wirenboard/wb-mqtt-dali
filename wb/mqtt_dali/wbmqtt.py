@@ -5,7 +5,7 @@ import random
 import string
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from enum import Flag, auto
+from enum import Enum, Flag, auto
 from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
@@ -76,16 +76,38 @@ class ControlError(Flag):
         return "".join(chars)
 
 
+def _is_momentary(meta: ControlMeta) -> bool:
+    # A momentary control's value is a notification, not state: retaining it would replay a
+    # phantom press to every new subscriber, and dropping a repeat as "unchanged" would
+    # swallow the second press.
+    return meta.control_type == "pushbutton"
+
+
+class PublishPolicy(Enum):
+    """Whether an update repeating the published value still reaches the topic."""
+
+    # The value is state: a repeat says nothing new.
+    ON_CHANGE = auto()
+
+    # The value is an event: a repeat is a second occurrence, and has to be published.
+    ALWAYS = auto()
+
+
 @dataclass
 class ControlState:
     meta: ControlMeta
     value: Optional[str] = None
     error: ControlError = ControlError.NONE
+    publish_policy: PublishPolicy = PublishPolicy.ON_CHANGE
 
     def __post_init__(self):
         # meta can be changed during runtime with set_control_read_only and set_control_title,
         # so we need to make a copy of it to not modify the original meta passed to the constructor
         self.meta = deepcopy(self.meta)
+
+
+def _publishes_every_update(control: ControlState) -> bool:
+    return control.publish_policy is PublishPolicy.ALWAYS or _is_momentary(control.meta)
 
 
 class Device:
@@ -130,8 +152,14 @@ class Device:
             await self.remove_control(mqtt_control_name)
         await self._publish(self._base_topic + "/meta", None)
 
-    async def create_control(self, mqtt_control_name: str, meta: ControlMeta, value: str) -> None:
-        self._controls[mqtt_control_name] = ControlState(meta=meta, value=None)
+    async def create_control(
+        self,
+        mqtt_control_name: str,
+        meta: ControlMeta,
+        value: str,
+        publish_policy: PublishPolicy = PublishPolicy.ON_CHANGE,
+    ) -> None:
+        self._controls[mqtt_control_name] = ControlState(meta=meta, value=None, publish_policy=publish_policy)
         await self._publish_control_meta(mqtt_control_name, meta)
         await self.set_control_value(mqtt_control_name, value)
 
@@ -154,13 +182,41 @@ class Device:
     ) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
-            if control.value != value or force:
+            if control.value != value or force or _publishes_every_update(control):
                 control.value = value
-                await self._publish(self._get_control_base_topic(mqtt_control_name), value)
+                await self._publish(
+                    self._get_control_base_topic(mqtt_control_name),
+                    value,
+                    retain=not _is_momentary(control.meta),
+                )
             if control.error:
                 await self.set_control_error(mqtt_control_name, ControlError.NONE)
         else:
             logging.debug("Can't set value of undeclared control %s", mqtt_control_name)
+
+    async def set_control_state(
+        self, mqtt_control_name: str, value: Optional[str], error: ControlError
+    ) -> None:
+        """Publish whichever of the value and the error differs from what is on the wire.
+
+        Unlike ``set_control_value`` the error is compared, not cleared as a side effect, so a
+        value can go out under a standing ``/meta/error`` and an error can clear on its own.
+        Whichever carries the news goes last: the error when raised, the value when it clears.
+        """
+        control = self._controls.get(mqtt_control_name)
+        if control is None:
+            logging.debug("Can't set state of undeclared control %s", mqtt_control_name)
+            return
+        publish_value = control.value != value or _publishes_every_update(control)
+        publish_error = control.error != error
+        control.value, control.error = value, error
+        topic = self._get_control_base_topic(mqtt_control_name)
+        if publish_error and not error:
+            await self._publish(f"{topic}/meta/error", None)
+        if publish_value:
+            await self._publish(topic, value, retain=not _is_momentary(control.meta))
+        if publish_error and error:
+            await self._publish(f"{topic}/meta/error", error.to_mqtt())
 
     async def set_control_read_only(self, mqtt_control_name: str, read_only: bool) -> None:
         if mqtt_control_name in self._controls:
@@ -252,12 +308,12 @@ class Device:
             meta_json = json.dumps(meta_dict)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", meta_json)
 
-    async def _publish(self, topic: str, value: Optional[str]) -> None:
+    async def _publish(self, topic: str, value: Optional[str], retain: bool = True) -> None:
         if value is None:
             logging.debug('Clear "%s"', topic)
         else:
             logging.debug('Publish "%s" "%s"', topic, value)
-        await self._mqtt_client.publish(topic, value, retain=True)
+        await self._mqtt_client.publish(topic, value, qos=2, retain=retain)
 
 
 async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -> None:

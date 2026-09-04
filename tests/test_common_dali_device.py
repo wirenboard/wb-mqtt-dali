@@ -225,6 +225,15 @@ def _make_mock_param_handler(read_return=None, schema_return=None):
 
 
 @pytest.mark.asyncio
+async def test_load_info_raises_when_not_initialized():
+    d = _make_device()
+    driver = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await d.load_info(driver)
+
+
+@pytest.mark.asyncio
 async def test_load_info_populates_params_and_schema():
     d = _make_device()
     driver = AsyncMock()
@@ -235,6 +244,7 @@ async def test_load_info_populates_params_and_schema():
         mock_gmp_instance = _make_mock_param_handler(read_return={"gtin": 123})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params["short_address"] == 1
@@ -269,6 +279,7 @@ async def test_load_info_force_reload_reloads_even_if_params_present():
         mock_gmp_instance = _make_mock_param_handler(read_return={"firmware_version": "1.0"})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver, force_reload=True)
 
     assert d.params["short_address"] == 1
@@ -285,6 +296,7 @@ async def test_load_info_merges_params_from_multiple_handlers():
         mock_gmp_instance = _make_mock_param_handler(read_return={"gtin": 456})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params["gtin"] == 456
@@ -302,6 +314,7 @@ async def test_load_info_later_handler_overrides_earlier():
         mock_gmp_instance = _make_mock_param_handler(read_return={"gtin": 123})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     # extra_handler comes after GeneralMemoryParams, so its value wins
@@ -321,6 +334,7 @@ async def test_load_info_merges_schemas_from_handlers():
         MockGMP.return_value = mock_gmp_instance
 
         with patch("wb.mqtt_dali.common_dali_device.merge_json_schemas") as mock_merge:
+            await d.initialize(driver)
             await d.load_info(driver)
             # merge_json_schemas should be called for each non-None schema
             assert mock_merge.call_count == 2
@@ -337,6 +351,7 @@ async def test_load_info_skips_none_schemas():
         MockGMP.return_value = mock_gmp_instance
 
         with patch("wb.mqtt_dali.common_dali_device.merge_json_schemas") as mock_merge:
+            await d.initialize(driver)
             await d.load_info(driver)
             mock_merge.assert_not_called()
 
@@ -352,6 +367,7 @@ async def test_load_info_stores_parameter_handlers():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert len(d._parameter_handlers) == 2
@@ -369,6 +385,7 @@ async def test_load_info_schema_is_deepcopy_of_common():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     # schema should not be the same object as _common_schema
@@ -386,6 +403,7 @@ async def test_load_info_uses_correct_short_address_for_read():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     mock_gmp_instance.read.assert_awaited_once_with(driver, GearShort(42), d.logger)
@@ -404,6 +422,7 @@ async def test_load_info_includes_custom_name_and_mqtt_id():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params["name"] == "Custom Name"
@@ -420,6 +439,7 @@ async def test_load_info_empty_params_dict_triggers_load():
         mock_gmp_instance = _make_mock_param_handler(read_return={"key": "val"})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params.get("key") == "val"

@@ -15,6 +15,7 @@ from wb.mqtt_dali.application_controller import (
 
 # pylint: disable=too-many-public-methods
 from wb.mqtt_dali.dali_device import DaliDevice
+from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.device_init_scheduler import (
     INIT_RETRY_INITIAL_DELAY,
     INIT_RETRY_MAX_DELAY,
@@ -516,3 +517,52 @@ class TestPollStep:
         timeout = await ctrl._poll_step(t0 + 2.0)
         assert ctrl._poll_scheduler.poll_turn is True
         assert timeout <= 0.01
+
+
+# --- ApplicationController._load_device_info_task tests ---
+
+
+class TestLoadDeviceInfoTask:
+    @pytest.mark.asyncio
+    async def test_publishes_controls_for_device_that_failed_to_initialize(self):
+        # pylint: disable=protected-access
+        """A device whose start-up init failed is on MQTT with the common controls only, retry
+        still pending. Opening its settings page must publish its own control set and clear
+        the retry."""
+        ctrl = _make_controller()
+        ctrl._device_publisher.has_device = MagicMock(return_value=True)
+        dev = _make_mock_device(mqtt_id="r1", is_initialized=False)
+        dev.dimming_curve_type = DimmingCurveType.LOGARITHMIC
+        dev.get_mqtt_controls = MagicMock(return_value=["set_rgb"])
+        dev.load_info = AsyncMock()
+        ctrl.dali_devices = [dev]
+        ctrl._devices_by_mqtt_id = {"r1": dev}
+        ctrl._init_scheduler.schedule("r1", 0.0)
+        ctrl._init_scheduler.record_failure("r1", 0.0)
+
+        await ctrl._load_device_info_task(dev, False)
+
+        dev.initialize.assert_awaited_once()
+        ctrl._device_publisher.remove_device.assert_awaited_once_with("r1")
+        assert ctrl._device_publisher.add_device.await_args.args[0].controls == ["set_rgb"]
+        assert not ctrl._init_scheduler.has_pending
+        dev.load_info.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_republish_initialized_device(self):
+        # pylint: disable=protected-access
+        """Opening the settings page of a device that is already up must not touch its MQTT
+        publication -- dropping and re-adding the controls would flap the topics."""
+        ctrl = _make_controller()
+        dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
+        dev.dimming_curve_type = DimmingCurveType.LOGARITHMIC
+        dev.load_info = AsyncMock()
+        ctrl.dali_devices = [dev]
+        ctrl._devices_by_mqtt_id = {"d1": dev}
+
+        await ctrl._load_device_info_task(dev, False)
+
+        dev.initialize.assert_not_awaited()
+        ctrl._device_publisher.remove_device.assert_not_awaited()
+        ctrl._device_publisher.add_device.assert_not_awaited()
+        dev.load_info.assert_awaited_once()

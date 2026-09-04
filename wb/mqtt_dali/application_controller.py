@@ -777,6 +777,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     async def _load_device_info_task(
         self, device: Union[DaliDevice, Dali2Device], force_reload: bool
     ) -> None:
+        if not device.is_initialized:
+            await self._do_init_device(device.mqtt_id, default_timer())
         await device.load_info(self._dev, force_reload)
         if isinstance(device, DaliDevice):
             # Group membership turns up on a settings read: the gear may have been silent about

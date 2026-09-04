@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.27.1) stable; urgency=medium
+
+  * A device that failed to initialise at service start was no longer retried once its
+    settings page had been opened: it kept only the level and on/off controls until a
+    service restart. The retries now continue until the device answers and comes up in full.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 04 Sep 2026 11:25:00 +0500
+
 wb-mqtt-dali (1.27.0) stable; urgency=medium
 
   * Values, errors and meta now go to the broker at QoS 2.

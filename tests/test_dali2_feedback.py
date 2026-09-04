@@ -289,6 +289,7 @@ async def test_dali2_feedback_force_reload_does_not_re_discover():
         general_handler.get_schema = MagicMock(return_value={})
         mock_general.return_value = general_handler
 
+        await device.initialize(driver)
         await device.load_info(driver)
         first_discovery_calls = sum(
             1
@@ -343,6 +344,7 @@ async def test_dali2_feedback_repeated_load_info_no_extra_bus_traffic():
         general_handler.get_schema = MagicMock(return_value={})
         mock_general.return_value = general_handler
 
+        await device.initialize(driver)
         await device.load_info(driver)
         first_discovery_calls = sum(
             1
@@ -608,6 +610,7 @@ async def test_dali2_feedback_feature_discovered_in_load_info():
         general_handler.read = AsyncMock(return_value={})
         general_handler.get_schema = MagicMock(return_value={})
         mock_general.return_value = general_handler
+        await device.initialize(driver)
         await device.load_info(driver)
 
     instance_props = device.schema["properties"]["instance0"]["properties"]
@@ -698,6 +701,7 @@ async def _load_device_with_feedback(device: Dali2Device) -> None:
         general_handler.requires_mqtt_controls_refresh = False
         general_handler.name = MagicMock(en="general")
         mock_general.return_value = general_handler
+        await device.initialize(driver)
         await device.load_info(driver)
 
 
@@ -1087,6 +1091,7 @@ async def _run_load_info(device: Dali2Device, driver: FakeDriver) -> None:
         general_handler.read = AsyncMock(return_value={})
         general_handler.get_schema = MagicMock(return_value={})
         mock_general.return_value = general_handler
+        await device.initialize(driver)
         await device.load_info(driver)
 
 

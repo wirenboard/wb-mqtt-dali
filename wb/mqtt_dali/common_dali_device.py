@@ -765,7 +765,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if self.params and not force_reload:
             return
 
-        await self.initialize(driver)
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before loading info."
+            )
 
         params = {
             "short_address": self.address.short,

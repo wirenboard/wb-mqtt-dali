@@ -1,170 +1,198 @@
+"""The service across broker sessions, driven with fakes; the stop request is a real SIGTERM."""
+
 import asyncio
+import os
+import signal
 import unittest
+from enum import Enum
 from types import SimpleNamespace
+from typing import List, Optional
 from unittest.mock import patch
 
 import aiomqtt
 
 from wb.mqtt_dali.main import default_service
-
-_real_sleep = asyncio.sleep
-
-
-async def _no_backoff_sleep(delay):
-    # Patches asyncio.sleep module-wide: collapse the 1s reconnect backoff to a
-    # bare yield, while keeping real cooperative yields (sleep(0)) working so
-    # the test's own polling loops still advance.
-    await _real_sleep(0)
-    del delay
+from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
 
 class _FakeClient:
-    """Async context manager standing in for the MQTT client.
+    """Entering is a connected session; after `sessions_before_refusing` of them every enter
+    fails like an unreachable broker. Exiting is a no-op."""
 
-    Entering always succeeds (a connected session); exiting is a no-op. A broker
-    drop is modelled by a child task raising MqttError rather than by the
-    context manager, mirroring how aiomqtt surfaces a lost connection
-    through the gathered tasks. The same client instance is reused across
-    reconnect iterations, as in production.
-    """
+    def __init__(self, sessions_before_refusing: Optional[int] = None):
+        self.enter_calls = 0
+        self._sessions_before_refusing = sessions_before_refusing
 
     async def __aenter__(self):
+        self.enter_calls += 1
+        if self._sessions_before_refusing is not None and self.enter_calls > self._sessions_before_refusing:
+            raise aiomqtt.MqttError("connection refused")
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
 
-class _FakeDispatcher:  # pylint: disable=too-few-public-methods
-    """Stand-in for MQTTDispatcher; run() is scriptable per reconnect iteration.
+class _SessionStream(Enum):
+    DROP = "fails once the session has settled"
+    END = "ends without an error"
+    HOLD = "serves until cancelled"
 
-    A single instance is reused across reconnect iterations (the service builds
-    one dispatcher up front). `run_behaviours[i]` drives the i-th run() call:
-      "drop"  -> raise MqttError after letting the session settle, modelling a
-                 broker loss surfacing through the dispatcher during normal
-                 operation;
-      "block" -> a healthy session: await until the loop cancels it.
-    """
 
-    def __init__(self, run_behaviours):
+class _FakeDispatcher:
+    """`run_behaviours[i]` is how the i-th session's message stream behaves; the calls go to `events`."""
+
+    def __init__(self, run_behaviours, events: List[str]):
         self._run_behaviours = list(run_behaviours)
+        self._events = events
+        self.connected = True
         self.run_calls = 0
-        self.cancel_count = 0
+        self.replay_calls = 0
+        self.replayed_after_reconnect = asyncio.Event()
+
+    async def connection_restored(self):
+        self.connected = True
+        self._events.append("restored")
+
+    async def replay_retained(self):
+        self.replay_calls += 1
+        self._events.append("replay")
+        if self.replay_calls > 1:
+            self.replayed_after_reconnect.set()
+
+    def connection_lost(self):
+        if self.connected:
+            self.connected = False
+            self._events.append("lost")
 
     async def run(self):
         behaviour = self._run_behaviours[self.run_calls]
         self.run_calls += 1
-        if behaviour == "drop":
-            # Yield once so the rest of the session (gateway start) is in flight,
-            # then surface the broker loss like a real dropped connection.
-            await asyncio.sleep(0)
-            raise aiomqtt.MqttError("broker connection lost")
-        try:
+        if behaviour is _SessionStream.HOLD:
             await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            self.cancel_count += 1
-            raise
+        await asyncio.sleep(0)
+        if behaviour is _SessionStream.DROP:
+            raise aiomqtt.MqttError("broker connection lost")
 
 
 class _FakeGateway:
-    """Stand-in for Gateway with a scriptable start() per reconnect iteration.
-
-    `start_behaviours[i]` drives the i-th start() call:
-      "ok"           -> start succeeds, signal `healthy_session`;
-      "init_fail"    -> flag the bus as still INITIALIZING and raise (a startup
-                        that never finished), so the following stop() raises
-                        RuntimeError like a real bus torn down mid-start.
-    stop() raises RuntimeError while the gateway is flagged as initializing.
-    """
-
-    def __init__(self, start_behaviours):
-        self._start_behaviours = list(start_behaviours)
+    def __init__(self, dispatcher: _FakeDispatcher, events: List[str]):
+        self._dispatcher = dispatcher
+        self._events = events
         self.start_calls = 0
         self.stop_calls = 0
-        self._initializing = False
-        self.reconnected = asyncio.Event()
+        self.connected_at_stop = None
 
     async def start(self):
-        behaviour = self._start_behaviours[self.start_calls]
         self.start_calls += 1
-        if behaviour == "init_fail":
-            self._initializing = True
-            raise aiomqtt.MqttError("broker lost while bus INITIALIZING")
-        # A successful start fully initializes the bus, so a later stop() no
-        # longer raises — mirroring a real reconnect recovering from a prior
-        # mid-start teardown.
-        self._initializing = False
-        if self.start_calls >= 2:
-            # The healthy reconnect (second start) has begun.
-            self.reconnected.set()
+        self._events.append("start")
 
     async def stop(self):
         self.stop_calls += 1
-        if self._initializing:
-            raise RuntimeError("ApplicationController must be initialized to stop")
+        self.connected_at_stop = self._dispatcher.connected
+        self._events.append("stop")
 
 
-def _cancel_wait_for_cancel():
-    """Deliver the same cancellation the SIGTERM handler would, ending the loop."""
-    for task in asyncio.all_tasks():
-        coro = task.get_coro()
-        if getattr(coro, "__name__", None) == "wait_for_cancel":
-            task.cancel()
+async def _poll_until(condition):
+    while not condition():
+        await asyncio.sleep(0.001)
 
 
 class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
-    async def _run_loop(self, gateway, dispatcher):
-        async def reach_healthy_then_stop():
-            # Once the reconnect has reached a healthy second session, signal a
-            # graceful shutdown so the loop terminates and the test can assert.
-            await gateway.reconnected.wait()
-            _cancel_wait_for_cancel()
+    def setUp(self):
+        self.events: List[str] = []
+
+    async def _run_service(self, client, dispatcher, gateway, stop_when) -> int:
+        async def send_sigterm():
+            # `stop_when` completes inside a session, after the service installed its handlers.
+            await stop_when()
+            os.kill(os.getpid(), signal.SIGTERM)
 
         with patch("wb.mqtt_dali.main.load_config", return_value={}), patch(
             "wb.mqtt_dali.main.DaliDatabase", return_value=object()
         ), patch("wb.mqtt_dali.main.MQTTDispatcher", return_value=dispatcher), patch(
-            "wb.mqtt_dali.main.asyncio.sleep", new=_no_backoff_sleep
+            "wb.mqtt_dali.main.RECONNECT_DELAY_S", 0.001
         ):
-            helper = asyncio.create_task(reach_healthy_then_stop())
-            result = await default_service(
-                SimpleNamespace(config="x", broker_url="y"),
-                client_factory=lambda _url: _FakeClient(),
-                gateway_factory=lambda *_a: gateway,
-            )
-            await helper
-        return result
+            stopper = asyncio.create_task(send_sigterm())
+            try:
+                return await asyncio.wait_for(
+                    default_service(
+                        SimpleNamespace(config="x", broker_url="y"),
+                        client_factory=lambda _url: client,
+                        gateway_factory=lambda *_a: gateway,
+                    ),
+                    timeout=5.0,
+                )
+            finally:
+                stopper.cancel()
 
-    async def test_reconnect_cancels_children_on_broker_drop(self):
-        """First session drops with MqttError mid-operation; the loop must tear
-        down the child tasks (dispatcher cancelled and awaited, gateway folded
-        via stop()) and run a second iteration that reconnects to a healthy
-        session, which is then cancelled gracefully so the loop terminates."""
-        gateway = _FakeGateway(["ok", "ok"])
-        dispatcher = _FakeDispatcher(["drop", "block"])
+    async def test_lost_link_keeps_the_buses_and_replays_state_on_reconnect(self):
+        """A dropped session leaves the gateway alone; the next one replays the mirror; SIGTERM
+        then stops the gateway once."""
+        client = _FakeClient()
+        dispatcher = _FakeDispatcher([_SessionStream.DROP, _SessionStream.HOLD], self.events)
+        gateway = _FakeGateway(dispatcher, self.events)
 
-        result = await self._run_loop(gateway, dispatcher)
+        result = await self._run_service(
+            client, dispatcher, gateway, dispatcher.replayed_after_reconnect.wait
+        )
 
-        # Two start attempts: the dropped one and the healthy reconnect.
-        self.assertEqual(gateway.start_calls, 2)
-        # Each session folded the gateway exactly once — no old gateway left
-        # running in parallel with the reconnect.
-        self.assertEqual(gateway.stop_calls, 2)
-        # The dispatcher ran in both sessions; the healthy second session's run
-        # was cancelled during graceful teardown.
-        self.assertEqual(dispatcher.run_calls, 2)
-        self.assertGreaterEqual(dispatcher.cancel_count, 1)
         self.assertEqual(result, 0)
+        self.assertEqual(gateway.start_calls, 1)
+        self.assertEqual(client.enter_calls, 2)
+        self.assertEqual(self.events, ["restored", "start", "replay", "lost", "restored", "replay", "stop"])
 
-    async def test_reconnect_survives_bus_initializing_teardown_error(self):
-        """The session drops with MqttError while the bus is still INITIALIZING,
-        so gateway.stop() raises RuntimeError during teardown. The loop must
-        swallow that teardown error, not exit, and proceed to a healthy
-        reconnect that is then cancelled gracefully."""
-        gateway = _FakeGateway(["init_fail", "ok"])
-        dispatcher = _FakeDispatcher(["block", "block"])
+    async def test_a_message_stream_that_ends_cleanly_is_a_lost_link_too(self):
+        """The dispatcher returns from a session without an error; the service reconnects and
+        replays as after a drop."""
+        client = _FakeClient()
+        dispatcher = _FakeDispatcher([_SessionStream.END, _SessionStream.HOLD], self.events)
+        gateway = _FakeGateway(dispatcher, self.events)
 
-        result = await self._run_loop(gateway, dispatcher)
+        result = await self._run_service(
+            client, dispatcher, gateway, dispatcher.replayed_after_reconnect.wait
+        )
 
-        # The RuntimeError from stop() did not break the loop: it reconnected.
-        self.assertEqual(gateway.start_calls, 2)
         self.assertEqual(result, 0)
+        self.assertEqual(client.enter_calls, 2)
+        self.assertEqual(self.events, ["restored", "start", "replay", "lost", "restored", "replay", "stop"])
+
+    async def test_stop_with_the_link_up_stops_the_gateway_before_disconnecting(self):
+        """SIGTERM with the session up: the gateway is stopped while the link is still connected,
+        and no loss is recorded."""
+        client = _FakeClient()
+        dispatcher = _FakeDispatcher([_SessionStream.HOLD], self.events)
+        gateway = _FakeGateway(dispatcher, self.events)
+
+        result = await self._run_service(
+            client, dispatcher, gateway, lambda: _poll_until(lambda: gateway.start_calls == 1)
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(gateway.stop_calls, 1)
+        self.assertTrue(gateway.connected_at_stop)
+        self.assertNotIn("lost", self.events)
+
+    async def test_stop_during_outage_ends_the_service_without_a_session(self):
+        """The link drops and every reconnect attempt is refused; SIGTERM ends the reconnect
+        loop, the gateway is stopped with the link down and nothing is republished."""
+        client = _FakeClient(sessions_before_refusing=1)
+        dispatcher = _FakeDispatcher([_SessionStream.DROP], self.events)
+        gateway = _FakeGateway(dispatcher, self.events)
+
+        result = await self._run_service(
+            client, dispatcher, gateway, lambda: _poll_until(lambda: client.enter_calls >= 3)
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(gateway.stop_calls, 1)
+        self.assertFalse(gateway.connected_at_stop)
+        self.assertEqual(self.events, ["restored", "start", "replay", "lost", "stop"])
+
+
+class TestMqttClientFactory(unittest.TestCase):
+    def test_client_keepalive_is_15_s(self):
+        with patch("wb.mqtt_dali.wbmqtt.aiomqtt.Client") as client_cls:
+            make_mqtt_client("unix:///var/run/mosquitto/mosquitto.sock")
+
+        self.assertEqual(client_cls.call_args.kwargs["keepalive"], 15)

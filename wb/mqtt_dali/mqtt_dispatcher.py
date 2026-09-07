@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Set
 
 import aiomqtt
@@ -8,7 +9,17 @@ from paho.mqtt.matcher import MQTTMatcher
 MessageCallback = Callable[[aiomqtt.Message], None]
 
 
-class MQTTDispatcher:
+class BrokerDisconnectedError(aiomqtt.MqttError):
+    """A non-retained publish while the broker link is down."""
+
+
+@dataclass(frozen=True)
+class _MirroredMessage:
+    payload: Optional[str]
+    qos: int
+
+
+class MQTTDispatcher:  # pylint: disable=too-many-instance-attributes
     def __init__(self, client: aiomqtt.Client):
         self.client = client
         self._subscriptions: Dict[str, Set[MessageCallback]] = {}
@@ -21,7 +32,55 @@ class MQTTDispatcher:
         # additional callbacks on the same topic miss the initial state.
         self._retained_cache: Dict[str, aiomqtt.Message] = {}
         self._running = False
+        self._connected = True
+        self._session = 0
+        self._retained_mirror: Dict[str, _MirroredMessage] = {}
         self._lock = asyncio.Lock()
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    @property
+    def session(self) -> int:
+        return self._session
+
+    async def connection_restored(self) -> None:
+        async with self._lock:
+            for topic in self._subscriptions:
+                await self.client.subscribe(topic)
+            self._session += 1
+            self._connected = True
+
+    def connection_lost(self) -> None:
+        self._connected = False
+        # A clear made during the outage is never redelivered, so the cache must not outlive the session.
+        self._retained_cache.clear()
+
+    async def replay_retained(self) -> None:
+        # Order of first appearance: a pair published in one order live can be replayed in the other.
+        # Read as it goes: a topic updated during the replay goes out with the new payload or after it.
+        for topic in list(self._retained_mirror):
+            if not self._connected:
+                return
+            message = self._retained_mirror[topic]
+            await self.client.publish(topic, message.payload, qos=message.qos, retain=True)
+
+    async def publish(
+        self, topic: str, payload: Optional[str] = None, qos: int = 0, retain: bool = False
+    ) -> None:
+        if retain:
+            self._mirror_retained(topic, payload, qos)
+            if not self._connected:
+                return
+            try:
+                await self.client.publish(topic, payload, qos=qos, retain=True)
+            except aiomqtt.MqttError as exc:
+                logging.debug("Retained publish to %s left to the replay: %s", topic, exc)
+            return
+        if not self._connected:
+            raise BrokerDisconnectedError(f"Broker disconnected, not publishing to {topic}")
+        await self.client.publish(topic, payload, qos=qos, retain=False)
 
     async def subscribe(self, topic: str, callback: MessageCallback) -> None:
         replay: Optional[aiomqtt.Message] = None
@@ -30,12 +89,15 @@ class MQTTDispatcher:
                 callbacks: Set[MessageCallback] = {callback}
                 self._subscriptions[topic] = callbacks
                 self._matcher[topic] = callbacks
-                try:
-                    await self.client.subscribe(topic)
-                except Exception:
-                    del self._subscriptions[topic]
-                    del self._matcher[topic]
-                    raise
+                if self._connected:
+                    try:
+                        await self.client.subscribe(topic)
+                    except aiomqtt.MqttError as exc:
+                        logging.debug("Subscription to %s deferred: %s", topic, exc)
+                    except Exception:
+                        del self._subscriptions[topic]
+                        del self._matcher[topic]
+                        raise
             else:
                 self._subscriptions[topic].add(callback)
                 replay = self._retained_cache.get(topic)
@@ -54,7 +116,7 @@ class MQTTDispatcher:
                 del self._subscriptions[topic]
                 del self._matcher[topic]
                 self._retained_cache.pop(topic, None)
-                await self.client.unsubscribe(topic)
+                await self._unsubscribe_client(topic)
             else:
                 self._subscriptions[topic].discard(callback)
 
@@ -62,13 +124,13 @@ class MQTTDispatcher:
                     del self._subscriptions[topic]
                     del self._matcher[topic]
                     self._retained_cache.pop(topic, None)
-                    await self.client.unsubscribe(topic)
+                    await self._unsubscribe_client(topic)
 
     async def clear_subscriptions(self) -> None:
         async with self._lock:
             topics = list(self._subscriptions.keys())
             for topic in topics:
-                await self.client.unsubscribe(topic)
+                await self._unsubscribe_client(topic)
 
             self._subscriptions.clear()
             self._matcher = MQTTMatcher()
@@ -90,11 +152,7 @@ class MQTTDispatcher:
             logging.error(e)
             raise
         finally:
-            async with self._lock:
-                self._subscriptions.clear()
-                self._matcher = MQTTMatcher()
-                self._retained_cache.clear()
-                self._running = False
+            self._running = False
 
     def _dispatch_message(self, message: aiomqtt.Message) -> None:
         topic = message.topic.value
@@ -114,6 +172,21 @@ class MQTTDispatcher:
                 callback(message)
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logging.error("Error in callback for topic %s: %s", topic, e)
+
+    def _mirror_retained(self, topic: str, payload: Optional[str], qos: int) -> None:
+        current = self._retained_mirror.get(topic)
+        if payload is not None and (current is None or current.payload is None):
+            # Appearing (again): to the end, so the replay keeps the order the state was built in.
+            self._retained_mirror.pop(topic, None)
+        self._retained_mirror[topic] = _MirroredMessage(payload, qos)
+
+    async def _unsubscribe_client(self, topic: str) -> None:
+        if not self._connected:
+            return
+        try:
+            await self.client.unsubscribe(topic)
+        except aiomqtt.MqttError as exc:
+            logging.debug("Unsubscribe from %s skipped: %s", topic, exc)
 
     @property
     def is_running(self) -> bool:

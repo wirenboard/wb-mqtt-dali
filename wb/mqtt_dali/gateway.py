@@ -383,7 +383,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         idle_payload = json.dumps(CommissioningState().to_dict())
         for bus in self._iter_buses():
             try:
-                await self._mqtt_dispatcher.client.publish(
+                await self._mqtt_dispatcher.publish(
                     commissioning_topic(bus.uid), idle_payload, qos=1, retain=True
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -392,7 +392,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     async def _clear_commissioning_state_for_all_buses(self) -> None:
         for bus in self._iter_buses():
             try:
-                await self._mqtt_dispatcher.client.publish(
+                await self._mqtt_dispatcher.publish(
                     commissioning_topic(bus.uid), payload=None, qos=1, retain=True
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -462,7 +462,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
             async def _publish_and_save() -> None:
                 payload = json.dumps(state.to_dict())
                 try:
-                    await self._mqtt_dispatcher.client.publish(topic, payload, qos=1, retain=True)
+                    await self._mqtt_dispatcher.publish(topic, payload, qos=1, retain=True)
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logging.error("Failed to publish commissioning state for bus %s: %s", bus_uid, exc)
                 if state.status == CommissioningStatus.COMPLETED:

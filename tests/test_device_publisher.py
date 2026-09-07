@@ -30,6 +30,9 @@ class MockMQTTDispatcher:
         self.unsubscribe = AsyncMock()
         self._subscriptions = {}
 
+    async def publish(self, topic, payload=None, qos=0, retain=False):
+        await self.client.publish(topic, payload, qos=qos, retain=retain)
+
     async def mock_subscribe(self, topic, callback):
         if topic not in self._subscriptions:
             self._subscriptions[topic] = []

@@ -34,7 +34,11 @@ class MockMqttClient:
     async def subscribe(self, topic: str) -> None:
         del topic
 
-    async def publish(self, topic: str, payload: str) -> None:
+    async def unsubscribe(self, topic: str) -> None:
+        del topic
+
+    async def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False) -> None:
+        del qos, retain
         await self._messages_to_broker.put((topic, payload))
 
     async def clear_publishes(self):

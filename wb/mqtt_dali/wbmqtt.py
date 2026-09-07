@@ -13,6 +13,9 @@ import aiomqtt
 
 from .mqtt_dispatcher import MQTTDispatcher
 
+# A dead link goes unnoticed for one or two keepalives; 15 s keeps that under half a minute.
+MQTT_KEEPALIVE_S = 15
+
 
 @dataclass
 class TranslatedTitle:
@@ -77,9 +80,7 @@ class ControlError(Flag):
 
 
 def _is_momentary(meta: ControlMeta) -> bool:
-    # A momentary control's value is a notification, not state: retaining it would replay a
-    # phantom press to every new subscriber, and dropping a repeat as "unchanged" would
-    # swallow the second press.
+    """Whether the control's value is an event: published without retain and never deduplicated."""
     return meta.control_type == "pushbutton"
 
 
@@ -113,12 +114,12 @@ def _publishes_every_update(control: ControlState) -> bool:
 class Device:
     def __init__(
         self,
-        mqtt_client: aiomqtt.Client,
+        mqtt_dispatcher: MQTTDispatcher,
         device_mqtt_name: str,
         driver_name: str,
         device_title: Optional[Union[str, TranslatedTitle]] = None,
     ) -> None:
-        self._mqtt_client = mqtt_client
+        self._mqtt_dispatcher = mqtt_dispatcher
         self._base_topic = f"/devices/{device_mqtt_name}"
         self._device_mqtt_name = device_mqtt_name
         self._driver_name = driver_name
@@ -142,11 +143,6 @@ class Device:
             await self._publish_device_meta()
             self._initialized = True
 
-    async def republish_device(self) -> None:
-        await self._publish_device_meta()
-        for mqtt_control_name in list(self._controls.keys()):
-            await self.republish_control(mqtt_control_name)
-
     async def remove_device(self) -> None:
         for mqtt_control_name in list(self._controls.keys()):
             await self.remove_control(mqtt_control_name)
@@ -163,13 +159,6 @@ class Device:
         await self._publish_control_meta(mqtt_control_name, meta)
         await self.set_control_value(mqtt_control_name, value)
 
-    async def republish_control(self, mqtt_control_name: str) -> None:
-        if mqtt_control_name in self._controls:
-            control = self._controls[mqtt_control_name]
-            if control:
-                await self._publish_control_meta(mqtt_control_name, control.meta)
-                await self.set_control_value(mqtt_control_name, control.value, force=True)
-
     async def remove_control(self, mqtt_control_name: str) -> None:
         if mqtt_control_name in self._controls:
             self._controls.pop(mqtt_control_name)
@@ -177,12 +166,10 @@ class Device:
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta/error", None)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", None)
 
-    async def set_control_value(
-        self, mqtt_control_name: str, value: Optional[str], force: bool = False
-    ) -> None:
+    async def set_control_value(self, mqtt_control_name: str, value: Optional[str]) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
-            if control.value != value or force or _publishes_every_update(control):
+            if control.value != value or _publishes_every_update(control):
                 control.value = value
                 await self._publish(
                     self._get_control_base_topic(mqtt_control_name),
@@ -197,12 +184,7 @@ class Device:
     async def set_control_state(
         self, mqtt_control_name: str, value: Optional[str], error: ControlError
     ) -> None:
-        """Publish whichever of the value and the error differs from what is on the wire.
-
-        Unlike ``set_control_value`` the error is compared, not cleared as a side effect, so a
-        value can go out under a standing ``/meta/error`` and an error can clear on its own.
-        Whichever carries the news goes last: the error when raised, the value when it clears.
-        """
+        """Publish whichever of the value and the error changed; the one carrying the news goes last."""
         control = self._controls.get(mqtt_control_name)
         if control is None:
             logging.debug("Can't set state of undeclared control %s", mqtt_control_name)
@@ -313,7 +295,10 @@ class Device:
             logging.debug('Clear "%s"', topic)
         else:
             logging.debug('Publish "%s" "%s"', topic, value)
-        await self._mqtt_client.publish(topic, value, qos=2, retain=retain)
+        try:
+            await self._mqtt_dispatcher.publish(topic, value, qos=2, retain=retain)
+        except aiomqtt.MqttError as exc:
+            logging.debug('Not published "%s": %s', topic, exc)
 
 
 async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -> None:
@@ -326,10 +311,8 @@ async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -
         event.set()
 
     await mqtt_dispatcher.subscribe(retain_hack_topic, on_retain_hack)
-
-    await mqtt_dispatcher.client.publish(retain_hack_topic, "2", qos=2)
-
     try:
+        await mqtt_dispatcher.publish(retain_hack_topic, "2", qos=2)
         await asyncio.wait_for(event.wait(), timeout)
     except asyncio.TimeoutError:
         logging.warning("Retain hack timeout")
@@ -358,9 +341,11 @@ async def remove_topics_by_driver(
                 logging.debug("Failed to parse meta for %s: %s", topic, e)
 
     await mqtt_dispatcher.subscribe(devices_pattern, collect_devices)
-    await retain_hack(mqtt_dispatcher, timeout)
-    await asyncio.sleep(0.05)
-    await mqtt_dispatcher.unsubscribe(devices_pattern)
+    try:
+        await retain_hack(mqtt_dispatcher, timeout)
+        await asyncio.sleep(0.05)
+    finally:
+        await mqtt_dispatcher.unsubscribe(devices_pattern)
 
     if not devices_to_remove:
         logging.debug("No devices found with driver '%s'", driver_name)
@@ -382,7 +367,7 @@ async def remove_topics_by_driver(
 
     logging.info("Removing %d topics for driver '%s'", len(topics_to_remove), driver_name)
     for topic in topics_to_remove:
-        await mqtt_dispatcher.client.publish(topic, None, retain=True)
+        await mqtt_dispatcher.publish(topic, None, retain=True)
 
 
 def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
@@ -390,6 +375,7 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
     client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
     client_kwargs = {
         "identifier": f"wb-mqtt-dali-{client_id_suffix}",
+        "keepalive": MQTT_KEEPALIVE_S,
         "logger": logging.getLogger("mqtt_client"),
         "transport": "websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
     }

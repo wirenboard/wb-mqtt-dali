@@ -99,7 +99,8 @@ class UnknownResponseStatus(WbGatewayTransmissionError):
 
 
 class GatewayUnavailable(WbGatewayTransmissionError):
-    """Returned while wb-mqtt-serial reports the gateway device as `r` on `/meta/error`."""
+    """Returned while the gateway cannot be reached: wb-mqtt-serial reports it `r` on
+    `/meta/error`, or the broker link carrying the Modbus RPC is down."""
 
     @property
     def raw_value(self):

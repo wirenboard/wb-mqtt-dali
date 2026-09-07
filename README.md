@@ -200,7 +200,7 @@ Device types (DT), определённые частными стандарта�
 | `no power on bus` | на шине нет питания |
 | `gateway overheated` | перегрев шлюза — передача временно заблокирована |
 | `transmission cancelled` | передача отменена по инициативе wb-mqtt-dali |
-| `gateway unavailable` | шлюз недоступен |
+| `gateway unavailable` | шлюз недоступен: wb-mqtt-serial сообщает `r` или нет связи с брокером |
 | `unknown response status` | шлюз вернул нераспознанный код статуса |
 | `transmission error` | не удалось разобрать ответ от шлюза |
 | `framing error` | ошибка приёма пакета ответа |

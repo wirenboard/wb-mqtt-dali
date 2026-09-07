@@ -83,7 +83,11 @@ class _MockMqttClient:
     async def subscribe(self, topic):
         del topic
 
-    async def publish(self, topic, payload):
+    async def unsubscribe(self, topic):
+        del topic
+
+    async def publish(self, topic, payload, qos=0, retain=False):
+        del qos, retain
         await self._messages.put((topic, payload))
 
     async def clear_publishes(self):

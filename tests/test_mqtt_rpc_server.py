@@ -23,7 +23,7 @@ from wb.mqtt_dali.mqtt_rpc_server import (
 @pytest.fixture
 def mock_mqtt_dispatcher():
     dispatcher = MagicMock()
-    dispatcher.client = AsyncMock()
+    dispatcher.publish = AsyncMock()
     dispatcher.subscribe = AsyncMock()
     dispatcher.unsubscribe = AsyncMock()
     return dispatcher
@@ -60,7 +60,7 @@ class TestMQTTRPCServer:
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
 
-        mock_mqtt_dispatcher.client.publish.assert_called_once_with(
+        mock_mqtt_dispatcher.publish.assert_called_once_with(
             "/rpc/v1/test_driver/service1/method1", "1", retain=True, qos=1
         )
         assert "/rpc/v1/test_driver/service1/method1" in rpc_server._endpoints
@@ -72,11 +72,11 @@ class TestMQTTRPCServer:
             return {"result": "test"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
-        mock_mqtt_dispatcher.client.publish.reset_mock()
+        mock_mqtt_dispatcher.publish.reset_mock()
 
         await rpc_server.remove_endpoint("service1", "method1")
 
-        mock_mqtt_dispatcher.client.publish.assert_called_once_with(
+        mock_mqtt_dispatcher.publish.assert_called_once_with(
             "/rpc/v1/test_driver/service1/method1", payload=None, retain=True, qos=1
         )
         assert "/rpc/v1/test_driver/service1/method1" not in rpc_server._endpoints
@@ -88,7 +88,7 @@ class TestMQTTRPCServer:
             return {"result": "test"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
-        mock_mqtt_dispatcher.client.publish.side_effect = [None, Exception("Publish failed")]
+        mock_mqtt_dispatcher.publish.side_effect = Exception("Publish failed")
 
         await rpc_server.remove_endpoint("service1", "method1")
 
@@ -102,13 +102,13 @@ class TestMQTTRPCServer:
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
         await rpc_server.add_endpoint("service2", "method2", test_handler)
-        mock_mqtt_dispatcher.client.publish.reset_mock()
+        mock_mqtt_dispatcher.publish.reset_mock()
 
         await rpc_server.stop()
 
         assert len(rpc_server._endpoints) == 0
-        assert mock_mqtt_dispatcher.client.publish.call_count == 2
-        mock_mqtt_dispatcher.client.publish.assert_has_calls(
+        assert mock_mqtt_dispatcher.publish.call_count == 2
+        mock_mqtt_dispatcher.publish.assert_has_calls(
             [
                 call("/rpc/v1/test_driver/service1/method1", payload=None, retain=True, qos=1),
                 call("/rpc/v1/test_driver/service2/method2", payload=None, retain=True, qos=1),
@@ -248,7 +248,7 @@ class TestMQTTRPCServer:
             return {"result": "success"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
-        mock_mqtt_dispatcher.client.publish.reset_mock()
+        mock_mqtt_dispatcher.publish.reset_mock()
 
         mqtt_message = aiomqtt.Message(
             topic="/rpc/v1/test_driver/service1/method1/123",
@@ -261,7 +261,7 @@ class TestMQTTRPCServer:
 
         await rpc_server._process_callback(mqtt_message)
 
-        mock_mqtt_dispatcher.client.publish.assert_called_once_with(
+        mock_mqtt_dispatcher.publish.assert_called_once_with(
             "/rpc/v1/test_driver/service1/method1/123/reply",
             '{"result": {"result": "success"}, "error": null, "id": "req1"}',
             qos=2,
@@ -275,9 +275,9 @@ class TestMQTTRPCServer:
             return {"result": "success"}
 
         await rpc_server.add_endpoint("service1", "method1", test_handler)
-        mock_mqtt_dispatcher.client.publish.reset_mock()
+        mock_mqtt_dispatcher.publish.reset_mock()
 
-        mock_mqtt_dispatcher.client.publish.side_effect = [None, Exception("Publish failed")]
+        mock_mqtt_dispatcher.publish.side_effect = Exception("Publish failed")
         mqtt_message = aiomqtt.Message(
             topic="/rpc/v1/test_driver/service1/method1/123",
             payload=MQTTRPC10Request(params={}, _id="req1").json,
@@ -289,7 +289,7 @@ class TestMQTTRPCServer:
 
         await rpc_server._process_callback(mqtt_message)
 
-        mock_mqtt_dispatcher.client.publish.assert_called_once_with(
+        mock_mqtt_dispatcher.publish.assert_called_once_with(
             "/rpc/v1/test_driver/service1/method1/123/reply",
             '{"result": {"result": "success"}, "error": null, "id": "req1"}',
             qos=2,

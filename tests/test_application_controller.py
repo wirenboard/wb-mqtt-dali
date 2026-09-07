@@ -38,6 +38,7 @@ from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import bus_from_json
+from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
@@ -1581,7 +1582,7 @@ def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[Appl
     AsyncMock so the one-shot publish task is awaitable.
     """
     dispatcher = MagicMock()
-    dispatcher.client.publish = AsyncMock()
+    dispatcher.publish = AsyncMock()
     bus = bus_from_json(
         "gw1",
         uid_bus,
@@ -1607,13 +1608,31 @@ async def test_monitor_lines_logged_when_enabled():
         )
         await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    mqtt_payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    mqtt_payload = dispatcher.publish.call_args.args[1]
     timestamp, _, body = mqtt_payload.partition(" ")
     assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", timestamp)
     assert " - " in body
     assert log.messages == [body]
     assert not log.messages[0].startswith(timestamp)
+
+
+@pytest.mark.asyncio
+async def test_monitor_line_refused_by_the_broker_link_is_no_error():
+    """The monitor publish fails with the broker link down: the syslog mirror line is the only
+    record on the bus logger, nothing at error level."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=True)
+    dispatcher.publish.side_effect = BrokerDisconnectedError("Broker disconnected")
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrame(42)), BusTrafficSource.WB, 0
+        )
+        await asyncio.sleep(0.01)
+
+    dispatcher.publish.assert_called_once()
+    assert len(log.messages) == 1
+    assert log.levels[0] < logging.ERROR
 
 
 @pytest.mark.asyncio
@@ -1628,8 +1647,8 @@ async def test_monitor_request_with_response_is_one_combined_line():
     bus.driver.bus_traffic.notify_command(command.frame, response, BusTrafficSource.WB, 0)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     timestamp, _, body = payload.partition(" ")
     assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", timestamp)
 
@@ -1650,8 +1669,8 @@ async def test_monitor_silent_yes_no_query_publishes_the_no_answer():
     bus.driver.bus_traffic.notify_command(command.frame, command.response(None), BusTrafficSource.WB, 0)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     _, _, body = payload.partition(" ")
     request_part, sep, response_part = body.partition(" - ")
     assert sep == " - "
@@ -1669,8 +1688,8 @@ async def test_monitor_unanswered_query_publishes_no_response():
     bus.driver.bus_traffic.notify_command(command.frame, command.response(None), BusTrafficSource.WB, 0)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     _, _, body = payload.partition(" ")
     request_part, sep, response_part = body.partition(" - ")
     assert sep == " - "
@@ -1687,8 +1706,8 @@ async def test_monitor_fire_and_forget_request_has_no_arrow():
     bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(16, 0xFF93), 7)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     _, _, body = payload.partition(" ")
     assert " - " not in body
     assert body.startswith("<<")
@@ -1705,7 +1724,7 @@ async def test_monitor_not_logged_when_flag_off():
         await asyncio.sleep(0)
 
     assert not log.messages
-    dispatcher.client.publish.assert_called_once()
+    dispatcher.publish.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1718,7 +1737,7 @@ async def test_monitor_not_logged_when_monitor_disabled():
         await asyncio.sleep(0)
 
     assert not log.messages
-    dispatcher.client.publish.assert_not_called()
+    dispatcher.publish.assert_not_called()
 
 
 @pytest.mark.asyncio

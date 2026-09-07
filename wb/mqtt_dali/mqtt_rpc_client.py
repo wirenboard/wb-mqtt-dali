@@ -89,7 +89,7 @@ async def rpc_call(  # pylint: disable=too-many-arguments, R0917
     try:
         request = MQTTRPC10Request(params=params, _id="1")
         logger.debug("RPC call %s: %s", topic_str, request.json)
-        await mqtt_dispatcher.client.publish(topic_str, request.json, qos=2, retain=False)
+        await mqtt_dispatcher.publish(topic_str, request.json, qos=2, retain=False)
         res = await asyncio.wait_for(fut, timeout)
         logger.debug("RPC response %s: %s", reply_topic, res)
         return res

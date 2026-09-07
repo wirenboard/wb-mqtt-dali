@@ -34,7 +34,7 @@ from .device_registry import DeviceRegistry
 from .event_sync_coordinator import EventSyncCoordinator, is_event_sync_owned_setpoint
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
-from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
+from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
 from .send_command import format_command_expression
 from .short_address import set_short_address_sequence
 from .utils import merge_json_schemas
@@ -1661,7 +1661,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                     if instance is not None:
                         self._one_shot_tasks.add(
                             publish_dali2_event(
-                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client, instance
+                                incoming_command, device.mqtt_id, self._mqtt_dispatcher, instance
                             ),
                             "Publish DALI 2 event to MQTT",
                         )
@@ -1719,13 +1719,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         # MQTT keeps the leading timestamp; the log mirror omits it because
         # journald already stamps each record (and self.logger is named by bus uid).
         self._one_shot_tasks.add(
-            self._mqtt_dispatcher.client.publish(
-                self._bus_monitor_topic, f"{timestamp} {body}", qos=2, retain=False
-            ),
-            "Publish DALI bus traffic to MQTT",
+            self._publish_monitor_line_to_mqtt(f"{timestamp} {body}"), "Publish DALI bus traffic to MQTT"
         )
         if self._bus_monitor_syslog_enabled:
             self.logger.log(level, body)
+
+    async def _publish_monitor_line_to_mqtt(self, line: str) -> None:
+        try:
+            await self._mqtt_dispatcher.publish(self._bus_monitor_topic, line, qos=2, retain=False)
+        except BrokerDisconnectedError as exc:
+            self.logger.debug("Bus monitor line not published: %s", exc)
 
 
 def format_frame_hex(frame: Frame) -> str:

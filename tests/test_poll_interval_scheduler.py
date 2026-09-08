@@ -8,7 +8,7 @@ from wb.mqtt_dali.application_controller import PollScheduler
 from wb.mqtt_dali.common_dali_device import (
     DaliDeviceAddress,
     DaliDeviceBase,
-    MqttControl,
+    MqttControlBase,
 )
 from wb.mqtt_dali.dali_controls import ErrorStatusControl
 from wb.mqtt_dali.dali_device import DaliDevice
@@ -19,18 +19,18 @@ from wb.mqtt_dali.dali_type21_parameters import Type21Parameters
 from wb.mqtt_dali.dali_type49_parameters import Type49Parameters
 from wb.mqtt_dali.dali_type51_parameters import Type51Parameters
 from wb.mqtt_dali.device_publisher import ControlInfo
-from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
+from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
+
+from ._control_stubs import ReadableControl
 
 # Avoid filesystem reads in DaliDeviceBase.__init__.
 # pylint: disable-next=protected-access
 DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
-def _readable_control(control_id: str, poll_interval=5.0) -> MqttControl:
-    return MqttControl(
-        control_info=ControlInfo(control_id, ControlState(ControlMeta(read_only=True), "0")),
-        query_builder=lambda addr, _id=control_id: f"Q_{_id}",
-        value_formatter=lambda resp: "v",
+def _readable_control(control_id: str, poll_interval=5.0) -> MqttControlBase:
+    return ReadableControl(
+        ControlInfo(control_id, ControlState(ControlMeta(read_only=True), "0")),
         poll_interval=poll_interval,
     )
 
@@ -298,7 +298,7 @@ async def test_failed_poll_still_advances_schedule():
 
     poll_results = await res.poll_coroutine()
     assert len(poll_results) == 1
-    assert poll_results[0].error == ControlError.READ
+    assert c.decoded_responses == [None]  # the transport rejected the answer
 
     assert c.next_due_at == 5.0
     assert not c.is_poll_due(4.9)

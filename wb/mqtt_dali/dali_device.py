@@ -241,7 +241,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         return mqtt_controls
 
     def _build_pollables(self) -> list[Pollable]:
-        readable_controls = [c for c in self._controls.values() if c.is_readable()]
+        readable_controls = [c for c in self._controls.values() if isinstance(c, Pollable)]
         return [*readable_controls, *self._standalone_pollables]
 
     async def _initialize_impl(  # pylint: disable=too-many-branches

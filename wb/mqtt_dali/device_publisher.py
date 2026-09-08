@@ -159,15 +159,20 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_error(control_id, error)
 
-    async def publish_control_state(
-        self, device_id: str, control_id: str, value: Optional[str], error: ControlError
+    async def publish_control_state(  # pylint: disable=too-many-arguments, R0917
+        self,
+        device_id: str,
+        control_id: str,
+        value: Optional[str],
+        error: ControlError,
+        title: Optional[Union[str, TranslatedTitle]] = None,
     ) -> None:
         async with self._lock:
             if device_id not in self._devices:
                 self.logger.warning("Device %s not found", device_id)
                 return
 
-            await self._devices[device_id].set_control_state(control_id, value, error)
+            await self._devices[device_id].set_control_state(control_id, value, error, title)
 
     async def register_control_handler(
         self, device_id: str, control_id: str, callback: MessageCallback

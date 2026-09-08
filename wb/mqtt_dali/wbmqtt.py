@@ -16,6 +16,11 @@ from .mqtt_dispatcher import MQTTDispatcher
 # A dead link goes unnoticed for one or two keepalives; 15 s keeps that under half a minute.
 MQTT_KEEPALIVE_S = 15
 
+# Deadline for a broker acknowledgement (aiomqtt's client-wide setting). At QoS 2 one slow
+# PUBCOMP holds DevicePublisher's lock and with it every publish of the bus; aiomqtt's own
+# default would hold it for 10 s.
+MQTT_PUBLISH_TIMEOUT_S = 5.0
+
 
 @dataclass
 class TranslatedTitle:
@@ -79,19 +84,23 @@ class ControlError(Flag):
         return "".join(chars)
 
 
+PUSHBUTTON_CONTROL_TYPE = "pushbutton"
+
+
+def is_pushbutton(meta: ControlMeta) -> bool:
+    return meta.control_type == PUSHBUTTON_CONTROL_TYPE
+
+
 def _is_momentary(meta: ControlMeta) -> bool:
     """Whether the control's value is an event: published without retain and never deduplicated."""
-    return meta.control_type == "pushbutton"
+    return meta.control_type == PUSHBUTTON_CONTROL_TYPE
 
 
 class PublishPolicy(Enum):
     """Whether an update repeating the published value still reaches the topic."""
 
-    # The value is state: a repeat says nothing new.
-    ON_CHANGE = auto()
-
-    # The value is an event: a repeat is a second occurrence, and has to be published.
-    ALWAYS = auto()
+    ON_CHANGE = auto()  # the value is state: a repeat says nothing new
+    ALWAYS = auto()  # the value is an event: a repeat is a second occurrence
 
 
 @dataclass
@@ -170,35 +179,45 @@ class Device:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
             if control.value != value or _publishes_every_update(control):
-                control.value = value
-                await self._publish(
+                if await self._publish(
                     self._get_control_base_topic(mqtt_control_name),
                     value,
                     retain=not _is_momentary(control.meta),
-                )
+                ):
+                    control.value = value
             if control.error:
                 await self.set_control_error(mqtt_control_name, ControlError.NONE)
         else:
             logging.debug("Can't set value of undeclared control %s", mqtt_control_name)
 
     async def set_control_state(
-        self, mqtt_control_name: str, value: Optional[str], error: ControlError
+        self,
+        mqtt_control_name: str,
+        value: Optional[str],
+        error: ControlError,
+        title: Optional[Union[str, TranslatedTitle]] = None,
     ) -> None:
-        """Publish whichever of the value and the error changed; the one carrying the news goes last."""
+        """Publish whichever of the value, the error and the title changed; the news goes last."""
         control = self._controls.get(mqtt_control_name)
         if control is None:
             logging.debug("Can't set state of undeclared control %s", mqtt_control_name)
             return
-        publish_value = control.value != value or _publishes_every_update(control)
+        if title is not None:
+            await self.set_control_title(mqtt_control_name, title)
+        # A missing value leaves the value topic alone: publishing None deletes the retained
+        # message, which only remove_control means to do.
+        publish_value = value is not None and (control.value != value or _publishes_every_update(control))
         publish_error = control.error != error
-        control.value, control.error = value, error
         topic = self._get_control_base_topic(mqtt_control_name)
         if publish_error and not error:
-            await self._publish(f"{topic}/meta/error", None)
+            if await self._publish(f"{topic}/meta/error", None):
+                control.error = error
         if publish_value:
-            await self._publish(topic, value, retain=not _is_momentary(control.meta))
+            if await self._publish(topic, value, retain=not _is_momentary(control.meta)):
+                control.value = value
         if publish_error and error:
-            await self._publish(f"{topic}/meta/error", error.to_mqtt())
+            if await self._publish(f"{topic}/meta/error", error.to_mqtt()):
+                control.error = error
 
     async def set_control_read_only(self, mqtt_control_name: str, read_only: bool) -> None:
         if mqtt_control_name in self._controls:
@@ -229,9 +248,9 @@ class Device:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
             if control.error != error:
-                control.error = error
                 error_topic = self._get_control_base_topic(mqtt_control_name) + "/meta/error"
-                await self._publish(error_topic, error.to_mqtt() or None)
+                if await self._publish(error_topic, error.to_mqtt() or None):
+                    control.error = error
         else:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
@@ -290,7 +309,12 @@ class Device:
             meta_json = json.dumps(meta_dict)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", meta_json)
 
-    async def _publish(self, topic: str, value: Optional[str], retain: bool = True) -> None:
+    async def _publish(self, topic: str, value: Optional[str], retain: bool = True) -> bool:
+        """Publish ``value`` on ``topic``; ``False`` means the broker never confirmed it.
+
+        A timed-out confirmation is logged here and nowhere else: the message stays queued in
+        paho and may still arrive, so the caller can only republish on the next update.
+        """
         if value is None:
             logging.debug('Clear "%s"', topic)
         else:
@@ -299,6 +323,8 @@ class Device:
             await self._mqtt_dispatcher.publish(topic, value, qos=2, retain=retain)
         except aiomqtt.MqttError as exc:
             logging.debug('Not published "%s": %s', topic, exc)
+            return False
+        return True
 
 
 async def retain_hack(mqtt_dispatcher: MQTTDispatcher, timeout: float = 120.0) -> None:
@@ -378,6 +404,7 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         "keepalive": MQTT_KEEPALIVE_S,
         "logger": logging.getLogger("mqtt_client"),
         "transport": "websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
+        "timeout": MQTT_PUBLISH_TIMEOUT_S,
     }
     if urlparse_result.scheme == "unix":
         client_kwargs["hostname"] = urlparse_result.path

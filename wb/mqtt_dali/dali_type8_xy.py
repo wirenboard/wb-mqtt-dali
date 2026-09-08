@@ -2,7 +2,7 @@
 
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from dali import command
 from dali.address import Address
@@ -17,7 +17,7 @@ from dali.gear.colour import (
 )
 from dali.gear.general import DTR0, DTR1
 
-from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .common_dali_device import MqttControl, MqttControlBase
 from .control_ids import (
     CURRENT_X_COORDINATE,
     CURRENT_Y_COORDINATE,
@@ -25,9 +25,10 @@ from .control_ids import (
     SET_Y_COORDINATE,
 )
 from .dali_type8_common import ColourComponent
+from .dali_type8_controls import SingleComponentColourControl
 from .device_publisher import ControlInfo
 from .wbdali_utils import MASK_2BYTES
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 XY_COLOUR_COMPONENTS = [
     ColourComponent.X_COORDINATE,
@@ -104,28 +105,25 @@ class XYColourValues:
         }
 
 
-def get_mqtt_controls() -> list[MqttControlBase]:
+def _set_x_coordinate_commands_builder(short_address: Address, value: str) -> list[command.Command]:
+    try:
+        x_coordinate = int(value)
+    except ValueError as e:
+        raise ValueError("X coordinate must be integer") from e
+    return set_x_coordinate_commands_builder(short_address, x_coordinate) + [Activate(short_address)]
 
-    def _set_x_coordinate_commands_builder(short_address: Address, value: str) -> list[command.Command]:
-        try:
-            x_coordinate = int(value)
-        except ValueError as e:
-            raise ValueError("X coordinate must be integer") from e
-        return set_x_coordinate_commands_builder(short_address, x_coordinate) + [
-            Activate(short_address),
-        ]
 
-    def _set_y_coordinate_commands_builder(short_address: Address, value: str) -> list[command.Command]:
-        try:
-            y_coordinate = int(value)
-        except ValueError as e:
-            raise ValueError("Y coordinate must be integer") from e
-        return set_y_coordinate_commands_builder(short_address, y_coordinate) + [
-            Activate(short_address),
-        ]
+def _set_y_coordinate_commands_builder(short_address: Address, value: str) -> list[command.Command]:
+    try:
+        y_coordinate = int(value)
+    except ValueError as e:
+        raise ValueError("Y coordinate must be integer") from e
+    return set_y_coordinate_commands_builder(short_address, y_coordinate) + [Activate(short_address)]
 
-    return [
-        MqttControl(
+
+class CurrentXCoordinateControl(SingleComponentColourControl):
+    def __init__(self) -> None:
+        super().__init__(
             ControlInfo(
                 CURRENT_X_COORDINATE,
                 ControlState(
@@ -136,8 +134,13 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                     "0",
                 ),
             ),
-        ),
-        MqttControl(
+            component=ColourComponent.X_COORDINATE,
+        )
+
+
+class CurrentYCoordinateControl(SingleComponentColourControl):
+    def __init__(self) -> None:
+        super().__init__(
             ControlInfo(
                 CURRENT_Y_COORDINATE,
                 ControlState(
@@ -148,7 +151,54 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                     "0",
                 ),
             ),
-        ),
+            component=ColourComponent.Y_COORDINATE,
+        )
+
+
+class SetXCoordinateControl(SingleComponentColourControl):
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                SET_X_COORDINATE,
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
+                        minimum=0,
+                        maximum=MASK_2BYTES,
+                    ),
+                    "0",
+                ),
+            ),
+            component=ColourComponent.X_COORDINATE,
+            commands_builder=_set_x_coordinate_commands_builder,
+        )
+
+
+class SetYCoordinateControl(SingleComponentColourControl):
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                SET_Y_COORDINATE,
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
+                        minimum=0,
+                        maximum=MASK_2BYTES,
+                    ),
+                    "0",
+                ),
+            ),
+            component=ColourComponent.Y_COORDINATE,
+            commands_builder=_set_y_coordinate_commands_builder,
+        )
+
+
+def get_mqtt_controls() -> list[MqttControlBase]:
+    return [
+        CurrentXCoordinateControl(),
+        CurrentYCoordinateControl(),
         MqttControl(
             ControlInfo(
                 "x_coordinate_step_up",
@@ -197,49 +247,6 @@ def get_mqtt_controls() -> list[MqttControlBase]:
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepDown(short_address)],
         ),
-        MqttControl(
-            ControlInfo(
-                SET_X_COORDINATE,
-                ControlState(
-                    ControlMeta(
-                        "range",
-                        TranslatedTitle("Wanted X Coordinate", "Желаемая координата X"),
-                        minimum=0,
-                        maximum=MASK_2BYTES,
-                    ),
-                    "0",
-                ),
-            ),
-            commands_builder=_set_x_coordinate_commands_builder,
-        ),
-        MqttControl(
-            ControlInfo(
-                SET_Y_COORDINATE,
-                ControlState(
-                    ControlMeta(
-                        "range",
-                        TranslatedTitle("Wanted Y Coordinate", "Желаемая координата Y"),
-                        minimum=0,
-                        maximum=MASK_2BYTES,
-                    ),
-                    "0",
-                ),
-            ),
-            commands_builder=_set_y_coordinate_commands_builder,
-        ),
-    ]
-
-
-def handle_poll_controls_result(new_colour: Optional[XYColourValues]) -> list[ControlPollResult]:
-    return [
-        ControlPollResult(
-            CURRENT_X_COORDINATE,
-            None if new_colour is None else str(new_colour.x_coordinate),
-            error=ControlError.READ if new_colour is None else ControlError.NONE,
-        ),
-        ControlPollResult(
-            CURRENT_Y_COORDINATE,
-            None if new_colour is None else str(new_colour.y_coordinate),
-            error=ControlError.READ if new_colour is None else ControlError.NONE,
-        ),
+        SetXCoordinateControl(),
+        SetYCoordinateControl(),
     ]

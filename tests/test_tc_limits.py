@@ -9,6 +9,7 @@ from dali.address import GearBroadcast, GearGroup, GearShort
 from dali.gear.colour import (
     StoreColourTemperatureTcLimit,
     StoreColourTemperatureTcLimitDTR2,
+    tc_kelvin_mirek,
 )
 from dali.gear.general import DTR0, DTR1, DTR2
 
@@ -18,21 +19,30 @@ from wb.mqtt_dali.common_dali_device import (
     DaliDeviceBase,
     MqttControl,
     MqttControlBase,
+    NotifyResult,
 )
+from wb.mqtt_dali.control_ids import CURRENT_COLOUR_TEMPERATURE, SET_COLOUR_TEMPERATURE
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
+from wb.mqtt_dali.dali_type8_common import ColourComponent
+from wb.mqtt_dali.dali_type8_parameters import Type8Parameters
 from wb.mqtt_dali.dali_type8_tc import (
     MAX_TC_MIREK,
     MIN_TC_MIREK,
     UI_MAX_TC_MIREK,
     UI_MIN_TC_MIREK,
     ColourTemperatureValue,
+    CurrentColourTemperatureControl,
     TcLimitsSettings,
     Type8TcLimits,
     read_colour_temperature_limits_mirek,
 )
 from wb.mqtt_dali.device_publisher import ControlInfo
+from wb.mqtt_dali.events import ColourChanged, EventSource
 from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
+from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState, TranslatedTitle
+
+from ._control_stubs import ReadableControl
 
 
 def _make_response(msb, lsb):
@@ -193,6 +203,72 @@ async def test_tc_limits_read_mutates_shared_limits():
     assert limits.tc_max_mirek == 380
     assert limits.tc_phys_min_mirek == 60
     assert limits.tc_phys_max_mirek == 480
+
+
+async def _tc_handler(tc_min_mirek: int, tc_max_mirek: int) -> Type8Parameters:
+    """A DT8 handler that identified its colour type as Tc and read back the given user limits
+    (physical ones left at the extremes), the way ``read_mandatory_info`` discovers them."""
+    status = MagicMock()
+    status.raw_value = MagicMock(error=False)
+    status.colour_type_xy_active = False
+    status.colour_type_colour_temperature_Tc_active = True
+    status.colour_type_primary_N_active = False
+    driver = AsyncMock()
+    driver.send = AsyncMock(return_value=status)
+    driver.send_commands = AsyncMock(
+        return_value=_make_reread_response(tc_max_mirek, tc_min_mirek, MAX_TC_MIREK, MIN_TC_MIREK)
+    )
+    handler = Type8Parameters()
+    await handler.read_mandatory_info(driver, GearShort(1))
+    return handler
+
+
+def _predicted_tc(handler: Type8Parameters, mirek: int) -> int:
+    """The mirek the handler puts in the event it predicts from a sniffed Tc command."""
+    event = handler.apply_observed_colour({ColourComponent.COLOUR_TEMPERATURE: mirek}, settle_at=0.0)
+    return event.components[ColourComponent.COLOUR_TEMPERATURE]
+
+
+@pytest.mark.asyncio
+async def test_tc_limits_injected_into_control():
+    """The limits a Tc handler reads bound the set_colour_temperature slider and clamp what it
+    predicts from a sniffed command, while a read is published exactly as the gear answered
+    it."""
+    handler = await _tc_handler(tc_min_mirek=120, tc_max_mirek=380)
+    controls = {c.control_info.id: c for c in handler.get_mqtt_controls()}
+
+    wanted_meta = controls[SET_COLOUR_TEMPERATURE].control_info.state.meta
+    assert (wanted_meta.minimum, wanted_meta.maximum) == (tc_kelvin_mirek(380), tc_kelvin_mirek(120))
+
+    control = controls[CURRENT_COLOUR_TEMPERATURE]
+    predicted = handler.apply_observed_colour({ColourComponent.COLOUR_TEMPERATURE: 100}, settle_at=0.0)
+    assert control.notify(predicted) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == str(tc_kelvin_mirek(120))  # below the coolest limit
+
+    assert control.notify(_tc_read(100)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == str(tc_kelvin_mirek(100))
+
+
+def _tc_read(mirek: int) -> ColourChanged:
+    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, EventSource.READ)
+
+
+@pytest.mark.asyncio
+async def test_tc_prediction_clamped_to_the_ui_range_when_a_limit_is_not_implemented():
+    """Gear without the Tc limit registers answers MASK, and clamping to that verbatim would
+    report 15 K for every colour temperature: the UI range stands in for the unknown bound,
+    while a bound the gear did give still clamps. A read passes through either way."""
+    both_unknown = await _tc_handler(tc_min_mirek=MASK_2BYTES, tc_max_mirek=MASK_2BYTES)
+    assert _predicted_tc(both_unknown, 250) == 250  # inside the stand-in range, not clamped to MASK
+    assert _predicted_tc(both_unknown, UI_MAX_TC_MIREK + 500) == UI_MAX_TC_MIREK
+
+    warmest_known = await _tc_handler(tc_min_mirek=MASK_2BYTES, tc_max_mirek=500)
+    assert _predicted_tc(warmest_known, 250) == 250
+    assert _predicted_tc(warmest_known, 600) == 500  # past the warmest limit the gear did report
+
+    control = CurrentColourTemperatureControl()
+    assert control.notify(_tc_read(600)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == str(tc_kelvin_mirek(600))
 
 
 @pytest.mark.asyncio
@@ -492,12 +568,10 @@ def _make_device(**kwargs):
 
 
 def _make_readable_control(control_id):
-    return MqttControl(
+    return ReadableControl(
         ControlInfo(
             control_id, ControlState(ControlMeta("range", TranslatedTitle(control_id, control_id)), "0")
-        ),
-        query_builder=lambda addr: MagicMock(),
-        value_formatter=lambda resp: "0",
+        )
     )
 
 

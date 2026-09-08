@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.29.0) stable; urgency=medium
+
+  * The internal logic of polling devices and publishing their state has changed.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 08 Sep 2026 18:05:00 +0500
+
 wb-mqtt-dali (1.28.0) stable; urgency=medium
 
   * A lost connection to the MQTT broker no longer restarts the buses: the devices stay in

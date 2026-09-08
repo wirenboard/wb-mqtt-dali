@@ -3,16 +3,21 @@
 import logging
 from typing import Optional
 
-from dali.address import Address, GearShort
-from dali.command import Command, Response
+from dali.address import GearShort
+from dali.command import Response
 
 from .common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
     MqttControlBase,
+    NotifyResult,
     PropertyStartOrder,
+    SingleQueryControl,
 )
+from .control_ids import LAST_ACTED
+from .dali_controls import MAX_GEAR_LEVEL
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo
+from .events import BusEvent, EventSource, LevelChanged, SwitchStatusRead
 from .gear.switching_function import (
     QueryDownSwitchOffThreshold,
     QueryDownSwitchOnThreshold,
@@ -104,7 +109,7 @@ class ErrorHoldOffTimeParam(NumberGearParam):
         self.property_order = PropertyStartOrder.SPECIFIC.value + 4
 
 
-class LastActedControl(MqttControlBase):
+class LastActedControl(SingleQueryControl):
     """Type-7 switch status; an event control predicted from level-threshold crossings.
 
     Best-effort: a level transition that crosses a switch's on/off threshold sets the
@@ -122,7 +127,7 @@ class LastActedControl(MqttControlBase):
     ) -> None:
         super().__init__(
             ControlInfo(
-                "last_acted",
+                LAST_ACTED,
                 ControlState(
                     ControlMeta(
                         title=TranslatedTitle("Last Acted", "Последнее действие"),
@@ -138,6 +143,7 @@ class LastActedControl(MqttControlBase):
                     "0",
                 ),
             ),
+            query_builder=QuerySwitchStatus,
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
             startup_reconfirm=True,
@@ -146,12 +152,8 @@ class LastActedControl(MqttControlBase):
         self._up_off = up_off
         self._down_on = down_on
         self._down_off = down_off
-
-    def get_query(self, short_address: Address) -> Command:
-        return QuerySwitchStatus(short_address)
-
-    def is_readable(self) -> bool:
-        return True
+        # Kept to detect a threshold crossing on the next level.
+        self._last_level: Optional[int] = None
 
     def format_response(self, response: Response) -> str:
         if isinstance(response, SwitchingFunctionSwitchStatusResponse):
@@ -165,15 +167,34 @@ class LastActedControl(MqttControlBase):
                 return "4"
         return "0"
 
-    def apply(self, prev_level: Optional[int], new_level: Optional[int]) -> Optional[str]:
-        if prev_level is None or new_level is None:
-            return None
-        code = self._crossing_code(prev_level, new_level)
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if isinstance(event, SwitchStatusRead):
+            return self._apply_quantity_read(event, SwitchStatusRead, self.format_response)
+        if not isinstance(event, LevelChanged):
+            return super().notify(event)
+        if event.settle_at is not None:
+            self.schedule_poll_at(event.settle_at)
+        # Neither a failed read nor MASK is a side of a crossing; keeping one would drop the
+        # last real level the next one is compared against.
+        if event.raw_level is None or event.raw_level > MAX_GEAR_LEVEL:
+            return NotifyResult.NOTHING_TO_PUBLISH
+        prev_level = self._last_level
+        self._last_level = event.raw_level
+        # Only a sniffed command says something about the switching function: a difference
+        # between two polls can come from a missed frame or mid-fade. And a code published
+        # while the readback is failing would sit beside a standing /meta/error=r.
+        if event.source is not EventSource.OBSERVED or self.control_info.state.error:
+            return NotifyResult.NOTHING_TO_PUBLISH
+        code = self._crossing_code(prev_level, event.raw_level) if prev_level is not None else None
         if code is None:
-            return None
-        value = str(code)
-        self.control_info.state.value = value
-        return value
+            return NotifyResult.NOTHING_TO_PUBLISH
+        self.control_info.state.value = str(code)
+        return NotifyResult.PUBLISH_STATE
+
+    # --- Hooks for subclasses ---
+
+    def decode_response(self, response: Optional[Response]) -> BusEvent:
+        return SwitchStatusRead(response, response is None)
 
     # --- Private ---
 

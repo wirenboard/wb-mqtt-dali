@@ -2,6 +2,9 @@
 
 import enum
 
+from .control_ids import PRIMARY_N_MAX
+from .wbdali_utils import MASK, MASK_2BYTES
+
 
 class ColourComponent(enum.Enum):
     RED = "red"
@@ -19,3 +22,28 @@ class ColourComponent(enum.Enum):
     PRIMARY_N5 = "primary_n5"
     X_COORDINATE = "x_coordinate"
     Y_COORDINATE = "y_coordinate"
+
+
+PRIMARY_N_BY_INDEX: dict[int, ColourComponent] = {
+    index: ColourComponent(f"primary_n{index}") for index in range(PRIMARY_N_MAX)
+}
+
+# Component -> the raw "not available / leave unchanged" value (62386-209). Same byte both
+# directions: our own filler for the fields a command does not set when we write it, the gear
+# refusing to name the value when it answers it.
+INVALID_RAW_VALUE: dict[ColourComponent, int] = {
+    ColourComponent.RED: MASK,
+    ColourComponent.GREEN: MASK,
+    ColourComponent.BLUE: MASK,
+    ColourComponent.WHITE: MASK,
+    ColourComponent.AMBER: MASK,
+    ColourComponent.FREE_COLOUR: MASK,
+    ColourComponent.COLOUR_TEMPERATURE: MASK_2BYTES,
+    ColourComponent.X_COORDINATE: MASK_2BYTES,
+    ColourComponent.Y_COORDINATE: MASK_2BYTES,
+    **{component: MASK_2BYTES for component in PRIMARY_N_BY_INDEX.values()},
+}
+
+
+def is_invalid_component_value(component: ColourComponent, value: int) -> bool:
+    return INVALID_RAW_VALUE.get(component) == value

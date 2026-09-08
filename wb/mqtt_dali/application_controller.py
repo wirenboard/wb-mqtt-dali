@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Any, Callable, Coroutine, Iterable, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Optional, Type, Union
 
 import aiomqtt
 from dali.address import (
@@ -23,15 +23,16 @@ from dali.gear.general import EnableDeviceType
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
-from .common_dali_device import ControlPollResult, DaliDeviceAddress, read_product_name
+from .common_dali_device import DaliDeviceAddress, Pollable, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
-from .dali2_device import Dali2Device, publish_dali2_event
+from .dali2_device import Dali2Device
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .device_registry import DeviceRegistry
-from .event_sync_coordinator import EventSyncCoordinator, is_event_sync_owned_setpoint
+from .event_sync_coordinator import EventSyncCoordinator
+from .events import BusEvent, Dali2InputEvent
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
@@ -42,7 +43,6 @@ from .virtual_devices import (
     AggregatedCapabilities,
     BroadcastVirtualDevice,
     GroupSpec,
-    GroupStateUpdateKind,
     GroupVirtualDevice,
     aggregate_capabilities,
 )
@@ -55,7 +55,7 @@ from .wbdali_utils import (
     is_transmission_error_response,
     send_with_retry,
 )
-from .wbmqtt import ControlError
+from .wbmqtt import ControlError, is_pushbutton
 
 # A device is allowed to ignore commands until 300 ms after Reset started
 # (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
@@ -295,7 +295,7 @@ class PollScheduler:
 
     async def poll(
         self, driver: WBDALIDriver, current_time: float
-    ) -> list[tuple[DaliDevice, Union[list[ControlPollResult], BaseException]]]:
+    ) -> list[tuple[DaliDevice, Union[list[BusEvent], BaseException]]]:
         if not self._devices:
             return []
         default_max_commands = 3
@@ -399,7 +399,7 @@ async def publish_device(
     await publisher.add_device(device_info)
     await publisher.register_control_handler(device.mqtt_id, "+", control_handler)
     for control in common_controls:
-        if control.is_readable():
+        if isinstance(control, Pollable):
             await publisher.set_control_error(device.mqtt_id, control.control_info.id, ControlError.READ)
 
 
@@ -1200,12 +1200,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._tasks_queue.put_nowait(task)
             await task.future
             await self._device_publisher.set_control_error(device_id, control_id, ControlError.NONE)
-            # Setpoints event sync owns (real-device wanted_level/dapc/set_*) are published
-            # from the observed truth via the monitor path; confirm only holds their write
-            # error here. Non-owned writables and virtual-device setpoints echo as before.
-            owned = isinstance(device, DaliDevice) and is_event_sync_owned_setpoint(control_id)
             new_value = control.control_info.state.value
-            if not owned and new_value is not None:
+            # A press is the one value no event reports, so confirm is what puts it on the topic.
+            if is_pushbutton(control.control_info.state.meta) and new_value is not None:
                 await self._device_publisher.set_control_value(device_id, control_id, new_value)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
@@ -1523,96 +1520,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 if isinstance(device_responses, BaseException):
                     self.logger.error("Error polling device %s: %s", device.name, device_responses)
                 else:
-                    await self._publish_poll_results(device, device_responses)
-
-    async def _publish_poll_results(self, device: DaliDevice, responses: Iterable[ControlPollResult]) -> None:
-        responses = list(responses)
-        tasks = []
-        for response in responses:
-            control = device.get_mqtt_control(response.control_id)
-            if response.error:
-                if control is not None:
-                    control.read_error = True
-                tasks.append(
-                    self._device_publisher.set_control_error(
-                        device.mqtt_id, response.control_id, ControlError.READ
-                    )
-                )
-                continue
-            if control is not None:
-                control.read_error = False
-            if response.title is not None:
-                tasks.append(
-                    self._device_publisher.set_control_title(
-                        device.mqtt_id, response.control_id, response.title
-                    )
-                )
-            if response.value is not None:
-                tasks.append(
-                    self._device_publisher.set_control_value(
-                        device.mqtt_id, response.control_id, response.value
-                    )
-                )
-        tasks.extend(self._build_group_state_tasks(device, responses))
-
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    self.logger.error(
-                        "Error updating MQTT control for device %s: %s",
-                        device.name,
-                        result,
-                    )
-
-        # Mirror the readback onto the quantity's setpoints (§5): keeps wanted_level/dapc/
-        # set_* in sync even for commands prediction can't follow.
-        await self._event_sync.publish_poll_setpoint_mirror(device, responses)
-
-    def _build_group_state_tasks(
-        self,
-        device: DaliDevice,
-        responses: Iterable[ControlPollResult],
-    ) -> list[Coroutine]:
-        if not device.groups:
-            return []
-        tasks: list[Coroutine] = []
-        for group_number in device.groups:
-            group_device = self._group_devices_by_number.get(group_number)
-            if group_device is None:
-                continue
-            source = group_device.state_source
-            for response in responses:
-                control_id = response.control_id
-                if control_id not in source.control_ids:
-                    continue
-                action = source.record_poll(
-                    candidate_uid=device.uid,
-                    control_id=control_id,
-                    success=not response.error,
-                    value=response.value,
-                )
-                if action is None:
-                    continue
-                if action.kind is GroupStateUpdateKind.VALUE:
-                    tasks.append(
-                        self._device_publisher.set_control_value(
-                            group_device.mqtt_id,
-                            action.control_id,
-                            action.payload,
-                        )
-                    )
-                elif action.kind is GroupStateUpdateKind.ERROR:
-                    # Group state only surfaces read failures; action.payload carries the
-                    # matching wire string ("r") for the update's polymorphic value slot.
-                    tasks.append(
-                        self._device_publisher.set_control_error(
-                            group_device.mqtt_id,
-                            action.control_id,
-                            ControlError.READ,
-                        )
-                    )
-        return tasks
+                    for event in device_responses:
+                        await self._event_sync.notify_poll_event(device, event)
 
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True
@@ -1657,14 +1566,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             ):
                 device = self._device_registry.dali2_device_by_short(incoming_command.short_address.address)
                 if device is not None:
-                    instance = device.instances.get(incoming_command.instance_number)
-                    if instance is not None:
-                        self._one_shot_tasks.add(
-                            publish_dali2_event(
-                                incoming_command, device.mqtt_id, self._mqtt_dispatcher, instance
-                            ),
-                            "Publish DALI 2 event to MQTT",
-                        )
+                    self._one_shot_tasks.add(
+                        self._event_sync.notify_dali2_event(
+                            device,
+                            Dali2InputEvent(incoming_command),
+                        ),
+                        "Dispatch DALI 2 event",
+                    )
 
             # Our own polling queries reach here as WB frames too; they change no state and
             # would only churn tasks. Only send-only gear commands (queries declare a response

@@ -7,12 +7,14 @@ import aiomqtt
 import pytest
 
 from wb.mqtt_dali.wbmqtt import (
+    MQTT_PUBLISH_TIMEOUT_S,
     ControlError,
     ControlMeta,
     ControlState,
     Device,
     PublishPolicy,
     TranslatedTitle,
+    make_mqtt_client,
     remove_topics_by_driver,
     retain_hack,
 )
@@ -158,9 +160,6 @@ class TestControlState:
         state = ControlState(ControlMeta(), "value")
         assert state.error == ControlError(0)
         assert not state.error
-
-    def test_default_publish_policy_is_on_change(self):
-        assert ControlState(ControlMeta(), "value").publish_policy is PublishPolicy.ON_CHANGE
 
 
 class TestControlError:
@@ -330,6 +329,141 @@ class TestDevice:
         assert (
             mock_client.publish.call_args_list
             == [(("/devices/test_device/controls/short_press1", "1"), {"qos": 2, "retain": False})] * 2
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_control_state_publishes_the_value_under_a_raised_error(
+        self, mock_client, mock_dispatcher
+    ):
+        """A read that produced a value and still reports a failure: both reach the wire, the
+        error last -- it carries the news, the value on its own would look freshly confirmed.
+        """
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "0")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", "42", ControlError.READ)
+
+        assert mock_client.publish.call_args_list == [
+            (("/devices/test_device/controls/ctrl1", "42"), {"qos": 2, "retain": True}),
+            (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 2, "retain": True}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_set_control_state_clears_the_error_before_the_new_value(
+        self, mock_client, mock_dispatcher
+    ):
+        """The successful read behind a failed one: /meta/error is cleared first, so no
+        subscriber sees the fresh value while the stale error still stands next to it."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "0")
+        await device.set_control_state("ctrl1", "42", ControlError.READ)
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", "43", ControlError.NONE)
+
+        assert mock_client.publish.call_args_list == [
+            (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 2, "retain": True}),
+            (("/devices/test_device/controls/ctrl1", "43"), {"qos": 2, "retain": True}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_set_control_state_leaves_a_standing_error_untouched(self, mock_client, mock_dispatcher):
+        """A value that changed while the same error still stands touches the value topic
+        alone: the error is compared, so it is neither republished nor cleared by a value."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "0")
+        await device.set_control_state("ctrl1", "42", ControlError.READ)
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", "43", ControlError.READ)
+
+        assert mock_client.publish.call_args_list == [
+            (("/devices/test_device/controls/ctrl1", "43"), {"qos": 2, "retain": True})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_set_control_state_without_a_value_keeps_the_value_topic(
+        self, mock_client, mock_dispatcher
+    ):
+        """A control with nothing to show reports its error alone: publishing the missing value
+        would delete the retained message, and the cached value stands."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "42")
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", None, ControlError.READ)
+
+        assert mock_client.publish.call_args_list == [
+            (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 2, "retain": True})
+        ]
+        mock_client.publish.reset_mock()
+
+        await device.set_control_state("ctrl1", "42", ControlError.NONE)
+
+        assert mock_client.publish.call_args_list == [
+            (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 2, "retain": True})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_publish_is_logged_once_and_republished(
+        self, mock_client, mock_dispatcher, caplog
+    ):
+        """The broker never confirms the first publish: it is logged in one line naming the
+        topic, and the value stays uncommitted, so the next identical update publishes it."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "0")
+        mock_client.publish.reset_mock()
+        mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
+
+        with caplog.at_level(logging.DEBUG):
+            await device.set_control_state("ctrl1", "42", ControlError.NONE)
+
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if record.getMessage().startswith("Not published")
+        ] == ['Not published "/devices/test_device/controls/ctrl1": Operation timed out']
+
+        await device.set_control_state("ctrl1", "42", ControlError.NONE)
+
+        assert (
+            mock_client.publish.call_args_list
+            == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 2, "retain": True})] * 2
+        )
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_value_and_error_are_republished(self, mock_client, mock_dispatcher):
+        """The broker never confirms the first publish of the value, then of the error: neither is
+        committed, so the next identical update of each publishes it again."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("ctrl1", ControlMeta(), "0")
+        mock_client.publish.reset_mock()
+        mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
+
+        await device.set_control_value("ctrl1", "42")
+        await device.set_control_value("ctrl1", "42")
+
+        assert (
+            mock_client.publish.call_args_list
+            == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 2, "retain": True})] * 2
+        )
+
+        mock_client.publish.reset_mock()
+        mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
+
+        await device.set_control_error("ctrl1", ControlError.READ)
+        await device.set_control_error("ctrl1", ControlError.READ)
+
+        assert (
+            mock_client.publish.call_args_list
+            == [(("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 2, "retain": True})] * 2
         )
 
     @pytest.mark.asyncio
@@ -746,3 +880,11 @@ class TestIntegration:  # pylint: disable=too-few-public-methods
 
         await device.remove_device()
         assert len(device._controls) == 0
+
+
+@pytest.mark.asyncio
+async def test_make_mqtt_client_bounds_the_wait_for_a_publish():
+    """A publish awaiting its confirmation holds DevicePublisher's lock, so the client is
+    built with an explicit timeout instead of aiomqtt's 10 s default. (The client binds the
+    running loop at construction, hence the async test.)"""
+    assert make_mqtt_client("tcp://localhost:1883").timeout == MQTT_PUBLISH_TIMEOUT_S

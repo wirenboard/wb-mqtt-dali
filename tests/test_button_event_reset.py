@@ -7,14 +7,13 @@ so without an extra reset a short/double/long press would leave the control
 stuck at "1". These tests assert that `ButtonReleased`, `ShortPress`,
 `DoublePress` and `LongPressStop` clear `button{instance}` after a
 `ButtonPressed`, that a still-held `LongPressStart` does not, and that a
-release event with no preceding press publishes nothing (no retained-"0" spam).
+release event with no preceding press asks for no publish (no retained-"0" spam).
 """
 
 import unittest
-from unittest.mock import AsyncMock
 
-from dali.address import DeviceShort, InstanceNumber
-from dali.device import pushbutton
+from dali.address import DeviceShort
+from dali.device.occupancy import OccupancyEvent
 from dali.device.pushbutton import (
     ButtonPressed,
     ButtonReleased,
@@ -25,110 +24,113 @@ from dali.device.pushbutton import (
     ShortPress,
 )
 
-from wb.mqtt_dali.dali2_device import InstanceParameters, publish_dali2_event
+from wb.mqtt_dali.common_dali_device import NotifyResult
+from wb.mqtt_dali.dali2_controls import (
+    ButtonControl,
+    LongPressControl,
+    get_occupancy_controls,
+)
+from wb.mqtt_dali.events import Dali2InputEvent
 
-_DEVICE_ID = "wb-dali_1_1"
+from ._control_publishing import publish_events
+
 _INSTANCE = 4
-_BUTTON_TOPIC = f"/devices/{_DEVICE_ID}/controls/button{_INSTANCE}"
 
 
-def _instance() -> InstanceParameters:
-    return InstanceParameters(InstanceNumber(_INSTANCE), pushbutton.instance_type)
+def _event(command_type) -> Dali2InputEvent:
+    return Dali2InputEvent(command_type(short_address=DeviceShort(1), instance_number=_INSTANCE))
 
 
-def _published(mqtt_client: AsyncMock) -> dict[str, str]:
-    return {call.args[0]: call.args[1] for call in mqtt_client.publish.await_args_list}
+class ButtonEventResetTests(unittest.TestCase):
+    def test_release_type_event_after_press_clears_state(self):
+        """A press publishes "1"; every release-type event behind it publishes "0" — the short
+        and the double press too, for which no released event is delivered."""
+        for command_type in (ButtonReleased, ShortPress, DoublePress):
+            with self.subTest(command_type=command_type.__name__):
+                control = ButtonControl(_INSTANCE)
 
+                control.notify(_event(ButtonPressed))
+                self.assertIs(control.notify(_event(command_type)), NotifyResult.PUBLISH_STATE)
+                self.assertEqual(control.control_info.state.value, "0")
 
-def _event(command_type):
-    return command_type(short_address=DeviceShort(1), instance_number=_INSTANCE)
-
-
-class ButtonEventResetTests(unittest.IsolatedAsyncioTestCase):
-    async def test_press_then_release_clears_state(self):
-        """A press publishes "1"; the following release publishes "0"."""
-        instance = _instance()
-        mqtt_client = AsyncMock()
-
-        await publish_dali2_event(_event(ButtonPressed), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(ButtonReleased), _DEVICE_ID, mqtt_client, instance)
-
-        self.assertEqual(_published(mqtt_client)[_BUTTON_TOPIC], "0")
-        self.assertFalse(instance.button_pressed)
-
-    async def test_short_press_clears_state_after_press(self):
-        """A short press following a press clears `button{instance}` even though
-        no released event is delivered for it."""
-        instance = _instance()
-        mqtt_client = AsyncMock()
-
-        await publish_dali2_event(_event(ButtonPressed), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(ShortPress), _DEVICE_ID, mqtt_client, instance)
-
-        self.assertEqual(_published(mqtt_client)[_BUTTON_TOPIC], "0")
-
-    async def test_double_press_clears_state_after_press(self):
-        """A double press following a press clears `button{instance}`."""
-        instance = _instance()
-        mqtt_client = AsyncMock()
-
-        await publish_dali2_event(_event(ButtonPressed), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(DoublePress), _DEVICE_ID, mqtt_client, instance)
-
-        self.assertEqual(_published(mqtt_client)[_BUTTON_TOPIC], "0")
-
-    async def test_long_press_stop_clears_state_after_press(self):
+    def test_long_press_stop_clears_state_after_press(self):
         """LongPressStart keeps the state set while held; LongPressStop clears it."""
-        instance = _instance()
-        mqtt_client = AsyncMock()
+        control = ButtonControl(_INSTANCE)
 
-        await publish_dali2_event(_event(ButtonPressed), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(LongPressStart), _DEVICE_ID, mqtt_client, instance)
-        self.assertTrue(instance.button_pressed)
+        control.notify(_event(ButtonPressed))
+        self.assertIs(control.notify(_event(LongPressStart)), NotifyResult.NOTHING_TO_PUBLISH)
+        self.assertEqual(control.control_info.state.value, "1")
 
-        await publish_dali2_event(_event(LongPressStop), _DEVICE_ID, mqtt_client, instance)
-        self.assertEqual(_published(mqtt_client)[_BUTTON_TOPIC], "0")
+        self.assertIs(control.notify(_event(LongPressStop)), NotifyResult.PUBLISH_STATE)
+        self.assertEqual(control.control_info.state.value, "0")
 
-    async def test_long_press_repeat_keeps_pressed_state(self):
+    def test_long_press_repeat_keeps_pressed_state(self):
         """Long press repeats arrive while the button is still held, so they
         must not clear the pressed state; the following stop clears it."""
-        instance = _instance()
-        mqtt_client = AsyncMock()
+        control = ButtonControl(_INSTANCE)
 
-        await publish_dali2_event(_event(ButtonPressed), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(LongPressStart), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(LongPressRepeat), _DEVICE_ID, mqtt_client, instance)
-        self.assertTrue(instance.button_pressed)
-        mqtt_client.reset_mock()
+        control.notify(_event(ButtonPressed))
+        control.notify(_event(LongPressStart))
+        self.assertIs(control.notify(_event(LongPressRepeat)), NotifyResult.NOTHING_TO_PUBLISH)
+        self.assertEqual(control.control_info.state.value, "1")
 
-        await publish_dali2_event(_event(LongPressStop), _DEVICE_ID, mqtt_client, instance)
+        self.assertIs(control.notify(_event(LongPressStop)), NotifyResult.PUBLISH_STATE)
+        self.assertEqual(control.control_info.state.value, "0")
 
-        self.assertEqual(_published(mqtt_client)[_BUTTON_TOPIC], "0")
-        self.assertFalse(instance.button_pressed)
-
-    async def test_release_without_press_publishes_nothing(self):
+    def test_release_without_press_publishes_nothing(self):
         """No release-type event clears the state when no "button pressed" event
         preceded it — every variant must leave `button{instance}` untouched, so
         there is no retained-"0" spam (in particular `ButtonReleased`, which has
         no other publish branch)."""
         for command_type in (ButtonReleased, ShortPress, DoublePress, LongPressStop):
             with self.subTest(command_type=command_type.__name__):
-                instance = _instance()
-                mqtt_client = AsyncMock()
+                control = ButtonControl(_INSTANCE)
 
-                await publish_dali2_event(_event(command_type), _DEVICE_ID, mqtt_client, instance)
+                self.assertIs(control.notify(_event(command_type)), NotifyResult.NOTHING_TO_PUBLISH)
 
-                self.assertNotIn(_BUTTON_TOPIC, _published(mqtt_client))
-
-    async def test_release_after_clear_is_not_republished(self):
+    def test_release_after_clear_is_not_republished(self):
         """Once cleared, a further release event does not republish "0"."""
-        instance = _instance()
-        mqtt_client = AsyncMock()
+        control = ButtonControl(_INSTANCE)
 
-        await publish_dali2_event(_event(ButtonPressed), _DEVICE_ID, mqtt_client, instance)
-        await publish_dali2_event(_event(ButtonReleased), _DEVICE_ID, mqtt_client, instance)
-        mqtt_client.reset_mock()
+        control.notify(_event(ButtonPressed))
+        control.notify(_event(ButtonReleased))
 
-        await publish_dali2_event(_event(ShortPress), _DEVICE_ID, mqtt_client, instance)
+        self.assertIs(control.notify(_event(ShortPress)), NotifyResult.NOTHING_TO_PUBLISH)
 
-        self.assertNotIn(_BUTTON_TOPIC, _published(mqtt_client))
+
+def _occupancy_event(occupied: bool, repeat: bool) -> Dali2InputEvent:
+    return Dali2InputEvent(
+        OccupancyEvent(
+            short_address=DeviceShort(1),
+            instance_number=_INSTANCE,
+            data=OccupancyEvent.EventData(movement=False, occupied=occupied, repeat=repeat),
+        )
+    )
+
+
+class EventControlPublishPolicyTests(unittest.IsolatedAsyncioTestCase):
+    """Whether a repeated event reaches the topic is the control's publish policy, applied by
+    the MQTT device — so these go through a real one."""
+
+    async def test_long_press_repeat_republishes(self):
+        """A held button republishes "1" on every LongPressRepeat under the ALWAYS policy,
+        while an occupancy control's repeated event is dropped by ON_CHANGE."""
+        published = await publish_events(
+            LongPressControl(_INSTANCE),
+            [_event(LongPressStart), _event(LongPressRepeat), _event(LongPressRepeat)],
+        )
+
+        self.assertEqual([publish.payload for publish in published], ["1", "1", "1"])
+
+        occupied = next(
+            control
+            for control in get_occupancy_controls(_INSTANCE)
+            if control.control_info.id == f"occupied{_INSTANCE}"
+        )
+
+        occupancy_published = await publish_events(
+            occupied,
+            [_occupancy_event(occupied=True, repeat=False), _occupancy_event(occupied=True, repeat=True)],
+        )
+
+        self.assertEqual([publish.payload for publish in occupancy_published], ["1"])

@@ -1,19 +1,20 @@
 # Type 8 Primary N
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from dali import command
 from dali.address import Address
 from dali.gear.colour import Activate, SetTemporaryPrimaryNDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
-from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .common_dali_device import MqttControlBase
 from .control_ids import CURRENT_PRIMARY_N, PRIMARY_N_MAX, SET_PRIMARY_N
-from .dali_type8_common import ColourComponent
+from .dali_type8_common import PRIMARY_N_BY_INDEX, ColourComponent
+from .dali_type8_controls import SingleComponentColourControl
 from .device_publisher import ControlInfo
 from .wbdali_utils import MASK_2BYTES
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 COLOUR_NAMES = {
     ColourComponent.PRIMARY_N0: ("Primary N0", "Основной N0"),
@@ -25,14 +26,8 @@ COLOUR_NAMES = {
 }
 
 
-PRIMARY_N_COLOUR_COMPONENTS = [
-    ColourComponent.PRIMARY_N0,
-    ColourComponent.PRIMARY_N1,
-    ColourComponent.PRIMARY_N2,
-    ColourComponent.PRIMARY_N3,
-    ColourComponent.PRIMARY_N4,
-    ColourComponent.PRIMARY_N5,
-]
+# Indexed by primary number, so the order is the one PRIMARY_N_BY_INDEX declares.
+PRIMARY_N_COLOUR_COMPONENTS = list(PRIMARY_N_BY_INDEX.values())
 
 
 def set_primary_n_commands_builder(address: Address, value: int, index: int) -> list[command.Command]:
@@ -95,63 +90,54 @@ class PrimaryNColourValues:
         }
 
 
-def get_mqtt_controls() -> list[MqttControlBase]:
+def _set_primary_n_commands_builder(short_address: Address, value: str, index: int) -> list[command.Command]:
+    try:
+        primary_n = int(value)
+    except ValueError as e:
+        raise ValueError(f"primary N{index} must be integer") from e
+    return set_primary_n_commands_builder(short_address, primary_n, index) + [Activate(short_address)]
 
-    def _set_primary_n_commands_builder(
-        short_address: Address, value: str, index: int
-    ) -> list[command.Command]:
-        try:
-            primary_n = int(value)
-        except ValueError as e:
-            raise ValueError(f"primary N{index} must be integer") from e
-        return set_primary_n_commands_builder(short_address, primary_n, index) + [
-            Activate(short_address),
-        ]
 
-    res = []
-    for i in range(PRIMARY_N_MAX):
-        res.append(
-            MqttControl(
-                ControlInfo(
-                    CURRENT_PRIMARY_N.format(i),
-                    ControlState(
-                        ControlMeta(
-                            title=TranslatedTitle(f"Current Primary N{i}", f"Текущий основной N{i}"),
-                            read_only=True,
-                        ),
-                        "0",
+class CurrentPrimaryNControl(SingleComponentColourControl):
+    def __init__(self, index: int) -> None:
+        super().__init__(
+            ControlInfo(
+                CURRENT_PRIMARY_N.format(index),
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle(f"Current Primary N{index}", f"Текущий основной N{index}"),
+                        read_only=True,
                     ),
+                    "0",
                 ),
             ),
+            component=PRIMARY_N_COLOUR_COMPONENTS[index],
         )
-        res.append(
-            MqttControl(
-                ControlInfo(
-                    SET_PRIMARY_N.format(i),
-                    ControlState(
-                        ControlMeta(
-                            "range",
-                            TranslatedTitle(f"Wanted Primary N{i}", f"Желаемый основной N{i}"),
-                            minimum=0,
-                            maximum=MASK_2BYTES,
-                        ),
-                        "0",
+
+
+class SetPrimaryNControl(SingleComponentColourControl):
+    def __init__(self, index: int) -> None:
+        super().__init__(
+            ControlInfo(
+                SET_PRIMARY_N.format(index),
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle(f"Wanted Primary N{index}", f"Желаемый основной N{index}"),
+                        minimum=0,
+                        maximum=MASK_2BYTES,
                     ),
+                    "0",
                 ),
-                commands_builder=lambda short_address, value, index=i: _set_primary_n_commands_builder(
-                    short_address, value, index
-                ),
-            )
+            ),
+            component=PRIMARY_N_COLOUR_COMPONENTS[index],
+            commands_builder=lambda address, value: _set_primary_n_commands_builder(address, value, index),
         )
+
+
+def get_mqtt_controls() -> list[MqttControlBase]:
+    res: list[MqttControlBase] = []
+    for i in range(PRIMARY_N_MAX):
+        res.append(CurrentPrimaryNControl(i))
+        res.append(SetPrimaryNControl(i))
     return res
-
-
-def handle_poll_controls_result(new_colour: Optional[PrimaryNColourValues]) -> list[ControlPollResult]:
-    return [
-        ControlPollResult(
-            CURRENT_PRIMARY_N.format(i),
-            None if new_colour is None else str(getattr(new_colour, f"primary_n{i}")),
-            error=ControlError.READ if new_colour is None else ControlError.NONE,
-        )
-        for i, _ in enumerate(PRIMARY_N_COLOUR_COMPONENTS)
-    ]

@@ -3,11 +3,20 @@ import json
 import logging
 import random
 import uuid
+from abc import abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional, Protocol, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Optional,
+    Protocol,
+    Union,
+    runtime_checkable,
+)
 
 import jsonschema
 from dali.address import Address
@@ -19,6 +28,7 @@ from dali.memory.location import FlagValue
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .device_publisher import ControlInfo
+from .events import BusEvent, QuantityRead
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .short_address import set_short_address_sequence
@@ -30,7 +40,14 @@ from .wbdali_utils import (
     query_response,
     send_commands_with_retry,
 )
-from .wbmqtt import ControlError, TranslatedTitle
+from .wbmqtt import ControlError
+
+
+class NotifyResult(Enum):
+    """What a control asks for after ``notify``."""
+
+    PUBLISH_STATE = "publish_state"  # my control_info.state is what should be on the wire now
+    NOTHING_TO_PUBLISH = "nothing_to_publish"  # not mine, or the value was refused
 
 
 class PropertyStartOrder(Enum):
@@ -135,11 +152,6 @@ class MqttControlBase(EventPollSchedule):
 
     value_to_set: Optional[str] = None
 
-    # Set by the re-sync poll: True after a failed read, False after a successful one.
-    # Event sync suppresses prediction of this control's quantity while it stands, so a
-    # standing /meta/error=r doesn't flicker r <-> "" under live traffic.
-    read_error: bool = False
-
     def __init__(
         self,
         control_info: ControlInfo,
@@ -151,22 +163,18 @@ class MqttControlBase(EventPollSchedule):
         # the property value is used as default value for the control
         self.control_info = control_info
 
-    def is_readable(self) -> bool:
-        return False
+    def notify(self, event: BusEvent) -> NotifyResult:
+        """React to an event dispatched to every control of the device.
+
+        A control that reads itself schedules the confirming poll on ``event.settle_at`` before
+        any early exit: a refused value (standing read error, no threshold crossed) still needs
+        the re-read.
+        """
+        del event
+        return NotifyResult.NOTHING_TO_PUBLISH
 
     def is_writable(self) -> bool:
         return False
-
-    def get_query(self, short_address: Address) -> Optional[Command]:
-        del short_address
-
-    def format_response(self, response: Response) -> str:
-        del response
-        return ""
-
-    def format_title(self, response: Response) -> Union[str, TranslatedTitle]:
-        del response
-        return ""
 
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         del short_address, value_to_set
@@ -175,106 +183,51 @@ class MqttControlBase(EventPollSchedule):
     def is_dirty(self) -> bool:
         return self.value_to_set is not None
 
-    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        self,
-        driver: "WBDALIDriver",
-        address: Address,
-        max_commands: int,
-        default_max_commands: int,
-        now: float,
-        logger: Optional[logging.Logger] = None,
-    ) -> "ControlsPollRequestResult":
-        del default_max_commands
-        if max_commands < 1:
-            return ControlsPollRequestResult(has_more=True)
-        self.schedule_next_periodic_poll(polled_at=now)
-        return ControlsPollRequestResult(
-            has_more=False,
-            poll_coroutine=lambda: self._run_single_query(driver, address, logger),
-            commands_count=1,
-        )
-
-    def cancel_pending_poll(self) -> None:
-        pass
-
     # --- Private ---
 
-    async def _run_single_query(
+    def _apply_quantity_read(
         self,
-        driver: "WBDALIDriver",
-        address: Address,
-        logger: Optional[logging.Logger] = None,
-    ) -> list["ControlPollResult"]:
-        try:
-            # pylint: disable-next=assignment-from-no-return
-            query = self.get_query(address)
-            responses = await send_commands_with_retry(driver, [query], priority=FramePriority.PERIODIC_QUERY)
-            response = responses[0]
-            try:
-                check_query_response(response)
-            except RuntimeError:
-                return [ControlPollResult(control_id=self.control_info.id, value="", error=ControlError.READ)]
-
-            if self.control_info.state.meta.control_type == "alarm":
-                title = self.format_title(response)
-                value = self.format_response(response)
-                return [ControlPollResult(control_id=self.control_info.id, value=value, title=title)]
-
-            return [ControlPollResult(control_id=self.control_info.id, value=self.format_response(response))]
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            if logger is not None:
-                logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
-            return [ControlPollResult(control_id=self.control_info.id, value="", error=ControlError.READ)]
+        event: BusEvent,
+        quantity_event: type[QuantityRead],
+        format_value: Callable[[Response], str],
+    ) -> NotifyResult:
+        """Apply a read of a quantity this control is the only MQTT representation of."""
+        if not isinstance(event, quantity_event):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        if event.failed:
+            self.control_info.state.error = ControlError.READ
+            return NotifyResult.PUBLISH_STATE
+        self.control_info.state.value = format_value(event.response)
+        self.control_info.state.error = ControlError.NONE
+        return NotifyResult.PUBLISH_STATE
 
 
 class MqttControl(MqttControlBase):
-    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """A control configured by a command builder: it writes, and reads nothing.
+
+    A readable quantity has to be decoded into its event, so it gets its own class instead.
+    """
+
+    def __init__(
         self,
         control_info: ControlInfo,
-        query_builder: Optional[Callable[[Address], object]] = None,
-        value_formatter: Optional[Callable[[Response], str]] = None,
         commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
         is_group_state_control: bool = False,
-        poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
-        randomize_poll_interval: bool = False,
     ) -> None:
-        super().__init__(control_info, poll_interval, randomize_poll_interval)
-        self.query_builder = query_builder
-        self.value_formatter = value_formatter
+        super().__init__(control_info)
         self.commands_builder = commands_builder
         self.is_group_state_control = is_group_state_control
-
-    def get_query(self, short_address: Address) -> Optional[Command]:
-        if self.query_builder is not None:
-            return self.query_builder(short_address)
-        return None
-
-    def format_response(self, response: Response) -> str:
-        if self.value_formatter is not None:
-            return self.value_formatter(response)
-        return ""
 
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         if self.commands_builder is not None:
             return self.commands_builder(short_address, value_to_set)
         return []
 
-    def is_readable(self) -> bool:
-        return self.query_builder is not None and self.value_formatter is not None
-
     def is_writable(self) -> bool:
         return self.commands_builder is not None
 
 
-@dataclass
-class ControlPollResult:
-    control_id: str
-    value: Optional[str] = None
-    error: ControlError = ControlError.NONE
-    title: Optional[Union[str, TranslatedTitle]] = None
-
-
-ControlPollCoroutine = Callable[[], Awaitable[list[ControlPollResult]]]
+ControlPollCoroutine = Callable[[], Awaitable[list[BusEvent]]]
 
 
 @dataclass
@@ -284,23 +237,31 @@ class ControlsPollRequestResult:
     commands_count: int = 0
 
 
+@runtime_checkable
 class Pollable(Protocol):
     """Structural interface for anything `DaliDeviceBase.poll_controls` rotates.
+
+    Naming this protocol among its bases is how a readable control or handler is meant to mark
+    itself, but `isinstance` matches structurally, so the method set is what actually decides.
+    The methods are abstract, so a missing one fails at construction.
 
     The due moment is the implementation's own state, not a field of this
     protocol; `is_poll_due` and `time_until_next_poll` are its two derivations.
     Multi-tick state is encoded entirely by `has_more`.
     """
 
+    @abstractmethod
     def is_poll_due(self, now: float) -> bool:
         """Whether the pollable is eligible for the next round."""
 
+    @abstractmethod
     def time_until_next_poll(self, now: float) -> float:
         """Seconds until the scheduled moment, never negative.
 
         Not an eligibility answer: that is `is_poll_due`'s, and it may differ.
         """
 
+    @abstractmethod
     def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
         driver: Any,
@@ -316,8 +277,83 @@ class Pollable(Protocol):
         next tick. ``poll_coroutine=None`` means skip dispatch this tick.
         """
 
+    @abstractmethod
+    def schedule_poll_at(self, at: float) -> None:
+        """Poll at ``at`` instead of on the periodic schedule; the most recent call wins."""
+
+    @abstractmethod
     def cancel_pending_poll(self) -> None:
         """Drop any in-flight multi-tick state. No-op for single-shot pollables."""
+
+
+class SingleQueryControl(MqttControlBase, Pollable):
+    """A control whose value is one query answered by one response.
+
+    The other readable shape, a multi-tick read (DT51 energy, DT8 colour), is a pollable of
+    its own.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        control_info: ControlInfo,
+        query_builder: Callable[[Address], Command],
+        poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
+        randomize_poll_interval: bool = False,
+        startup_reconfirm: bool = False,
+    ) -> None:
+        super().__init__(control_info, poll_interval, randomize_poll_interval, startup_reconfirm)
+        self._query_builder = query_builder
+
+    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        driver: WBDALIDriver,
+        address: Address,
+        max_commands: int,
+        default_max_commands: int,
+        now: float,
+        logger: Optional[logging.Logger] = None,
+    ) -> ControlsPollRequestResult:
+        del default_max_commands
+        if max_commands < 1:
+            return ControlsPollRequestResult(has_more=True)
+        self.schedule_next_periodic_poll(polled_at=now)
+        return ControlsPollRequestResult(
+            has_more=False,
+            poll_coroutine=lambda: self._run_single_query(driver, address, logger),
+            commands_count=1,
+        )
+
+    def cancel_pending_poll(self) -> None:
+        pass
+
+    # --- Hooks for subclasses ---
+
+    def decode_response(self, response: Optional[Response]) -> BusEvent:
+        """The event this control's read produced; ``response`` is ``None`` when it failed."""
+        raise NotImplementedError
+
+    # --- Private ---
+
+    async def _run_single_query(
+        self,
+        driver: WBDALIDriver,
+        address: Address,
+        logger: Optional[logging.Logger] = None,
+    ) -> list[BusEvent]:
+        try:
+            query = self._query_builder(address)
+            responses = await send_commands_with_retry(driver, [query], priority=FramePriority.PERIODIC_QUERY)
+            response = responses[0]
+            try:
+                check_query_response(response)
+            except RuntimeError:
+                return [self.decode_response(None)]
+
+            return [self.decode_response(response)]
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            if logger is not None:
+                logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
+            return [self.decode_response(None)]
 
 
 @dataclass
@@ -853,6 +889,28 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
     def get_mqtt_control(self, control_id: str) -> Optional[MqttControlBase]:
         return self._controls.get(control_id)
 
+    def notify_all(self, event: BusEvent) -> list[MqttControlBase]:
+        """Dispatch ``event`` to every control; returns the ones that asked to be published.
+
+        One control raising must not truncate the fan-out: the rest would silently miss the
+        event.
+        """
+        to_publish = []
+        for control in self._controls.values():
+            try:
+                if control.notify(event) is NotifyResult.PUBLISH_STATE:
+                    to_publish.append(control)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                self.logger.warning(
+                    "Control %s failed to handle %s: %s",
+                    control.control_info.id,
+                    type(event).__name__,
+                    exc,
+                    # Our own bug: without the traceback, which branch blew up is unknowable.
+                    exc_info=True,
+                )
+        return to_publish
+
     def get_group_state_controls(self) -> list[MqttControlBase]:
         if not self.is_initialized:
             return []
@@ -905,9 +963,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if not coroutines:
             return ControlsPollRequestResult(has_more=bool(self._current_round))
 
-        async def _run_batch() -> list[ControlPollResult]:
+        async def _run_batch() -> list[BusEvent]:
             batches = await asyncio.gather(*[c() for c in coroutines])
-            results: list[ControlPollResult] = []
+            results: list[BusEvent] = []
             for batch in batches:
                 results.extend(batch)
             return results
@@ -972,7 +1030,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return []
 
     def _build_pollables(self) -> list[Pollable]:
-        return [c for c in self._controls.values() if c.is_readable()]
+        return [c for c in self._controls.values() if isinstance(c, Pollable)]
 
     async def _initialize_impl(
         self, driver: WBDALIDriver

@@ -22,18 +22,28 @@ from wb.mqtt_dali.application_controller import (
     ApplicationControllerTaskType,
 )
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
-from wb.mqtt_dali.common_dali_device import ControlPollResult
 from wb.mqtt_dali.control_ids import SET_RGB, WANTED_LEVEL
 from wb.mqtt_dali.dali_device import DaliDevice
-from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
+from wb.mqtt_dali.events import EventSource, LevelChanged, StatusRead
+from wb.mqtt_dali.virtual_devices import BroadcastVirtualDevice, GroupVirtualDevice
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
-from wb.mqtt_dali.wbmqtt import ControlError
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
 
 
 def _ff(command) -> ForwardFrame:
     return command.frame
+
+
+def _mock_control(control_id: str, control_type: str) -> MagicMock:
+    """A control stub whose id and meta type are what the confirm path reads."""
+    control = MagicMock()
+    control.control_info.id = control_id
+    control.control_info.state.meta = ControlMeta(control_type)
+    control.control_info.state.value = "1" if control_type == "pushbutton" else "50"
+    control.is_dirty.return_value = False
+    return control
 
 
 def _monitor_controller():
@@ -223,9 +233,7 @@ async def test_setpoint_value_not_published_by_confirm():
     device = MagicMock(spec=DaliDevice)
     device.mqtt_id = "dev-5"
     device.execute_control = AsyncMock(return_value=None)
-    control = MagicMock()
-    control.control_info.id = WANTED_LEVEL
-    control.is_dirty.return_value = False
+    control = _mock_control(WANTED_LEVEL, "range")
     device.get_mqtt_control.return_value = control
     controller._devices_by_mqtt_id = {"dev-5": device}
 
@@ -248,9 +256,7 @@ async def test_setpoint_write_error_held_by_confirm():
     device = MagicMock(spec=DaliDevice)
     device.mqtt_id = "dev-5"
     device.execute_control = AsyncMock(side_effect=RuntimeError("bus down"))
-    control = MagicMock()
-    control.control_info.id = SET_RGB
-    control.is_dirty.return_value = False
+    control = _mock_control(SET_RGB, "rgb")
     device.get_mqtt_control.return_value = control
     controller._devices_by_mqtt_id = {"dev-5": device}
 
@@ -260,80 +266,95 @@ async def test_setpoint_write_error_held_by_confirm():
 
 
 @pytest.mark.asyncio
-async def test_owned_setpoint_echoed_by_confirm_for_virtual_device():
-    """A virtual (group) device is not a DaliDevice, so the owned-setpoint suppression the
-    confirm path applies to real gear does not fire: an owned setpoint write is still echoed
-    to MQTT after a successful write (the isinstance guard's False branch)."""
+async def test_group_setpoint_value_not_published_by_confirm():
+    """A group setpoint is published from the member the group shows, so confirm does not echo
+    its value either -- only the write error is its own."""
     # pylint: disable=protected-access
     controller = make_loop_controller()
     device = MagicMock(spec=GroupVirtualDevice)
     device.mqtt_id = "grp-1"
     device.execute_control = AsyncMock(return_value=None)
-    control = MagicMock()
-    control.control_info.id = WANTED_LEVEL
-    control.is_dirty.return_value = False
+    control = _mock_control(WANTED_LEVEL, "range")
     device.get_mqtt_control.return_value = control
     controller._devices_by_mqtt_id = {"grp-1": device}
 
     await _run_confirm(controller, "grp-1", WANTED_LEVEL, "50")
 
-    controller._device_publisher.set_control_value.assert_any_await("grp-1", "wanted_level", "50")
+    controller._device_publisher.set_control_error.assert_any_await("grp-1", "wanted_level", ControlError(0))
+    controller._device_publisher.set_control_value.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_publish_poll_results_flags_read_error_and_mirrors_setpoints():
-    """_publish_poll_results driven directly with a failed + a successful readback: the
-    failing control is flagged read_error and gets /meta/error=r, the successful one is
-    cleared, and the setpoint mirror runs once against the *materialized* responses —
-    passing a generator pins the ``responses = list(responses)`` fix (a spent iterator
-    would silently drop the mirror)."""
+async def test_broadcast_button_press_published_by_confirm():
+    """The broadcast device has no state of its own, but a press is still an action that
+    happened, so its button is confirmed by the echo like everywhere else."""
+    # pylint: disable=protected-access
+    controller = make_loop_controller()
+    device = MagicMock(spec=BroadcastVirtualDevice)
+    device.mqtt_id = "bcast"
+    device.execute_control = AsyncMock(return_value=None)
+    device.get_mqtt_control.return_value = _mock_control("off", "pushbutton")
+    controller._devices_by_mqtt_id = {"bcast": device}
+
+    await _run_confirm(controller, "bcast", "off", "1")
+
+    controller._device_publisher.set_control_value.assert_any_await("bcast", "off", "1")
+
+
+@pytest.mark.asyncio
+async def test_broadcast_setpoint_value_not_published_by_confirm():
+    """A broadcast setpoint carries no state either: confirm holds only its write error, so the
+    topic keeps the value the control was created with."""
+    # pylint: disable=protected-access
+    controller = make_loop_controller()
+    device = MagicMock(spec=BroadcastVirtualDevice)
+    device.mqtt_id = "bcast"
+    device.execute_control = AsyncMock(return_value=None)
+    device.get_mqtt_control.return_value = _mock_control(WANTED_LEVEL, "range")
+    controller._devices_by_mqtt_id = {"bcast": device}
+
+    await _run_confirm(controller, "bcast", WANTED_LEVEL, "50")
+
+    controller._device_publisher.set_control_error.assert_any_await("bcast", "wanted_level", ControlError(0))
+    controller._device_publisher.set_control_value.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_events_are_dispatched_one_by_one():
+    """A poll round's outcome reaches event sync as events: every event a device's poll
+    produced is dispatched on its own, and a device whose poll raised is logged, not fatal."""
     # pylint: disable=protected-access
     controller = make_loop_controller()
     controller._event_sync = MagicMock()
-    controller._event_sync.publish_poll_setpoint_mirror = AsyncMock()
-
-    fail_control = MagicMock()
-    fail_control.read_error = False
-    ok_control = MagicMock()
-    ok_control.read_error = True
-    controls = {"current_rgb": fail_control, "actual_level": ok_control}
+    controller._event_sync.notify_poll_event = AsyncMock()
 
     device = MagicMock(spec=DaliDevice)
-    device.mqtt_id = "dev-5"
     device.name = "dev-5"
-    device.groups = []
-    device.get_mqtt_control.side_effect = controls.get
+    unreachable = MagicMock(spec=DaliDevice)
+    unreachable.name = "dev-6"
+    events = [StatusRead(None, True), LevelChanged(120, EventSource.READ)]
+    poll_scheduler = MagicMock()
+    # The unreachable device comes first: its failure must not cost the next device its events.
+    poll_scheduler.poll = AsyncMock(return_value=[(unreachable, RuntimeError("bus down")), (device, events)])
 
-    responses = (
-        result
-        for result in [
-            ControlPollResult(control_id="current_rgb", value=None, error=ControlError.READ),
-            ControlPollResult(control_id="actual_level", value="50.000"),
-        ]
-    )
-    await controller._publish_poll_results(device, responses)
+    await controller._poll_devices(poll_scheduler, 0.0)
 
-    assert fail_control.read_error is True
-    assert ok_control.read_error is False
-    controller._device_publisher.set_control_error.assert_any_await("dev-5", "current_rgb", ControlError.READ)
-
-    controller._event_sync.publish_poll_setpoint_mirror.assert_awaited_once()
-    mirrored = controller._event_sync.publish_poll_setpoint_mirror.await_args.args[1]
-    assert isinstance(mirrored, list) and len(mirrored) == 2
+    assert [c.args for c in controller._event_sync.notify_poll_event.await_args_list] == [
+        (device, events[0]),
+        (device, events[1]),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_nonowned_control_published_by_confirm():
-    """A non-owned writable (a colour step pushbutton) still has its value published by
-    confirm after a successful write."""
+async def test_button_press_published_by_confirm():
+    """A button press is the one value no event reports, so confirm still publishes it after a
+    successful write."""
     # pylint: disable=protected-access
     controller = make_loop_controller()
     device = MagicMock(spec=DaliDevice)
     device.mqtt_id = "dev-5"
     device.execute_control = AsyncMock(return_value=None)
-    control = MagicMock()
-    control.control_info.id = "colour_temperature_step_warmer"
-    control.is_dirty.return_value = False
+    control = _mock_control("colour_temperature_step_warmer", "pushbutton")
     device.get_mqtt_control.return_value = control
     controller._devices_by_mqtt_id = {"dev-5": device}
 

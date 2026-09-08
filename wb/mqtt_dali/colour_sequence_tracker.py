@@ -24,11 +24,10 @@ from dali.gear.colour import (
     SetTemporaryYCoordinate,
 )
 
-from .dali_type8_common import ColourComponent
+from .dali_type8_common import PRIMARY_N_BY_INDEX, ColourComponent
 from .dtr_snapshot import DtrSnapshot
 
-# ColourComponent.value -> raw value.
-CapturedComponents = dict[str, int]
+CapturedComponents = dict[ColourComponent, int]
 
 
 @dataclass
@@ -39,31 +38,37 @@ class ColourCapture:
 
 
 def _capture_xy_x(capture: ColourCapture, snapshot: DtrSnapshot) -> None:
-    capture.components[ColourComponent.X_COORDINATE.value] = snapshot.word
+    capture.components[ColourComponent.X_COORDINATE] = snapshot.word
 
 
 def _capture_xy_y(capture: ColourCapture, snapshot: DtrSnapshot) -> None:
-    capture.components[ColourComponent.Y_COORDINATE.value] = snapshot.word
+    capture.components[ColourComponent.Y_COORDINATE] = snapshot.word
 
 
 def _capture_tc(capture: ColourCapture, snapshot: DtrSnapshot) -> None:
-    capture.components[ColourComponent.COLOUR_TEMPERATURE.value] = snapshot.word
+    capture.components[ColourComponent.COLOUR_TEMPERATURE] = snapshot.word
 
 
 def _capture_rgb(capture: ColourCapture, snapshot: DtrSnapshot) -> None:
-    capture.components[ColourComponent.RED.value] = snapshot.dtr0
-    capture.components[ColourComponent.GREEN.value] = snapshot.dtr1
-    capture.components[ColourComponent.BLUE.value] = snapshot.dtr2
+    capture.components[ColourComponent.RED] = snapshot.dtr0
+    capture.components[ColourComponent.GREEN] = snapshot.dtr1
+    capture.components[ColourComponent.BLUE] = snapshot.dtr2
 
 
 def _capture_waf(capture: ColourCapture, snapshot: DtrSnapshot) -> None:
-    capture.components[ColourComponent.WHITE.value] = snapshot.dtr0
-    capture.components[ColourComponent.AMBER.value] = snapshot.dtr1
-    capture.components[ColourComponent.FREE_COLOUR.value] = snapshot.dtr2
+    capture.components[ColourComponent.WHITE] = snapshot.dtr0
+    capture.components[ColourComponent.AMBER] = snapshot.dtr1
+    capture.components[ColourComponent.FREE_COLOUR] = snapshot.dtr2
 
 
 def _capture_primary_n(capture: ColourCapture, snapshot: DtrSnapshot) -> None:
-    capture.components[f"primary_n{snapshot.dtr2}"] = snapshot.word
+    # DTR2 is a raw byte off a shared bus: a foreign controller or a mis-decoded frame can
+    # leave anything there.
+    component = PRIMARY_N_BY_INDEX.get(snapshot.dtr2)
+    if component is None:
+        capture.predictable = False
+        return
+    capture.components[component] = snapshot.word
 
 
 # SetTemporary class -> (required DTR registers, capture builder).

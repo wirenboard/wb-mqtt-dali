@@ -524,7 +524,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._send_queue_item_index = 0
 
         self._meta_error_topic = f"/devices/{self.config.device_name}/meta/error"
-        self._gateway_unavailable = False
+        # Broker session in which wb-mqtt-serial reported the gateway unreachable; None once withdrawn.
+        self._unreachable_reported_in_session: Optional[int] = None
+        # Broker session the gateway queue was last synced with; a newer one means a reconnect to catch up.
+        self._synced_session = mqtt_dispatcher.session
         self._pending_resync = False
 
         self._response_timeout = WAIT_DALI_RESPONSE_TIMEOUT_S
@@ -557,15 +560,19 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
     @property
     def gateway_unavailable(self) -> bool:
-        """True while wb-mqtt-serial reports the gateway device as unreachable (`r`)."""
-        return self._gateway_unavailable
+        return self._gateway_reported_unreachable or not self._mqtt_dispatcher.connected
 
     async def initialize(self) -> None:
         self.logger.debug("Initializing...")
 
         self._queue_sender_task = asyncio.create_task(self._queue_sender())
 
-        await self._reset_queue_in_gateway()
+        self._synced_session = self._mqtt_dispatcher.session
+        try:
+            await self._reset_queue_in_gateway()
+        except aiomqtt.MqttError as exc:
+            self.logger.warning("Gateway queue reset not delivered (%s); deferred to the next batch", exc)
+            self._pending_resync = True
 
         # Subscribe to all reply topics
         self.logger.debug("Subscribing to reply topics...")
@@ -606,17 +613,15 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         # Unsubscribe from all reply topics
         for i in range(self.config.queue_size):
             topic = f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{i}"
-            if self._mqtt_dispatcher.is_running:
-                await self._mqtt_dispatcher.unsubscribe(topic)
+            await self._mqtt_dispatcher.unsubscribe(topic)
 
         # Unsubscribe from FF24 topic
-        if self._mqtt_dispatcher.is_running:
-            for i in range(1, BUS_MONITOR_RING_SIZE + 1):
-                await self._mqtt_dispatcher.unsubscribe(
-                    f"/devices/{self.config.device_name}/controls/"
-                    f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
-                )
-            await self._mqtt_dispatcher.unsubscribe(self._meta_error_topic)
+        for i in range(1, BUS_MONITOR_RING_SIZE + 1):
+            await self._mqtt_dispatcher.unsubscribe(
+                f"/devices/{self.config.device_name}/controls/"
+                f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
+            )
+        await self._mqtt_dispatcher.unsubscribe(self._meta_error_topic)
         self.logger.debug("Deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
@@ -630,7 +635,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         )
 
         self._rpc_id_counter += 1
-        await self._mqtt_dispatcher.client.publish(
+        await self._mqtt_dispatcher.publish(
             f"/rpc/v1/wb-mqtt-serial/port/Load/{self._rpc_client_id}",
             json.dumps(
                 {
@@ -665,6 +670,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             msg="0000",
         )
 
+    @property
+    def _gateway_reported_unreachable(self) -> bool:
+        # A report from an older broker session is stale: its withdrawal was lost with that session.
+        return self._unreachable_reported_in_session == self._mqtt_dispatcher.session
+
     def _handle_meta_error_message(self, message: aiomqtt.Message) -> None:
         try:
             payload = get_str_payload(message).strip()
@@ -681,18 +691,31 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             self.logger.debug("Ignoring /meta/error payload %r", payload)
             return
 
-        if should_unavailable == self._gateway_unavailable:
+        if should_unavailable == self._gateway_reported_unreachable:
             return
 
         if should_unavailable:
             self.logger.warning("Gateway reported unreachable; failing pending DALI traffic")
-            self._gateway_unavailable = True
+            self._unreachable_reported_in_session = self._mqtt_dispatcher.session
             self._drain_pending_with_gateway_unavailable()
         else:
             self.logger.info("Gateway reported reachable; queue resync deferred to next batch")
-            self._reset_queue_state_locally()
             self._pending_resync = True
-            self._gateway_unavailable = False
+            self._unreachable_reported_in_session = None
+
+    def _sync_with_broker_session(self) -> None:
+        """Catch up with a broker reconnect: fail pending waiters, schedule the reset."""
+        session = self._mqtt_dispatcher.session
+        if session == self._synced_session:
+            return
+        self.logger.info(
+            "Broker session %d -> %d; failing pending DALI traffic, queue resync deferred to next batch",
+            self._synced_session,
+            session,
+        )
+        self._synced_session = session
+        self._drain_pending_with_gateway_unavailable()
+        self._pending_resync = True
 
     def _drain_pending_with_gateway_unavailable(self) -> None:
         # Resolve in-flight waiters whose timeout handlers would otherwise fire
@@ -708,11 +731,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     resp_waiter.send_item.source,
                     resp_waiter.sequence_id,
                 )
-        self._waiting_for_responses.clear()
-
-    def _reset_queue_state_locally(self) -> None:
-        self._next_queue_index = 0
-        self._batch_start_index = 0
         self._waiting_for_responses.clear()
 
     def _fail_batch_gateway_unavailable(self, items: list[SendQueueItem]) -> None:
@@ -1074,8 +1092,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         await self._send_to_gateway(batch, self._batch_start_index)
                     finally:
                         batch = []
-                        self._batch_start_index = 0
-                        self._next_queue_index = 0
+                        # A batch renumbered from slot 0 by the resync may not have reached the end.
+                        if self._next_queue_index == self.config.queue_size:
+                            self._next_queue_index = 0
+                        self._batch_start_index = self._next_queue_index
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 try:
@@ -1090,14 +1110,21 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     item.future.set_result(WbGatewayTransmissionError())
 
     async def _send_to_gateway(self, items: list[SendQueueItem], start_index: int) -> None:
-        if len(items) > 0:
-            await self._overheat_rate_limiter.wait_before_send()
-            if self._gateway_unavailable:
-                self._fail_batch_gateway_unavailable(items)
-                return
+        if not items:
+            return
+        await self._overheat_rate_limiter.wait_before_send()
+        self._sync_with_broker_session()
+        if self.gateway_unavailable:
+            self._fail_batch_gateway_unavailable(items)
+            return
+        try:
             if self._pending_resync:
                 await self._reset_queue_in_gateway()
                 self._pending_resync = False
+                # Both sides restart: this batch goes to slot 0 whatever slot it was batched for.
+                start_index = 0
+                self._batch_start_index = 0
+                self._next_queue_index = len(items)
             regs_32bit = []
             for current_index, item in enumerate(items, start_index):
 
@@ -1142,6 +1169,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 count=len(regs_32bit) * 2,
                 msg=msg,
             )
+        except aiomqtt.MqttError as exc:
+            self.logger.warning("Modbus RPC not delivered (%s); failing the batch", exc)
+            self._drain_pending_with_gateway_unavailable()
+            self._fail_batch_gateway_unavailable(items)
 
     async def _send_commands_internal(
         self,
@@ -1152,7 +1183,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     ) -> list[Response]:
         if self.logger.isEnabledFor(logging.DEBUG):
             self.logger.debug("send: %s", ", ".join(format_command_expression(cmd) for cmd in commands))
-        if self._gateway_unavailable:
+        if self.gateway_unavailable:
             # Synthesise bus-traffic so listeners see the dropped frames just like real errors.
             for cmd in commands:
                 response = GatewayUnavailable()

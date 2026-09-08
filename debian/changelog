@@ -1,3 +1,16 @@
+wb-mqtt-dali (1.28.0) stable; urgency=medium
+
+  * A lost connection to the MQTT broker no longer restarts the buses: the devices stay in
+    the interface, their state keeps being read and is published again once the connection
+    is back. Controls polled during the outage show a read error until the first successful
+    read after it; the rest keep their values.
+  * A connection lost without the socket being closed is noticed within 15-30 s instead of
+    1-2 minutes.
+  * Stopping the service now also removes its RPC endpoint markers from the broker; they
+    used to stay behind.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 07 Sep 2026 14:15:00 +0500
+
 wb-mqtt-dali (1.27.1) stable; urgency=medium
 
   * A device that failed to initialise at service start was no longer retried once its

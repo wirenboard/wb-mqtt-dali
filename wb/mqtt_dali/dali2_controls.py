@@ -1,9 +1,9 @@
-import aiomqtt
 from dali.address import DeviceShort, Instance
 
 from .common_dali_device import MqttControl
 from .device import absolute_input_device, feedback
 from .device_publisher import ControlInfo
+from .mqtt_dispatcher import MQTTDispatcher
 from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 
@@ -225,9 +225,9 @@ def get_feedback_controls(feature_address: Instance, suffix: str, order_base: in
 
 
 async def publish_event(
-    mqtt_client: aiomqtt.Client, device_id: str, control_id: str, value: str, retain: bool = True
+    mqtt_dispatcher: MQTTDispatcher, device_id: str, control_id: str, value: str, retain: bool = True
 ) -> None:
-    await mqtt_client.publish(
+    await mqtt_dispatcher.publish(
         f"/devices/{device_id}/controls/{control_id}",
         value,
         retain=retain,

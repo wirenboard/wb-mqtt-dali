@@ -25,8 +25,7 @@ def _make_gateway_shell():
     gw = Gateway.__new__(Gateway)
     gw.wb_dali_gateways = []
     gw._mqtt_dispatcher = MagicMock()
-    gw._mqtt_dispatcher.client = MagicMock()
-    gw._mqtt_dispatcher.client.publish = AsyncMock()
+    gw._mqtt_dispatcher.publish = AsyncMock()
     gw._save_configuration = AsyncMock()
     return gw
 
@@ -121,7 +120,7 @@ async def test_commissioning_state_cb_saves_on_completed():
     )
     await cb(state)
 
-    publish_mock = cast(AsyncMock, gw._mqtt_dispatcher.client.publish)
+    publish_mock = cast(AsyncMock, gw._mqtt_dispatcher.publish)
     publish_mock.assert_awaited_once()
     await_args = publish_mock.await_args
     assert await_args is not None
@@ -152,7 +151,7 @@ async def test_commissioning_state_cb_skips_save_on_cancelled():
     await cb(state)
 
     # Still published so the retained topic converges to the cancelled state.
-    cast(AsyncMock, gw._mqtt_dispatcher.client.publish).assert_awaited_once()
+    cast(AsyncMock, gw._mqtt_dispatcher.publish).assert_awaited_once()
     # But the config is NOT saved.
     cast(AsyncMock, gw._save_configuration).assert_not_awaited()
 
@@ -190,7 +189,7 @@ async def test_publish_idle_emits_retained_for_every_bus():
 
     await gw._publish_idle_commissioning_state_for_all_buses()
 
-    calls = gw._mqtt_dispatcher.client.publish.await_args_list
+    calls = gw._mqtt_dispatcher.publish.await_args_list
     assert len(calls) == 2
     topics = [c.args[0] for c in calls]
     assert "/wb-dali/bus_1/commissioning" in topics
@@ -212,7 +211,7 @@ async def test_publish_idle_payload_matches_default_state_constructor():
 
     await gw._publish_idle_commissioning_state_for_all_buses()
 
-    call = gw._mqtt_dispatcher.client.publish.await_args
+    call = gw._mqtt_dispatcher.publish.await_args
     assert call is not None
     _topic, payload = call.args
     assert payload == json.dumps(CommissioningState().to_dict())
@@ -227,7 +226,7 @@ async def test_clear_retained_state_on_stop():
 
     await gw._clear_commissioning_state_for_all_buses()
 
-    call = gw._mqtt_dispatcher.client.publish.await_args
+    call = gw._mqtt_dispatcher.publish.await_args
     assert call.args[0] == "/wb-dali/bus_1/commissioning"
     # payload None → retained deletion.
     assert call.kwargs.get("payload") is None

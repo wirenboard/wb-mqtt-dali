@@ -37,7 +37,8 @@ class _MockMqttClient:
     async def unsubscribe(self, _topic: str) -> None:
         return None
 
-    async def publish(self, topic: str, payload: str) -> None:
+    async def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False) -> None:
+        del qos, retain
         await self._messages_to_broker.put((topic, payload))
 
     async def drain_publishes(self) -> List[tuple]:
@@ -188,12 +189,11 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         self.assertNotIsInstance(result, WbGatewayTransmissionError)
 
     async def test_queue_counters_resync_after_null(self):
-        """Recovery restores counters so a full queue_size batch can be sent without drift.
+        """Recovery restores the slot numbering so a full queue_size batch can be sent without drift.
 
         Advances internal counters before the outage by sending a few commands, then
-        triggers r → empty. After recovery, the public batch_start_index must be back at
-        0 and sending queue_size commands in one shot must produce queue_size normal
-        responses (replies at indices 0..queue_size-1).
+        triggers r → empty. Sending queue_size commands in one shot must then produce
+        queue_size normal responses (replies at indices 0..queue_size-1).
         """
         driver = await self._make_driver()
 
@@ -205,17 +205,11 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         for i in range(pre_count):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
         await pre_task
-        # After pre-sends, batch_start_index has advanced (or wrapped); we don't assert
-        # the exact value, only that recovery brings it back to 0.
 
         self._deliver_meta_error(driver, b"r")
         await self._wait_gateway_state(driver, True)
         self._deliver_meta_error(driver, b"")
         await self._wait_gateway_state(driver, False)
-
-        # Counters are zeroed in the callback itself; the matching gateway-side
-        # reset is deferred to the next batch (lazy resync).
-        self.assertEqual(driver.batch_start_index, 0)
 
         cmds = [_MockCommand(data=[i & 0xFF, (i + 1) & 0xFF]) for i in range(size)]
         send_task = asyncio.create_task(driver.send_commands(cmds))

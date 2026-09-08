@@ -92,6 +92,9 @@ class MockMQTTDispatcher:
             del self._subscriptions[topic]
         await self.client.unsubscribe(topic)
 
+    async def publish(self, topic, payload=None, **kwargs):
+        await self.client.publish(topic, payload, **kwargs)
+
 
 @pytest.fixture
 def mock_dispatcher(mock_client):
@@ -178,9 +181,9 @@ class TestControlError:
 
 class TestDevice:
     @pytest.mark.asyncio
-    async def test_initialization(self, mock_client):
+    async def test_initialization(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         assert device._base_topic == "/devices/test_device"
@@ -200,9 +203,9 @@ class TestDevice:
         assert meta_json["title"]["en"] == "Test Device"
 
     @pytest.mark.asyncio
-    async def test_create_control(self, mock_client):
+    async def test_create_control(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
@@ -217,9 +220,9 @@ class TestDevice:
         assert mock_client.publish.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_set_control_value(self, mock_client):
+    async def test_set_control_value(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
@@ -235,8 +238,8 @@ class TestDevice:
         )
 
     @pytest.mark.asyncio
-    async def test_set_control_value_no_change(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_set_control_value_no_change(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
@@ -248,23 +251,8 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_control_value_force(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
-        await device.initialize()
-
-        meta = ControlMeta(title="Test")
-        await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
-
-        await device.set_control_value("ctrl1", "value", force=True)
-
-        mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/ctrl1", "value", qos=2, retain=True
-        )
-
-    @pytest.mark.asyncio
-    async def test_set_control_value_undeclared(self, mock_client, caplog):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_set_control_value_undeclared(self, mock_client, mock_dispatcher, caplog):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
@@ -275,8 +263,8 @@ class TestDevice:
         assert "Can't set value of undeclared control" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_set_control_state_drops_repeated_value(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_set_control_state_drops_repeated_value(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(control_type="switch"), "0")
         mock_client.publish.reset_mock()
@@ -292,9 +280,11 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_control_state_republishes_repeated_value_when_policy_is_always(self, mock_client):
+    async def test_set_control_state_republishes_repeated_value_when_policy_is_always(
+        self, mock_client, mock_dispatcher
+    ):
         """The repeat goes out and stays retained: the policy and retain are separate axes."""
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control(
             "long_press1", ControlMeta(control_type="switch"), "0", PublishPolicy.ALWAYS
@@ -309,9 +299,11 @@ class TestDevice:
         )
 
     @pytest.mark.asyncio
-    async def test_set_control_value_republishes_repeated_value_when_policy_is_always(self, mock_client):
+    async def test_set_control_value_republishes_repeated_value_when_policy_is_always(
+        self, mock_client, mock_dispatcher
+    ):
         """The policy governs the plain value path too, with no force from the caller."""
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "value", PublishPolicy.ALWAYS)
         mock_client.publish.reset_mock()
@@ -323,9 +315,11 @@ class TestDevice:
         )
 
     @pytest.mark.asyncio
-    async def test_pushbutton_publishes_every_update_unretained_without_a_policy(self, mock_client):
+    async def test_pushbutton_publishes_every_update_unretained_without_a_policy(
+        self, mock_client, mock_dispatcher
+    ):
         """A pushbutton's type alone sends the repeat out, unretained and with no policy."""
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("short_press1", ControlMeta(control_type="pushbutton"), "0")
         mock_client.publish.reset_mock()
@@ -339,9 +333,9 @@ class TestDevice:
         )
 
     @pytest.mark.asyncio
-    async def test_set_control_read_only(self, mock_client):
+    async def test_set_control_read_only(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test", read_only=False)
@@ -354,8 +348,8 @@ class TestDevice:
         assert mock_client.publish.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_set_control_read_only_no_change(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_set_control_read_only_no_change(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test", read_only=True)
@@ -367,9 +361,9 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_control_title(self, mock_client):
+    async def test_set_control_title(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Old Title")
@@ -382,8 +376,8 @@ class TestDevice:
         assert mock_client.publish.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_set_control_title_no_change(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_set_control_title_no_change(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Same Title")
@@ -395,9 +389,9 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_control_error(self, mock_client):
+    async def test_set_control_error(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
@@ -416,9 +410,9 @@ class TestDevice:
         assert device._controls["ctrl1"].error == ControlError.READ
 
     @pytest.mark.asyncio
-    async def test_set_control_error_clears(self, mock_client):
+    async def test_set_control_error_clears(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
@@ -438,8 +432,8 @@ class TestDevice:
         assert device._controls["ctrl1"].error == ControlError(0)
 
     @pytest.mark.asyncio
-    async def test_set_control_error_nonexistent(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_set_control_error_nonexistent(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
@@ -448,11 +442,11 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_set_control_error_publishes_flag_string(self, mock_client):
+    async def test_set_control_error_publishes_flag_string(self, mock_client, mock_dispatcher):
         """set_control_error serializes the flag to the wire chars; a combined
         READ|WRITE flag publishes "rw", and the empty flag clears the topic."""
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(title="Test"), "value")
         error_topic = "/devices/test_device/controls/ctrl1/meta/error"
@@ -469,9 +463,9 @@ class TestDevice:
         assert device._controls["ctrl1"].error == ControlError(0)
 
     @pytest.mark.asyncio
-    async def test_remove_control(self, mock_client):
+    async def test_remove_control(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
@@ -491,8 +485,8 @@ class TestDevice:
         )
 
     @pytest.mark.asyncio
-    async def test_remove_control_nonexistent(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_remove_control_nonexistent(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
@@ -501,47 +495,9 @@ class TestDevice:
         mock_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_republish_control(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
-        await device.initialize()
-
-        meta = ControlMeta(title="Test", control_type="switch")
-        await device.create_control("ctrl1", meta, "1")
-        mock_client.publish.reset_mock()
-
-        await device.republish_control("ctrl1")
-
-        assert mock_client.publish.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_republish_control_nonexistent(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
-        await device.initialize()
-        mock_client.publish.reset_mock()
-
-        await device.republish_control("nonexistent")
-
-        mock_client.publish.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_republish_device(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
-        await device.initialize()
-
-        meta1 = ControlMeta(title="Control 1")
-        meta2 = ControlMeta(title="Control 2")
-        await device.create_control("ctrl1", meta1, "val1")
-        await device.create_control("ctrl2", meta2, "val2")
-        mock_client.publish.reset_mock()
-
-        await device.republish_device()
-
-        assert mock_client.publish.call_count >= 5
-
-    @pytest.mark.asyncio
-    async def test_remove_device(self, mock_client):
+    async def test_remove_device(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta1 = ControlMeta(title="Control 1")
@@ -556,8 +512,8 @@ class TestDevice:
         assert mock_client.publish.call_count >= 5
 
     @pytest.mark.asyncio
-    async def test_publish_control_meta_full(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_publish_control_meta_full(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(
@@ -588,8 +544,8 @@ class TestDevice:
         assert meta_json["max"] == 100
 
     @pytest.mark.asyncio
-    async def test_publish_control_meta_empty_enum(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_publish_control_meta_empty_enum(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(
@@ -613,8 +569,8 @@ class TestDevice:
         assert meta_json["enum"] == {"100": {"en": "100"}, "200": {"en": "200"}}
 
     @pytest.mark.asyncio
-    async def test_publish_control_meta_minimal(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_publish_control_meta_minimal(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta()
@@ -633,15 +589,15 @@ class TestDevice:
         assert "title" not in meta_json
         assert "order" not in meta_json
 
-    def test_get_control_base_topic(self, mock_client):
+    def test_get_control_base_topic(self, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         topic = device._get_control_base_topic("my_control")
         assert topic == "/devices/test_device/controls/my_control"
 
     @pytest.mark.asyncio
-    async def test_device_meta_format(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_device_meta_format(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == "/devices/test_device/meta"]
@@ -655,8 +611,8 @@ class TestDevice:
         assert meta_calls[0][1]["retain"] is True
 
     @pytest.mark.asyncio
-    async def test_device_meta_without_title(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver")
+    async def test_device_meta_without_title(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver")
         await device.initialize()
 
         meta_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == "/devices/test_device/meta"]
@@ -668,8 +624,8 @@ class TestDevice:
         assert meta_json["driver"] == "test_driver"
 
     @pytest.mark.asyncio
-    async def test_remove_device_clears_meta(self, mock_client):
-        device = Device(mock_client, "test_device", "test_driver", "Test Device")
+    async def test_remove_device_clears_meta(self, mock_client, mock_dispatcher):
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
@@ -766,9 +722,9 @@ class TestRemoveTopicsByDriver:
 
 class TestIntegration:  # pylint: disable=too-few-public-methods
     @pytest.mark.asyncio
-    async def test_device_lifecycle(self, mock_client):
+    async def test_device_lifecycle(self, mock_dispatcher):
         # pylint: disable=protected-access
-        device = Device(mock_client, "test_dev", "test_driver", "Test Device")
+        device = Device(mock_dispatcher, "test_dev", "test_driver", "Test Device")
         await device.initialize()
 
         meta1 = ControlMeta(title="Switch", control_type="switch")
@@ -783,10 +739,6 @@ class TestIntegration:  # pylint: disable=too-few-public-methods
 
         assert device._controls["switch"].value == "1"
         assert device._controls["brightness"].value == "75"
-
-        publish_count_before = mock_client.publish.call_count
-        await device.republish_device()
-        assert mock_client.publish.call_count > publish_count_before
 
         await device.remove_control("brightness")
         assert len(device._controls) == 1

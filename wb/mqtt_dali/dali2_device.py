@@ -2,7 +2,6 @@ import logging
 from dataclasses import dataclass
 from typing import Optional, Type
 
-import aiomqtt
 from dali.address import (
     Address,
     Device,
@@ -73,6 +72,7 @@ from .dali2_type32_parameters import build_type32_feedback_parameters
 from .dali_device import DaliDeviceAddress
 from .device import absolute_input_device, feedback, general_purpose_sensor
 from .gtin_db import DaliDatabase
+from .mqtt_dispatcher import MQTTDispatcher
 from .settings import (
     BooleanSettingsParam,
     NumberSettingsParam,
@@ -775,25 +775,25 @@ class Dali2Device(DaliDeviceBase):
 async def publish_dali2_event(  # pylint: disable=too-many-return-statements
     command: _Event,
     device_mqtt_id: str,
-    mqtt_client: aiomqtt.Client,
+    mqtt_dispatcher: MQTTDispatcher,
     instance: InstanceParameters,
 ) -> None:
 
     if isinstance(command, light.LightEvent):
         await publish_event(
-            mqtt_client, device_mqtt_id, f"illuminance{command.instance_number}", str(command.illuminance)
+            mqtt_dispatcher, device_mqtt_id, f"illuminance{command.instance_number}", str(command.illuminance)
         )
         return
 
     if isinstance(command, occupancy.OccupancyEvent):
         await publish_event(
-            mqtt_client,
+            mqtt_dispatcher,
             device_mqtt_id,
             f"movement{command.instance_number}",
             "1" if command.movement else "0",
         )
         await publish_event(
-            mqtt_client,
+            mqtt_dispatcher,
             device_mqtt_id,
             f"occupied{command.instance_number}",
             "1" if command.occupied else "0",
@@ -802,7 +802,7 @@ async def publish_dali2_event(  # pylint: disable=too-many-return-statements
 
     if isinstance(command, pushbutton.ButtonPressed):
         instance.button_pressed = True
-        await publish_event(mqtt_client, device_mqtt_id, f"button{command.instance_number}", "1")
+        await publish_event(mqtt_dispatcher, device_mqtt_id, f"button{command.instance_number}", "1")
         return
 
     # Any release-type event clears the pressed state, but only when we have
@@ -823,36 +823,36 @@ async def publish_dali2_event(  # pylint: disable=too-many-return-statements
         and instance.button_pressed
     ):
         instance.button_pressed = False
-        await publish_event(mqtt_client, device_mqtt_id, f"button{command.instance_number}", "0")
+        await publish_event(mqtt_dispatcher, device_mqtt_id, f"button{command.instance_number}", "0")
 
     if isinstance(command, pushbutton.ButtonReleased):
         return
 
     if isinstance(command, (pushbutton.LongPressStart, pushbutton.LongPressRepeat)):
-        await publish_event(mqtt_client, device_mqtt_id, f"long_press{command.instance_number}", "1")
+        await publish_event(mqtt_dispatcher, device_mqtt_id, f"long_press{command.instance_number}", "1")
         return
 
     if isinstance(command, pushbutton.LongPressStop):
-        await publish_event(mqtt_client, device_mqtt_id, f"long_press{command.instance_number}", "0")
+        await publish_event(mqtt_dispatcher, device_mqtt_id, f"long_press{command.instance_number}", "0")
         return
 
     if isinstance(command, pushbutton.ShortPress):
         await publish_event(
-            mqtt_client, device_mqtt_id, f"short_press{command.instance_number}", "1", retain=False
+            mqtt_dispatcher, device_mqtt_id, f"short_press{command.instance_number}", "1", retain=False
         )
         return
 
     if isinstance(command, pushbutton.DoublePress):
         await publish_event(
-            mqtt_client, device_mqtt_id, f"double_press{command.instance_number}", "1", retain=False
+            mqtt_dispatcher, device_mqtt_id, f"double_press{command.instance_number}", "1", retain=False
         )
 
     if isinstance(command, absolute_input_device.PositionEvent):
         await publish_event(
-            mqtt_client, device_mqtt_id, f"position{command.instance_number}", str(command.position)
+            mqtt_dispatcher, device_mqtt_id, f"position{command.instance_number}", str(command.position)
         )
 
     if isinstance(command, general_purpose_sensor.MeasurementEvent):
         await publish_event(
-            mqtt_client, device_mqtt_id, f"measurement{command.instance_number}", str(command.measurement)
+            mqtt_dispatcher, device_mqtt_id, f"measurement{command.instance_number}", str(command.measurement)
         )

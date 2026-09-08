@@ -232,7 +232,7 @@ class DevicePublisher:
             raise RuntimeError(f"Device {device_id} already exists")
 
         device = Device(
-            mqtt_client=self._mqtt_dispatcher.client,
+            mqtt_dispatcher=self._mqtt_dispatcher,
             device_mqtt_name=device_id,
             driver_name="wb-mqtt-dali",
             device_title=device_info.title,

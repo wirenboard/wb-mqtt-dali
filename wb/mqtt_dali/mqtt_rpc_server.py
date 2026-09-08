@@ -42,15 +42,14 @@ class MQTTRPCServer:
     async def add_endpoint(self, service: str, method: str, callback: RpcHandlerFunction) -> None:
         self.logger.debug("Add RPC: %s/%s", service, method)
         topic_str = get_topic_path(self.driver_name, service, method)
-        await self._mqtt_dispatcher.client.publish(topic_str, "1", retain=True, qos=1)
+        await self._mqtt_dispatcher.publish(topic_str, "1", retain=True, qos=1)
         self._endpoints[topic_str] = callback
 
     async def remove_endpoint(self, service: str, method: str) -> None:
         self.logger.debug("Remove RPC: %s/%s", service, method)
         topic_str = get_topic_path(self.driver_name, service, method)
         try:
-            if self._mqtt_dispatcher.is_running:
-                await self._mqtt_dispatcher.client.publish(topic_str, payload=None, retain=True, qos=1)
+            await self._mqtt_dispatcher.publish(topic_str, payload=None, retain=True, qos=1)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Failed to delete RPC topic %s: %s", topic_str, e)
         finally:
@@ -62,11 +61,10 @@ class MQTTRPCServer:
         for topic_str, _ in items:
             service, method = topic_str.split("/")[-2:]
             await self.remove_endpoint(service, method)
-        if self._mqtt_dispatcher.is_running:
-            try:
-                await self._mqtt_dispatcher.unsubscribe(get_request_topic_path(self.driver_name))
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                self.logger.error("Failed to unsubscribe from RPC requests: %s", e)
+        try:
+            await self._mqtt_dispatcher.unsubscribe(get_request_topic_path(self.driver_name))
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error("Failed to unsubscribe from RPC requests: %s", e)
 
         await self._one_shot_tasks.stop()
 
@@ -113,6 +111,6 @@ class MQTTRPCServer:
         try:
             reply_topic = mqtt_message.topic.value + "/reply"
             self.logger.debug("Response %s: %s", reply_topic, response)
-            await self._mqtt_dispatcher.client.publish(reply_topic, response, qos=2, retain=False)
+            await self._mqtt_dispatcher.publish(reply_topic, response, qos=2, retain=False)
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Failed to publish RPC response: %s", e)

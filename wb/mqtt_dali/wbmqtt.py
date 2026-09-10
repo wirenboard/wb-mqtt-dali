@@ -159,13 +159,17 @@ class Device:
             await self.remove_control(mqtt_control_name)
         await self._publish(self._base_topic + "/meta", None)
 
-    async def create_control(self, mqtt_control_name: str, state: ControlState) -> None:
-        self._controls[mqtt_control_name] = ControlState(meta=state.meta, publish_policy=state.publish_policy)
-        await self._publish_control_meta(mqtt_control_name, state.meta)
-        if not value_is_retained(state.meta):
-            return
-        value = state.value if state.value is not None else ""
-        await self.set_control_state(mqtt_control_name, value, state.error)
+    async def create_control(
+        self,
+        mqtt_control_name: str,
+        meta: ControlMeta,
+        value: str,
+        publish_policy: PublishPolicy = PublishPolicy.ON_CHANGE,
+    ) -> None:
+        self._controls[mqtt_control_name] = ControlState(meta=meta, value=None, publish_policy=publish_policy)
+        await self._publish_control_meta(mqtt_control_name, meta)
+        if value_is_retained(meta):
+            await self.set_control_value(mqtt_control_name, value)
 
     async def remove_control(self, mqtt_control_name: str) -> None:
         if mqtt_control_name in self._controls:

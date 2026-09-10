@@ -247,7 +247,7 @@ class DevicePublisher:
             await device.initialize()
 
         for control_info in device_info.controls:
-            await device.create_control(control_info.id, control_info.state)
+            await self._add_control(device, control_info)
 
         self._devices[device_id] = device
         self.logger.info("Added device %s", device_id)
@@ -270,6 +270,14 @@ class DevicePublisher:
         await device.remove_device()
         del self._devices[device_id]
         self.logger.info("Removed device %s", device_id)
+
+    async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
+        value = control_info.state.value if control_info.state.value is not None else ""
+        await device.create_control(
+            control_info.id, control_info.state.meta, value, control_info.state.publish_policy
+        )
+        if control_info.state.error:
+            await device.set_control_error(control_info.id, control_info.state.error)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

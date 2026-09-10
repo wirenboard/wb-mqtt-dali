@@ -209,7 +209,7 @@ class TestDevice:
         mock_client.publish.reset_mock()
 
         meta = ControlMeta(title="Test Control", control_type="switch", order=1)
-        await device.create_control("ctrl1", ControlState(meta, "1"))
+        await device.create_control("ctrl1", meta, "1")
 
         assert "ctrl1" in device._controls
         assert device._controls["ctrl1"].value == "1"
@@ -219,23 +219,6 @@ class TestDevice:
         assert mock_client.publish.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_create_control_with_error_publishes_error_last(self, mock_client, mock_dispatcher):
-        """A control created with a standing error: the value goes out first, /meta/error last,
-        because publishing a value clears a standing error."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
-        await device.initialize()
-        mock_client.publish.reset_mock()
-
-        meta = ControlMeta(title="Test Control", control_type="value", order=1)
-        await device.create_control("ctrl1", ControlState(meta, "42", error=ControlError.READ))
-
-        topics = [c[0][0] for c in mock_client.publish.call_args_list]
-        error_topic = "/devices/test_device/controls/ctrl1/meta/error"
-        assert "/devices/test_device/controls/ctrl1" in topics  # value published
-        assert topics[-1] == error_topic  # error is the LAST publish
-        assert mock_client.publish.call_args_list[-1][0][1] == "r"
-
-    @pytest.mark.asyncio
     async def test_set_control_value(self, mock_client, mock_dispatcher):
         # pylint: disable=protected-access
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
@@ -243,7 +226,7 @@ class TestDevice:
         mock_client.publish.reset_mock()
 
         meta = ControlMeta(title="Test")
-        await device.create_control("ctrl1", ControlState(meta, "initial"))
+        await device.create_control("ctrl1", meta, "initial")
         mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "updated")
@@ -259,7 +242,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Test")
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "value")
@@ -282,7 +265,7 @@ class TestDevice:
     async def test_set_control_state_drops_repeated_value(self, mock_client, mock_dispatcher):
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(control_type="switch"), "0"))
+        await device.create_control("ctrl1", ControlMeta(control_type="switch"), "0")
         mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "1", ControlError.NONE)
@@ -303,8 +286,7 @@ class TestDevice:
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control(
-            "long_press1",
-            ControlState(ControlMeta(control_type="switch"), "0", publish_policy=PublishPolicy.ALWAYS),
+            "long_press1", ControlMeta(control_type="switch"), "0", PublishPolicy.ALWAYS
         )
         await device.set_control_state("long_press1", "1", ControlError.NONE)
         mock_client.publish.reset_mock()
@@ -322,9 +304,7 @@ class TestDevice:
         """The policy governs the plain value path too, with no force from the caller."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control(
-            "ctrl1", ControlState(ControlMeta(), "value", publish_policy=PublishPolicy.ALWAYS)
-        )
+        await device.create_control("ctrl1", ControlMeta(), "value", PublishPolicy.ALWAYS)
         mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "value")
@@ -336,12 +316,12 @@ class TestDevice:
     @pytest.mark.asyncio
     async def test_creating_a_pushbutton_publishes_only_its_meta(self, mock_client, mock_dispatcher):
         """A button has no state to declare: a payload on its value topic would read as a press,
-        so creating one publishes the meta alone — even when the state carries a past press."""
+        so creating one publishes the meta alone - even when a past press is passed as its value."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         mock_client.publish.reset_mock()
 
-        await device.create_control("off", ControlState(ControlMeta(control_type="pushbutton"), "1"))
+        await device.create_control("off", ControlMeta(control_type="pushbutton"), "1")
 
         assert [call.args[0] for call in mock_client.publish.await_args_list] == [
             "/devices/test_device/controls/off/meta"
@@ -354,7 +334,7 @@ class TestDevice:
         """A pushbutton's type alone sends the repeat out, unretained and with no policy."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("short_press1", ControlState(ControlMeta(control_type="pushbutton"), "0"))
+        await device.create_control("short_press1", ControlMeta(control_type="pushbutton"), "0")
         mock_client.publish.reset_mock()
 
         await device.set_control_state("short_press1", "1", ControlError.NONE)
@@ -374,7 +354,7 @@ class TestDevice:
         """
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(), "0"))
+        await device.create_control("ctrl1", ControlMeta(), "0")
         mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "42", ControlError.READ)
@@ -392,7 +372,7 @@ class TestDevice:
         subscriber sees the fresh value while the stale error still stands next to it."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(), "0"))
+        await device.create_control("ctrl1", ControlMeta(), "0")
         await device.set_control_state("ctrl1", "42", ControlError.READ)
         mock_client.publish.reset_mock()
 
@@ -409,7 +389,7 @@ class TestDevice:
         alone: the error is compared, so it is neither republished nor cleared by a value."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(), "0"))
+        await device.create_control("ctrl1", ControlMeta(), "0")
         await device.set_control_state("ctrl1", "42", ControlError.READ)
         mock_client.publish.reset_mock()
 
@@ -427,7 +407,7 @@ class TestDevice:
         would delete the retained message, and the cached value stands."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(), "42"))
+        await device.create_control("ctrl1", ControlMeta(), "42")
         mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", None, ControlError.READ)
@@ -451,7 +431,7 @@ class TestDevice:
         topic, and the value stays uncommitted, so the next identical update publishes it."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(), "0"))
+        await device.create_control("ctrl1", ControlMeta(), "0")
         mock_client.publish.reset_mock()
         mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
 
@@ -477,7 +457,7 @@ class TestDevice:
         committed, so the next identical update of each publishes it again."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(), "0"))
+        await device.create_control("ctrl1", ControlMeta(), "0")
         mock_client.publish.reset_mock()
         mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
 
@@ -507,7 +487,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Test", read_only=False)
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.set_control_read_only("ctrl1", True)
@@ -521,7 +501,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Test", read_only=True)
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.set_control_read_only("ctrl1", True)
@@ -535,7 +515,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Old Title")
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.set_control_title("ctrl1", "New Title")
@@ -549,7 +529,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Same Title")
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.set_control_title("ctrl1", "Same Title")
@@ -563,7 +543,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Test")
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.set_control_error("ctrl1", ControlError.READ)
@@ -584,7 +564,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Test")
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         await device.set_control_error("ctrl1", ControlError.READ)
         mock_client.publish.reset_mock()
 
@@ -616,7 +596,7 @@ class TestDevice:
         # pylint: disable=protected-access
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("ctrl1", ControlState(ControlMeta(title="Test"), "value"))
+        await device.create_control("ctrl1", ControlMeta(title="Test"), "value")
         error_topic = "/devices/test_device/controls/ctrl1/meta/error"
 
         mock_client.publish.reset_mock()
@@ -637,7 +617,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta(title="Test")
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
         mock_client.publish.reset_mock()
 
         await device.remove_control("ctrl1")
@@ -658,7 +638,7 @@ class TestDevice:
         and an empty payload there would read as a press."""
         device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        await device.create_control("off", ControlState(ControlMeta(control_type="pushbutton")))
+        await device.create_control("off", ControlMeta(control_type="pushbutton"), "")
         mock_client.publish.reset_mock()
 
         await device.remove_control("off")
@@ -686,8 +666,8 @@ class TestDevice:
 
         meta1 = ControlMeta(title="Control 1")
         meta2 = ControlMeta(title="Control 2")
-        await device.create_control("ctrl1", ControlState(meta1, "val1"))
-        await device.create_control("ctrl2", ControlState(meta2, "val2"))
+        await device.create_control("ctrl1", meta1, "val1")
+        await device.create_control("ctrl2", meta2, "val2")
         mock_client.publish.reset_mock()
 
         await device.remove_device()
@@ -709,7 +689,7 @@ class TestDevice:
             minimum=200,
             maximum=100,
         )
-        await device.create_control("ctrl1", ControlState(meta, "25"))
+        await device.create_control("ctrl1", meta, "25")
 
         meta_calls = [
             c
@@ -739,7 +719,7 @@ class TestDevice:
                 "200": None,
             },
         )
-        await device.create_control("ctrl1", ControlState(meta, "25"))
+        await device.create_control("ctrl1", meta, "25")
 
         meta_calls = [
             c
@@ -758,7 +738,7 @@ class TestDevice:
         await device.initialize()
 
         meta = ControlMeta()
-        await device.create_control("ctrl1", ControlState(meta, "value"))
+        await device.create_control("ctrl1", meta, "value")
 
         meta_calls = [
             c
@@ -913,8 +893,8 @@ class TestIntegration:  # pylint: disable=too-few-public-methods
 
         meta1 = ControlMeta(title="Switch", control_type="switch")
         meta2 = ControlMeta(title="Brightness", control_type="range")
-        await device.create_control("switch", ControlState(meta1, "0"))
-        await device.create_control("brightness", ControlState(meta2, "50"))
+        await device.create_control("switch", meta1, "0")
+        await device.create_control("brightness", meta2, "50")
 
         assert len(device._controls) == 2
 

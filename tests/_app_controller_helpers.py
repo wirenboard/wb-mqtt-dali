@@ -49,6 +49,7 @@ def make_loop_controller() -> ApplicationController:
     controller._commissioning_state_cb = None
     controller._device_registry = DeviceRegistry()
     controller._group_devices_by_number = {}
+    controller._run_on_topic_handler = MagicMock()
     controller._device_publisher = AsyncMock()
     controller._event_sync = EventSyncCoordinator(
         publisher=controller._device_publisher,
@@ -74,6 +75,8 @@ def make_group_controller(dali_devices, publisher) -> ApplicationController:
     controller._devices_by_mqtt_id = {}
     controller._group_devices_by_number = {}
     controller.dali_devices = list(dali_devices)
+    controller._device_registry = DeviceRegistry()
+    controller._device_registry.set_gear_devices(controller.dali_devices)
     return controller
 
 

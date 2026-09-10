@@ -6,15 +6,25 @@ from typing import Iterable, Optional, Union
 
 from dali.address import GearBroadcast, GearGroup
 
-from .common_dali_device import MqttControlBase
+from .common_dali_device import MqttControlBase, NotifyResult
 from .control_ids import (
     ACTUAL_LEVEL,
     CURRENT_COLOUR_TEMPERATURE,
+    CURRENT_PRIMARY_N,
     CURRENT_RGB,
     CURRENT_WHITE,
+    CURRENT_X_COORDINATE,
+    CURRENT_Y_COORDINATE,
+)
+from .control_ids import DAPC as DAPC_ID
+from .control_ids import (
+    PRIMARY_N_MAX,
     SET_COLOUR_TEMPERATURE,
+    SET_PRIMARY_N,
     SET_RGB,
     SET_WHITE,
+    SET_X_COORDINATE,
+    SET_Y_COORDINATE,
     WANTED_LEVEL,
 )
 from .dali_controls import WantedLevelControl, make_controls
@@ -22,10 +32,13 @@ from .dali_device import DaliDevice
 from .dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from .dali_type8_parameters import ColourType
 from .dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
+from .dali_type8_tc import Type8TcLimits
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_publisher import ControlInfo, TranslatedTitle
+from .events import BusEvent
 from .wbdali import WBDALIDriver
 from .wbdali_utils import send_commands_with_retry
+from .wbmqtt import ControlError
 
 ControlId = str
 # Stable per-bus identity for a candidate device. ``device.uid`` (UUID4) survives
@@ -78,16 +91,12 @@ def collect_group_state_controls(
     return templates, candidates
 
 
-class GroupStateUpdateKind(Enum):
-    VALUE = "value"
-    ERROR = "error"
+class MemberAnswer(Enum):
+    """What the group does with the answer a member control gave."""
 
-
-@dataclass(frozen=True)
-class GroupStateUpdate:
-    kind: GroupStateUpdateKind
-    control_id: ControlId
-    payload: str
+    TAKE = "take"  # copy the member's value onto the group
+    HOLD = "hold"  # another member leads, or this failure is not the last one
+    SHOW_ERROR = "show_error"  # every candidate's last read failed
 
 
 class CandidatePollStatus(Enum):
@@ -137,39 +146,32 @@ class GroupStateSource:
         book = self._state.get(control_id)
         return book.err_published if book is not None else False
 
-    def record_poll(
+    def record_answer(
         self,
         candidate_uid: CandidateUid,
         control_id: ControlId,
         success: bool,
-        value: Optional[str],
-    ) -> Optional[GroupStateUpdate]:
+    ) -> MemberAnswer:
         book = self._state.get(control_id)
         if book is None or candidate_uid not in book.candidate_statuses:
-            return None
+            return MemberAnswer.HOLD
 
         book.candidate_statuses[candidate_uid] = (
             CandidatePollStatus.SUCCESS if success else CandidatePollStatus.ERROR
         )
         if book.pinned_source is not None and book.pinned_source != candidate_uid:
-            return None
+            return MemberAnswer.HOLD
 
         if success:
             book.pinned_source = candidate_uid
             book.err_published = False
-            return GroupStateUpdate(
-                kind=GroupStateUpdateKind.VALUE, control_id=control_id, payload=value or ""
-            )
+            return MemberAnswer.TAKE
 
         book.pinned_source = None
         if self._all_errored(book) and not book.err_published:
             book.err_published = True
-            return GroupStateUpdate(
-                kind=GroupStateUpdateKind.ERROR,
-                control_id=control_id,
-                payload="",
-            )
-        return None
+            return MemberAnswer.SHOW_ERROR
+        return MemberAnswer.HOLD
 
     def update_candidates(self, new_candidates_by_control_id: dict[ControlId, list[CandidateUid]]) -> None:
         """Replace candidate set in place; preserve last_status / pin for surviving candidates.
@@ -195,6 +197,20 @@ class GroupStateSource:
         if not statuses:
             return False
         return all(status == CandidatePollStatus.ERROR for status in statuses.values())
+
+
+# The state control whose pinned member drives each mirrored setpoint, so a group card never
+# shows a value and a setpoint that came from two different members.
+_SETPOINT_STATE: dict[ControlId, ControlId] = {
+    WANTED_LEVEL: ACTUAL_LEVEL,
+    DAPC_ID: ACTUAL_LEVEL,
+    SET_RGB: CURRENT_RGB,
+    SET_WHITE: CURRENT_WHITE,
+    SET_COLOUR_TEMPERATURE: CURRENT_COLOUR_TEMPERATURE,
+    SET_X_COORDINATE: CURRENT_X_COORDINATE,
+    SET_Y_COORDINATE: CURRENT_Y_COORDINATE,
+    **{SET_PRIMARY_N.format(i): CURRENT_PRIMARY_N.format(i) for i in range(PRIMARY_N_MAX)},
+}
 
 
 @dataclass(frozen=True)
@@ -226,7 +242,9 @@ def build_virtual_device_controls(
     if capabilities.has_dt8_rgbwaf:
         setup_controls.extend(rgbwaf_mqtt_controls(only_setup_controls=True))
     if capabilities.has_dt8_tc:
-        setup_controls.extend(tc_mqtt_controls(capabilities.tc_min_mirek, capabilities.tc_max_mirek))
+        setup_controls.extend(
+            tc_mqtt_controls(Type8TcLimits(capabilities.tc_min_mirek, capabilities.tc_max_mirek))
+        )
 
     state_by_id = {c.control_info.id: c for c in (state_controls or [])}
     state_at_anchor: dict[ControlId, MqttControlBase] = {
@@ -308,9 +326,9 @@ class GroupSpec:
 class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     """Virtual device that aggregates DALI gear in a single group.
 
-    Owns a per-control ``GroupStateSource`` mirroring one member's polled value
-    onto the group topic. The source is always present; with no group-eligible
-    state controls it carries an empty per-control map.
+    Owns a per-control ``GroupStateSource`` picking whose answer the group takes.
+    The source is always present; with no group-eligible state controls it
+    carries an empty per-control map.
     """
 
     def __init__(  # pylint: disable=too-many-arguments, R0917
@@ -384,6 +402,24 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         self._state_source.update_candidates(spec.state_candidates)
         return True
 
+    def notify_all(self, event: BusEvent, member: DaliDevice) -> list[MqttControlBase]:
+        """Take what ``member``'s own controls decided about ``event``, for the controls it leads.
+
+        The member control is asked again with the same event, so its ``notify`` has to answer a
+        repeat the same way -- the group holds no rule of its own to fall back on.
+        """
+        to_publish: list[MqttControlBase] = []
+        # The state controls go first: they move the pin the setpoints then follow.
+        for control_id in self._state_source.control_ids:
+            control = self._controls.get(control_id)
+            if control is not None and self._take_state(member, event, control_id, control):
+                to_publish.append(control)
+        for control_id, state_id in _SETPOINT_STATE.items():
+            control = self._controls.get(control_id)
+            if control is not None and self._take_setpoint(member, event, control_id, control, state_id):
+                to_publish.append(control)
+        return to_publish
+
     def get_mqtt_controls(self) -> list[ControlInfo]:
         return [control.control_info for control in self._controls.values()]
 
@@ -406,6 +442,64 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
 
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
+
+    # --- Private ---
+
+    def _take_state(
+        self, member: DaliDevice, event: BusEvent, control_id: ControlId, control: MqttControlBase
+    ) -> bool:
+        answered = self._ask_member(member, event, control_id)
+        if answered is None:
+            return False
+        answer = self._state_source.record_answer(
+            member.uid, control_id, not answered.control_info.state.error
+        )
+        if answer is MemberAnswer.TAKE:
+            control.control_info.state.value = answered.control_info.state.value
+            control.control_info.state.error = ControlError.NONE
+            return True
+        if answer is MemberAnswer.SHOW_ERROR:
+            # Only the error goes out: the last value the group showed stays.
+            control.control_info.state.error = ControlError.READ
+            return True
+        return False
+
+    def _take_setpoint(  # pylint: disable=too-many-arguments, R0917
+        self,
+        member: DaliDevice,
+        event: BusEvent,
+        control_id: ControlId,
+        control: MqttControlBase,
+        state_id: ControlId,
+    ) -> bool:
+        if self._state_source.pinned_source(state_id) != member.uid:
+            return False
+        answered = self._ask_member(member, event, control_id)
+        if answered is None or answered.control_info.state.value is None:
+            return False
+        control.control_info.state.value = answered.control_info.state.value
+        return True
+
+    def _ask_member(
+        self, member: DaliDevice, event: BusEvent, control_id: ControlId
+    ) -> Optional[MqttControlBase]:
+        control = member.get_mqtt_control(control_id)
+        if control is None:
+            return None
+        try:
+            if control.notify(event) is not NotifyResult.PUBLISH_STATE:
+                return None
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.warning(
+                "Control %s of group member %s failed to handle %s: %s",
+                control_id,
+                member.name,
+                type(event).__name__,
+                exc,
+                exc_info=True,
+            )
+            return None
+        return control
 
 
 class BroadcastVirtualDevice:

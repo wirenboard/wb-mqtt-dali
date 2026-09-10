@@ -49,7 +49,6 @@ from dali.device.general import (
     SetInstanceGroup1,
     SetInstanceGroup2,
     SetPrimaryInstanceGroup,
-    _Event,
 )
 
 from .common_dali_device import DaliDeviceBase, MqttControlBase, PropertyStartOrder
@@ -61,7 +60,6 @@ from .dali2_controls import (
     get_general_purpose_sensor_controls,
     get_light_controls,
     get_occupancy_controls,
-    publish_event,
 )
 from .dali2_type1_parameters import build_type1_push_button_parameters
 from .dali2_type2_parameters import build_type2_absolute_input_device_parameters
@@ -72,7 +70,6 @@ from .dali2_type32_parameters import build_type32_feedback_parameters
 from .dali_device import DaliDeviceAddress
 from .device import absolute_input_device, feedback, general_purpose_sensor
 from .gtin_db import DaliDatabase
-from .mqtt_dispatcher import MQTTDispatcher
 from .settings import (
     BooleanSettingsParam,
     NumberSettingsParam,
@@ -265,9 +262,6 @@ class InstanceParameters(SettingsParamGroup):  # pylint: disable=too-many-instan
         self.instance_type = instance_type
         self.feature_address = FeatureInstanceNumber(instance_number.value)
         self.feedback_capability: Optional[int] = None
-        # Tracks whether we have published a "1" for this push button so the
-        # release events only clear the state for a press we actually reported.
-        self.button_pressed = False
         self._parameters = list(self._base_parameters)
 
     async def discover_feedback(
@@ -770,89 +764,3 @@ class Dali2Device(DaliDeviceBase):
         parameter_handlers.extend(self.instances.values())
 
         return (parameter_handlers, [])
-
-
-async def publish_dali2_event(  # pylint: disable=too-many-return-statements
-    command: _Event,
-    device_mqtt_id: str,
-    mqtt_dispatcher: MQTTDispatcher,
-    instance: InstanceParameters,
-) -> None:
-
-    if isinstance(command, light.LightEvent):
-        await publish_event(
-            mqtt_dispatcher, device_mqtt_id, f"illuminance{command.instance_number}", str(command.illuminance)
-        )
-        return
-
-    if isinstance(command, occupancy.OccupancyEvent):
-        await publish_event(
-            mqtt_dispatcher,
-            device_mqtt_id,
-            f"movement{command.instance_number}",
-            "1" if command.movement else "0",
-        )
-        await publish_event(
-            mqtt_dispatcher,
-            device_mqtt_id,
-            f"occupied{command.instance_number}",
-            "1" if command.occupied else "0",
-        )
-        return
-
-    if isinstance(command, pushbutton.ButtonPressed):
-        instance.button_pressed = True
-        await publish_event(mqtt_dispatcher, device_mqtt_id, f"button{command.instance_number}", "1")
-        return
-
-    # Any release-type event clears the pressed state, but only when we have
-    # actually reported the button as pressed. Otherwise events that arrive
-    # without a preceding "button pressed" event (e.g. a short press, which is
-    # enabled by default while "button pressed" is not) would keep republishing
-    # a retained "0".
-    if (
-        isinstance(
-            command,
-            (
-                pushbutton.ButtonReleased,
-                pushbutton.ShortPress,
-                pushbutton.DoublePress,
-                pushbutton.LongPressStop,
-            ),
-        )
-        and instance.button_pressed
-    ):
-        instance.button_pressed = False
-        await publish_event(mqtt_dispatcher, device_mqtt_id, f"button{command.instance_number}", "0")
-
-    if isinstance(command, pushbutton.ButtonReleased):
-        return
-
-    if isinstance(command, (pushbutton.LongPressStart, pushbutton.LongPressRepeat)):
-        await publish_event(mqtt_dispatcher, device_mqtt_id, f"long_press{command.instance_number}", "1")
-        return
-
-    if isinstance(command, pushbutton.LongPressStop):
-        await publish_event(mqtt_dispatcher, device_mqtt_id, f"long_press{command.instance_number}", "0")
-        return
-
-    if isinstance(command, pushbutton.ShortPress):
-        await publish_event(
-            mqtt_dispatcher, device_mqtt_id, f"short_press{command.instance_number}", "1", retain=False
-        )
-        return
-
-    if isinstance(command, pushbutton.DoublePress):
-        await publish_event(
-            mqtt_dispatcher, device_mqtt_id, f"double_press{command.instance_number}", "1", retain=False
-        )
-
-    if isinstance(command, absolute_input_device.PositionEvent):
-        await publish_event(
-            mqtt_dispatcher, device_mqtt_id, f"position{command.instance_number}", str(command.position)
-        )
-
-    if isinstance(command, general_purpose_sensor.MeasurementEvent):
-        await publish_event(
-            mqtt_dispatcher, device_mqtt_id, f"measurement{command.instance_number}", str(command.measurement)
-        )

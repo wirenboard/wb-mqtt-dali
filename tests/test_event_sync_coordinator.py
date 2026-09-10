@@ -2,18 +2,20 @@
 state + confirmation polls, fade tracking, group/broadcast optimism, the aggregate
 group topic, and the READY-reentry reconfirm.
 
-Devices are lightweight fakes that expose only the public surface the coordinator
-touches (``get_mqtt_control``, ``dt8_handler``, ``fade_param``, ``groups``, ``uid``,
-``mqtt_id``). Real controls/handlers are used so prediction logic is exercised; the
-DT8 colour handler is initialized through its public ``read_mandatory_info`` with a
-fake driver (no private attribute access). A fake clock drives settle timing.
+Devices are real ``DaliDevice``s carrying only the controls a test needs, installed through
+the ``_build_mqtt_controls`` hook. Real controls/handlers are used so prediction logic is
+exercised; the DT8 colour handler is initialized through its public ``read_mandatory_info``
+with a fake driver (no private attribute access). A fake clock drives settle timing.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from dali.address import GearBroadcast, GearGroup, GearShort
+from dali.address import DeviceShort, GearBroadcast, GearGroup, GearShort
+from dali.device import occupancy
+from dali.frame import BackwardFrame
 from dali.gear.colour import (
     Activate,
     SetTemporaryColourTemperature,
@@ -24,18 +26,30 @@ from dali.gear.colour import (
     XCoordinateStepUp,
     tc_kelvin_mirek,
 )
-from dali.gear.general import DAPC, DTR0, DTR1, DTR2, GoToScene, Off, SetFadeTime
+from dali.gear.general import (
+    DAPC,
+    DTR0,
+    DTR1,
+    DTR2,
+    GoToScene,
+    Off,
+    QueryStatusResponse,
+    SetFadeTime,
+)
 
 from wb.mqtt_dali.colour_sequence_tracker import ColourSequenceTracker
-from wb.mqtt_dali.common_dali_device import ControlPollResult
-from wb.mqtt_dali.dali_common_parameters import FadeTimeFadeRateParam
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_controls import (
     ActualLevelControl,
+    ErrorStatusControl,
     WantedLevelControl,
     make_controls,
 )
+from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from wb.mqtt_dali.dali_type7_parameters import LastActedControl
+from wb.mqtt_dali.dali_type8_common import ColourComponent
 from wb.mqtt_dali.dali_type8_parameters import (
     ColourSettings,
     ColourType,
@@ -45,22 +59,38 @@ from wb.mqtt_dali.dali_type8_primary_n import (
     get_mqtt_controls as primary_n_mqtt_controls,
 )
 from wb.mqtt_dali.dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
+from wb.mqtt_dali.dali_type8_tc import Type8TcLimits
 from wb.mqtt_dali.dali_type8_tc import get_mqtt_controls as tc_mqtt_controls
 from wb.mqtt_dali.dali_type8_xy import get_mqtt_controls as xy_mqtt_controls
+from wb.mqtt_dali.device_publisher import DeviceInfo, DevicePublisher
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.dtr_snapshot import DtrSnapshot
-from wb.mqtt_dali.event_sync_coordinator import (
-    _COLOUR_MIRROR,
-    _OWNED_SETPOINTS,
-    EventSyncCoordinator,
+from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
+from wb.mqtt_dali.events import (
+    ColourChanged,
+    Dali2InputEvent,
+    EventSource,
+    LevelChanged,
+    StatusRead,
+    SwitchStatusRead,
 )
 from wb.mqtt_dali.settle_clock import SettleBasis, SettleClock
-from wb.mqtt_dali.virtual_devices import GroupStateSource
+from wb.mqtt_dali.virtual_devices import (
+    _SETPOINT_STATE,
+    AggregatedCapabilities,
+    GroupStateSource,
+    GroupVirtualDevice,
+    collect_group_state_controls,
+)
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
 NOW = 1000.0
 RESYNC_INTERVAL = 300.0
+
+# Avoid filesystem reads in DaliDeviceBase.__init__.
+# pylint: disable-next=protected-access
+DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
 class _SceneStub:  # pylint: disable=too-few-public-methods
@@ -71,8 +101,48 @@ class _SceneStub:  # pylint: disable=too-few-public-methods
         return self._levels.get(index)
 
 
-class _GearDevice:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
-    """Public-surface fake of a DALI gear device for the coordinator."""
+class _TestGearDevice(DaliDevice):
+    """Gear device carrying exactly the controls a test hands it, plus the colour controls its
+    DT8 handler declares. A real ``DaliDevice`` and not a stand-in: dispatch goes through
+    ``notify_all``, and the group aggregate is mirrored for real gear only.
+    """
+
+    def __init__(self, short: int, controls, groups=(), dt8_handler=None) -> None:
+        super().__init__(DaliDeviceAddress(short=short, random=0), "bus", MagicMock())
+        self.mqtt_id = f"dev-{short}"
+        self.name = f"dev{short}"
+        self._test_controls = list(controls)
+        self._test_groups = set(groups)
+        self._test_dt8_handler = dt8_handler
+        self.rebuild_mqtt_controls()
+
+    @property
+    def groups(self) -> set[int]:
+        return self._test_groups
+
+    @property
+    def dt8_handler(self):
+        return self._test_dt8_handler
+
+    @dt8_handler.setter
+    def dt8_handler(self, handler) -> None:
+        self._test_dt8_handler = handler
+        self.rebuild_mqtt_controls()
+
+    def _build_mqtt_controls(self):
+        colour = [] if self._test_dt8_handler is None else self._test_dt8_handler.get_mqtt_controls()
+        return [*self._test_controls, *colour]
+
+
+def _linear_curve() -> DimmingCurveState:
+    curve = DimmingCurveState()
+    curve.curve_type = DimmingCurveType.LINEAR
+    return curve
+
+
+class _GearDevice(_TestGearDevice):
+    """Gear device whose only level representation is ``actual_level`` (plus a Type-7
+    ``last_acted`` when the test brings one)."""
 
     def __init__(  # pylint: disable=too-many-arguments,R0917
         self,
@@ -84,36 +154,23 @@ class _GearDevice:  # pylint: disable=too-many-instance-attributes,too-few-publi
         fade_code=None,
         last_acted=None,
     ) -> None:
-        self.address = SimpleNamespace(short=short)
-        self.uid = f"uid-{short}"
-        self.mqtt_id = f"dev-{short}"
-        self.name = f"dev{short}"
-        self.groups = set(groups)
-        self.fade_param = FadeTimeFadeRateParam()
-        if fade_code is not None:
-            self.fade_param.set_fade_time(fade_code)
-        curve = DimmingCurveState()
-        curve.curve_type = DimmingCurveType.LINEAR
-        self._controls = {
-            "actual_level": ActualLevelControl(
-                curve,
+        controls = [
+            ActualLevelControl(
+                _linear_curve(),
                 max_level=SimpleNamespace(value=max_level),
                 min_level=SimpleNamespace(value=min_level),
                 scene_source=scene_source if scene_source is not None else _SceneStub({}),
             )
-        }
+        ]
         if last_acted is not None:
-            self._controls["last_acted"] = last_acted
-        self.dt8_handler = None
-
-    def get_mqtt_control(self, control_id):
-        return self._controls.get(control_id)
+            controls.append(last_acted)
+        super().__init__(short, controls, groups=groups)
+        if fade_code is not None:
+            self.fade_param.set_fade_time(fade_code)
 
 
 def _fmt(raw: int) -> str:
-    curve = DimmingCurveState()
-    curve.curve_type = DimmingCurveType.LINEAR
-    return f"{curve.get_level(raw):.3f}"
+    return f"{_linear_curve().get_level(raw):.3f}"
 
 
 def _coordinator(devices, group_devices=None):
@@ -153,9 +210,33 @@ async def _make_colour_handler(colour_type: ColourType) -> Type8Parameters:
     return handler
 
 
+def _group_with_member(member, capabilities=None) -> GroupVirtualDevice:
+    """The group virtual device of group 2, composed from ``member`` as its only candidate."""
+    member.is_initialized = True
+    templates, candidates = collect_group_state_controls([member])
+    return GroupVirtualDevice(
+        mqtt_id="group-2",
+        name="Group 2",
+        capabilities=capabilities if capabilities is not None else AggregatedCapabilities(),
+        group_number=2,
+        state_control_templates=templates,
+        state_candidates=candidates,
+    )
+
+
 def _published(publisher) -> dict:
-    """Map (device_id, control_id) -> last published value."""
-    return {(c.args[0], c.args[1]): c.args[2] for c in publisher.set_control_value.await_args_list}
+    """Map (device_id, control_id) -> last published value, over both publish paths: a
+    control's own state and the group aggregate mirrored from it."""
+    calls = [
+        *publisher.publish_control_state.await_args_list,
+        *publisher.set_control_value.await_args_list,
+    ]
+    return {(c.args[0], c.args[1]): c.args[2] for c in calls}
+
+
+def _nothing_published(publisher) -> None:
+    publisher.publish_control_state.assert_not_awaited()
+    publisher.set_control_value.assert_not_awaited()
 
 
 # --- Optimistic level updates -------------------------------------------
@@ -179,7 +260,7 @@ async def test_unknown_device_command_ignored():
 
     await coordinator.apply_commands([DAPC(GearShort(9), 100)])
 
-    publisher.set_control_value.assert_not_awaited()
+    _nothing_published(publisher)
 
 
 # --- Confirmation poll & fade -------------------------------------------
@@ -263,7 +344,7 @@ async def test_type7_last_acted_predicted_from_level_crossing():
     )
     device = _GearDevice(5, max_level=254, last_acted=last_acted)
     actual = device.get_mqtt_control("actual_level")
-    actual.apply(DAPC(GearShort(5), 50))  # prime level 50
+    device.notify_all(LevelChanged(50, EventSource.READ))  # prime level 50 on both controls
     _prime_poll(actual)
     _prime_poll(last_acted)
     coordinator, publisher = _coordinator([device])
@@ -272,6 +353,111 @@ async def test_type7_last_acted_predicted_from_level_crossing():
 
     assert _published(publisher)[("dev-5", "last_acted")] == "1"
     assert last_acted.next_due_at < NOW + RESYNC_INTERVAL  # also confirm-polled
+
+
+# --- Confirmation deadlines shared by the level readers ------------------
+
+
+@pytest.mark.asyncio
+async def test_observed_event_schedules_one_shared_confirmation():
+    """A Type-7 device whose level two controls read: a confirmed read schedules nothing, and
+    the sniffed command that follows leaves both the very same settle deadline."""
+    last_acted = LastActedControl(
+        up_on=SimpleNamespace(value=150),
+        up_off=SimpleNamespace(value=80),
+        down_on=SimpleNamespace(value=40),
+        down_off=SimpleNamespace(value=20),
+    )
+    device = _GearDevice(5, max_level=254, last_acted=last_acted, fade_code=8)  # 8.0s fade
+    actual = device.get_mqtt_control("actual_level")
+    _prime_poll(actual)
+    _prime_poll(last_acted)
+    coordinator, _ = _coordinator([device])
+
+    await coordinator.notify_poll_event(device, LevelChanged(100, EventSource.READ))
+
+    assert actual.next_due_at == NOW + RESYNC_INTERVAL
+    assert last_acted.next_due_at == NOW + RESYNC_INTERVAL
+
+    await coordinator.apply_commands([DAPC(GearShort(5), 200)])  # 100 -> 200 crosses up-on (150)
+
+    expected = NOW + SettleClock().settle_for(SettleBasis.FADE, 8)
+    assert actual.next_due_at == pytest.approx(expected)
+    assert last_acted.next_due_at == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_confirmation_scheduled_even_when_value_refused():
+    """Every control that can refuse a sniffed value, refusing one: actual_level and
+    current_rgb under a standing read error, last_acted because 200 -> 210 crosses no
+    threshold. Nothing is published, and every confirming poll is scheduled all the same.
+    """
+    last_acted = LastActedControl(
+        up_on=SimpleNamespace(value=100),  # already crossed at the primed level 200
+        up_off=SimpleNamespace(value=50),
+        down_on=SimpleNamespace(value=40),
+        down_off=SimpleNamespace(value=20),
+    )
+    device = _GearDevice(5, max_level=254, last_acted=last_acted, fade_code=8)
+    actual = device.get_mqtt_control("actual_level")
+    device.notify_all(LevelChanged(200, EventSource.READ))  # the level both compare against
+    actual.control_info.state.error = ControlError.READ  # its own poll is failing
+    _prime_poll(actual)
+    _prime_poll(last_acted)
+    coordinator, publisher = _coordinator([device])
+
+    await coordinator.apply_commands([DAPC(GearShort(5), 210)])  # crosses nothing on the way up
+
+    _nothing_published(publisher)
+    expected = NOW + SettleClock().settle_for(SettleBasis.FADE, 8)
+    assert actual.next_due_at == pytest.approx(expected)
+    assert last_acted.next_due_at == pytest.approx(expected)
+    assert actual.control_info.state.error == ControlError.READ
+
+    handler = await _make_colour_handler(ColourType.RGBWAF)
+    colour_device = _TestGearDevice(6, [], dt8_handler=handler)
+    colour_device.get_mqtt_control("current_rgb").control_info.state.error = ControlError.READ
+    _prime_poll(handler)
+    colour_coordinator, colour_publisher = _coordinator([colour_device])
+
+    await colour_coordinator.apply_commands(
+        [DTR0(10), DTR1(20), DTR2(30), SetTemporaryRGBDimLevel(GearShort(6)), Activate(GearShort(6))]
+    )
+
+    assert ("dev-6", "current_rgb") not in _published(colour_publisher)
+    # A colour control schedules nothing itself; the handler is re-polled regardless.
+    assert handler.next_due_at == pytest.approx(NOW + SettleClock().settle_for(SettleBasis.FADE, None))
+
+
+@pytest.mark.asyncio
+async def test_last_acted_refuses_the_crossing_under_its_own_read_error():
+    """A sniffed crossing under last_acted's own standing /meta/error=r: the fresh code is not
+    put on the wire beside it, the confirming poll is scheduled all the same, and the crossing
+    base still moves to the level the refused event carried."""
+    last_acted = LastActedControl(
+        up_on=SimpleNamespace(value=150),
+        up_off=SimpleNamespace(value=80),
+        down_on=SimpleNamespace(value=40),
+        down_off=SimpleNamespace(value=20),
+    )
+    device = _GearDevice(5, max_level=254, last_acted=last_acted, fade_code=8)
+    device.notify_all(LevelChanged(50, EventSource.READ))  # the level the crossing starts from
+    device.notify_all(SwitchStatusRead(None, True))  # its own poll failed
+    _prime_poll(last_acted)
+    coordinator, publisher = _coordinator([device])
+
+    await coordinator.apply_commands([DAPC(GearShort(5), 200)])  # 50 -> 200 crosses up-on (150)
+
+    assert ("dev-5", "last_acted") not in _published(publisher)
+    assert last_acted.control_info.state.value == "0"  # the declared default, untouched
+    assert last_acted.control_info.state.error == ControlError.READ
+    assert last_acted.next_due_at == pytest.approx(NOW + SettleClock().settle_for(SettleBasis.FADE, 8))
+
+    last_acted.control_info.state.error = ControlError.NONE  # its next read answered
+
+    await coordinator.apply_commands([DAPC(GearShort(5), 50)])  # 200 -> 50 crosses up-off (80)
+
+    assert _published(publisher)[("dev-5", "last_acted")] == "2"
 
 
 # --- Group / broadcast ---------------------------------------------------
@@ -318,15 +504,12 @@ async def test_broadcast_command_updates_all_devices():
 async def test_group_aggregate_mirrors_optimistic_value():
     """A predictable group command also moves the group's aggregate topic (pinned member)."""
     member = _GearDevice(3, groups={2})
-    group_device = SimpleNamespace(
-        mqtt_id="group-2",
-        state_source=GroupStateSource({"actual_level": [member.uid]}),
-    )
+    group_device = _group_with_member(member)
     coordinator, publisher = _coordinator([member], group_devices={2: group_device})
 
     await coordinator.apply_commands([DAPC(GearGroup(2), 200)])
 
-    assert _published(publisher)[("group-2", "actual_level")] == _fmt(200)
+    assert _published(publisher)[(group_device.mqtt_id, "actual_level")] == _fmt(200)
 
 
 @pytest.mark.asyncio
@@ -470,10 +653,10 @@ async def test_external_primary_n_color_command_updates_topic():
 
 
 @pytest.mark.asyncio
-async def test_colour_overlay_carries_forward_prior_components():
-    """A second partial colour command overlays onto the first's already-known component
-    and republishes it, rather than resetting the unset channel to the MASK sentinel — so
-    both coordinates end up published, the first carried forward as a real value."""
+async def test_colour_overlay_leaves_untouched_component_alone():
+    """A second partial colour command overlays only the component it carries: the first
+    command's coordinate is neither lost nor reset to the MASK sentinel, and the picture goes
+    out whole, so the untouched coordinate is reported again with the value it already had."""
     handler = await _make_colour_handler(ColourType.XY)
     device = _GearDevice(5, fade_code=2)
     device.dt8_handler = handler
@@ -498,9 +681,10 @@ async def test_colour_overlay_carries_forward_prior_components():
     )
 
     x_publishes = [
-        c for c in publisher.set_control_value.await_args_list if c.args[1] == "current_x_coordinate"
+        c for c in publisher.publish_control_state.await_args_list if c.args[1] == "current_x_coordinate"
     ]
-    assert len(x_publishes) == 2  # republished on the second command (carried, not dropped as MASK)
+    # Reported by both commands, and by the second one unchanged -- not dropped as MASK either.
+    assert [c.args[2] for c in x_publishes] == [str(x_word), str(x_word)]
     published = _published(publisher)
     assert published[("dev-5", "current_x_coordinate")] == str(x_word)
     assert published[("dev-5", "current_y_coordinate")] == str(y_word)
@@ -531,7 +715,7 @@ async def test_partial_color_sequence_polls_without_optimistic_value():
 
     await coordinator.apply_commands([SetTemporaryXCoordinate(GearShort(5)), Activate(GearShort(5))])
 
-    publisher.set_control_value.assert_not_awaited()
+    _nothing_published(publisher)
     assert handler.next_due_at < NOW + RESYNC_INTERVAL  # still confirm-polled
 
 
@@ -547,7 +731,7 @@ async def test_color_step_command_polls_without_optimistic_value():
 
     await coordinator.apply_commands([XCoordinateStepUp(GearShort(5))])
 
-    publisher.set_control_value.assert_not_awaited()
+    _nothing_published(publisher)
     assert handler.next_due_at < NOW + RESYNC_INTERVAL
 
 
@@ -573,30 +757,26 @@ async def test_goto_scene_uses_cached_scene_colour():
     assert published[("dev-5", "current_x_coordinate")] == "4242"
 
 
+@pytest.mark.asyncio
+async def test_goto_scene_colour_published_without_a_level_control():
+    """A scene sets colour as well as level, so a DT8 device carrying no actual_level control
+    still gets the cached scene colour on its current_* topics."""
+    handler = await _make_colour_handler(ColourType.XY)
+    scene_colour = ColourSettings(ColourType.XY, level=120)
+    scene_colour.colour.x_coordinate = 4242
+    driver = AsyncMock()
+    driver.run_sequence = AsyncMock(return_value=scene_colour)
+    await handler.scenes_settings.read(driver, GearShort(5))  # populate scene colours
+
+    device = _TestGearDevice(5, [], dt8_handler=handler)
+    coordinator, publisher = _coordinator([device])
+
+    await coordinator.apply_commands([GoToScene(GearShort(5), 3)])
+
+    assert _published(publisher)[("dev-5", "current_x_coordinate")] == "4242"
+
+
 # --- Representation mirroring --------------------------------------------
-
-
-class _FullDevice:  # pylint: disable=too-many-instance-attributes,too-few-public-methods
-    """Public-surface fake carrying the full set of a quantity's representation controls."""
-
-    def __init__(self, short, controls, dt8_handler=None, groups=()) -> None:
-        self.address = SimpleNamespace(short=short)
-        self.uid = f"uid-{short}"
-        self.mqtt_id = f"dev-{short}"
-        self.name = f"dev{short}"
-        self.groups = set(groups)
-        self.fade_param = FadeTimeFadeRateParam()
-        self.dt8_handler = dt8_handler
-        self._controls = {c.control_info.id: c for c in controls}
-
-    def get_mqtt_control(self, control_id):
-        return self._controls.get(control_id)
-
-
-def _linear_curve() -> DimmingCurveState:
-    curve = DimmingCurveState()
-    curve.curve_type = DimmingCurveType.LINEAR
-    return curve
 
 
 def _level_controls(curve):
@@ -612,20 +792,26 @@ def _level_controls(curve):
     ]
 
 
-def _level_device(short=5) -> _FullDevice:
-    return _FullDevice(short, _level_controls(_linear_curve()))
+def _level_device(short=5) -> _TestGearDevice:
+    """Gear device carrying the full set of the level quantity's representation controls."""
+    return _TestGearDevice(short, _level_controls(_linear_curve()))
 
 
-def _colour_device(handler, colour_controls, short=5, groups=()) -> _FullDevice:
-    return _FullDevice(
-        short, [*_level_controls(_linear_curve()), *colour_controls], dt8_handler=handler, groups=groups
+def _colour_device(handler, short=5, groups=()) -> _TestGearDevice:
+    """Gear device carrying the full set of representation controls: the level ones plus the
+    colour controls ``handler`` declares."""
+    return _TestGearDevice(short, _level_controls(_linear_curve()), groups=groups, dt8_handler=handler)
+
+
+def _rgb_read(red: int, green: int, blue: int) -> ColourChanged:
+    return ColourChanged(
+        {
+            ColourComponent.RED: red,
+            ColourComponent.GREEN: green,
+            ColourComponent.BLUE: blue,
+        },
+        EventSource.READ,
     )
-
-
-def _level_response(raw: int) -> MagicMock:
-    resp = MagicMock()
-    resp.raw_value = MagicMock(as_integer=raw)
-    return resp
 
 
 @pytest.mark.asyncio
@@ -649,7 +835,7 @@ async def test_rgb_change_mirrors_representations():
     """An RGB colour command publishes both the state (current_rgb) and setpoint (set_rgb)
     representations from the same observed colour."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
-    device = _colour_device(handler, rgbwaf_mqtt_controls(only_setup_controls=False))
+    device = _colour_device(handler)
     coordinator, publisher = _coordinator([device])
 
     await coordinator.apply_commands(
@@ -668,7 +854,7 @@ async def test_tc_change_mirrors_representations():
     handler = await _make_colour_handler(ColourType.COLOUR_TEMPERATURE)
     handler.tc_limits.tc_min_mirek = 100
     handler.tc_limits.tc_max_mirek = 500
-    device = _colour_device(handler, tc_mqtt_controls(100, 500))
+    device = _colour_device(handler)
     coordinator, publisher = _coordinator([device])
 
     tc = 250  # mirek, within limits
@@ -709,7 +895,7 @@ async def test_foreign_command_mirrors_setpoints():
     """A foreign level command and a foreign colour command both move their setpoints
     (which used to freeze), not only the state controls."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
-    device = _colour_device(handler, rgbwaf_mqtt_controls(only_setup_controls=False))
+    device = _colour_device(handler)
     coordinator, publisher = _coordinator([device])
 
     await coordinator.apply_commands([DAPC(GearShort(5), 100)])
@@ -728,18 +914,15 @@ async def test_poll_readback_mirrors_representations():
     """A re-sync poll's state readbacks mirror onto the quantity's setpoints, so they sync
     even for commands prediction can't follow."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
-    device = _colour_device(handler, rgbwaf_mqtt_controls(only_setup_controls=False))
-    device.get_mqtt_control("actual_level").format_response(_level_response(180))  # store raw
+    device = _colour_device(handler)
     coordinator, publisher = _coordinator([device])
 
-    results = [
-        ControlPollResult("actual_level", _fmt(180)),
-        ControlPollResult("current_rgb", "1;2;3"),
-        ControlPollResult("current_white", "4"),
-    ]
-    await coordinator.publish_poll_setpoint_mirror(device, results)
+    await coordinator.notify_poll_event(device, LevelChanged(180, EventSource.READ))
+    await coordinator.notify_poll_event(device, _rgb_read(1, 2, 3))
+    await coordinator.notify_poll_event(device, ColourChanged({ColourComponent.WHITE: 4}, EventSource.READ))
 
     published = _published(publisher)
+    assert published[("dev-5", "actual_level")] == _fmt(180)
     assert published[("dev-5", "wanted_level")] == "71"  # round(_fmt(180) == "70.866")
     assert published[("dev-5", "dapc")] == "180"
     assert published[("dev-5", "set_rgb")] == "1;2;3"
@@ -747,21 +930,18 @@ async def test_poll_readback_mirrors_representations():
 
 
 @pytest.mark.asyncio
-async def test_poll_readback_skips_errored_and_none_results():
-    """A poll batch mixing a failed read (error="r", value=None), a value-less read
-    (value=None, no error) and a good read mirrors setpoints only for the good one: the
-    errored/None entries are skipped, so no stale value is painted and round(float(None))
-    never runs on the level branch."""
+async def test_poll_readback_skips_failed_reads():
+    """A poll batch mixing failed reads with a good one mirrors setpoints only for the good
+    one: a read that brought no value leaves a setpoint nothing to show."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
-    device = _colour_device(handler, rgbwaf_mqtt_controls(only_setup_controls=False))
+    device = _colour_device(handler)
     coordinator, publisher = _coordinator([device])
 
-    results = [
-        ControlPollResult("actual_level", error=ControlError.READ),  # failed read -> no level setpoints
-        ControlPollResult("current_white", None),  # value-less read -> no set_white
-        ControlPollResult("current_rgb", "1;2;3"),  # good read -> mirrors
-    ]
-    await coordinator.publish_poll_setpoint_mirror(device, results)
+    await coordinator.notify_poll_event(device, LevelChanged(None, EventSource.READ, failed=True))
+    await coordinator.notify_poll_event(
+        device, ColourChanged({ColourComponent.WHITE: None}, EventSource.READ, failed=True)
+    )
+    await coordinator.notify_poll_event(device, _rgb_read(1, 2, 3))
 
     published = _published(publisher)
     assert ("dev-5", "wanted_level") not in published
@@ -771,25 +951,69 @@ async def test_poll_readback_skips_errored_and_none_results():
 
 
 @pytest.mark.asyncio
-async def test_level_suppressed_while_read_error():
-    """While the level's read poll is failing, no level representation is published (so the
-    standing /meta/error=r is not cleared)."""
+async def test_level_read_failure_marks_actual_level_only():
+    """A good level read primes all three representations, then the same read fails: only
+    actual_level is published again, with `/meta/error=r` over the value it keeps, while its
+    setpoints hold their values error-free."""
     device = _level_device()
-    device.get_mqtt_control("actual_level").read_error = True
+    coordinator, publisher = _coordinator([device])
+
+    await coordinator.notify_poll_event(device, LevelChanged(180, EventSource.READ))
+    published_before_failure = len(publisher.publish_control_state.await_args_list)
+
+    await coordinator.notify_poll_event(device, LevelChanged(None, EventSource.READ, failed=True))
+
+    failure_calls = publisher.publish_control_state.await_args_list[published_before_failure:]
+    assert [(call.args[1], call.args[3]) for call in failure_calls] == [("actual_level", ControlError.READ)]
+    states = {
+        control_id: device.get_mqtt_control(control_id).control_info.state
+        for control_id in ("actual_level", "wanted_level", "dapc")
+    }
+    assert states["actual_level"].value == _fmt(180)  # the last known level stands under the error
+    assert (states["wanted_level"].value, states["wanted_level"].error) == ("71", ControlError.NONE)
+    assert (states["dapc"].value, states["dapc"].error) == ("180", ControlError.NONE)
+
+
+@pytest.mark.asyncio
+async def test_meta_title_change_without_value_change_still_publishes():
+    """Two failing status reads in a row name different bits, so the second read changes the
+    title alone -- and is published all the same, carrying the new title."""
+    device = _TestGearDevice(5, [ErrorStatusControl()])
+    coordinator, publisher = _coordinator([device])
+
+    for status_bit in ("lamp failure", "ballast status"):
+        response = QueryStatusResponse(BackwardFrame(1 << QueryStatusResponse.bits.index(status_bit)))
+        await coordinator.notify_poll_event(device, StatusRead(response, False))
+
+    calls = publisher.publish_control_state.await_args_list
+    assert [call.args[2] for call in calls] == ["1", "1"]  # the value never moved
+    assert [call.args[4].en for call in calls] == ["Lamp failure", "Ballast not ok"]
+
+
+@pytest.mark.asyncio
+async def test_level_suppressed_while_read_error():
+    """While the level's read poll is failing, `actual_level` refuses the observed value, so
+    nothing republishes it and its standing /meta/error=r is not cleared. Its setpoints have
+    no read error to protect and mirror the observed value as usual."""
+    device = _level_device()
+    device.get_mqtt_control("actual_level").control_info.state.error = ControlError.READ
     coordinator, publisher = _coordinator([device])
 
     await coordinator.apply_commands([DAPC(GearShort(5), 200)])
 
-    publisher.set_control_value.assert_not_awaited()
+    published = _published(publisher)
+    assert ("dev-5", "actual_level") not in published
+    assert published[("dev-5", "dapc")] == "200"
 
 
 @pytest.mark.asyncio
 async def test_colour_suppressed_while_read_error():
-    """While a colour state control's read poll is failing, neither it nor its setpoint is
-    published."""
+    """While a colour state control's read poll is failing, the observed colour does not
+    republish it (its /meta/error=r stands); the paired setpoint, having no read error of its
+    own, still mirrors."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
-    device = _colour_device(handler, rgbwaf_mqtt_controls(only_setup_controls=False))
-    device.get_mqtt_control("current_rgb").read_error = True
+    device = _colour_device(handler)
+    device.get_mqtt_control("current_rgb").control_info.state.error = ControlError.READ
     coordinator, publisher = _coordinator([device])
 
     await coordinator.apply_commands(
@@ -798,21 +1022,21 @@ async def test_colour_suppressed_while_read_error():
 
     published = _published(publisher)
     assert ("dev-5", "current_rgb") not in published
-    assert ("dev-5", "set_rgb") not in published
+    assert published[("dev-5", "set_rgb")] == "10;20;30"
 
 
 @pytest.mark.asyncio
 async def test_read_error_no_flicker():
-    """A stream of commands while a read error stands produces no value publish — so nothing
-    clears /meta/error and it never flickers r <-> "" under live traffic."""
+    """A stream of commands while a read error stands never publishes the reading control — so
+    nothing clears its /meta/error and it never flickers r <-> "" under live traffic."""
     device = _level_device()
-    device.get_mqtt_control("actual_level").read_error = True
+    device.get_mqtt_control("actual_level").control_info.state.error = ControlError.READ
     coordinator, publisher = _coordinator([device])
 
     for _ in range(5):
         await coordinator.apply_commands([DAPC(GearShort(5), 200), Off(GearShort(5))])
 
-    publisher.set_control_value.assert_not_awaited()
+    assert ("dev-5", "actual_level") not in _published(publisher)
     publisher.set_control_error.assert_not_awaited()
 
 
@@ -822,13 +1046,8 @@ async def test_group_topic_single_publish():
     mirrors the pinned member's owned setpoints (wanted_level/dapc/set_*) once each, with
     the same value — so the group card's setpoints track the member whose state it shows."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
-    member = _colour_device(handler, rgbwaf_mqtt_controls(only_setup_controls=False), short=3, groups={2})
-    group_controls = {"actual_level", "current_rgb", "wanted_level", "dapc", "set_rgb"}
-    group_device = SimpleNamespace(
-        mqtt_id="group-2",
-        state_source=GroupStateSource({"actual_level": [member.uid], "current_rgb": [member.uid]}),
-        get_mqtt_control=lambda cid: object() if cid in group_controls else None,
-    )
+    member = _colour_device(handler, short=3, groups={2})
+    group_device = _group_with_member(member, AggregatedCapabilities(has_dt8_rgbwaf=True))
     coordinator, publisher = _coordinator([member], group_devices={2: group_device})
 
     await coordinator.apply_commands([DAPC(GearGroup(2), 200)])
@@ -837,8 +1056,8 @@ async def test_group_topic_single_publish():
     )
 
     group_values: dict[str, list[str]] = {}
-    for call in publisher.set_control_value.await_args_list:
-        if call.args[0] == "group-2":
+    for call in publisher.publish_control_state.await_args_list:
+        if call.args[0] == group_device.mqtt_id:
             group_values.setdefault(call.args[1], []).append(call.args[2])
     published = _published(publisher)
     # Each state topic and each owned setpoint moves exactly once...
@@ -846,7 +1065,50 @@ async def test_group_topic_single_publish():
         assert len(group_values.get(control_id, [])) == 1, control_id
     # ...and the setpoints carry the pinned member's value verbatim.
     for setpoint in ("wanted_level", "dapc", "set_rgb"):
-        assert published[("group-2", setpoint)] == published[("dev-3", setpoint)]
+        assert published[(group_device.mqtt_id, setpoint)] == published[("dev-3", setpoint)]
+
+
+# --- DALI-2 input events ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dali2_event_reaches_the_topic_of_the_control_that_took_it():
+    """The DALI-2 leg of the dispatch, end to end over a real publisher: an occupancy event
+    reaches a real Dali2Device and costs exactly one message -- movement0, the only control
+    whose value moved (occupied0 took it unchanged, and there is no gear group to mirror)."""
+    device = Dali2Device(DaliDeviceAddress(short=7, random=0), "bus", MagicMock())
+    device.add_instance(0, occupancy.instance_type)
+    device.rebuild_mqtt_controls()
+    device.is_initialized = True
+    mqtt_dispatcher = MagicMock()
+    mqtt_dispatcher.publish = AsyncMock()
+    publisher = DevicePublisher(mqtt_dispatcher, logging.getLogger("test.dali2"))
+    await publisher.initialize()
+    await publisher.add_device(DeviceInfo(id=device.mqtt_id, controls=device.get_mqtt_controls()))
+    coordinator = EventSyncCoordinator(
+        publisher=publisher,
+        device_registry=DeviceRegistry(),
+        group_devices_by_number={1: SimpleNamespace(mqtt_id="group-1")},
+        logger=MagicMock(),
+        settle_clock=SettleClock(),
+        now_fn=lambda: NOW,
+    )
+    mqtt_dispatcher.publish.reset_mock()
+
+    await coordinator.notify_dali2_event(
+        device,
+        Dali2InputEvent(
+            occupancy.OccupancyEvent(
+                short_address=DeviceShort(7),
+                instance_number=0,
+                data=occupancy.OccupancyEvent.EventData(movement=True, occupied=False),
+            )
+        ),
+    )
+
+    assert [call.args for call in mqtt_dispatcher.publish.await_args_list] == [
+        (f"/devices/{device.mqtt_id}/controls/movement0", "1")
+    ]
 
 
 # --- State<->setpoint pairing invariant ---------------------------------
@@ -861,24 +1123,22 @@ def _real_control_ids() -> set[str]:
     control_sets = [
         [ActualLevelControl(curve), WantedLevelControl(curve), *make_controls()],
         rgbwaf_mqtt_controls(only_setup_controls=False),
-        tc_mqtt_controls(MASK_2BYTES, MASK_2BYTES),
+        tc_mqtt_controls(Type8TcLimits(MASK_2BYTES, MASK_2BYTES)),
         xy_mqtt_controls(),
         primary_n_mqtt_controls(),
     ]
     return {c.control_info.id for controls in control_sets for c in controls}
 
 
-def test_coordinator_tables_match_real_controls():
-    """The coordinator's mirror/ownership tables and the ids the real builders create must
-    agree, so a renamed or dropped id fails CI instead of silently freezing a topic:
-    (a) every id the tables reference is a real control (no orphan constant), and (b) every
-    ``current_*``/``set_*`` colour control the builders create is covered by the tables."""
+def test_setpoint_pairing_matches_real_controls():
+    """The state<->setpoint pairing and the ids the real builders create must agree, so a
+    renamed or dropped id fails CI instead of silently freezing a group topic."""
     real_ids = _real_control_ids()
 
-    table_ids = set(_COLOUR_MIRROR) | set(_COLOUR_MIRROR.values()) | set(_OWNED_SETPOINTS)
+    table_ids = set(_SETPOINT_STATE) | set(_SETPOINT_STATE.values())
     orphans = table_ids - real_ids
-    assert not orphans, f"table ids with no real control: {sorted(orphans)}"
+    assert not orphans, f"pairing ids with no real control: {sorted(orphans)}"
 
     colour_controls = {cid for cid in real_ids if cid.startswith(("current_", "set_"))}
     uncovered = colour_controls - table_ids
-    assert not uncovered, f"current_*/set_* controls not covered by tables: {sorted(uncovered)}"
+    assert not uncovered, f"current_*/set_* controls not covered by the pairing: {sorted(uncovered)}"

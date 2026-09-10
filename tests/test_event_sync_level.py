@@ -1,13 +1,13 @@
 """Per-command prediction tests for the event-sync layer.
 
-`ActualLevelControl.apply` and `LastActedControl.apply` are pure against their
-injected owner params, so they are exercised directly with lightweight stubs (no
-bus). `SettleClock` and the event-poll scheduling additions (`schedule_poll_at`,
-randomized re-draw) are tested in isolation too.
+`ActualLevelControl.predict_level` is pure against its injected owner params, and both it
+and `LastActedControl` take the level a command predicted through `notify`, so they are
+exercised directly with lightweight stubs (no bus). `SettleClock` and the event-poll
+scheduling additions (`schedule_poll_at`, randomized re-draw) are tested in isolation too.
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from typing import Optional
 
 from dali.address import GearShort
 from dali.gear.general import (
@@ -17,6 +17,7 @@ from dali.gear.general import (
     GoToScene,
     Off,
     OnAndStepUp,
+    QueryActualLevel,
     RecallMaxLevel,
     RecallMinLevel,
     StepDown,
@@ -29,13 +30,16 @@ from wb.mqtt_dali.common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
     EVENT_STARTUP_RECONFIRM_DELAY,
     PERIODIC_STATUS_POLL_INTERVAL,
-    MqttControlBase,
+    NotifyResult,
+    SingleQueryControl,
 )
 from wb.mqtt_dali.dali_controls import ActualLevelControl, ErrorStatusControl
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from wb.mqtt_dali.dali_type7_parameters import LastActedControl
 from wb.mqtt_dali.device_publisher import ControlInfo
+from wb.mqtt_dali.events import EventSource, LevelChanged
 from wb.mqtt_dali.settle_clock import SettleBasis, SettleClock
+from wb.mqtt_dali.wbdali_utils import MASK
 from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
 ADDR = GearShort(5)
@@ -66,25 +70,35 @@ def _fmt(raw: int) -> str:
     return f"{curve.get_level(raw):.3f}"
 
 
+def _observe(control: ActualLevelControl, command) -> Optional[str]:
+    """Predict a sniffed command and hand the result to the control the way the coordinator
+    does; returns the value the control now holds, or None when nothing was predicted."""
+    predicted = control.predict_level(command)
+    if predicted is None:
+        return None
+    control.notify(LevelChanged(predicted, EventSource.OBSERVED))
+    return control.control_info.state.value
+
+
 # --- DAPC ----------------------------------------------------------------
 
 
 def test_dapc_normal_level_predicts_that_level_with_fade():
     control = _level_control()
-    assert control.apply(DAPC(ADDR, 200)) == _fmt(200)
+    assert _observe(control, DAPC(ADDR, 200)) == _fmt(200)
     assert control.current_level == 200
 
 
 def test_dapc_zero_predicts_off_but_still_fades():
     control = _level_control()
-    assert control.apply(DAPC(ADDR, 0)) == _fmt(0)
+    assert _observe(control, DAPC(ADDR, 0)) == _fmt(0)
     assert control.current_level == 0
 
 
 def test_dapc_mask_emits_no_effect():
     control = _level_control()
-    control.apply(DAPC(ADDR, 100))  # prime a known level
-    assert control.apply(DAPC(ADDR, 255)) is None
+    _observe(control, DAPC(ADDR, 100))  # prime a known level
+    assert _observe(control, DAPC(ADDR, 255)) is None
     assert control.current_level == 100  # unchanged
 
 
@@ -93,20 +107,20 @@ def test_dapc_mask_emits_no_effect():
 
 def test_off_sets_zero_immediately():
     control = _level_control()
-    assert control.apply(Off(ADDR)) == _fmt(0)
+    assert _observe(control, Off(ADDR)) == _fmt(0)
     assert control.current_level == 0
 
 
 def test_recall_max_uses_device_max_level():
     control = _level_control(max_level=240)
-    assert control.apply(RecallMaxLevel(ADDR)) == _fmt(240)
-    assert _level_control().apply(RecallMaxLevel(ADDR)) is None  # MAX unknown -> poll only
+    assert _observe(control, RecallMaxLevel(ADDR)) == _fmt(240)
+    assert _observe(_level_control(), RecallMaxLevel(ADDR)) is None  # MAX unknown -> poll only
 
 
 def test_recall_min_uses_device_min_level():
     control = _level_control(min_level=20)
-    assert control.apply(RecallMinLevel(ADDR)) == _fmt(20)
-    assert _level_control().apply(RecallMinLevel(ADDR)) is None
+    assert _observe(control, RecallMinLevel(ADDR)) == _fmt(20)
+    assert _observe(_level_control(), RecallMinLevel(ADDR)) is None
 
 
 # --- GoToScene / GoToLastActiveLevel -------------------------------------
@@ -114,22 +128,22 @@ def test_recall_min_uses_device_min_level():
 
 def test_goto_scene_uses_cached_scene_level():
     control = _level_control(scenes={3: 120})
-    assert control.apply(GoToScene(ADDR, 3)) == _fmt(120)
+    assert _observe(control, GoToScene(ADDR, 3)) == _fmt(120)
     assert control.current_level == 120
 
 
 def test_goto_scene_masked_scene_polls_only():
     control = _level_control(scenes={})  # scene 4 unknown
-    assert control.apply(GoToScene(ADDR, 4)) is None
+    assert _observe(control, GoToScene(ADDR, 4)) is None
 
 
 def test_goto_last_active_polls_without_optimistic_value():
     """GoToLastActiveLevel is not predicted (rarely emitted, and it would need separate
     last-active tracking) — the level is left to the confirmation poll."""
     control = _level_control()
-    control.apply(DAPC(ADDR, 90))
-    control.apply(Off(ADDR))
-    assert control.apply(GoToLastActiveLevel(ADDR)) is None
+    _observe(control, DAPC(ADDR, 90))
+    _observe(control, Off(ADDR))
+    assert _observe(control, GoToLastActiveLevel(ADDR)) is None
 
 
 # --- Up / Down (not predicted) -------------------------------------------
@@ -137,14 +151,14 @@ def test_goto_last_active_polls_without_optimistic_value():
 
 def test_up_polls_without_optimistic_value():
     control = _level_control()
-    control.apply(DAPC(ADDR, 100))
-    assert control.apply(Up(ADDR)) is None
+    _observe(control, DAPC(ADDR, 100))
+    assert _observe(control, Up(ADDR)) is None
 
 
 def test_down_polls_without_optimistic_value():
     control = _level_control()
-    control.apply(DAPC(ADDR, 100))
-    assert control.apply(Down(ADDR)) is None
+    _observe(control, DAPC(ADDR, 100))
+    assert _observe(control, Down(ADDR)) is None
 
 
 # --- Step commands -------------------------------------------------------
@@ -152,35 +166,65 @@ def test_down_polls_without_optimistic_value():
 
 def test_step_up_increments_from_known_level():
     control = _level_control(max_level=254)
-    control.apply(DAPC(ADDR, 100))
-    assert control.apply(StepUp(ADDR)) == _fmt(101)
+    _observe(control, DAPC(ADDR, 100))
+    assert _observe(control, StepUp(ADDR)) == _fmt(101)
 
 
 def test_step_down_decrements_from_known_level():
     control = _level_control(min_level=1)
-    control.apply(DAPC(ADDR, 100))
-    assert control.apply(StepDown(ADDR)) == _fmt(99)
+    _observe(control, DAPC(ADDR, 100))
+    assert _observe(control, StepDown(ADDR)) == _fmt(99)
 
 
 def test_step_down_and_off_turns_off_at_min():
     control = _level_control(min_level=10)
-    control.apply(DAPC(ADDR, 10))  # cur == MIN
-    assert control.apply(StepDownAndOff(ADDR)) == _fmt(0)
+    _observe(control, DAPC(ADDR, 10))  # cur == MIN
+    assert _observe(control, StepDownAndOff(ADDR)) == _fmt(0)
 
 
 def test_on_and_step_up_turns_on_from_off():
     control = _level_control(max_level=254, min_level=15)
-    control.apply(DAPC(ADDR, 0))  # off
-    assert control.apply(OnAndStepUp(ADDR)) == _fmt(15)
+    _observe(control, DAPC(ADDR, 0))  # off
+    assert _observe(control, OnAndStepUp(ADDR)) == _fmt(15)
 
 
 def test_step_without_known_level_polls_only():
     """Step commands need the current level; without it (never seen) -> poll only."""
     control = _level_control(max_level=254, min_level=1)
-    assert control.apply(StepUp(ADDR)) is None
+    assert _observe(control, StepUp(ADDR)) is None
+
+
+def test_actual_level_shows_an_unknown_level_without_stepping_from_it():
+    """A read answering MASK renders like any other level, but the step prediction keeps the
+    last real level as its base -- stepping from MASK would invent one."""
+    control = _level_control(max_level=254)
+    control.notify(LevelChanged(200, EventSource.READ))
+
+    assert control.notify(LevelChanged(MASK, EventSource.READ)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == _fmt(MASK)
+    assert control.current_level == 200
+    assert control.predict_level(StepUp(ADDR)) == 201
 
 
 # --- Type 7 last_acted ---------------------------------------------------
+
+
+def _last_acted_control() -> LastActedControl:
+    """last_acted with every threshold read: up switch on/off at 150/80, down at 40/20."""
+    return LastActedControl(
+        up_on=SimpleNamespace(value=150),
+        up_off=SimpleNamespace(value=80),
+        down_on=SimpleNamespace(value=40),
+        down_off=SimpleNamespace(value=20),
+    )
+
+
+def _crossing(control: LastActedControl, prev: int, new: int) -> Optional[str]:
+    """Feed two observed levels; returns the code the control published, if any."""
+    control.notify(LevelChanged(prev, EventSource.OBSERVED))
+    if control.notify(LevelChanged(new, EventSource.OBSERVED)) is not NotifyResult.PUBLISH_STATE:
+        return None
+    return control.control_info.state.value
 
 
 def test_last_acted_predicted_from_threshold_crossing():
@@ -193,11 +237,11 @@ def test_last_acted_predicted_from_threshold_crossing():
         down_on=SimpleNamespace(value=40),
         down_off=SimpleNamespace(value=20),
     )
-    assert control.apply(100, 200) == "1"  # crosses up-on upward
-    assert control.apply(200, 50) == "2"  # crosses up-off downward
-    assert control.apply(30, 100) == "3"  # rising crosses down-on only (below up-on)
-    assert control.apply(30, 10) == "4"  # falling crosses down-off only (above up-off)
-    assert control.apply(100, 100) is None  # no transition
+    assert _crossing(control, 100, 200) == "1"  # crosses up-on upward
+    assert _crossing(control, 200, 50) == "2"  # crosses up-off downward
+    assert _crossing(control, 30, 100) == "3"  # rising crosses down-on only (below up-on)
+    assert _crossing(control, 30, 10) == "4"  # falling crosses down-off only (above up-off)
+    assert _crossing(control, 100, 100) is None  # no transition
 
     unread = LastActedControl(
         up_on=SimpleNamespace(value=None),
@@ -205,7 +249,31 @@ def test_last_acted_predicted_from_threshold_crossing():
         down_on=SimpleNamespace(value=None),
         down_off=SimpleNamespace(value=None),
     )
-    assert unread.apply(10, 250) is None  # thresholds unknown -> poll only
+    assert _crossing(unread, 10, 250) is None  # thresholds unknown -> poll only
+
+
+def test_last_acted_ignores_a_level_that_came_from_a_poll():
+    """The pair of levels that yields the up-on code when observed says nothing when both came
+    from polls: the difference can be a missed frame or a mid-fade sample."""
+    control = _last_acted_control()
+    control.notify(LevelChanged(50, EventSource.READ))
+
+    assert control.notify(LevelChanged(200, EventSource.READ)) is NotifyResult.NOTHING_TO_PUBLISH
+    assert control.control_info.state.value == "0"  # the declared default, untouched
+
+    assert _crossing(_last_acted_control(), 50, 200) == "1"
+
+
+def test_last_acted_does_not_remember_an_unknown_level():
+    """MASK is no side of a crossing: last_acted keeps the last real level to compare against,
+    so the rise to 200 is not read as a fall from 255."""
+    control = _last_acted_control()
+    control.notify(LevelChanged(100, EventSource.READ))  # the base, from a poll
+
+    assert control.notify(LevelChanged(MASK, EventSource.READ)) is NotifyResult.NOTHING_TO_PUBLISH
+
+    assert control.notify(LevelChanged(200, EventSource.OBSERVED)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == "1"  # 100 -> 200 crosses up-on (150)
 
 
 # --- SettleClock ---------------------------------------------------------
@@ -231,16 +299,17 @@ def test_settle_clock_horizon_bounded_by_max_fade():
 # --- Confirmation scheduling / randomized re-draw ------------------------
 
 
-def _event_control() -> MqttControlBase:
-    return MqttControlBase(
+def _event_control() -> SingleQueryControl:
+    return SingleQueryControl(
         ControlInfo("c", ControlState(ControlMeta(read_only=True), "0")),
+        query_builder=QueryActualLevel,
         poll_interval=EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval=True,
         startup_reconfirm=True,
     )
 
 
-def _polled_event_control(at: float) -> MqttControlBase:
+def _polled_event_control(at: float) -> SingleQueryControl:
     """Event control past its first poll, due one exact base interval later — no startup
     reconfirm, no jitter, so a confirmation has something unambiguous to move."""
     control = _event_control()
@@ -293,8 +362,9 @@ def test_startup_reconfirm_only_ever_pulls_the_poll_closer():
     """The reconfirm is a `min`, not an assignment: a pollable whose base interval is shorter
     than the startup delay keeps its own interval instead of having its first read pushed out.
     """
-    control = MqttControlBase(
+    control = SingleQueryControl(
         ControlInfo("short", ControlState(ControlMeta(read_only=True), "0")),
+        query_builder=QueryActualLevel,
         poll_interval=2.0,
         randomize_poll_interval=True,
         startup_reconfirm=True,
@@ -379,14 +449,8 @@ def test_unsettled_value_corrected_by_resync():
     """A confirm read that lands mid-fade overwrites the optimistic value; a later re-sync
     read corrects it to the settled level (no early re-read needed)."""
     control = _level_control()
-    control.apply(DAPC(ADDR, 200))  # optimistic target
-    control.format_response(_response(150))  # confirm read mid-fade
+    _observe(control, DAPC(ADDR, 200))  # optimistic target
+    control.notify(LevelChanged(150, EventSource.READ))  # confirm read mid-fade
     assert control.current_level == 150
-    control.format_response(_response(200))  # later re-sync read
+    control.notify(LevelChanged(200, EventSource.READ))  # later re-sync read
     assert control.current_level == 200
-
-
-def _response(raw: int) -> MagicMock:
-    resp = MagicMock()
-    resp.raw_value = MagicMock(as_integer=raw)
-    return resp

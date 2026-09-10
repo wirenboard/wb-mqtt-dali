@@ -21,6 +21,7 @@ from dali.memory.location import FlagValue
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam, Type51Parameters
+from wb.mqtt_dali.events import ActiveEnergyRead
 from wb.mqtt_dali.wbmqtt import ControlError
 
 # pylint: disable=redefined-outer-name
@@ -289,9 +290,9 @@ async def test_type51_mqtt_control_present_after_initialize():
     assert "active_energy" in control_ids
 
 
-def _energy_bytes_to_kwh_str(scale_byte: int, energy_bytes: list) -> str:
+def _energy_bytes_to_kwh(scale_byte: int, energy_bytes: list) -> float:
     wh = float(ActiveEnergy.raw_to_value(bytes([scale_byte, *energy_bytes])))
-    return f"{wh / 1000.0:.3f}"
+    return wh / 1000.0
 
 
 async def _run_one_chunk(dev: DaliDevice, driver, now: float):
@@ -329,9 +330,7 @@ async def test_type51_chunked_poll_assembles_value():
     assert results[1] == []
     final = results[2]
     assert len(final) == 1
-    assert final[0].control_id == "active_energy"
-    assert final[0].error == ControlError(0)
-    assert final[0].value == _energy_bytes_to_kwh_str(0, energy_bytes)
+    assert final[0] == ActiveEnergyRead(pytest.approx(_energy_bytes_to_kwh(0, energy_bytes)), False)
 
 
 @pytest.mark.asyncio
@@ -345,6 +344,8 @@ async def test_type51_chunked_poll_assembles_value():
     ],
 )
 async def test_type51_chunked_poll_publishes_kwh_three_decimals(scale_byte, energy_bytes, expected_value):
+    """The assembled kWh is formatted to three decimals by the control that owns the
+    quantity, so the event carries the number and the topic gets the string."""
     dev = await _make_initialized_device_with_type51(scale_byte=scale_byte)
     sent_calls = []
 
@@ -368,9 +369,10 @@ async def test_type51_chunked_poll_publishes_kwh_three_decimals(scale_byte, ener
 
     final = results[2]
     assert len(final) == 1
-    assert final[0].control_id == "active_energy"
-    assert final[0].error == ControlError(0)
-    assert final[0].value == expected_value
+    control = dev.get_mqtt_control("active_energy")
+    assert dev.notify_all(final[0]) == [control]
+    assert control.control_info.state.value == expected_value
+    assert control.control_info.state.error == ControlError.NONE
 
 
 @pytest.mark.asyncio
@@ -431,9 +433,33 @@ async def test_type51_chunked_poll_failure_publishes_error():
     result1 = await _run_one_chunk(dev, driver, now=0.0)
     assert result1 == []
     result2 = await _run_one_chunk(dev, driver, now=1.0)
-    assert len(result2) == 1
-    assert result2[0].control_id == "active_energy"
-    assert result2[0].error == ControlError.READ
+    assert result2 == [ActiveEnergyRead(None, True)]
+    control = dev.get_mqtt_control("active_energy")
+    assert dev.notify_all(result2[0]) == [control]
+    assert control.control_info.state.error == ControlError.READ
+
+
+@pytest.mark.asyncio
+async def test_type51_failed_cycle_reports_the_error_with_no_value_to_publish():
+    """A cycle that failed before assembling a reading keeps the empty value the control was
+    declared with: publishing a missing value would delete the retained topic."""
+    dev = await _make_initialized_device_with_type51(scale_byte=0)
+    control = dev.get_mqtt_control("active_energy")
+    assert control.control_info.state.value == ""
+
+    async def fake_send_failing(cmds, priority=None):
+        del cmds, priority
+        return [MagicMock(), MagicMock(), _bad_response(), _bad_response()]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send_failing)
+
+    result = await _run_one_chunk(dev, driver, now=0.0)
+
+    assert result == [ActiveEnergyRead(None, True)]
+    assert dev.notify_all(result[0]) == [control]
+    assert control.control_info.state.error == ControlError.READ
+    assert control.control_info.state.value == ""
 
 
 @pytest.mark.asyncio
@@ -462,7 +488,7 @@ async def test_type51_chunked_poll_restarts_after_failure():
 
     await _run_one_chunk(dev, driver, now=0.0)
     failure = await _run_one_chunk(dev, driver, now=1.0)
-    assert failure[0].error == ControlError.READ
+    assert failure[0].failed is True
 
     completion_time = 1.0 + 200.0
     result: list = []
@@ -470,9 +496,9 @@ async def test_type51_chunked_poll_restarts_after_failure():
         result = await _run_one_chunk(dev, driver, now=completion_time + float(i))
         if i < 2:
             assert result == []
-    assert result[0].control_id == "active_energy"
-    assert result[0].error == ControlError(0)
-    assert result[0].value == _energy_bytes_to_kwh_str(0, energy_bytes_attempt_2)
+    assert result[0] == ActiveEnergyRead(
+        pytest.approx(_energy_bytes_to_kwh(0, energy_bytes_attempt_2)), False
+    )
 
     # Restarting the cycle resets DTR0 back to byte 0x05.
     first_post_failure_chunk = sent_calls[2]
@@ -497,7 +523,7 @@ async def test_type51_chunked_poll_no_publish_on_partial():
     assert await _run_one_chunk(dev, driver, now=1.0) == []
     final = await _run_one_chunk(dev, driver, now=2.0)
     assert len(final) == 1
-    assert final[0].error == ControlError(0)
+    assert final[0].failed is False
 
 
 @pytest.mark.asyncio
@@ -606,7 +632,7 @@ async def test_type51_refresh_paced_120s_after_failure():
     cycle_start = 0.0
     assert await _run_one_chunk(dev, driver, now=cycle_start) == []
     failure = await _run_one_chunk(dev, driver, now=30.0)
-    assert failure[0].error == ControlError.READ
+    assert failure[0].failed is True
     assert driver.send_commands.await_count == 2
 
     # 120 s window measured from cycle-start, not from the failure that ended the cycle: a
@@ -645,7 +671,7 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send_failing)
     result = await _run_one_chunk(dev, driver, now=0.0)
-    assert result[0].error == ControlError.READ
+    assert result[0].failed is True
 
     energy_bytes = [0, 0, 0, 0, 0x10, 0x00]  # 4096 Wh
 
@@ -673,8 +699,7 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     assert res_scale == []
     assert res1 == []
     assert res2 == []
-    assert res3[0].error == ControlError(0)
-    assert res3[0].value == _energy_bytes_to_kwh_str(0, energy_bytes)
+    assert res3[0] == ActiveEnergyRead(pytest.approx(_energy_bytes_to_kwh(0, energy_bytes)), False)
 
     assert isinstance(sent_calls[0][1], DTR0)
     assert sent_calls[0][1].param == 0x04

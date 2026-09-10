@@ -52,7 +52,7 @@ except ImportError:  # pytest-asyncio < 0.17 (system Debian bullseye)
 from tests.test_commissioning import FakeDALIBus
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import Commissioning, check_presence
-from wb.mqtt_dali.common_dali_device import ControlInfo, MqttControl, read_memory_bank
+from wb.mqtt_dali.common_dali_device import ControlInfo, read_memory_bank
 from wb.mqtt_dali.dali_common_parameters import FadeTimeFadeRateParam
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import query_device_types_sequence
@@ -61,6 +61,8 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_utils import send_commands_with_retry
 from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
+
+from ._control_stubs import ReadableControl
 
 _RPC_LOAD_TOPIC = "/rpc/v1/wb-mqtt-serial/port/Load/{client_id}"
 
@@ -256,18 +258,15 @@ async def test_mqtt_level_write_uses_user_action_priority(initialized_driver):
 
 @pytest.mark.asyncio
 async def test_polling_loop_uses_periodic_query_priority(initialized_driver):
-    """An ``MqttControl`` polled through its public ``next_poll_step`` factory
+    """A readable control polled through its public ``next_poll_step`` factory
     (the entry-point that ``PollScheduler.poll`` invokes inside
     ``_polling_loop``) sends its query at PERIODIC_QUERY priority. We exercise
     the returned ``poll_coroutine`` so the assertion covers the actual on-wire
     frame produced by the polling code path, not a stub."""
     driver, mqtt_client, dispatcher = initialized_driver
-    control = MqttControl(
-        control_info=ControlInfo(
-            id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))
-        ),
-        query_builder=QueryActualLevel,
-        value_formatter=lambda r: str(r.raw_value.as_integer if r.raw_value is not None else ""),
+    control = ReadableControl(
+        ControlInfo(id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))),
+        QueryActualLevel,
     )
     step = control.next_poll_step(
         driver=driver,

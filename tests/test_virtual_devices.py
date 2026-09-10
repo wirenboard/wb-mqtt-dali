@@ -11,8 +11,8 @@ Covers:
 
 import itertools
 import logging
-from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import Optional, cast
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from dali.address import GearBroadcast
@@ -20,21 +20,33 @@ from dali.gear.colour import tc_kelvin_mirek
 from dali.gear.general import DAPC
 
 from wb.mqtt_dali.application_controller import ApplicationController
-from wb.mqtt_dali.common_dali_device import ControlPollResult, MqttControlBase
-from wb.mqtt_dali.dali_controls import ActualLevelControl, ErrorStatusControl
+from wb.mqtt_dali.common_dali_device import (
+    DaliDeviceAddress,
+    DaliDeviceBase,
+    MqttControlBase,
+    Pollable,
+)
+from wb.mqtt_dali.dali_controls import (
+    ActualLevelControl,
+    DapcControl,
+    ErrorStatusControl,
+    WantedLevelControl,
+)
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from wb.mqtt_dali.dali_type8_parameters import ColourType
 from wb.mqtt_dali.dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
 from wb.mqtt_dali.dali_type8_tc import MAX_TC_MIREK, MIN_TC_MIREK, Type8TcLimits
 from wb.mqtt_dali.dali_type8_tc import get_mqtt_controls as tc_mqtt_controls
+from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
+from wb.mqtt_dali.events import EventSource, LevelChanged, StatusRead
 from wb.mqtt_dali.virtual_devices import (
     AggregatedCapabilities,
     BroadcastVirtualDevice,
     CandidatePollStatus,
-    GroupStateUpdate,
-    GroupStateUpdateKind,
     GroupVirtualDevice,
+    MemberAnswer,
     aggregate_capabilities,
     build_virtual_device_controls,
     collect_group_state_controls,
@@ -44,6 +56,10 @@ from wb.mqtt_dali.wbmqtt import ControlError
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# Avoid filesystem reads in DaliDeviceBase.__init__.
+# pylint: disable-next=protected-access
+DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 _MOCK_MQTT_ID_COUNTER = itertools.count(1)
 _MOCK_SHORT_ADDRESS_COUNTER = itertools.count(1)
@@ -59,7 +75,9 @@ def _eligible_state_controls_for(colour_type, is_initialized):
             c for c in rgbwaf_mqtt_controls(only_setup_controls=False) if c.is_group_state_control
         )
     elif colour_type == ColourType.COLOUR_TEMPERATURE:
-        controls.extend(c for c in tc_mqtt_controls(MIN_TC_MIREK, MAX_TC_MIREK) if c.is_group_state_control)
+        controls.extend(
+            c for c in tc_mqtt_controls(Type8TcLimits(MIN_TC_MIREK, MAX_TC_MIREK)) if c.is_group_state_control
+        )
     return controls
 
 
@@ -694,7 +712,7 @@ class TestGroupStateControlComposition:
         ids = {c.control_info.id for c in controls}
         assert "actual_level" in ids
         assert "error_status" not in ids
-        assert non_eligible_readonly.is_readable()
+        assert isinstance(non_eligible_readonly, Pollable)  # readable, yet excluded all the same
         assert not non_eligible_readonly.is_group_state_control
 
 
@@ -781,12 +799,10 @@ class TestGroupStateSourceSemantics:
         await self._refresh(ctrl)
         source = ctrl._group_devices_by_number[1].state_source
 
-        action = source.record_poll(d1.uid, "actual_level", success=True, value="42")
+        action = source.record_answer(d1.uid, "actual_level", success=True)
 
         assert source.pinned_source("actual_level") == d1.uid
-        assert action == GroupStateUpdate(
-            kind=GroupStateUpdateKind.VALUE, control_id="actual_level", payload="42"
-        )
+        assert action is MemberAnswer.TAKE
 
     @pytest.mark.asyncio
     async def test_group_publishes_source_polls_only(self):
@@ -794,12 +810,12 @@ class TestGroupStateSourceSemantics:
         await self._refresh(ctrl)
         source = ctrl._group_devices_by_number[1].state_source
 
-        source.record_poll(d1.uid, "actual_level", success=True, value="10")
-        action_success = source.record_poll(d2.uid, "actual_level", success=True, value="99")
-        action_error = source.record_poll(d2.uid, "actual_level", success=False, value=None)
+        source.record_answer(d1.uid, "actual_level", success=True)
+        action_success = source.record_answer(d2.uid, "actual_level", success=True)
+        action_error = source.record_answer(d2.uid, "actual_level", success=False)
 
-        assert action_success is None
-        assert action_error is None
+        assert action_success is MemberAnswer.HOLD
+        assert action_error is MemberAnswer.HOLD
         assert source.pinned_source("actual_level") == d1.uid
         assert not source.is_err_set("actual_level")
 
@@ -809,18 +825,16 @@ class TestGroupStateSourceSemantics:
         await self._refresh(ctrl)
         source = ctrl._group_devices_by_number[1].state_source
 
-        source.record_poll(d1.uid, "actual_level", success=True, value="10")
-        unpin_action = source.record_poll(d1.uid, "actual_level", success=False, value=None)
+        source.record_answer(d1.uid, "actual_level", success=True)
+        unpin_action = source.record_answer(d1.uid, "actual_level", success=False)
         assert source.pinned_source("actual_level") is None
         # No err yet: d2's last status is None, so not all candidates errored.
-        assert unpin_action is None
+        assert unpin_action is MemberAnswer.HOLD
         assert not source.is_err_set("actual_level")
 
-        action = source.record_poll(d2.uid, "actual_level", success=True, value="55")
+        action = source.record_answer(d2.uid, "actual_level", success=True)
         assert source.pinned_source("actual_level") == d2.uid
-        assert action == GroupStateUpdate(
-            kind=GroupStateUpdateKind.VALUE, control_id="actual_level", payload="55"
-        )
+        assert action is MemberAnswer.TAKE
 
     @pytest.mark.asyncio
     async def test_group_does_not_emit_err_when_some_candidate_not_polled_yet(self):
@@ -828,9 +842,9 @@ class TestGroupStateSourceSemantics:
         await self._refresh(ctrl)
         source = ctrl._group_devices_by_number[1].state_source
 
-        action = source.record_poll(d1.uid, "actual_level", success=False, value=None)
+        action = source.record_answer(d1.uid, "actual_level", success=False)
 
-        assert action is None
+        assert action is MemberAnswer.HOLD
         assert not source.is_err_set("actual_level")
 
     @pytest.mark.asyncio
@@ -839,32 +853,13 @@ class TestGroupStateSourceSemantics:
         await self._refresh(ctrl)
         source = ctrl._group_devices_by_number[1].state_source
 
-        source.record_poll(d1.uid, "actual_level", success=False, value=None)
+        source.record_answer(d1.uid, "actual_level", success=False)
         assert not source.is_err_set("actual_level")
 
-        action = source.record_poll(d2.uid, "actual_level", success=False, value=None)
+        action = source.record_answer(d2.uid, "actual_level", success=False)
 
-        assert action == GroupStateUpdate(
-            kind=GroupStateUpdateKind.ERROR, control_id="actual_level", payload=""
-        )
+        assert action is MemberAnswer.SHOW_ERROR
         assert source.is_err_set("actual_level")
-
-    @pytest.mark.asyncio
-    async def test_group_error_update_has_empty_payload(self):
-        """A group ERROR update needs no payload: the ERROR kind is self-describing
-        (group state only ever surfaces read failures), and no consumer reads the
-        payload for ERROR — the controller emits ControlError.READ directly. So the
-        polymorphic payload slot is left empty for ERROR updates."""
-        ctrl, d1, d2 = self._build_group_with_two_actual_level_candidates()
-        await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
-
-        source.record_poll(d1.uid, "actual_level", success=False, value=None)
-        action = source.record_poll(d2.uid, "actual_level", success=False, value=None)
-
-        assert action is not None
-        assert action.kind is GroupStateUpdateKind.ERROR
-        assert action.payload == ""
 
     @pytest.mark.asyncio
     async def test_group_clears_err_on_next_successful_candidate_poll(self):
@@ -872,15 +867,13 @@ class TestGroupStateSourceSemantics:
         await self._refresh(ctrl)
         source = ctrl._group_devices_by_number[1].state_source
 
-        source.record_poll(d1.uid, "actual_level", success=False, value=None)
-        source.record_poll(d2.uid, "actual_level", success=False, value=None)
+        source.record_answer(d1.uid, "actual_level", success=False)
+        source.record_answer(d2.uid, "actual_level", success=False)
         assert source.is_err_set("actual_level")
 
-        action = source.record_poll(d1.uid, "actual_level", success=True, value="73")
+        action = source.record_answer(d1.uid, "actual_level", success=True)
 
-        assert action == GroupStateUpdate(
-            kind=GroupStateUpdateKind.VALUE, control_id="actual_level", payload="73"
-        )
+        assert action is MemberAnswer.TAKE
         assert not source.is_err_set("actual_level")
         assert source.pinned_source("actual_level") == d1.uid
 
@@ -985,7 +978,7 @@ class TestGroupCandidateInPlaceUpdate:
         await ctrl._refresh_group_virtual_devices()
         source = ctrl._group_devices_by_number[1].state_source
         # Drive d1 to a SUCCESS status to make the surviving entry distinguishable.
-        source.record_poll("uid-1", "actual_level", success=True, value="42")
+        source.record_answer("uid-1", "actual_level", success=True)
         assert source._state["actual_level"].candidate_statuses["uid-1"] == CandidatePollStatus.SUCCESS
 
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
@@ -1004,7 +997,7 @@ class TestGroupCandidateInPlaceUpdate:
         await ctrl._refresh_group_virtual_devices()
         source = ctrl._group_devices_by_number[1].state_source
         # Pin d1 as the source.
-        source.record_poll("uid-1", "actual_level", success=True, value="10")
+        source.record_answer("uid-1", "actual_level", success=True)
         assert source.pinned_source("actual_level") == "uid-1"
 
         d1.groups = set()
@@ -1022,7 +1015,7 @@ class TestGroupCandidateInPlaceUpdate:
         ctrl = _make_controller(dali_devices=[d1, d2])
         await ctrl._refresh_group_virtual_devices()
         source = ctrl._group_devices_by_number[1].state_source
-        source.record_poll("uid-1", "actual_level", success=True, value="10")
+        source.record_answer("uid-1", "actual_level", success=True)
         assert source.pinned_source("actual_level") == "uid-1"
 
         # d2 leaves the group; d1 (the pin) remains.
@@ -1064,7 +1057,7 @@ class TestGroupCandidateInPlaceUpdate:
         device_before = ctrl._group_devices_by_number[1]
         source = device_before.state_source
         # Pin d1 as the source via a successful poll.
-        source.record_poll("uid-1", "actual_level", success=True, value="42")
+        source.record_answer("uid-1", "actual_level", success=True)
         assert source.pinned_source("actual_level") == "uid-1"
         cast(MagicMock, ctrl._device_publisher).reset_mock()
 
@@ -1097,7 +1090,7 @@ class TestGroupCandidateInPlaceUpdate:
         device_before = ctrl._group_devices_by_number[1]
         source = device_before.state_source
         # Pin d1 as the source via a successful poll.
-        source.record_poll("uid-1", "actual_level", success=True, value="42")
+        source.record_answer("uid-1", "actual_level", success=True)
         assert source.pinned_source("actual_level") == "uid-1"
         cast(MagicMock, ctrl._device_publisher).reset_mock()
 
@@ -1189,110 +1182,189 @@ class TestGroupCompositionFromRealDevice:  # pylint: disable=too-few-public-meth
 
 
 # ---------------------------------------------------------------------------
-# _build_group_state_tasks
+# What a member event turns into on the group device
 # ---------------------------------------------------------------------------
 
 
-class TestBuildGroupStateTasks:
-    # pylint: disable=protected-access
+def _member(short_address: int) -> "_GroupMemberDevice":
+    return _GroupMemberDevice(group_number=1, short_address=short_address)
 
-    async def _setup_group_with_two_members(self, mqtt_ids=("d1", "d2")):
-        devices = [_make_device(groups=[1], mqtt_id=mid) for mid in mqtt_ids]
-        ctrl = _make_controller(dali_devices=list(devices))
-        await ctrl._refresh_group_virtual_devices()
-        group_mqtt_id = ctrl._group_devices_by_number[1].mqtt_id
-        return ctrl, devices, group_mqtt_id
 
-    @pytest.mark.asyncio
-    async def test_no_groups_yields_no_tasks(self):
-        dev = _make_device(groups=[], mqtt_id="lonely")
-        ctrl = _make_controller(dali_devices=[dev])
+def _group_of(*members: "_GroupMemberDevice") -> GroupVirtualDevice:
+    templates, candidates = collect_group_state_controls(list(members))
+    return GroupVirtualDevice(
+        mqtt_id="bus_1_group_01",
+        name="Bus 1 Group 1",
+        capabilities=AggregatedCapabilities(),
+        group_number=1,
+        state_control_templates=templates,
+        state_candidates=candidates,
+    )
 
-        tasks = ctrl._build_group_state_tasks(
-            dev,
-            [ControlPollResult(control_id="actual_level", value="42")],
-        )
 
-        assert not tasks
+def _group_value(group: GroupVirtualDevice, control_id: str) -> Optional[str]:
+    return group.get_mqtt_control(control_id).control_info.state.value
 
-    @pytest.mark.asyncio
-    async def test_successful_poll_yields_set_control_value_on_group(self):
-        ctrl, (d1, _d2), group_mqtt_id = await self._setup_group_with_two_members()
 
-        tasks = ctrl._build_group_state_tasks(
-            d1,
-            [ControlPollResult(control_id="actual_level", value="42")],
-        )
+def _read(raw_level: Optional[int] = 120, failed: bool = False) -> LevelChanged:
+    return LevelChanged(raw_level, EventSource.READ, failed=failed)
 
-        assert len(tasks) == 1
-        cast(AsyncMock, ctrl._device_publisher.set_control_value).assert_called_once_with(
-            group_mqtt_id, "actual_level", "42"
-        )
-        # Returned coroutines are not awaited; close them to avoid warnings.
-        for task in tasks:
-            task.close()
 
-    @pytest.mark.asyncio
-    async def test_error_when_all_candidates_errored_yields_set_control_error(self):
-        ctrl, (d1, d2), group_mqtt_id = await self._setup_group_with_two_members()
+class TestGroupTakesMemberAnswer:
+    """A group of two real members, driven by the events of one member at a time."""
 
-        tasks_first = ctrl._build_group_state_tasks(
-            d1, [ControlPollResult(control_id="actual_level", value=None, error=ControlError.READ)]
-        )
-        assert not tasks_first
+    def test_leading_member_state_and_setpoints_reach_the_group(self):
+        m1, m2 = _member(1), _member(2)
+        group = _group_of(m1, m2)
 
-        tasks_second = ctrl._build_group_state_tasks(
-            d2, [ControlPollResult(control_id="actual_level", value=None, error=ControlError.READ)]
-        )
+        published = {c.control_info.id for c in group.notify_all(_read(120), m1)}
 
-        assert len(tasks_second) == 1
-        cast(AsyncMock, ctrl._device_publisher.set_control_error).assert_called_once_with(
-            group_mqtt_id, "actual_level", ControlError.READ
-        )
-        cast(AsyncMock, ctrl._device_publisher.set_control_value).assert_not_called()
-        for task in tasks_second:
-            task.close()
+        member_level = m1.get_mqtt_control("actual_level").control_info.state.value
+        assert published == {"actual_level", "wanted_level", "dapc"}
+        assert _group_value(group, "actual_level") == member_level
+        assert _group_value(group, "dapc") == "120"
 
-    @pytest.mark.asyncio
-    async def test_response_for_unknown_control_id_is_skipped(self):
-        ctrl, (d1, _d2), _ = await self._setup_group_with_two_members()
+    def test_member_that_does_not_lead_changes_nothing(self):
+        m1, m2 = _member(1), _member(2)
+        group = _group_of(m1, m2)
+        group.notify_all(_read(120), m1)
 
-        tasks = ctrl._build_group_state_tasks(
-            d1,
-            [ControlPollResult(control_id="error_status", value="0")],
-        )
+        published = group.notify_all(_read(60), m2)
 
-        assert not tasks
-        cast(AsyncMock, ctrl._device_publisher.set_control_value).assert_not_called()
-        cast(AsyncMock, ctrl._device_publisher.set_control_error).assert_not_called()
+        assert not published
+        assert _group_value(group, "dapc") == "120"
 
-    @pytest.mark.asyncio
-    async def test_non_source_successful_poll_yields_no_tasks(self):
-        ctrl, (d1, d2), _ = await self._setup_group_with_two_members()
+    def test_event_of_another_quantity_leaves_the_group_alone(self):
+        m1 = _member(1)
+        group = _group_of(m1)
 
-        first_tasks = ctrl._build_group_state_tasks(
-            d1, [ControlPollResult(control_id="actual_level", value="10")]
-        )
-        for task in first_tasks:
-            task.close()
-        cast(MagicMock, ctrl._device_publisher).reset_mock()
+        assert not group.notify_all(StatusRead(None, True), m1)
 
-        tasks = ctrl._build_group_state_tasks(d2, [ControlPollResult(control_id="actual_level", value="99")])
+    def test_failure_of_one_member_keeps_the_value(self):
+        m1, m2 = _member(1), _member(2)
+        group = _group_of(m1, m2)
+        group.notify_all(_read(120), m1)
+        shown = _group_value(group, "actual_level")
 
-        assert not tasks
-        cast(AsyncMock, ctrl._device_publisher.set_control_value).assert_not_called()
+        published = group.notify_all(_read(None, failed=True), m1)
+
+        assert not published
+        assert _group_value(group, "actual_level") == shown
+        assert not group.get_mqtt_control("actual_level").control_info.state.error
+
+    def test_failure_of_every_member_shows_the_error_and_keeps_the_value(self):
+        m1, m2 = _member(1), _member(2)
+        group = _group_of(m1, m2)
+        group.notify_all(_read(120), m1)
+        shown = _group_value(group, "actual_level")
+        group.notify_all(_read(None, failed=True), m1)
+
+        published = {c.control_info.id for c in group.notify_all(_read(None, failed=True), m2)}
+
+        assert published == {"actual_level"}
+        state = group.get_mqtt_control("actual_level").control_info.state
+        assert state.error is ControlError.READ
+        assert state.value == shown
+
+    def test_next_success_clears_the_error_and_repins(self):
+        m1, m2 = _member(1), _member(2)
+        group = _group_of(m1, m2)
+        group.notify_all(_read(None, failed=True), m1)
+        group.notify_all(_read(None, failed=True), m2)
+
+        group.notify_all(_read(60), m2)
+
+        state = group.get_mqtt_control("actual_level").control_info.state
+        assert state.error is ControlError.NONE
+        assert _group_value(group, "dapc") == "60"
+        assert group.state_source.pinned_source("actual_level") == m2.uid
+
+    def test_setpoints_follow_the_member_the_state_control_shows(self):
+        m1, m2 = _member(1), _member(2)
+        group = _group_of(m1, m2)
+        group.notify_all(_read(120), m1)
+        group.notify_all(_read(None, failed=True), m1)
+
+        group.notify_all(_read(200), m2)
+
+        assert group.state_source.pinned_source("actual_level") == m2.uid
+        assert _group_value(group, "dapc") == "200"
+
+    def test_repeated_event_answers_the_same(self):
+        """The group asks the member control a second time, so a repeat must not drift --
+        every mirrored control answers the same and keeps the same state."""
+        m1 = _member(1)
+        event = _read(120)
+
+        for control_id in ("actual_level", "wanted_level", "dapc"):
+            control = m1.get_mqtt_control(control_id)
+            first = (control.notify(event), control.control_info.state.value)
+            second = (control.notify(event), control.control_info.state.value)
+            assert first == second, control_id
 
 
 # ---------------------------------------------------------------------------
-# GroupStateUpdate (sanity)
+# Group mirror fed by the event path
 # ---------------------------------------------------------------------------
 
 
-class TestGroupStateUpdate:  # pylint: disable=too-few-public-methods
-    def test_group_state_update_is_immutable(self):
-        action = GroupStateUpdate(kind=GroupStateUpdateKind.VALUE, control_id="actual_level", payload="42")
-        with pytest.raises(Exception):
-            action.payload = "99"  # type: ignore[misc]
+class _GroupMemberDevice(DaliDevice):
+    """Real gear in one group carrying the level triplet.
+
+    A genuine ``DaliDevice``: the group takes the answers of real gear alone.
+    """
+
+    def __init__(self, group_number: int, short_address: int = 1) -> None:
+        super().__init__(DaliDeviceAddress(short=short_address, random=0), "bus_1", MagicMock())
+        self._member_groups = {group_number}
+        self.is_initialized = True
+        self.rebuild_mqtt_controls()
+
+    @property
+    def groups(self) -> set[int]:
+        return self._member_groups
+
+    # --- Hooks for subclasses ---
+
+    def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        curve = DimmingCurveState()
+        return [ActualLevelControl(curve), WantedLevelControl(curve), DapcControl()]
+
+
+@pytest.mark.asyncio
+async def test_group_state_records_member_failure_from_event():
+    """A group of one real member: its successful level read reaches the group topic through
+    the event path, and the failed one leaves `/meta/error=r` without repainting the value."""
+    member = _GroupMemberDevice(group_number=1)
+    templates, candidates = collect_group_state_controls([member])
+    group_device = GroupVirtualDevice(
+        mqtt_id="bus_1_group_01",
+        name="Bus 1 Group 1",
+        capabilities=AggregatedCapabilities(),
+        group_number=1,
+        state_control_templates=templates,
+        state_candidates=candidates,
+    )
+    publisher = AsyncMock()
+    mirror = EventSyncCoordinator(
+        publisher=publisher,
+        device_registry=DeviceRegistry(),
+        group_devices_by_number={1: group_device},
+        logger=logging.getLogger("test"),
+    )
+
+    await mirror.notify_poll_event(member, LevelChanged(120, EventSource.READ))
+
+    member_value = member.get_mqtt_control("actual_level").control_info.state.value
+    publisher.publish_control_state.assert_any_await(
+        group_device.mqtt_id, "actual_level", member_value, ControlError.NONE, ANY
+    )
+
+    await mirror.notify_poll_event(member, LevelChanged(None, EventSource.READ, failed=True))
+
+    publisher.publish_control_state.assert_any_await(
+        group_device.mqtt_id, "actual_level", member_value, ControlError.READ, ANY
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,8 @@ from .common_dali_device import (
     PERIODIC_STATUS_POLL_INTERVAL,
     MqttControl,
     MqttControlBase,
+    NotifyResult,
+    SingleQueryControl,
 )
 from .control_ids import ACTUAL_LEVEL
 from .control_ids import DAPC as DAPC_ID
@@ -32,10 +34,14 @@ from .control_ids import WANTED_LEVEL
 from .dali_common_parameters import SCENES_TOTAL, MaxLevelParam, MinLevelParam
 from .dali_dimming_curve import DimmingCurveState
 from .device_publisher import ControlInfo
+from .events import BusEvent, EventSource, LevelChanged, StatusRead
 from .wbdali_utils import MASK
-from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 AddressFactory = Callable[[int], Union[GearBroadcast, GearGroup, GearShort]]
+
+# Highest raw gear level; MASK (255) above it means "level unknown", not a level.
+MAX_GEAR_LEVEL = MASK - 1
 
 
 class SceneLevelSource(Protocol):  # pylint: disable=too-few-public-methods
@@ -55,7 +61,7 @@ def handle_dapc(short_address: Address, value: str) -> list[Command]:
     return [DAPC(short_address, power)]
 
 
-class ActualLevelControl(MqttControlBase):
+class ActualLevelControl(SingleQueryControl):
     is_group_state_control = True
 
     def __init__(
@@ -77,6 +83,7 @@ class ActualLevelControl(MqttControlBase):
                     "0",
                 ),
             ),
+            query_builder=QueryActualLevel,
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
             startup_reconfirm=True,
@@ -85,51 +92,17 @@ class ActualLevelControl(MqttControlBase):
         self._max_level = max_level
         self._min_level = min_level
         self._scene_source = scene_source
-        # Typed prediction state: last known raw level.
         self._level: Optional[int] = None
 
     @property
     def current_level(self) -> Optional[int]:
         return self._level
 
-    def get_query(self, short_address: Address) -> Optional[Command]:
-        return QueryActualLevel(short_address)
+    def predict_level(self, command: Command) -> Optional[int]:
+        """Predict the raw level a sniffed/own level command would produce.
 
-    def format_response(self, response: Response) -> str:
-        raw = response.raw_value.as_integer
-        if raw <= 254:
-            self._level = raw
-        return self._format_level(raw)
-
-    def is_readable(self) -> bool:
-        return True
-
-    def apply(self, command: Command) -> Optional[str]:
-        """Predict the new level from a sniffed/own level command.
-
-        Returns the published ``%`` string, or ``None`` when the effect is not
-        predictable (poll only). Reads MAX/MIN/scene from injected owner params.
+        ``None`` when the effect is not predictable (poll only).
         """
-        new_level = self._predict_level(command)
-        if new_level is None:
-            return None
-        self._level = new_level
-        value = self._format_level(new_level)
-        self.control_info.state.value = value
-        return value
-
-    # --- Private ---
-
-    def _format_level(self, raw: int) -> str:
-        return f"{self._dimming_curve_state.get_level(raw):.3f}"
-
-    def _max(self) -> Optional[int]:
-        return self._max_level.value if self._max_level is not None else None
-
-    def _min(self) -> Optional[int]:
-        return self._min_level.value if self._min_level is not None else None
-
-    def _predict_level(self, command: Command) -> Optional[int]:
         if isinstance(command, (StepUp, StepDown, StepDownAndOff, OnAndStepUp)):
             return self._predict_step(command)
         if isinstance(command, DAPC):
@@ -142,6 +115,42 @@ class ActualLevelControl(MqttControlBase):
         # GoToLastActiveLevel (rarely emitted, would need last-active tracking), Recall
         # max/min, Up/Down and anything else are not predicted here.
         return self._predict_recall(command)
+
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if not isinstance(event, LevelChanged):
+            return super().notify(event)
+        if event.settle_at is not None:
+            self.schedule_poll_at(event.settle_at)
+        if event.failed:
+            self.control_info.state.error = ControlError.READ
+            return NotifyResult.PUBLISH_STATE
+        # Applying a predicted value while our own read is failing would clear /meta/error=r.
+        if event.source is EventSource.OBSERVED and self.control_info.state.error:
+            return NotifyResult.NOTHING_TO_PUBLISH
+        # MASK is shown like any level but is none: step prediction keeps the last real one.
+        if event.raw_level <= MAX_GEAR_LEVEL:
+            self._level = event.raw_level
+        self.control_info.state.value = self._format_level(event.raw_level)
+        self.control_info.state.error = ControlError.NONE
+        return NotifyResult.PUBLISH_STATE
+
+    # --- Hooks for subclasses ---
+
+    def decode_response(self, response: Optional[Response]) -> BusEvent:
+        if response is None:
+            return LevelChanged(None, EventSource.READ, failed=True)
+        return LevelChanged(response.raw_value.as_integer, EventSource.READ)
+
+    # --- Private ---
+
+    def _format_level(self, raw: int) -> str:
+        return f"{self._dimming_curve_state.get_level(raw):.3f}"
+
+    def _max(self) -> Optional[int]:
+        return self._max_level.value if self._max_level is not None else None
+
+    def _min(self) -> Optional[int]:
+        return self._min_level.value if self._min_level is not None else None
 
     def _predict_recall(self, command: Command) -> Optional[int]:
         if isinstance(command, RecallMaxLevel):
@@ -205,10 +214,23 @@ class WantedLevelControl(MqttControlBase):
     def is_writable(self) -> bool:
         return True
 
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if not isinstance(event, LevelChanged):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        # A setpoint is "requested", not "measured": no read error to suppress a prediction
+        # on, and MASK is a level like any other.
+        if event.raw_level is None:
+            return NotifyResult.NOTHING_TO_PUBLISH
+        percent = self._dimming_curve_state.get_level(event.raw_level)
+        self.control_info.state.value = str(round(percent))
+        return NotifyResult.PUBLISH_STATE
 
-def make_controls() -> list[MqttControlBase]:
-    return [
-        MqttControl(
+
+class DapcControl(MqttControlBase):
+    """DAPC setpoint: the raw-level representation of the level triplet's observed truth."""
+
+    def __init__(self) -> None:
+        super().__init__(
             ControlInfo(
                 DAPC_ID,
                 ControlState(
@@ -220,9 +242,27 @@ def make_controls() -> list[MqttControlBase]:
                     ),
                     "0",
                 ),
-            ),
-            commands_builder=handle_dapc,
-        ),
+            )
+        )
+
+    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
+        return handle_dapc(short_address, value_to_set)
+
+    def is_writable(self) -> bool:
+        return True
+
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if not isinstance(event, LevelChanged):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        if event.raw_level is None:
+            return NotifyResult.NOTHING_TO_PUBLISH
+        self.control_info.state.value = str(event.raw_level)
+        return NotifyResult.PUBLISH_STATE
+
+
+def make_controls() -> list[MqttControlBase]:
+    return [
+        DapcControl(),
         MqttControl(
             ControlInfo(
                 "go_to_last_active_level",
@@ -309,7 +349,7 @@ def make_controls() -> list[MqttControlBase]:
     ]
 
 
-class ErrorStatusControl(MqttControlBase):
+class ErrorStatusControl(SingleQueryControl):
 
     def __init__(self) -> None:
         super().__init__(
@@ -317,14 +357,21 @@ class ErrorStatusControl(MqttControlBase):
                 "error_status",
                 ControlState(ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True), "0"),
             ),
+            query_builder=QueryStatus,
             poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
         )
 
-    def get_query(self, short_address: Address) -> Optional[Command]:
-        return QueryStatus(short_address)
-
-    def is_readable(self) -> bool:
-        return True
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if not isinstance(event, StatusRead):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        if event.failed:
+            self.control_info.state.error = ControlError.READ
+            return NotifyResult.PUBLISH_STATE
+        self.control_info.state.value = self.format_response(event.response)
+        # The title spells out which status bits are set, so a read changes it with the value.
+        self.control_info.state.meta.title = self.format_title(event.response)
+        self.control_info.state.error = ControlError.NONE
+        return NotifyResult.PUBLISH_STATE
 
     def format_response(self, response: Response) -> str:
         return "1" if getattr(response, "error", False) else "0"
@@ -346,3 +393,8 @@ class ErrorStatusControl(MqttControlBase):
             details_ru.append("Отсутствует короткий адрес")
 
         return TranslatedTitle(", ".join(details), ", ".join(details_ru))
+
+    # --- Hooks for subclasses ---
+
+    def decode_response(self, response: Optional[Response]) -> BusEvent:
+        return StatusRead(response, response is None)

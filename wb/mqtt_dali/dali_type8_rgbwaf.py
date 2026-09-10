@@ -1,22 +1,24 @@
 # Type 8 RGBWAF
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from dali import command
 from dali.address import Address
 from dali.gear.colour import Activate, SetTemporaryRGBDimLevel, SetTemporaryWAFDimLevel
 from dali.gear.general import DTR0, DTR1, DTR2
 
-from .common_dali_device import ControlPollResult, MqttControl, MqttControlBase
+from .common_dali_device import MqttControlBase
 from .control_ids import CURRENT_RGB, CURRENT_WHITE, SET_RGB, SET_WHITE
 from .dali_type8_common import ColourComponent
+from .dali_type8_controls import ColourComponentControl, SingleComponentColourControl
 from .device_publisher import ControlInfo
 from .wbdali_utils import MASK
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 MAX_COLOUR_VALUE = MASK - 1
 
+RGB_COMPONENTS = (ColourComponent.RED, ColourComponent.GREEN, ColourComponent.BLUE)
 
 RGBW_COLOUR_COMPONENTS = [
     ColourComponent.RED,
@@ -109,96 +111,104 @@ class RgbwafColourValues:
         }
 
 
-def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
-    def _set_rgb_commands_builder(short_address: Address, value: str) -> list[command.Command]:
-        components = value.split(";")
-        if len(components) != 3:
-            raise ValueError("RGB value must be in format 'R;G;B'")
-        try:
-            red, green, blue = (int(c) for c in components)
-            red = min(red, MAX_COLOUR_VALUE)
-            green = min(green, MAX_COLOUR_VALUE)
-            blue = min(blue, MAX_COLOUR_VALUE)
-        except ValueError as e:
-            raise ValueError("RGB components must be integers") from e
-        return set_rgb_commands_builder(short_address, red, green, blue) + [
-            Activate(short_address),
-        ]
+def _set_rgb_commands_builder(short_address: Address, value: str) -> list[command.Command]:
+    components = value.split(";")
+    if len(components) != 3:
+        raise ValueError("RGB value must be in format 'R;G;B'")
+    try:
+        red, green, blue = (int(c) for c in components)
+        red = min(red, MAX_COLOUR_VALUE)
+        green = min(green, MAX_COLOUR_VALUE)
+        blue = min(blue, MAX_COLOUR_VALUE)
+    except ValueError as e:
+        raise ValueError("RGB components must be integers") from e
+    return set_rgb_commands_builder(short_address, red, green, blue) + [Activate(short_address)]
 
-    def _set_white_commands_builder(short_address: Address, value: str) -> list[command.Command]:
-        try:
-            white = int(value)
-            white = min(white, MAX_COLOUR_VALUE)
-        except ValueError as e:
-            raise ValueError("W component must be integer") from e
-        return set_waf_commands_builder(short_address, white, MASK, MASK) + [
-            Activate(short_address),
-        ]
 
-    setup_rgb_control = MqttControl(
-        ControlInfo(
-            SET_RGB, ControlState(ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")), "0;0;0")
-        ),
-        commands_builder=_set_rgb_commands_builder,
-    )
+def _set_white_commands_builder(short_address: Address, value: str) -> list[command.Command]:
+    try:
+        white = int(value)
+        white = min(white, MAX_COLOUR_VALUE)
+    except ValueError as e:
+        raise ValueError("W component must be integer") from e
+    return set_waf_commands_builder(short_address, white, MASK, MASK) + [Activate(short_address)]
 
-    setup_white_control = MqttControl(
-        ControlInfo(
-            SET_WHITE,
-            ControlState(
-                ControlMeta(
-                    "range",
-                    TranslatedTitle("Wanted W", "Желаемый W"),
-                    minimum=0,
-                    maximum=MAX_COLOUR_VALUE,
-                ),
-                "0",
-            ),
-        ),
-        commands_builder=_set_white_commands_builder,
-    )
 
-    if only_setup_controls:
-        return [setup_rgb_control, setup_white_control]
+class _RgbControl(ColourComponentControl):
+    """Shared RGB representation: the three components joined as ``r;g;b``."""
 
-    return [
-        MqttControl(
+    # --- Hooks for subclasses ---
+
+    def _format(self, components: dict[ColourComponent, int]) -> str:
+        return ";".join(str(components[component]) for component in RGB_COMPONENTS)
+
+
+class CurrentRgbControl(_RgbControl):
+    def __init__(self) -> None:
+        super().__init__(
             ControlInfo(
                 CURRENT_RGB,
                 ControlState(
                     ControlMeta("rgb", TranslatedTitle("Current RGB", "Текущий RGB"), read_only=True), "0;0;0"
                 ),
             ),
+            components=RGB_COMPONENTS,
             is_group_state_control=True,
-        ),
-        setup_rgb_control,
-        MqttControl(
+        )
+
+
+class SetRgbControl(_RgbControl):
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                SET_RGB,
+                ControlState(ControlMeta("rgb", TranslatedTitle("Wanted RGB", "Желаемый RGB")), "0;0;0"),
+            ),
+            components=RGB_COMPONENTS,
+            commands_builder=_set_rgb_commands_builder,
+        )
+
+
+class CurrentWhiteControl(SingleComponentColourControl):
+    def __init__(self) -> None:
+        super().__init__(
             ControlInfo(
                 CURRENT_WHITE,
                 ControlState(
                     ControlMeta(title=TranslatedTitle("Current W", "Текущий W"), read_only=True), "0"
                 ),
             ),
+            component=ColourComponent.WHITE,
             is_group_state_control=True,
-        ),
-        setup_white_control,
-    ]
+        )
 
 
-def handle_poll_controls_result(new_colour: Optional[RgbwafColourValues]) -> list[ControlPollResult]:
-    return [
-        ControlPollResult(
-            CURRENT_RGB,
-            (
-                None
-                if new_colour is None
-                else ";".join([str(new_colour.red), str(new_colour.green), str(new_colour.blue)])
+class SetWhiteControl(SingleComponentColourControl):
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                SET_WHITE,
+                ControlState(
+                    ControlMeta(
+                        "range",
+                        TranslatedTitle("Wanted W", "Желаемый W"),
+                        minimum=0,
+                        maximum=MAX_COLOUR_VALUE,
+                    ),
+                    "0",
+                ),
             ),
-            error=ControlError.READ if new_colour is None else ControlError.NONE,
-        ),
-        ControlPollResult(
-            CURRENT_WHITE,
-            None if new_colour is None else str(new_colour.white),
-            error=ControlError.READ if new_colour is None else ControlError.NONE,
-        ),
+            component=ColourComponent.WHITE,
+            commands_builder=_set_white_commands_builder,
+        )
+
+
+def get_mqtt_controls(only_setup_controls: bool) -> list[MqttControlBase]:
+    if only_setup_controls:
+        return [SetRgbControl(), SetWhiteControl()]
+    return [
+        CurrentRgbControl(),
+        SetRgbControl(),
+        CurrentWhiteControl(),
+        SetWhiteControl(),
     ]

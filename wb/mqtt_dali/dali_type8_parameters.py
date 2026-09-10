@@ -5,7 +5,7 @@ import enum
 import logging
 from collections.abc import Iterable
 from copy import deepcopy
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Callable, Generator, List, Optional, Union
 
 from dali import command
@@ -32,22 +32,26 @@ from dali.gear.general import (
 from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8_xy
 from .common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
-    ControlPollResult,
     ControlsPollRequestResult,
     EventPollSchedule,
     MqttControlBase,
+    Pollable,
     PropertyStartOrder,
 )
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
-from .dali_type8_common import ColourComponent
+from .dali_type8_common import (
+    INVALID_RAW_VALUE,
+    ColourComponent,
+    is_invalid_component_value,
+)
 from .dali_type8_tc import TcLimitsSettings, Type8TcLimits
+from .events import BusEvent, ColourChanged, EventSource
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
-    MASK_2BYTES,
     check_query_response,
     is_broadcast_or_group_address,
     is_transmission_error_response,
@@ -91,7 +95,6 @@ COMPONENTS_BY_COLOUR_TYPE: "dict[ColourType, list[ColourComponent]]" = {
     ColourType.PRIMARY_N: dali_type8_primary_n.PRIMARY_N_COLOUR_COMPONENTS,
     ColourType.XY: dali_type8_xy.XY_COLOUR_COMPONENTS,
 }
-
 
 REPORT_COLOUR_TAGS = {
     ColourComponent.RED: QueryColourValueDTR.ReportRedDimLevel,
@@ -655,10 +658,12 @@ class _Type8ColourReadProgress:
     level: int = MASK
     colour_type: Optional[ColourType] = None
     pending_components: list = field(default_factory=list)
+    # Not folded into the handler's picture chunk by chunk: a cycle that fails halfway must
+    # not leave a picture half fresh and half a cycle old.
     done_values: dict = field(default_factory=dict)
 
 
-class Type8Parameters(EventPollSchedule, TypeParameters):
+class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
     def __init__(self) -> None:
         TypeParameters.__init__(self)
         EventPollSchedule.__init__(
@@ -670,8 +675,9 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
         self._colour_type_lock = asyncio.Lock()
 
         self._read_progress: Optional[_Type8ColourReadProgress] = None
-        # Typed active-colour state, projected to the current_* topics.
-        self._colour_value: Optional[object] = None
+        # What the components of the active colour type were last named as, by a finished read
+        # cycle or by an observed command.
+        self._colour: dict[ColourComponent, int] = {}
         self._scenes_settings: Optional[ScenesSettings] = None
 
     @property
@@ -721,12 +727,22 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
         if self._current_colour_type == ColourType.RGBWAF:
             return dali_type8_rgbwaf.get_mqtt_controls(only_setup_controls=False)
         if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-            return dali_type8_tc.get_mqtt_controls(self._limits.tc_min_mirek, self._limits.tc_max_mirek)
+            return dali_type8_tc.get_mqtt_controls(self._limits)
         if self._current_colour_type == ColourType.PRIMARY_N:
             return dali_type8_primary_n.get_mqtt_controls()
         if self._current_colour_type == ColourType.XY:
             return dali_type8_xy.get_mqtt_controls()
         return []
+
+    def get_group_parameters(self) -> list[SettingsParamBase]:
+        params: list[SettingsParamBase] = [
+            PowerOnColourState(self.default_colour_type, self._limits),
+            SystemFailureColourState(self.default_colour_type, self._limits),
+            ColourGroupScenesSettings(self.default_colour_type, self._limits),
+        ]
+        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
+            params.append(TcLimitsSettings(self._limits))
+        return params
 
     def is_poll_due(self, now: float) -> bool:
         if self._current_colour_type is None:
@@ -740,46 +756,63 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
     def cancel_pending_poll(self) -> None:
         self._read_progress = None
 
-    def apply_colour(self, components: dict[str, int]) -> list[ControlPollResult]:
-        """Project sniffed/own colour components onto the current_* topics (optimistic).
+    def apply_observed_colour(
+        self, components: dict[ColourComponent, int], settle_at: float
+    ) -> Optional[ColourChanged]:
+        """Overlay the components a sniffed command set on the colour picture and report it.
 
-        Overlays the captured components on the active typed colour (a fresh all-MASK
-        base before the first real read), clamps Tc to limits, and returns the per-topic
-        publishes. Components left at the MASK sentinel — those this command did not set
-        and that no prior read filled in — are not published (they would otherwise emit
-        the sentinel as a real value); the confirmation poll fills them in. Empty
-        components -> poll only.
+        Clamping happens here and only here: a predicted value is one we made up and must not
+        name a colour the luminaire cannot reach, while a bus answer is within range already.
         """
-        ct = self._current_colour_type
-        if ct is None or not components:
-            return []
-        colour = self._colour_value if self._colour_value is not None else ColourSettings(ct).colour
-        for key, raw in components.items():
-            if hasattr(colour, key):
-                setattr(colour, key, raw)
-        self._clamp_tc(colour)
-        self._colour_value = colour
-        return self._known_colour_results(ct, colour)
+        colour_type = self._current_colour_type
+        if colour_type is None or not components:
+            return None
+        active = COMPONENTS_BY_COLOUR_TYPE[colour_type]
+        for component, raw in self.filter_valid_components(components).items():
+            if component in active:
+                self._colour[component] = raw
+        self._clamp_tc()
+        known = {
+            component: raw
+            for component, raw in self._colour_picture().items()
+            if not is_invalid_component_value(component, raw)
+        }
+        if not known:
+            return None
+        return ColourChanged(known, EventSource.OBSERVED, settle_at)
 
-    def apply_scene_colour(self, scene_colour: "ColourSettings") -> list[ControlPollResult]:
-        """Project a DT8 GoToScene's stored scene colour onto the current_* topics.
+    def filter_valid_components(self, components: dict[ColourComponent, int]) -> dict[ColourComponent, int]:
+        """Drop components whose raw value is the protocol's "not available" sentinel.
 
-        A scene stores each colour component or the MASK sentinel meaning "this scene
-        leaves the component unchanged". A MASK component must keep the device's current
-        value, not overwrite it with the sentinel -- so only the scene's non-MASK
-        components are overlaid (via ``apply_colour``, which also drops MASK topics from
-        the publish); the rest are left as-is and confirmed by the poll.
+        Run over a sniffed capture, where the sentinel is our own filler for the fields the
+        command left alone -- overlaying it would fault a component the command never touched.
         """
+        return {
+            component: raw
+            for component, raw in components.items()
+            if not is_invalid_component_value(component, raw)
+        }
+
+    def scene_colour_components(self, scene_index: int) -> dict[ColourComponent, int]:
+        """Raw non-default components of a stored scene's colour, for a GoToScene event.
+
+        A MASK component means "this scene leaves it unchanged" (62386-209 NOTE 2), so a
+        component absent here keeps whatever the colour picture already has for it.
+        """
+        if self._scenes_settings is None:
+            return {}
+        scene_colour = self._scenes_settings.scene_colour(scene_index)
+        if scene_colour is None:
+            return {}
         ct = self._current_colour_type
         if ct is None or scene_colour.colour_type != ct:
-            return []
+            return {}
         fresh = ColourSettings(ct).colour
-        components = {
-            member.name: getattr(scene_colour.colour, member.name)
-            for member in fields(scene_colour.colour)
-            if getattr(scene_colour.colour, member.name) != getattr(fresh, member.name)
+        return {
+            component: getattr(scene_colour.colour, component.value)
+            for component in scene_colour.colour.components
+            if getattr(scene_colour.colour, component.value) != getattr(fresh, component.value)
         }
-        return self.apply_colour(components)
 
     def has_in_progress_read(self) -> bool:
         return self._read_progress is not None
@@ -826,9 +859,11 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
             commands_count=commands_count,
         )
 
+    # --- Private ---
+
     async def _do_first_subbatch(
         self, driver: WBDALIDriver, progress: _Type8ColourReadProgress
-    ) -> list[ControlPollResult]:
+    ) -> list[BusEvent]:
         cmds = [
             QueryActualLevel(progress.address),
             DTR0(QueryColourValueDTR.ReportColourType),
@@ -857,7 +892,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
 
     async def _do_component_subbatch(
         self, driver: WBDALIDriver, progress: _Type8ColourReadProgress
-    ) -> list[ControlPollResult]:
+    ) -> list[BusEvent]:
         component = progress.pending_components[0]
         is_rgbwaf = progress.colour_type == ColourType.RGBWAF
         cmds = [
@@ -868,21 +903,25 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
             cmds.append(QueryContentDTR0(progress.address))
         responses = await self._send_subbatch_with_retries(driver, cmds)
         if responses is None:
+            # Gear that went silent after the opening subbatch would otherwise be asked for
+            # every remaining component, with a full round of retries each.
             self._read_progress = None
             return self._build_error_results()
+        progress.pending_components.pop(0)
         msb = responses[1].raw_value.as_integer
         if is_rgbwaf:
             value = msb
         else:
             lsb = responses[2].raw_value.as_integer
             value = (msb << 8) | lsb
-        progress.done_values[component.value] = value
-        progress.pending_components.pop(0)
+        # A MASK answer travels raw: the control that owns the component knows its sentinel
+        # and errors itself on it.
+        progress.done_values[component] = value
         if progress.pending_components:
-            return []
-        results = self._build_success_results(progress)
+            return []  # the cycle publishes once, when its last component lands
         self._read_progress = None
-        return results
+        self._colour.update(progress.done_values)
+        return [ColourChanged(self._colour_picture(), EventSource.READ)]
 
     @staticmethod
     async def _send_subbatch_with_retries(driver: WBDALIDriver, cmds: list) -> Optional[list]:
@@ -896,74 +935,33 @@ class Type8Parameters(EventPollSchedule, TypeParameters):
                 return responses
         return None
 
-    def _build_error_results(self) -> list[ControlPollResult]:
+    def _build_error_results(self) -> list[BusEvent]:
+        """A failed subbatch ends the cycle, and the failure covers the whole active colour
+        type: a component read earlier is no fresher than the one the gear stopped answering
+        for."""
         ct = self._current_colour_type
-        if ct == ColourType.RGBWAF:
-            return dali_type8_rgbwaf.handle_poll_controls_result(None)
-        if ct == ColourType.COLOUR_TEMPERATURE:
-            return dali_type8_tc.handle_poll_controls_result(None)
-        if ct == ColourType.PRIMARY_N:
-            return dali_type8_primary_n.handle_poll_controls_result(None)
-        if ct == ColourType.XY:
-            return dali_type8_xy.handle_poll_controls_result(None)
-        return []
-
-    def _build_success_results(self, progress: _Type8ColourReadProgress) -> list[ControlPollResult]:
-        ct = progress.colour_type
-        if ct == ColourType.RGBWAF:
-            colour: object = dali_type8_rgbwaf.RgbwafColourValues(**progress.done_values)
-        elif ct == ColourType.COLOUR_TEMPERATURE:
-            colour = dali_type8_tc.ColourTemperatureValue(**progress.done_values)
-        elif ct == ColourType.PRIMARY_N:
-            colour = dali_type8_primary_n.PrimaryNColourValues(**progress.done_values)
-        elif ct == ColourType.XY:
-            colour = dali_type8_xy.XYColourValues(**progress.done_values)
-        else:
+        if ct is None:
             return []
-        self._colour_value = colour
-        return self._format_colour(ct, colour)
-
-    def _clamp_tc(self, colour: object) -> None:
-        if isinstance(colour, dali_type8_tc.ColourTemperatureValue) and colour.tc != MASK_2BYTES:
-            colour.tc = min(max(colour.tc, self._limits.tc_min_mirek), self._limits.tc_max_mirek)
-
-    @staticmethod
-    def _format_colour(colour_type: ColourType, colour: object) -> list[ControlPollResult]:
-        if colour_type == ColourType.RGBWAF:
-            return dali_type8_rgbwaf.handle_poll_controls_result(colour)
-        if colour_type == ColourType.COLOUR_TEMPERATURE:
-            return dali_type8_tc.handle_poll_controls_result(colour)
-        if colour_type == ColourType.PRIMARY_N:
-            return dali_type8_primary_n.handle_poll_controls_result(colour)
-        if colour_type == ColourType.XY:
-            return dali_type8_xy.handle_poll_controls_result(colour)
-        return []
-
-    def _known_colour_results(self, colour_type: ColourType, colour: object) -> list[ControlPollResult]:
-        """Format ``colour`` but drop topics still at their MASK sentinel value.
-
-        A MASK component is one this optimistic colour never set (and no prior read
-        filled in); publishing it would emit the sentinel as a real value. The MASK
-        representation per topic is whatever a fresh all-MASK colour formats to, so this
-        stays type-agnostic.
-        """
-        masked = {
-            res.control_id: res.value
-            for res in self._format_colour(colour_type, ColourSettings(colour_type).colour)
-        }
         return [
-            res for res in self._format_colour(colour_type, colour) if res.value != masked.get(res.control_id)
+            ColourChanged({c: None for c in COMPONENTS_BY_COLOUR_TYPE[ct]}, EventSource.READ, failed=True)
         ]
 
-    def get_group_parameters(self) -> list[SettingsParamBase]:
-        params: list[SettingsParamBase] = [
-            PowerOnColourState(self.default_colour_type, self._limits),
-            SystemFailureColourState(self.default_colour_type, self._limits),
-            ColourGroupScenesSettings(self.default_colour_type, self._limits),
-        ]
-        if self._current_colour_type == ColourType.COLOUR_TEMPERATURE:
-            params.append(TcLimitsSettings(self._limits))
-        return params
+    def _colour_picture(self) -> dict[ColourComponent, int]:
+        """The components of the active colour type, at their sentinel where nothing named one."""
+        ct = self._current_colour_type
+        if ct is None:
+            return {}
+        return {
+            component: self._colour.get(component, INVALID_RAW_VALUE[component])
+            for component in COMPONENTS_BY_COLOUR_TYPE[ct]
+        }
+
+    def _clamp_tc(self) -> None:
+        tc = self._colour.get(ColourComponent.COLOUR_TEMPERATURE)
+        if tc is None or is_invalid_component_value(ColourComponent.COLOUR_TEMPERATURE, tc):
+            return
+        bounds = self._limits.effective_bounds()
+        self._colour[ColourComponent.COLOUR_TEMPERATURE] = min(max(tc, bounds.min_mirek), bounds.max_mirek)
 
     async def _read_current_colour_type(
         self,

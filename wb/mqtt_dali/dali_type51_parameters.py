@@ -19,10 +19,11 @@ from dali.memory.energy import (
 )
 
 from .common_dali_device import (
-    ControlPollResult,
     ControlsPollRequestResult,
     EventPollSchedule,
     MqttControlBase,
+    NotifyResult,
+    Pollable,
     PropertyStartOrder,
     read_bank_as_dict,
     try_read_bank_as_dict,
@@ -30,6 +31,7 @@ from .common_dali_device import (
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
+from .events import ActiveEnergyRead, BusEvent
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
 from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
@@ -272,7 +274,7 @@ async def _read_active_scale(
 class _ActiveEnergyControl(MqttControlBase):
     """Read-only `value` control for the active-energy totalizer.
 
-    Has no `query_builder` — Type51Parameters owns the chunked polling. The
+    Has no query of its own — Type51Parameters owns the chunked polling. The
     control is registered so MQTT shows the field as soon as the device has
     initialized, even before the first cycle completes.
     """
@@ -287,16 +289,24 @@ class _ActiveEnergyControl(MqttControlBase):
                         title=TranslatedTitle("Active energy", "Активная энергия"),
                         read_only=True,
                         units="kWh",
-                    )
+                    ),
+                    "",
                 ),
             ),
         )
 
-    def is_readable(self) -> bool:
-        return False
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if not isinstance(event, ActiveEnergyRead):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        if event.failed:
+            self.control_info.state.error = ControlError.READ
+            return NotifyResult.PUBLISH_STATE
+        self.control_info.state.value = f"{event.kwh:.3f}"
+        self.control_info.state.error = ControlError.NONE
+        return NotifyResult.PUBLISH_STATE
 
 
-class Type51Parameters(EventPollSchedule, TypeParameters):
+class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
     """DT51 (Energy reporting) integration.
 
     Owns:
@@ -393,7 +403,7 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
             commands_count=4,
         )
 
-    async def _do_scale_chunk(self, driver: WBDALIDriver, address: Address) -> list[ControlPollResult]:
+    async def _do_scale_chunk(self, driver: WBDALIDriver, address: Address) -> list[BusEvent]:
         # 4-cmd chunk reading scale at 0x04. The second ReadMemoryLocation advances
         # DTR0 past addr 0x05; its result is discarded and energy re-read next tick.
         cmds = [
@@ -418,7 +428,7 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
         driver: WBDALIDriver,
         address: Address,
         progress: _Type51EnergyReadProgress,
-    ) -> list[ControlPollResult]:
+    ) -> list[BusEvent]:
         cmds = [
             self._compat.DTR1(BANK_202.address),
             self._compat.DTR0(progress.next_data_address),
@@ -445,23 +455,18 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
 
         return self._finish_cycle(progress.bytes_read)
 
-    def _fail_cycle(self) -> list[ControlPollResult]:
+    def _fail_cycle(self) -> list[BusEvent]:
         self._read_progress = None
-        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)]
+        return [ActiveEnergyRead(None, True)]
 
-    def _finish_cycle(self, energy_bytes: list) -> list[ControlPollResult]:
+    def _finish_cycle(self, energy_bytes: list) -> list[BusEvent]:
         self._read_progress = None
         if self._scale_byte is None:
-            return [
-                ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)
-            ]
+            return [ActiveEnergyRead(None, True)]
         raw = bytes([self._scale_byte, *energy_bytes])
         check = ActiveEnergy.check_raw(raw)
         if check is not None:
             # MASK / TMASK / Invalid — surface as error so the UI is not misled.
-            return [
-                ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)
-            ]
+            return [ActiveEnergyRead(None, True)]
         value = ActiveEnergy.raw_to_value(raw)
-        kwh = float(value) / 1000.0
-        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value=f"{kwh:.3f}")]
+        return [ActiveEnergyRead(float(value) / 1000.0, False)]

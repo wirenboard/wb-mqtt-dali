@@ -14,6 +14,7 @@ from wb.mqtt_dali.application_controller import (
 )
 
 # pylint: disable=too-many-public-methods
+from wb.mqtt_dali.common_dali_device import MqttControl
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.device_init_scheduler import (
@@ -22,9 +23,12 @@ from wb.mqtt_dali.device_init_scheduler import (
     INIT_RETRY_MULTIPLIER,
     DeviceInitScheduler,
 )
+from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
-from wb.mqtt_dali.wbmqtt import ControlError
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
+
+from ._control_stubs import ReadableControl
 
 
 class TestDeviceInitScheduler:
@@ -310,10 +314,10 @@ class TestTryInitializeDevice:
         driver, publisher, scheduler, handler, logger = _make_init_deps()
         device = _make_mock_device()
         device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
-        mock_control = MagicMock()
-        mock_control.control_info.id = "brightness"
-        mock_control.is_readable = MagicMock(return_value=True)
-        device.get_common_mqtt_controls = MagicMock(return_value=[mock_control])
+        readable_control = ReadableControl(
+            ControlInfo("brightness", ControlState(ControlMeta(read_only=True), "0"))
+        )
+        device.get_common_mqtt_controls = MagicMock(return_value=[readable_control])
         scheduler.schedule(device.mqtt_id, 0.0)
 
         await try_initialize_device(device, driver, publisher, scheduler, handler, logger, 100.0)
@@ -340,9 +344,10 @@ class TestTryInitializeDevice:
         driver, publisher, scheduler, handler, logger = _make_init_deps()
         device = _make_mock_device()
         device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
-        writable_control = MagicMock()
-        writable_control.control_info.id = "button"
-        writable_control.is_readable = MagicMock(return_value=False)
+        writable_control = MqttControl(
+            ControlInfo("button", ControlState(ControlMeta(read_only=False), "0")),
+            commands_builder=lambda address, value: [],
+        )
         device.get_common_mqtt_controls = MagicMock(return_value=[writable_control])
         scheduler.schedule(device.mqtt_id, 0.0)
 

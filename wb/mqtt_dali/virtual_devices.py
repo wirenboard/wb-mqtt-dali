@@ -2,7 +2,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Optional, Union
+from typing import Iterable, Optional, Sequence
 
 from dali.address import GearBroadcast, GearGroup
 
@@ -212,6 +212,12 @@ _SETPOINT_STATE: dict[ControlId, ControlId] = {
     **{SET_PRIMARY_N.format(i): CURRENT_PRIMARY_N.format(i) for i in range(PRIMARY_N_MAX)},
 }
 
+# The setpoints each state control drives, the reverse of _SETPOINT_STATE.
+_STATE_SETPOINTS: dict[ControlId, tuple[ControlId, ...]] = {
+    state_id: tuple(sp for sp, st in _SETPOINT_STATE.items() if st == state_id)
+    for state_id in set(_SETPOINT_STATE.values())
+}
+
 
 @dataclass(frozen=True)
 class AggregatedCapabilities:
@@ -294,35 +300,6 @@ def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilit
     )
 
 
-@dataclass(frozen=True)
-class GroupSpec:
-    """Single-pass snapshot of everything needed to build a group's virtual device.
-
-    ``capabilities`` and ``state_config`` jointly define the MQTT topic layout;
-    ``state_config`` additionally encodes the per-control candidate lists, so
-    two snapshots with equal ``capabilities`` and equal control_id sets but
-    different candidate lists differ in ``state_config`` only.
-    """
-
-    capabilities: AggregatedCapabilities
-    templates: dict[ControlId, MqttControlBase]
-    state_candidates: dict[ControlId, list[CandidateUid]]
-    state_config: GroupStateConfig
-
-    @classmethod
-    def from_devices(cls, devices: Iterable[DaliDevice]) -> "GroupSpec":
-        device_list = list(devices)
-        capabilities = aggregate_capabilities(device_list)
-        templates, state_candidates = collect_group_state_controls(device_list)
-        state_config = make_group_state_config(state_candidates)
-        return cls(
-            capabilities=capabilities,
-            templates=templates,
-            state_candidates=state_candidates,
-            state_config=state_config,
-        )
-
-
 class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     """Virtual device that aggregates DALI gear in a single group.
 
@@ -331,47 +308,30 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     carries an empty per-control map.
     """
 
-    def __init__(  # pylint: disable=too-many-arguments, R0917
+    def __init__(
         self,
-        mqtt_id: str,
-        name: Union[str, TranslatedTitle],
-        capabilities: AggregatedCapabilities,
         group_number: int,
-        state_control_templates: dict[ControlId, MqttControlBase],
-        state_candidates: dict[ControlId, list[CandidateUid]],
+        members: Sequence[DaliDevice],
+        mqtt_id_prefix: str,
+        bus_name: str,
     ) -> None:
-        self.mqtt_id = mqtt_id
-        self.name = name
-        self.capabilities = capabilities
+        templates, state_candidates = collect_group_state_controls(members)
+        self.mqtt_id = f"{mqtt_id_prefix}_group_{group_number:02d}"
+        self.name = TranslatedTitle(
+            f"{bus_name} Group {group_number}",
+            f"{bus_name} группа {group_number}",
+        )
+        self.capabilities = aggregate_capabilities(members)
         self.logger = logging.getLogger()
 
         self._controls = build_virtual_device_controls(
-            capabilities,
-            state_controls=state_control_templates.values(),
+            self.capabilities,
+            state_controls=templates.values(),
         )
         self._address = GearGroup(group_number)
         self._state_config = make_group_state_config(state_candidates)
         self._state_source = GroupStateSource(state_candidates)
-
-    @classmethod
-    def for_group(
-        cls,
-        group_number: int,
-        spec: GroupSpec,
-        mqtt_id_prefix: str,
-        bus_name: str,
-    ) -> "GroupVirtualDevice":
-        return cls(
-            mqtt_id=f"{mqtt_id_prefix}_group_{group_number:02d}",
-            name=TranslatedTitle(
-                f"{bus_name} Group {group_number}",
-                f"{bus_name} группа {group_number}",
-            ),
-            capabilities=spec.capabilities,
-            group_number=group_number,
-            state_control_templates=spec.templates,
-            state_candidates=spec.state_candidates,
-        )
+        self._seed_state_from_members(members)
 
     @property
     def state_config(self) -> GroupStateConfig:
@@ -381,25 +341,27 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     def state_source(self) -> GroupStateSource:
         return self._state_source
 
-    def update_in_place(self, spec: GroupSpec) -> bool:
-        """Reconcile this device with ``spec`` without republishing if possible.
+    def update_in_place(self, members: Sequence[DaliDevice]) -> bool:
+        """Reconcile this device with ``members`` without republishing if possible.
 
-        Returns ``True`` when the device already matches the snapshot or when
-        only the candidate lists differ (in which case ``state_config`` and
-        the ``state_source`` are updated in place). Returns ``False`` when the
+        Returns ``True`` when the device already matches them or when only the
+        candidate lists differ (in which case ``state_config`` and the
+        ``state_source`` are updated in place). Returns ``False`` when the
         MQTT topic layout differs — capabilities mismatch or the set of
         state-control ids changed — and the caller must rebuild the device.
         """
-        if self.capabilities != spec.capabilities:
+        if self.capabilities != aggregate_capabilities(members):
             return False
-        if self._state_config == spec.state_config:
+        _, state_candidates = collect_group_state_controls(members)
+        state_config = make_group_state_config(state_candidates)
+        if self._state_config == state_config:
             return True
         old_ids = {entry.control_id for entry in self._state_config.entries}
-        new_ids = {entry.control_id for entry in spec.state_config.entries}
+        new_ids = {entry.control_id for entry in state_config.entries}
         if old_ids != new_ids:
             return False
-        self._state_config = spec.state_config
-        self._state_source.update_candidates(spec.state_candidates)
+        self._state_config = state_config
+        self._state_source.update_candidates(state_candidates)
         return True
 
     def notify_all(self, event: BusEvent, member: DaliDevice) -> list[MqttControlBase]:
@@ -500,6 +462,48 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             )
             return None
         return control
+
+    def _seed_state_from_members(self, members: Iterable[DaliDevice]) -> None:
+        """Take each state control's value, and its setpoints', from one member — no bus I/O."""
+        members_by_uid = {d.uid: d for d in members if d.is_initialized}
+        for control_id in self._state_source.control_ids:
+            group_control = self._controls.get(control_id)
+            if group_control is None:
+                continue
+            source = self._seed_source(members_by_uid, control_id)
+            if source is None:
+                group_control.control_info.state.error = ControlError.READ
+                continue
+            member, seeded_value = source
+            group_control.control_info.state.value = seeded_value
+            # The control was cloned from the first candidate, error included.
+            group_control.control_info.state.error = ControlError.NONE
+            for setpoint_id in _STATE_SETPOINTS.get(control_id, ()):
+                self._seed_setpoint(member, setpoint_id)
+
+    def _seed_setpoint(self, member: DaliDevice, setpoint_id: ControlId) -> None:
+        """Mirror the member's own setpoint, which already holds the read in the setpoint's terms."""
+        group_control = self._controls.get(setpoint_id)
+        member_control = member.get_mqtt_control(setpoint_id)
+        if group_control is None or member_control is None:
+            return
+        if member_control.control_info.state.value is not None:
+            group_control.control_info.state.value = member_control.control_info.state.value
+
+    def _seed_source(
+        self, members_by_uid: dict[CandidateUid, DaliDevice], control_id: ControlId
+    ) -> Optional[tuple[DaliDevice, str]]:
+        """The first candidate whose value is actually known, and that value."""
+        for candidate_uid in self._state_source.candidates_for(control_id):
+            member = members_by_uid.get(candidate_uid)
+            if member is None:
+                continue
+            control = member.get_mqtt_control(control_id)
+            if control is None or control.control_info.state.error:
+                continue
+            if control.control_info.state.value is not None:
+                return member, control.control_info.state.value
+        return None
 
 
 class BroadcastVirtualDevice:

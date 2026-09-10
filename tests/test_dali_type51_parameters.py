@@ -280,6 +280,11 @@ async def _make_initialized_device_with_type51(scale_byte: Optional[int] = 0) ->
     # pylint: disable=protected-access
     dev._pollables = list(dev._standalone_pollables)
     dev._current_round = []
+    # Rewind the cycle initialize()'s one-shot read consumed, so these tests drive one at now=0.
+    for pollable in dev._pollables:
+        pollable.cancel_pending_poll()
+        pollable.next_due_at = None
+        pollable.scale_byte = scale_byte
     return dev
 
 
@@ -288,6 +293,16 @@ async def test_type51_mqtt_control_present_after_initialize():
     dev = await _initialize_dt51_device(scale_byte=0)
     control_ids = [c.id for c in dev.get_mqtt_controls()]
     assert "active_energy" in control_ids
+
+
+@pytest.mark.asyncio
+async def test_type51_energy_control_carries_the_init_read_value():
+    """The state a real bus leaves after start, un-rewound: initialize()'s one-shot read drives a
+    whole DT51 cycle, so active_energy already holds the energy it read (0 Wh here, the fake
+    driver's answer) instead of the empty builder default."""
+    dev = await _initialize_dt51_device(scale_byte=0)
+    energy = next(c for c in dev.get_mqtt_controls() if c.id == "active_energy")
+    assert energy.state.value == "0.000"
 
 
 def _energy_bytes_to_kwh(scale_byte: int, energy_bytes: list) -> float:
@@ -441,11 +456,11 @@ async def test_type51_chunked_poll_failure_publishes_error():
 
 @pytest.mark.asyncio
 async def test_type51_failed_cycle_reports_the_error_with_no_value_to_publish():
-    """A cycle that failed before assembling a reading keeps the empty value the control was
-    declared with: publishing a missing value would delete the retained topic."""
+    """A cycle that failed before assembling a reading keeps the value the control already holds:
+    publishing a missing value would delete the retained topic."""
     dev = await _make_initialized_device_with_type51(scale_byte=0)
     control = dev.get_mqtt_control("active_energy")
-    assert control.control_info.state.value == ""
+    value_before = control.control_info.state.value
 
     async def fake_send_failing(cmds, priority=None):
         del cmds, priority
@@ -459,7 +474,7 @@ async def test_type51_failed_cycle_reports_the_error_with_no_value_to_publish():
     assert result == [ActiveEnergyRead(None, True)]
     assert dev.notify_all(result[0]) == [control]
     assert control.control_info.state.error == ControlError.READ
-    assert control.control_info.state.value == ""
+    assert control.control_info.state.value == value_before
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,6 @@ from .utils import merge_json_schemas
 from .virtual_devices import (
     AggregatedCapabilities,
     BroadcastVirtualDevice,
-    GroupSpec,
     GroupVirtualDevice,
     aggregate_capabilities,
 )
@@ -1217,8 +1216,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             active_groups.update(device.groups)
         return sorted(active_groups)
 
-    def _build_group_spec(self, group_number: int) -> GroupSpec:
-        return GroupSpec.from_devices(d for d in self.dali_devices if group_number in d.groups)
+    def _group_members(self, group_number: int) -> list[DaliDevice]:
+        return [d for d in self.dali_devices if group_number in d.groups]
 
     async def _publish_virtual_device(
         self, device: Union[GroupVirtualDevice, BroadcastVirtualDevice]
@@ -1297,8 +1296,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._devices_by_mqtt_id.pop(device.mqtt_id, None)
 
         for group_number in sorted(active_groups - existing_groups):
-            spec = self._build_group_spec(group_number)
-            device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
+            members = self._group_members(group_number)
+            device = GroupVirtualDevice(group_number, members, self.uid, self.bus_name)
             self.logger.debug(
                 "Adding group virtual device: group=%d mqtt_id=%s",
                 group_number,
@@ -1308,15 +1307,15 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._group_devices_by_number[group_number] = device
 
         for group_number in sorted(active_groups & existing_groups):
-            spec = self._build_group_spec(group_number)
+            members = self._group_members(group_number)
             old_device = self._group_devices_by_number[group_number]
-            if old_device.update_in_place(spec):
+            if old_device.update_in_place(members):
                 continue
             self.logger.debug(
                 "Rebuilding group virtual device: group=%d capabilities or state-set changed",
                 group_number,
             )
-            new_device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
+            new_device = GroupVirtualDevice(group_number, members, self.uid, self.bus_name)
             await self._device_publisher.remove_device(old_device.mqtt_id)
             self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
             await self._publish_virtual_device(new_device)

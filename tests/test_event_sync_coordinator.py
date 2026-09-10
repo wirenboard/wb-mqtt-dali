@@ -77,10 +77,8 @@ from wb.mqtt_dali.events import (
 from wb.mqtt_dali.settle_clock import SettleBasis, SettleClock
 from wb.mqtt_dali.virtual_devices import (
     _SETPOINT_STATE,
-    AggregatedCapabilities,
     GroupStateSource,
     GroupVirtualDevice,
-    collect_group_state_controls,
 )
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
@@ -113,7 +111,8 @@ class _TestGearDevice(DaliDevice):
         self.name = f"dev{short}"
         self._test_controls = list(controls)
         self._test_groups = set(groups)
-        self._test_dt8_handler = dt8_handler
+        # The real field, so dt8_colour_type and dt8_tc_limits report this handler too.
+        self._type8_handler = dt8_handler
         self.rebuild_mqtt_controls()
 
     @property
@@ -122,15 +121,15 @@ class _TestGearDevice(DaliDevice):
 
     @property
     def dt8_handler(self):
-        return self._test_dt8_handler
+        return self._type8_handler
 
     @dt8_handler.setter
     def dt8_handler(self, handler) -> None:
-        self._test_dt8_handler = handler
+        self._type8_handler = handler
         self.rebuild_mqtt_controls()
 
     def _build_mqtt_controls(self):
-        colour = [] if self._test_dt8_handler is None else self._test_dt8_handler.get_mqtt_controls()
+        colour = [] if self._type8_handler is None else self._type8_handler.get_mqtt_controls()
         return [*self._test_controls, *colour]
 
 
@@ -210,18 +209,10 @@ async def _make_colour_handler(colour_type: ColourType) -> Type8Parameters:
     return handler
 
 
-def _group_with_member(member, capabilities=None) -> GroupVirtualDevice:
+def _group_with_member(member) -> GroupVirtualDevice:
     """The group virtual device of group 2, composed from ``member`` as its only candidate."""
     member.is_initialized = True
-    templates, candidates = collect_group_state_controls([member])
-    return GroupVirtualDevice(
-        mqtt_id="group-2",
-        name="Group 2",
-        capabilities=capabilities if capabilities is not None else AggregatedCapabilities(),
-        group_number=2,
-        state_control_templates=templates,
-        state_candidates=candidates,
-    )
+    return GroupVirtualDevice(2, [member], "bus", "Bus")
 
 
 def _published(publisher) -> dict:
@@ -1047,7 +1038,7 @@ async def test_group_topic_single_publish():
     the same value — so the group card's setpoints track the member whose state it shows."""
     handler = await _make_colour_handler(ColourType.RGBWAF)
     member = _colour_device(handler, short=3, groups={2})
-    group_device = _group_with_member(member, AggregatedCapabilities(has_dt8_rgbwaf=True))
+    group_device = _group_with_member(member)
     coordinator, publisher = _coordinator([member], group_devices={2: group_device})
 
     await coordinator.apply_commands([DAPC(GearGroup(2), 200)])

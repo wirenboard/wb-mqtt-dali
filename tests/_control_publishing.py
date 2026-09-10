@@ -32,7 +32,7 @@ async def publish_events(control: MqttControlBase, events: Iterable[BusEvent]) -
     device = Device(client, _DEVICE_MQTT_ID, "wb-mqtt-dali")
     control_id = control.control_info.id
     state = control.control_info.state
-    await device.create_control(control_id, state.meta, state.value, state.publish_policy)
+    await device.create_control(control_id, state)
     client.publish.reset_mock()
 
     for event in events:

@@ -263,7 +263,8 @@ async def _initialize(
         # Stub GroupsParam.read so we don't need to mock the bus protocol
         stack.enter_context(patch.object(GroupsParam, "read", new=AsyncMock(return_value={"groups": []})))
 
-        return await device._initialize_impl(driver)
+        initialization = await device._initialize_impl(driver)
+        return initialization.parameter_handlers, initialization.group_parameter_handlers
 
 
 def _find_dimming_curve_param(handlers) -> Optional[DimmingCurveParam]:

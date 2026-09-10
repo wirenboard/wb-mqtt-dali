@@ -12,6 +12,7 @@ from typing import (
     Any,
     Awaitable,
     Callable,
+    Iterable,
     Optional,
     Protocol,
     Union,
@@ -40,7 +41,7 @@ from .wbdali_utils import (
     query_response,
     send_commands_with_retry,
 )
-from .wbmqtt import ControlError
+from .wbmqtt import ControlError, ControlMeta, is_alarm, value_is_retained
 
 
 class NotifyResult(Enum):
@@ -688,6 +689,63 @@ class GeneralMemoryParams(SettingsParamBase):
                 dst[param] = value
 
 
+@dataclass
+class InitializationResult:
+    parameter_handlers: list[SettingsParamBase]
+    group_parameter_handlers: list[SettingsParamBase]
+    mqtt_controls: list[MqttControlBase]
+
+
+def _value_fits_meta(value: Optional[str], meta: ControlMeta) -> bool:
+    if value is None:
+        return True
+    try:
+        numeric = float(value)
+    except ValueError:
+        return True
+    if meta.minimum is not None and numeric < meta.minimum:
+        return False
+    return meta.maximum is None or numeric <= meta.maximum
+
+
+def _carry_state_across_rebuild(old: Optional[MqttControlBase], new: MqttControlBase) -> None:
+    """Move the value, the error and an alarm's title from the control being replaced."""
+    if old is None:
+        return
+    if not value_is_retained(new.control_info.state.meta):
+        return
+    new.control_info.state.error = old.control_info.state.error
+    if not _value_fits_meta(old.control_info.state.value, new.control_info.state.meta):
+        return
+    new.control_info.state.value = old.control_info.state.value
+    if is_alarm(new.control_info.state.meta):
+        new.control_info.state.meta.title = old.control_info.state.meta.title
+
+
+def notify_controls(
+    controls: Iterable[MqttControlBase], event: BusEvent, logger: logging.Logger
+) -> list[MqttControlBase]:
+    """Dispatch ``event`` to each control; returns the ones that asked to be published.
+
+    One control raising must not truncate the fan-out: the rest would silently miss the event.
+    """
+    to_publish = []
+    for control in controls:
+        try:
+            if control.notify(event) is NotifyResult.PUBLISH_STATE:
+                to_publish.append(control)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Control %s failed to handle %s: %s",
+                control.control_info.id,
+                type(event).__name__,
+                exc,
+                # Our own bug: without the traceback, which branch blew up is unknowable.
+                exc_info=True,
+            )
+    return to_publish
+
+
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
     _common_schema = {}
 
@@ -784,11 +842,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         async with self._initialize_lock:
             if self.is_initialized:
                 return
-            [parameter_handlers, group_parameter_handlers] = await self._initialize_impl(driver)
-            parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
-            self._parameter_handlers = parameter_handlers
-            self._group_parameter_handlers = group_parameter_handlers
-            self.rebuild_mqtt_controls()
+            initialization = await self._initialize_impl(driver)
+            initialization.parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
+            self._parameter_handlers = initialization.parameter_handlers
+            self._group_parameter_handlers = initialization.group_parameter_handlers
+            self._install_mqtt_controls(initialization.mqtt_controls)
             self.is_initialized = True
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
@@ -872,12 +930,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return ApplyResult(needs_mqtt_controls_refresh=needs_refresh)
 
     def rebuild_mqtt_controls(self) -> None:
-        self.reset_polling_state()
-        mqtt_controls = self._build_mqtt_controls()
-        self._controls.clear()
-        for control in mqtt_controls:
-            self._controls[control.control_info.id] = control
-        self._pollables = self._build_pollables()
+        previous = dict(self._controls)
+        self._install_mqtt_controls(self._build_mqtt_controls())
+        for control_id, control in self._controls.items():
+            _carry_state_across_rebuild(previous.get(control_id), control)
 
     def get_mqtt_controls(self) -> list[ControlInfo]:
         if not self.is_initialized:
@@ -890,26 +946,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return self._controls.get(control_id)
 
     def notify_all(self, event: BusEvent) -> list[MqttControlBase]:
-        """Dispatch ``event`` to every control; returns the ones that asked to be published.
-
-        One control raising must not truncate the fan-out: the rest would silently miss the
-        event.
-        """
-        to_publish = []
-        for control in self._controls.values():
-            try:
-                if control.notify(event) is NotifyResult.PUBLISH_STATE:
-                    to_publish.append(control)
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                self.logger.warning(
-                    "Control %s failed to handle %s: %s",
-                    control.control_info.id,
-                    type(event).__name__,
-                    exc,
-                    # Our own bug: without the traceback, which branch blew up is unknowable.
-                    exc_info=True,
-                )
-        return to_publish
+        """Dispatch ``event`` to every control; returns the ones that asked to be published."""
+        return notify_controls(self._controls.values(), event, self.logger)
 
     def get_group_state_controls(self) -> list[MqttControlBase]:
         if not self.is_initialized:
@@ -1027,17 +1065,23 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return []
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        """The control set the device should have now, built fresh: a rebuild calls this to pick up
+        meta the device's settings have moved since."""
         return []
 
-    def _build_pollables(self) -> list[Pollable]:
-        return [c for c in self._controls.values() if isinstance(c, Pollable)]
+    def _build_pollables(self, mqtt_controls: list[MqttControlBase]) -> list[Pollable]:
+        return [c for c in mqtt_controls if isinstance(c, Pollable)]
 
-    async def _initialize_impl(
-        self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
+    async def _initialize_impl(self, driver: WBDALIDriver) -> InitializationResult:
         raise NotImplementedError()
 
     # --- Private ---
+
+    def _install_mqtt_controls(self, mqtt_controls: list[MqttControlBase]) -> None:
+        """Make the given set the device's control set, dropping whatever it had."""
+        self.reset_polling_state()
+        self._controls = {control.control_info.id: control for control in mqtt_controls}
+        self._pollables = self._build_pollables(mqtt_controls)
 
     def _refresh_round_snapshot(self, now: float) -> None:
         for pollable in self._pollables:

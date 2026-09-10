@@ -51,7 +51,12 @@ from dali.device.general import (
     SetPrimaryInstanceGroup,
 )
 
-from .common_dali_device import DaliDeviceBase, MqttControlBase, PropertyStartOrder
+from .common_dali_device import (
+    DaliDeviceBase,
+    InitializationResult,
+    MqttControlBase,
+    PropertyStartOrder,
+)
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_controls import (
     get_absolute_input_device_controls,
@@ -728,9 +733,7 @@ class Dali2Device(DaliDeviceBase):
             )
         return mqtt_controls
 
-    async def _initialize_impl(
-        self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
+    async def _initialize_impl(self, driver: WBDALIDriver) -> InitializationResult:
         addr = DeviceShort(self.address.short)
         await self._groups_parameter.read(driver, addr, self.logger)
 
@@ -763,4 +766,4 @@ class Dali2Device(DaliDeviceBase):
         ]
         parameter_handlers.extend(self.instances.values())
 
-        return (parameter_handlers, [])
+        return InitializationResult(parameter_handlers, [], self._build_mqtt_controls())

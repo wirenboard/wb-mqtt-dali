@@ -1,3 +1,15 @@
+wb-mqtt-dali (1.30.0) stable; urgency=medium
+
+  * Publish every device and group with its real state at once, instead of builder defaults
+    until the first poll; a control that could not be read carries /meta/error=r from that
+    same publish.
+  * Keep control values and errors when the control set is rebuilt on a colour-temperature
+    limits change.
+  * Publish nothing to a pushbutton's value topic when its control appears or goes away, so
+    republishing a device no longer looks like a press.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 08 Sep 2026 19:30:00 +0500
+
 wb-mqtt-dali (1.29.0) stable; urgency=medium
 
   * The internal logic of polling devices and publishing their state has changed.

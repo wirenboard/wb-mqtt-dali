@@ -467,6 +467,43 @@ class TestDevicePublisher:
         assert "dev1/ctrl2" not in publisher._control_handlers
 
     @pytest.mark.asyncio
+    async def test_add_control_publishes_a_seeded_read_error_after_the_value(self, publisher, mock_client):
+        """A ControlInfo arriving with state.error is published with /meta/error=r in the same
+        single publish, after the value."""
+        device_info = DeviceInfo(
+            "dev1",
+            "Device 1",
+            [ControlInfo("ctrl1", ControlState(ControlMeta("value", "Control 1"), "", ControlError.READ))],
+        )
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        published = [(call.args[0], call.args[1]) for call in mock_client.publish.await_args_list]
+        assert ("/devices/dev1/controls/ctrl1/meta/error", "r") in published
+        value_topic = "/devices/dev1/controls/ctrl1"
+        assert published.index(("/devices/dev1/controls/ctrl1/meta/error", "r")) > [
+            topic for topic, _ in published
+        ].index(value_topic)
+
+    @pytest.mark.asyncio
+    async def test_add_control_publishes_no_value_for_a_pressed_button(self, publisher, mock_client):
+        """A button whose state still holds the last press (a republish after an mqtt_id change)
+        is declared without touching its value topic."""
+        device_info = DeviceInfo(
+            "dev1",
+            "Device 1",
+            [ControlInfo("off", ControlState(ControlMeta("pushbutton", "Off"), "1"))],
+        )
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        published = [call.args[0] for call in mock_client.publish.await_args_list]
+        assert "/devices/dev1/controls/off/meta" in published
+        assert "/devices/dev1/controls/off" not in published
+
+    @pytest.mark.asyncio
     async def test_add_control_with_all_fields(self, publisher):
         # pylint: disable=protected-access
         device_info = DeviceInfo(

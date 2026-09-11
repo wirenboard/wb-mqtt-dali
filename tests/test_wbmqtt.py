@@ -314,6 +314,20 @@ class TestDevice:
         )
 
     @pytest.mark.asyncio
+    async def test_creating_a_pushbutton_publishes_only_its_meta(self, mock_client, mock_dispatcher):
+        """A button has no state to declare: a payload on its value topic would read as a press,
+        so creating one publishes the meta alone - even when a past press is passed as its value."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        mock_client.publish.reset_mock()
+
+        await device.create_control("off", ControlMeta(control_type="pushbutton"), "1")
+
+        assert [call.args[0] for call in mock_client.publish.await_args_list] == [
+            "/devices/test_device/controls/off/meta"
+        ]
+
+    @pytest.mark.asyncio
     async def test_pushbutton_publishes_every_update_unretained_without_a_policy(
         self, mock_client, mock_dispatcher
     ):
@@ -617,6 +631,22 @@ class TestDevice:
         mock_client.publish.assert_any_call(
             "/devices/test_device/controls/ctrl1/meta", None, qos=2, retain=True
         )
+
+    @pytest.mark.asyncio
+    async def test_removing_a_pushbutton_leaves_its_value_topic_alone(self, mock_client, mock_dispatcher):
+        """Removal clears the button's meta topics, but its value topic holds nothing to delete
+        and an empty payload there would read as a press."""
+        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        await device.initialize()
+        await device.create_control("off", ControlMeta(control_type="pushbutton"), "")
+        mock_client.publish.reset_mock()
+
+        await device.remove_control("off")
+
+        assert [call.args[0] for call in mock_client.publish.await_args_list] == [
+            "/devices/test_device/controls/off/meta/error",
+            "/devices/test_device/controls/off/meta",
+        ]
 
     @pytest.mark.asyncio
     async def test_remove_control_nonexistent(self, mock_client, mock_dispatcher):

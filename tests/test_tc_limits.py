@@ -17,6 +17,7 @@ from wb.mqtt_dali.common_dali_device import (
     ApplyResult,
     DaliDeviceAddress,
     DaliDeviceBase,
+    InitializationResult,
     MqttControl,
     MqttControlBase,
     NotifyResult,
@@ -551,7 +552,7 @@ class _TestDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribut
         return self._mqtt_controls_factory()
 
     async def _initialize_impl(self, driver):
-        return (self._extra_param_handlers, [])
+        return InitializationResult(self._extra_param_handlers, [], self._build_mqtt_controls())
 
 
 def _make_device(**kwargs):

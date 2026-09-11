@@ -59,6 +59,24 @@ def make_loop_controller() -> ApplicationController:
     return controller
 
 
+def make_group_controller(dali_devices, publisher) -> ApplicationController:
+    """Bare controller with only what the group-publish path touches.
+
+    `_refresh_group_virtual_devices` never looks at the broadcast device, so it is omitted.
+    """
+    # pylint: disable=protected-access
+    controller = ApplicationController.__new__(ApplicationController)
+    controller.uid = "bus_1"
+    controller.bus_name = "Bus 1"
+    controller.logger = logging.getLogger("test.group")
+    controller._run_on_topic_handler = MagicMock()
+    controller._device_publisher = publisher
+    controller._devices_by_mqtt_id = {}
+    controller._group_devices_by_number = {}
+    controller.dali_devices = list(dali_devices)
+    return controller
+
+
 def make_bare_gateway(
     command_registry: Optional[Dict[str, CommandInfo]] = None,
     config: Optional[dict] = None,

@@ -276,6 +276,8 @@ class DevicePublisher:
         await device.create_control(
             control_info.id, control_info.state.meta, value, control_info.state.publish_policy
         )
+        if control_info.state.error:
+            await device.set_control_error(control_info.id, control_info.state.error)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

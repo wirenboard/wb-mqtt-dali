@@ -1447,6 +1447,35 @@ async def test_dali2_feedback_runtime_init_survives_discovery_no_answer():
     assert all(not cid.startswith("stop_feedback") for cid in ids)
 
 
+@pytest.mark.asyncio
+async def test_dali2_init_stores_the_controls_of_its_discovered_instances():
+    """Initialization leaves the device holding its controls, not just able to build them: an
+    occupancy instance is discovered and its controls are what the device publishes."""
+    device = _bare_dali2_device(short=41)
+    silent_script = {
+        QueryFeatureType: [_numeric(FEATURE_TYPE_NONE)],
+        QueryNextFeatureType: [_numeric(FEATURE_TYPE_NONE)],
+    }
+    driver = FakeDriver(
+        num_instances=1,
+        instance_types={0: 3},  # occupancy
+        per_instance={0: silent_script},
+        device_level=silent_script,
+    )
+
+    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general:
+        general_handler = MagicMock()
+        general_handler.read = AsyncMock(return_value={})
+        general_handler.get_schema = MagicMock(return_value={})
+        mock_general.return_value = general_handler
+        await device.initialize(driver)
+
+    assert [c.id for c in device.get_mqtt_controls()] == [
+        c.control_info.id for c in device._build_mqtt_controls()
+    ]
+    assert device.get_mqtt_controls(), "occupancy instance should contribute controls"
+
+
 # ----------------------------------------------------------------------------
 # CLI registry / parser (FF24.F32 prefix)
 # ----------------------------------------------------------------------------

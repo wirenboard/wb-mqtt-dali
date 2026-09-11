@@ -510,14 +510,7 @@ class TestRefreshGroupVirtualDevices:
         dev = _make_device(groups=[1])
         ctrl = _make_controller(dali_devices=[dev])
         # Manually pre-populate group 2
-        old_device = GroupVirtualDevice(
-            mqtt_id="bus_1_group_02",
-            name="Bus 1 Group 2",
-            capabilities=AggregatedCapabilities(),
-            group_number=2,
-            state_control_templates={},
-            state_candidates={},
-        )
+        old_device = GroupVirtualDevice(2, [], "bus_1", "Bus 1")
         ctrl._group_devices_by_number[2] = old_device
         ctrl._devices_by_mqtt_id[old_device.mqtt_id] = old_device
 
@@ -1191,15 +1184,7 @@ def _member(short_address: int) -> "_GroupMemberDevice":
 
 
 def _group_of(*members: "_GroupMemberDevice") -> GroupVirtualDevice:
-    templates, candidates = collect_group_state_controls(list(members))
-    return GroupVirtualDevice(
-        mqtt_id="bus_1_group_01",
-        name="Bus 1 Group 1",
-        capabilities=AggregatedCapabilities(),
-        group_number=1,
-        state_control_templates=templates,
-        state_candidates=candidates,
-    )
+    return GroupVirtualDevice(1, list(members), "bus_1", "Bus 1")
 
 
 def _group_value(group: GroupVirtualDevice, control_id: str) -> Optional[str]:
@@ -1336,15 +1321,7 @@ async def test_group_state_records_member_failure_from_event():
     """A group of one real member: its successful level read reaches the group topic through
     the event path, and the failed one leaves `/meta/error=r` without repainting the value."""
     member = _GroupMemberDevice(group_number=1)
-    templates, candidates = collect_group_state_controls([member])
-    group_device = GroupVirtualDevice(
-        mqtt_id="bus_1_group_01",
-        name="Bus 1 Group 1",
-        capabilities=AggregatedCapabilities(),
-        group_number=1,
-        state_control_templates=templates,
-        state_candidates=candidates,
-    )
+    group_device = GroupVirtualDevice(1, [member], "bus_1", "Bus 1")
     publisher = AsyncMock()
     mirror = EventSyncCoordinator(
         publisher=publisher,

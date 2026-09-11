@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import sys
 from enum import IntEnum
+from timeit import default_timer
 from typing import Optional
 
 from dali.address import Address, GearShort
@@ -17,8 +19,10 @@ from dali.gear.general import (
 from .common_dali_device import (
     DaliDeviceAddress,
     DaliDeviceBase,
+    InitializationResult,
     MqttControlBase,
     Pollable,
+    notify_controls,
 )
 from .dali_common_parameters import (
     FadeTimeFadeRateParam,
@@ -56,6 +60,7 @@ from .dali_type49_parameters import Type49Parameters
 from .dali_type50_parameters import Type50Parameters
 from .dali_type51_parameters import Type51Parameters
 from .dali_type52_parameters import Type52Parameters
+from .events import BusEvent
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase
 from .wbdali import WBDALIDriver
@@ -126,6 +131,12 @@ def query_device_types_sequence(addr: Address):
             raise RuntimeError("Device type received out of order")
         result.append(r.raw_value.as_integer)
         last_seen = r.raw_value.as_integer
+
+
+def _pollable_name(pollable: Pollable) -> str:
+    if isinstance(pollable, MqttControlBase):
+        return pollable.control_info.id
+    return type(pollable).__name__
 
 
 class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
@@ -240,13 +251,13 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
             control.control_info.state.meta.order = i
         return mqtt_controls
 
-    def _build_pollables(self) -> list[Pollable]:
-        readable_controls = [c for c in self._controls.values() if isinstance(c, Pollable)]
+    def _build_pollables(self, mqtt_controls: list[MqttControlBase]) -> list[Pollable]:
+        readable_controls = [c for c in mqtt_controls if isinstance(c, Pollable)]
         return [*readable_controls, *self._standalone_pollables]
 
     async def _initialize_impl(  # pylint: disable=too-many-branches
         self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
+    ) -> InitializationResult:
         address = GearShort(self.address.short)
 
         types = await driver.run_sequence(query_device_types_sequence(address))
@@ -344,9 +355,46 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
                 if self._type8_handler is not None:
                     group_parameter_handlers.extend(self._type8_handler.get_group_parameters())
 
-        return (parameter_handlers, group_parameter_handlers)
+        # Built and read here: the set depends on what the type loop found on the bus.
+        mqtt_controls = self._build_mqtt_controls()
+        await self._read_initial_control_state(driver, mqtt_controls)
+        return InitializationResult(parameter_handlers, group_parameter_handlers, mqtt_controls)
 
     # --- Private ---
+
+    async def _read_initial_control_state(
+        self, driver: WBDALIDriver, mqtt_controls: list[MqttControlBase]
+    ) -> None:
+        """Read current state into the controls just built, before they are installed; never fatal."""
+        now = default_timer()
+        address = self._compat.getAddress(self.address.short)
+        events: list[BusEvent] = []
+
+        async def drain(pollable: Pollable) -> None:
+            while True:
+                step = pollable.next_poll_step(driver, address, sys.maxsize, sys.maxsize, now, self.logger)
+                if step.poll_coroutine is None:
+                    return
+                events.extend(await step.poll_coroutine())
+                if not step.has_more:
+                    return
+
+        pollables = self._build_pollables(mqtt_controls)
+        outcomes = await asyncio.gather(*(drain(p) for p in pollables), return_exceptions=True)
+        for pollable, outcome in zip(pollables, outcomes):
+            if isinstance(outcome, BaseException):
+                self.logger.warning(
+                    "Initial read of %s failed for %s: %s",
+                    _pollable_name(pollable),
+                    self.name,
+                    outcome,
+                    # Ordinary read failures never reach here, so this is our own bug.
+                    exc_info=outcome,
+                )
+                pollable.cancel_pending_poll()
+        # Dispatched like any other poll outcome, so the setpoints mirror what was read too.
+        for event in events:
+            notify_controls(mqtt_controls, event, self.logger)
 
     def _scene_level_source(self) -> Optional[SceneLevelSource]:
         # DT8 keeps scene levels on its colour scenes; other gear on ScenesParam.

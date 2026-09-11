@@ -14,7 +14,7 @@ from wb.mqtt_dali.application_controller import (
 )
 
 # pylint: disable=too-many-public-methods
-from wb.mqtt_dali.common_dali_device import MqttControl
+from wb.mqtt_dali.common_dali_device import ControlsPollRequestResult, MqttControl
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.device_init_scheduler import (
@@ -252,6 +252,9 @@ def _make_mock_device(mqtt_id="dev_1", name="DALI 1", is_initialized=False):
     device.initialize = AsyncMock()
     device.get_mqtt_controls = MagicMock(return_value=[])
     device.get_common_mqtt_controls = MagicMock(return_value=[])
+    # Initial read drains poll_controls: an empty, already-drained round reads nothing.
+    device.poll_controls = MagicMock(return_value=ControlsPollRequestResult(has_more=False))
+    device.get_mqtt_control = MagicMock(return_value=None)
     device.set_logger = MagicMock()
     device.time_until_next_poll = MagicMock(return_value=1.0)
     return device
@@ -384,6 +387,7 @@ def _make_controller():
     ctrl._fetch_scheduler = SettingsFetchScheduler()
     ctrl._device_publisher = _make_publisher()
     ctrl._dev = AsyncMock()
+    ctrl._event_sync = AsyncMock()
     ctrl._handle_on_topic = MagicMock()
     ctrl.dali_devices = []
     ctrl.dali2_devices = []

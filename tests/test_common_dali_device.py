@@ -11,6 +11,7 @@ from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.common_dali_device import (
     DaliDeviceAddress,
     DaliDeviceBase,
+    InitializationResult,
     NotifyResult,
     Pollable,
 )
@@ -229,7 +230,7 @@ class ConcreteDaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-a
         super().__init__(*args, **kwargs)
 
     async def _initialize_impl(self, driver):
-        return (self._extra_param_handlers, [])
+        return InitializationResult(self._extra_param_handlers, [], self._build_mqtt_controls())
 
 
 def _make_device(**kwargs):

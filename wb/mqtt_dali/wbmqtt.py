@@ -31,6 +31,10 @@ class TranslatedTitle:
         return not self.en and not self.ru
 
 
+def as_translated_title(title: Optional[Union[str, TranslatedTitle]]) -> Optional[TranslatedTitle]:
+    return TranslatedTitle(en=title) if isinstance(title, str) else title
+
+
 class ControlMeta:  # pylint: disable=too-many-instance-attributes, too-few-public-methods, too-many-arguments, R0917
     def __init__(
         self,
@@ -44,10 +48,7 @@ class ControlMeta:  # pylint: disable=too-many-instance-attributes, too-few-publ
         units: Optional[str] = None,
     ) -> None:
         self.control_type = control_type
-        if isinstance(title, str):
-            self.title: Optional[TranslatedTitle] = TranslatedTitle(en=title)
-        else:
-            self.title: Optional[TranslatedTitle] = title
+        self.title: Optional[TranslatedTitle] = as_translated_title(title)
         self.read_only = read_only
         self.order = order
         self.enum = enum
@@ -85,15 +86,19 @@ class ControlError(Flag):
 
 
 PUSHBUTTON_CONTROL_TYPE = "pushbutton"
+ALARM_CONTROL_TYPE = "alarm"
 
 
 def is_pushbutton(meta: ControlMeta) -> bool:
     return meta.control_type == PUSHBUTTON_CONTROL_TYPE
 
 
-def _is_momentary(meta: ControlMeta) -> bool:
-    """Whether the control's value is an event: published without retain and never deduplicated."""
-    return meta.control_type == PUSHBUTTON_CONTROL_TYPE
+def is_alarm(meta: ControlMeta) -> bool:
+    return meta.control_type == ALARM_CONTROL_TYPE
+
+
+def value_is_retained(meta: ControlMeta) -> bool:
+    return meta.control_type != PUSHBUTTON_CONTROL_TYPE
 
 
 class PublishPolicy(Enum):
@@ -117,7 +122,7 @@ class ControlState:
 
 
 def _publishes_every_update(control: ControlState) -> bool:
-    return control.publish_policy is PublishPolicy.ALWAYS or _is_momentary(control.meta)
+    return control.publish_policy is PublishPolicy.ALWAYS or not value_is_retained(control.meta)
 
 
 class Device:
@@ -132,10 +137,7 @@ class Device:
         self._base_topic = f"/devices/{device_mqtt_name}"
         self._device_mqtt_name = device_mqtt_name
         self._driver_name = driver_name
-        if isinstance(device_title, str):
-            self._device_title: Optional[TranslatedTitle] = TranslatedTitle(en=device_title)
-        else:
-            self._device_title: Optional[TranslatedTitle] = device_title
+        self._device_title: Optional[TranslatedTitle] = as_translated_title(device_title)
         self._controls: dict[str, ControlState] = {}
         self._initialized = False
 
@@ -166,12 +168,14 @@ class Device:
     ) -> None:
         self._controls[mqtt_control_name] = ControlState(meta=meta, value=None, publish_policy=publish_policy)
         await self._publish_control_meta(mqtt_control_name, meta)
-        await self.set_control_value(mqtt_control_name, value)
+        if value_is_retained(meta):
+            await self.set_control_value(mqtt_control_name, value)
 
     async def remove_control(self, mqtt_control_name: str) -> None:
         if mqtt_control_name in self._controls:
-            self._controls.pop(mqtt_control_name)
-            await self._publish(self._get_control_base_topic(mqtt_control_name), None)
+            control = self._controls.pop(mqtt_control_name)
+            if value_is_retained(control.meta):
+                await self._publish(self._get_control_base_topic(mqtt_control_name), None)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta/error", None)
             await self._publish(self._get_control_base_topic(mqtt_control_name) + "/meta", None)
 
@@ -182,7 +186,7 @@ class Device:
                 if await self._publish(
                     self._get_control_base_topic(mqtt_control_name),
                     value,
-                    retain=not _is_momentary(control.meta),
+                    retain=value_is_retained(control.meta),
                 ):
                     control.value = value
             if control.error:
@@ -213,7 +217,7 @@ class Device:
             if await self._publish(f"{topic}/meta/error", None):
                 control.error = error
         if publish_value:
-            if await self._publish(topic, value, retain=not _is_momentary(control.meta)):
+            if await self._publish(topic, value, retain=value_is_retained(control.meta)):
                 control.value = value
         if publish_error and error:
             if await self._publish(f"{topic}/meta/error", error.to_mqtt()):
@@ -234,10 +238,7 @@ class Device:
     async def set_control_title(self, mqtt_control_name: str, title: Union[str, TranslatedTitle]) -> None:
         if mqtt_control_name in self._controls:
             control = self._controls[mqtt_control_name]
-            if isinstance(title, str):
-                title_obj = TranslatedTitle(en=title)
-            else:
-                title_obj = title
+            title_obj = as_translated_title(title)
             if control.meta.title != title_obj:
                 control.meta.title = title_obj
                 await self._publish_control_meta(mqtt_control_name, control.meta)
@@ -255,10 +256,7 @@ class Device:
             logging.debug("Can't set error of undeclared control %s", mqtt_control_name)
 
     async def set_device_title(self, title: Optional[Union[str, TranslatedTitle]]) -> None:
-        if isinstance(title, str):
-            title_obj = TranslatedTitle(en=title)
-        else:
-            title_obj = title
+        title_obj = as_translated_title(title)
         if self._device_title != title_obj:
             self._device_title = title_obj
             await self._publish_device_meta()

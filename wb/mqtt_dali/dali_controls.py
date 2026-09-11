@@ -36,7 +36,13 @@ from .dali_dimming_curve import DimmingCurveState
 from .device_publisher import ControlInfo
 from .events import BusEvent, EventSource, LevelChanged, StatusRead
 from .wbdali_utils import MASK
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import (
+    ALARM_CONTROL_TYPE,
+    ControlError,
+    ControlMeta,
+    ControlState,
+    TranslatedTitle,
+)
 
 AddressFactory = Callable[[int], Union[GearBroadcast, GearGroup, GearShort]]
 
@@ -355,7 +361,9 @@ class ErrorStatusControl(SingleQueryControl):
         super().__init__(
             ControlInfo(
                 "error_status",
-                ControlState(ControlMeta("alarm", TranslatedTitle("Ok", "Норма"), read_only=True), "0"),
+                ControlState(
+                    ControlMeta(ALARM_CONTROL_TYPE, TranslatedTitle("Ok", "Норма"), read_only=True), "0"
+                ),
             ),
             query_builder=QueryStatus,
             poll_interval=PERIODIC_STATUS_POLL_INTERVAL,

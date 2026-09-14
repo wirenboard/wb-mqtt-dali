@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import aiomqtt
 import pytest
+
 from wb.mqtt_dali.wbmqtt import (
     MQTT_PUBLISH_TIMEOUT_S,
     ControlError,

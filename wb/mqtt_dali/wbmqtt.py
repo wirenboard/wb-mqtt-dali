@@ -396,12 +396,15 @@ async def remove_topics_by_driver(
 
 def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
     urlparse_result = urlparse(broker_url)
+    transport = "websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme
+    if transport not in {"tcp", "websockets", "unix"}:
+        raise ValueError(f"Unsupported MQTT URL scheme: {urlparse_result.scheme or '<empty>'}")
     client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
     client_kwargs = {
         "identifier": f"wb-mqtt-dali-{client_id_suffix}",
         "keepalive": MQTT_KEEPALIVE_S,
         "logger": logging.getLogger("mqtt_client"),
-        "transport": "websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
+        "transport": transport,
         "timeout": MQTT_PUBLISH_TIMEOUT_S,
     }
     if urlparse_result.scheme == "unix":

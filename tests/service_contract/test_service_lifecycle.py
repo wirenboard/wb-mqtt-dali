@@ -1,4 +1,6 @@
-"""Regression tests for the default service lifecycle contract."""
+"""
+Regression tests for the default service lifecycle contract.
+"""
 
 import asyncio
 import logging
@@ -6,6 +8,7 @@ import os
 import signal
 import unittest
 from types import SimpleNamespace
+from typing import Optional
 from unittest.mock import patch
 
 import aiomqtt
@@ -14,15 +17,20 @@ from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 
 from wb.mqtt_dali.main import BrokerSessions, default_service
+from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
 
 class FakeClient:
-    def __init__(self, enter_errors=None, stop_requested=None):
+    def __init__(
+        self,
+        enter_errors: Optional[list[Optional[aiomqtt.MqttError]]] = None,
+        stop_requested: Optional[asyncio.Event] = None,
+    ) -> None:
         self._enter_errors = list(enter_errors or [])
         self._stop_requested = stop_requested
         self.enter_calls = 0
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "FakeClient":
         error = self._enter_errors[self.enter_calls] if self.enter_calls < len(self._enter_errors) else None
         self.enter_calls += 1
         if error is not None:
@@ -31,25 +39,25 @@ class FakeClient:
             raise error
         return self
 
-    async def __aexit__(self, exc_type, exc, traceback):
+    async def __aexit__(self, _exc_type: object, _exc: object, _traceback: object) -> bool:
         return False
 
 
 class FakeDispatcher:
-    def __init__(self, drop_connection=False):
+    def __init__(self, drop_connection: bool = False) -> None:
         self.connected = True
         self._drop_connection = drop_connection
 
-    async def connection_restored(self):
+    async def connection_restored(self) -> None:
         self.connected = True
 
-    def connection_lost(self):
+    def connection_lost(self) -> None:
         self.connected = False
 
-    async def replay_retained(self):
-        return None
+    async def replay_retained(self) -> None:
+        pass
 
-    async def run(self):
+    async def run(self) -> None:
         if self._drop_connection:
             self._drop_connection = False
             await asyncio.sleep(0)
@@ -58,20 +66,22 @@ class FakeDispatcher:
 
 
 class FakeGateway:
-    def __init__(self):
+    def __init__(self) -> None:
         self.start_calls = 0
         self.stop_calls = 0
 
-    async def start(self):
+    async def start(self) -> None:
         self.start_calls += 1
 
-    async def stop(self):
+    async def stop(self) -> None:
         self.stop_calls += 1
 
 
 class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
-    async def test_mqtt_authentication_failure_returns_2(self):
-        """Each MQTT v3/v5 authentication refusal stops retries and maps to exit code 2."""
+    async def test_mqtt_authentication_failure_returns_2(self) -> None:
+        """
+        Each MQTT v3/v5 authentication refusal stops retries and maps to exit code 2.
+        """
         for reason_code in (
             4,
             5,
@@ -88,8 +98,10 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(client.enter_calls, 1)
                 self.assertEqual(gateway.stop_calls, 1)
 
-    async def test_non_connect_code_error_remains_retryable(self):
-        """A runtime Paho code matching an old CONNACK value is still retried."""
+    async def test_non_connect_code_error_remains_retryable(self) -> None:
+        """
+        A runtime Paho code matching an old CONNACK value is still retried.
+        """
         client = FakeClient([aiomqtt.MqttCodeError(4), MqttConnectError(135)])
 
         with patch("wb.mqtt_dali.main.RECONNECT_DELAY_S", 0):
@@ -98,8 +110,10 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 2)
         self.assertEqual(client.enter_calls, 2)
 
-    async def test_non_authentication_connack_error_remains_retryable(self):
-        """A non-authentication CONNACK failure is retried until a fatal authentication refusal."""
+    async def test_non_authentication_connack_error_remains_retryable(self) -> None:
+        """
+        A non-authentication CONNACK failure is retried until a fatal authentication refusal.
+        """
         server_unavailable = ReasonCode(PacketTypes.CONNACK, identifier=136)
         client = FakeClient([MqttConnectError(server_unavailable), MqttConnectError(135)])
 
@@ -109,11 +123,13 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 2)
         self.assertEqual(client.enter_calls, 2)
 
-    async def test_invalid_broker_url_returns_2(self):
-        """A malformed MQTT URL is logged and maps to exit code 2."""
+    async def test_invalid_broker_url_returns_2(self) -> None:
+        """
+        A malformed MQTT URL is logged and maps to exit code 2.
+        """
         args = SimpleNamespace(config="test.conf", broker_url="mqtt://user:secret@host")
 
-        def invalid_client_factory(_url):
+        def invalid_client_factory(_url: str) -> FakeClient:
             raise ValueError("No MQTT hostname specified")
 
         with patch("wb.mqtt_dali.main.load_config", return_value={}), patch(
@@ -128,8 +144,10 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Invalid MQTT broker URL", "\n".join(logs.output))
         self.assertNotIn("secret", "\n".join(logs.output))
 
-    async def test_signals_during_config_load_return_0(self):
-        """SIGINT and SIGTERM raised while loading configuration are handled as clean stops."""
+    async def test_signals_during_config_load_return_0(self) -> None:
+        """
+        SIGINT and SIGTERM raised while loading configuration are handled as clean stops.
+        """
         args = SimpleNamespace(config="test.conf", broker_url="mqtt://localhost")
 
         for stop_signal in (signal.SIGINT, signal.SIGTERM):
@@ -137,12 +155,17 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
                 dispatcher = FakeDispatcher()
                 gateway = FakeGateway()
 
-                def interrupt_config(_filepath, signal_to_send=stop_signal):
+                def interrupt_config(
+                    _filepath: str, signal_to_send: signal.Signals = stop_signal
+                ) -> dict[str, list]:
                     os.kill(os.getpid(), signal_to_send)
                     return {"gateways": []}
 
-                def gateway_factory(*_args, gateway_to_use=gateway):
+                def gateway_factory(*_args: object, gateway_to_use: FakeGateway = gateway) -> FakeGateway:
                     return gateway_to_use
+
+                def client_factory(_url: str) -> FakeClient:
+                    return FakeClient()
 
                 with patch("wb.mqtt_dali.main.load_config", side_effect=interrupt_config), patch(
                     "wb.mqtt_dali.main.DaliDatabase", return_value=object()
@@ -152,7 +175,7 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
                     result = await asyncio.wait_for(
                         default_service(
                             args,
-                            client_factory=lambda _url: FakeClient(),
+                            client_factory=client_factory,
                             gateway_factory=gateway_factory,
                         ),
                         timeout=2,
@@ -162,8 +185,10 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(gateway.stop_calls, 1)
                 self.assertIn("test.conf: 0 configured gateway(s)", "\n".join(logs.output))
 
-    async def test_stop_during_outage_reports_uncleared_topics(self):
-        """After a live session, brokerless shutdown reports retained cleanup failure and exits 0."""
+    async def test_stop_during_outage_reports_uncleared_topics(self) -> None:
+        """
+        After a live session, brokerless shutdown reports retained cleanup failure and exits 0.
+        """
         stop_requested = asyncio.Event()
         client = FakeClient(
             [None, aiomqtt.MqttError("connection refused")],
@@ -179,8 +204,10 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gateway.stop_calls, 1)
         self.assertIn("Unable to clear retained MQTT topics", "\n".join(logs.output))
 
-    async def test_stop_during_initial_outage_reports_uncleared_topics(self):
-        """Brokerless shutdown before the first session reports retained cleanup failure and exits 0."""
+    async def test_stop_during_initial_outage_reports_uncleared_topics(self) -> None:
+        """
+        Brokerless shutdown before the first session reports retained cleanup failure and exits 0.
+        """
         stop_requested = asyncio.Event()
         client = FakeClient(
             [aiomqtt.MqttError("connection refused")],
@@ -196,3 +223,10 @@ class TestServiceLifecycle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, 0)
         self.assertEqual(gateway.stop_calls, 1)
         self.assertIn("Unable to clear retained MQTT topics", "\n".join(logs.output))
+
+    def test_unsupported_url_scheme_is_rejected_before_client_creation(self) -> None:
+        """
+        An invalid transport is rejected without constructing a partial MQTT client.
+        """
+        with self.assertRaisesRegex(ValueError, "Unsupported MQTT URL scheme: mqtt"):
+            make_mqtt_client("mqtt://user:secret@localhost:1883")

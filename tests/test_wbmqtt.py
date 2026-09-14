@@ -918,9 +918,3 @@ async def test_make_mqtt_client_bounds_the_wait_for_a_publish():
     built with an explicit timeout instead of aiomqtt's 10 s default. (The client binds the
     running loop at construction, hence the async test.)"""
     assert make_mqtt_client("tcp://localhost:1883").timeout == MQTT_PUBLISH_TIMEOUT_S
-
-
-def test_make_mqtt_client_rejects_unsupported_url_scheme_before_client_creation():
-    """An invalid transport is rejected without constructing a partially initialized client."""
-    with pytest.raises(ValueError, match="Unsupported MQTT URL scheme: mqtt"):
-        make_mqtt_client("mqtt://user:secret@localhost:1883")

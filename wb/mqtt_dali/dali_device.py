@@ -62,6 +62,7 @@ from .dali_type51_parameters import Type51Parameters
 from .dali_type52_parameters import Type52Parameters
 from .events import BusEvent
 from .gtin_db import DaliDatabase
+from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
 from .wbdali import WBDALIDriver
 from .wbdali_utils import (
@@ -148,6 +149,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         gtin_db: DaliDatabase,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
+        on_off: Optional[OnOffConfig] = None,
     ) -> None:
         super().__init__(
             address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
@@ -160,6 +162,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         self._dimming_curve_state = DimmingCurveState()
         self._groups_parameter = GroupsParam()
         self._fade_parameter = FadeTimeFadeRateParam()
+        self._on_off_param = OnOffSettingsParam(on_off)
         # Prediction-input owners shared with the settings page and the background
         # fetch (same instances), read by ActualLevelControl.apply.
         self._max_level_param = MaxLevelParam()
@@ -223,6 +226,11 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         """Owner of the tracked fade-time code (init + sniffed SetFadeTime)."""
         return self._fade_parameter
 
+    @property
+    def on_off_config(self) -> Optional[OnOffConfig]:
+        """``None`` when the device has no on/off block, so no on_off control."""
+        return self._on_off_param.config
+
     # --- Hooks for subclasses ---
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
@@ -234,16 +242,22 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         ]
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
-        mqtt_controls: list[MqttControlBase] = [
-            ErrorStatusControl(),
-            ActualLevelControl(
-                self._dimming_curve_state,
-                max_level=self._max_level_param,
-                min_level=self._min_level_param,
-                scene_source=self._scene_level_source(),
-            ),
-            WantedLevelControl(self._dimming_curve_state),
-        ]
+        mqtt_controls: list[MqttControlBase] = [ErrorStatusControl()]
+        if self.on_off_config is not None:
+            mqtt_controls.append(
+                OnOffControl(self._on_off_param, self._dimming_curve_state, self._fade_parameter)
+            )
+        mqtt_controls.extend(
+            [
+                ActualLevelControl(
+                    self._dimming_curve_state,
+                    max_level=self._max_level_param,
+                    min_level=self._min_level_param,
+                    scene_source=self._scene_level_source(),
+                ),
+                WantedLevelControl(self._dimming_curve_state),
+            ]
+        )
         mqtt_controls.extend(make_controls())
         for type_handler in self._type_handlers:
             mqtt_controls.extend(type_handler.get_mqtt_controls())
@@ -336,6 +350,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
             parameter_handlers.extend([self._scenes_param, PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
             parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
+        parameter_handlers.append(self._on_off_param)
 
         # Group parameter handlers for group settings page in UI
         group_parameter_handlers: list[SettingsParamBase] = [

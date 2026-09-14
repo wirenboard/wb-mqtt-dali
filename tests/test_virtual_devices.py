@@ -121,6 +121,18 @@ def _make_publisher():
     return pub
 
 
+def _add_device(ctrl, device) -> None:
+    """Add gear to a test controller, keeping its registry in step as a real bus does."""
+    ctrl.dali_devices.append(device)
+    ctrl._device_registry.set_gear_devices(ctrl.dali_devices)  # pylint: disable=protected-access
+
+
+def _registry_of(members) -> DeviceRegistry:
+    registry = DeviceRegistry()
+    registry.set_gear_devices(list(members))
+    return registry
+
+
 def _make_controller(dali_devices=None):
     """Create a bare ApplicationController instance with minimal state."""
     ctrl = ApplicationController.__new__(ApplicationController)
@@ -131,6 +143,8 @@ def _make_controller(dali_devices=None):
     ctrl._device_publisher = _make_publisher()  # pylint: disable=protected-access
     ctrl._devices_by_mqtt_id = {}  # pylint: disable=protected-access
     ctrl._group_devices_by_number = {}  # pylint: disable=protected-access
+    ctrl._device_registry = DeviceRegistry()  # pylint: disable=protected-access
+    ctrl._device_registry.set_gear_devices(ctrl.dali_devices)  # pylint: disable=protected-access
     ctrl._broadcast_device = BroadcastVirtualDevice(  # pylint: disable=protected-access
         capabilities=AggregatedCapabilities(),
         mqtt_id_prefix=ctrl.uid,
@@ -510,7 +524,7 @@ class TestRefreshGroupVirtualDevices:
         dev = _make_device(groups=[1])
         ctrl = _make_controller(dali_devices=[dev])
         # Manually pre-populate group 2
-        old_device = GroupVirtualDevice(2, [], "bus_1", "Bus 1")
+        old_device = GroupVirtualDevice(2, DeviceRegistry(), "bus_1", "Bus 1")
         ctrl._group_devices_by_number[2] = old_device
         ctrl._devices_by_mqtt_id[old_device.mqtt_id] = old_device
 
@@ -555,7 +569,7 @@ class TestRefreshGroupVirtualDevices:
                 tc_phys_max_mirek=MAX_TC_MIREK,
             ),
         )
-        ctrl.dali_devices.append(tc_dev)
+        _add_device(ctrl, tc_dev)
 
         await ctrl._refresh_group_virtual_devices()
 
@@ -660,7 +674,7 @@ class TestGroupStateControlComposition:
                 tc_phys_max_mirek=MAX_TC_MIREK,
             ),
         )
-        ctrl.dali_devices.append(tc)
+        _add_device(ctrl, tc)
         await ctrl._refresh_group_virtual_devices()
 
         with_tc_ids = _control_ids_of(ctrl._group_devices_by_number[1])
@@ -676,7 +690,7 @@ class TestGroupStateControlComposition:
         assert "current_white" not in plain_only_ids
 
         rgb = _make_device(groups=[1], mqtt_id="rgb", colour_type=ColourType.RGBWAF)
-        ctrl.dali_devices.append(rgb)
+        _add_device(ctrl, rgb)
         await ctrl._refresh_group_virtual_devices()
 
         with_rgb_ids = _control_ids_of(ctrl._group_devices_by_number[1])
@@ -886,7 +900,7 @@ class TestGroupRebuildOnStateSetChange:
         cast(MagicMock, ctrl._device_publisher).reset_mock()
 
         rgb = _make_device(groups=[1], mqtt_id="rgb", colour_type=ColourType.RGBWAF)
-        ctrl.dali_devices.append(rgb)
+        _add_device(ctrl, rgb)
 
         await ctrl._refresh_group_virtual_devices()
 
@@ -928,7 +942,7 @@ class TestGroupRebuildOnStateSetChange:
         assert "actual_level" not in ids_before
 
         rgb = _make_device(groups=[1], mqtt_id="rgb", colour_type=ColourType.RGBWAF)
-        ctrl.dali_devices.append(rgb)
+        _add_device(ctrl, rgb)
         await ctrl._refresh_broadcast_device()
 
         ids_after = _control_ids_of(ctrl._broadcast_device)
@@ -955,7 +969,7 @@ class TestGroupCandidateInPlaceUpdate:
 
         # Add another initialized member with the same state-control set.
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
-        ctrl.dali_devices.append(d2)
+        _add_device(ctrl, d2)
 
         await ctrl._refresh_group_virtual_devices()
 
@@ -975,7 +989,7 @@ class TestGroupCandidateInPlaceUpdate:
         assert source._state["actual_level"].candidate_statuses["uid-1"] == CandidatePollStatus.SUCCESS
 
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
-        ctrl.dali_devices.append(d2)
+        _add_device(ctrl, d2)
 
         await ctrl._refresh_group_virtual_devices()
 
@@ -1184,7 +1198,7 @@ def _member(short_address: int) -> "_GroupMemberDevice":
 
 
 def _group_of(*members: "_GroupMemberDevice") -> GroupVirtualDevice:
-    return GroupVirtualDevice(1, list(members), "bus_1", "Bus 1")
+    return GroupVirtualDevice(1, _registry_of(members), "bus_1", "Bus 1")
 
 
 def _group_value(group: GroupVirtualDevice, control_id: str) -> Optional[str]:
@@ -1321,7 +1335,7 @@ async def test_group_state_records_member_failure_from_event():
     """A group of one real member: its successful level read reaches the group topic through
     the event path, and the failed one leaves `/meta/error=r` without repainting the value."""
     member = _GroupMemberDevice(group_number=1)
-    group_device = GroupVirtualDevice(1, [member], "bus_1", "Bus 1")
+    group_device = GroupVirtualDevice(1, _registry_of([member]), "bus_1", "Bus 1")
     publisher = AsyncMock()
     mirror = EventSyncCoordinator(
         publisher=publisher,

@@ -20,6 +20,7 @@ from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
+from .on_off_control import on_off_config_from_json, on_off_config_to_json
 from .send_command import (
     CommandInfo,
     build_command_catalog,
@@ -170,12 +171,14 @@ def bus_from_json(
             )
             dali2_devices.append(device)
         else:
+            on_off_conf = dev_conf.get("on_off")
             device = DaliDevice(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
                 gtin_db,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
+                on_off=on_off_config_from_json(on_off_conf) if on_off_conf is not None else None,
             )
             dali_devices.append(device)
 
@@ -186,6 +189,10 @@ def bus_from_json(
         dali2_devices,
         data.get("bus_monitor_enabled", False),
         data.get("bus_monitor_syslog_enabled", False),
+        group_on_off={
+            group_conf["number"]: on_off_config_from_json(group_conf["on_off"])
+            for group_conf in data.get("groups", [])
+        },
     )
 
     res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
@@ -206,6 +213,9 @@ def bus_to_json(bus: ApplicationController) -> dict:
                 bus.dali_devices + bus.dali2_devices,
             )
         ),
+        "groups": [
+            {"id": group.uid, "number": number} for number, group in sorted(bus.group_devices.items())
+        ],
         "commissioning": bus.commissioning_state.to_dict(),
         "bus_monitor_enabled": bus.bus_monitor_enabled,
         "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
@@ -440,6 +450,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         if new_mqtt_id is not None and new_mqtt_id != device.mqtt_id:
             check_mqtt_id_conflict(self.wb_dali_gateways, device, new_mqtt_id)
         await bus.apply_parameters(device, new_params)
+        await self._save_configuration()
         return device.params
 
     async def rescan_bus_rpc_handler(self, params: dict):
@@ -527,12 +538,17 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         group_id = params.get("groupId")
         if group_id is None:
             raise ValueError("groupId parameter is required")
-        new_params = params.get("config", {})
+        new_params = dict(params.get("config", {}))
         bus, group_index = self._get_bus_and_group_index_by_id(group_id)
         if bus is None or group_index is None:
             raise ValueError(f"Group {group_id} not found")
         await bus.apply_group_parameters(group_index, new_params)
-        return {}
+        await self._save_configuration()
+        group_device = bus.group_devices.get(group_index)
+        if group_device is None:
+            # Empty config and schema: the write took the group away, the editor has no page left.
+            return {"config": {}, "schema": {}}
+        return {"config": group_device.params, "schema": group_device.schema}
 
     async def identify_device_rpc_handler(self, params: dict):
         device_id = params.get("deviceId")
@@ -640,17 +656,11 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     def _get_bus_and_group_index_by_id(
         self, group_id: str
     ) -> Tuple[Optional[ApplicationController], Optional[int]]:
-        bus_uid, sep, index_str = group_id.rpartition("_g")
-        if not sep:
-            return None, None
-        try:
-            group_index = int(index_str)
-        except ValueError:
-            return None, None
-        if not 0 <= group_index <= 15:
-            return None, None
-        bus = next((b for b in self._iter_buses() if b.uid == bus_uid), None)
-        return (bus, group_index) if bus is not None else (None, None)
+        for bus in self._iter_buses():
+            for number, group in bus.group_devices.items():
+                if group.uid == group_id:
+                    return bus, number
+        return None, None
 
     def _get_bus_and_device_by_id(
         self, device_id: str
@@ -715,6 +725,24 @@ def get_dict_for_device_config(device: Union[DaliDevice, Dali2Device]) -> dict:
         res["mqtt_id"] = device.mqtt_id
     if device.has_custom_name:
         res["name"] = device.name
+    if isinstance(device, DaliDevice) and device.on_off_config is not None:
+        res["on_off"] = on_off_config_to_json(device.on_off_config)
+    return res
+
+
+def _get_dict_for_bus_config(bus: ApplicationController) -> dict:
+    res: dict = {
+        "devices": [get_dict_for_device_config(dev) for dev in bus.dali_devices + bus.dali2_devices],
+        "bus_monitor_enabled": bus.bus_monitor_enabled,
+        "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
+    }
+    groups = [
+        {"number": number, "on_off": on_off_config_to_json(device.on_off_config)}
+        for number, device in sorted(bus.group_devices.items())
+        if device.on_off_config is not None
+    ]
+    if groups:
+        res["groups"] = groups
     return res
 
 
@@ -735,17 +763,7 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                         "device_id": gw.uid,
                         "websocket_enabled": gw.websocket_enabled,
                         "websocket_port": gw.websocket_port,
-                        "buses": [
-                            {
-                                "devices": [
-                                    get_dict_for_device_config(dev)
-                                    for dev in bus.dali_devices + bus.dali2_devices
-                                ],
-                                "bus_monitor_enabled": bus.bus_monitor_enabled,
-                                "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
-                            }
-                            for bus in gw.buses
-                        ],
+                        "buses": [_get_dict_for_bus_config(bus) for bus in gw.buses],
                     }
                     for gw in gateways
                 ]

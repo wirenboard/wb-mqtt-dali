@@ -4,16 +4,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
 from timeit import default_timer
-from typing import Any, Callable, Coroutine, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Mapping, Optional, Type, Union
 
 import aiomqtt
-from dali.address import (
-    DeviceBroadcast,
-    DeviceShort,
-    GearBroadcast,
-    GearGroup,
-    InstanceNumber,
-)
+from dali.address import DeviceBroadcast, DeviceShort, GearBroadcast, InstanceNumber
 from dali.command import Command, Response, YesNoResponse, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.exceptions import ResponseError
@@ -36,6 +30,7 @@ from .events import BusEvent, Dali2InputEvent
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
+from .on_off_control import OnOffConfig, gear_params_only
 from .send_command import format_command_expression
 from .short_address import set_short_address_sequence
 from .utils import merge_json_schemas
@@ -232,6 +227,7 @@ class ApplicationControllerConfig:
     dali2_devices: list[Dali2Device]
     enable_bus_monitor: bool = False
     enable_bus_monitor_syslog: bool = False
+    group_on_off: dict[int, OnOffConfig] = field(default_factory=dict)
 
 
 class ApplicationControllerTaskType(Enum):
@@ -453,7 +449,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             mqtt_id_prefix=self.uid,
             bus_name=self.bus_name,
         )
-        self._group_devices_by_number: dict[int, GroupVirtualDevice] = {}
+        self._group_devices_by_number: dict[int, GroupVirtualDevice] = {
+            number: self._make_group_device(number, on_off) for number, on_off in config.group_on_off.items()
+        }
 
         self._gtin_db = gtin_db
 
@@ -516,6 +514,10 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         try:
             await self._device_publisher.initialize()
             await self._publish_virtual_device(self._broadcast_device)
+            # Groups configured in the file go out before any ballast has answered: their
+            # settings are all that is known about them until membership is read.
+            for group_device in self._group_devices_by_number.values():
+                await self._publish_virtual_device(group_device)
 
             current_time = default_timer()
             for device in self.dali_devices + self.dali2_devices:
@@ -536,6 +538,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             except Exception:  # pylint: disable=broad-exception-caught
                 self.logger.exception("Error deinitializing WBDALIDriver during start() rollback")
             self._devices_by_mqtt_id.pop(self._broadcast_device.mqtt_id, None)
+            # The group devices stay in the map: they carry the settings a later start() republishes.
+            for group_device in self._group_devices_by_number.values():
+                self._devices_by_mqtt_id.pop(group_device.mqtt_id, None)
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise
@@ -701,13 +706,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_broadcast_device()
 
     async def load_group_info(self, group_index: int) -> dict:
-        res = {}
-        for device in self.dali_devices:
-            if device.is_initialized and group_index in device.groups:
-                handlers = device.get_group_parameter_handlers()
-                for handler in handlers:
-                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
-        return res
+        group_device = self._group_devices_by_number.get(group_index)
+        if group_device is None:
+            raise ValueError(f"Group {group_index} not found")
+        return {"config": group_device.params, "schema": group_device.schema}
+
+    @property
+    def group_devices(self) -> Mapping[int, GroupVirtualDevice]:
+        return self._group_devices_by_number
 
     async def apply_group_parameters(self, group_index: int, new_params: dict) -> None:
         async with self._state_lock:
@@ -785,28 +791,30 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_group_virtual_devices()
 
     async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
-        group_parameter_handlers = []
-        group_parameter_types: set[tuple[str, str]] = set()
-        for device in self.dali_devices:
-            if device.is_initialized and group_index in device.groups:
-                handlers = device.get_group_parameter_handlers()
-                for handler in handlers:
-                    handler_key = (type(handler).__name__, getattr(handler, "property_name", ""))
-                    if handler_key not in group_parameter_types:
-                        group_parameter_types.add(handler_key)
-                        group_parameter_handlers.append(handler)
-        for handler in group_parameter_handlers:
-            await handler.write(self._dev, GearGroup(group_index), new_params)
-        for device in self.dali_devices:
-            if not device.is_initialized or group_index not in device.groups:
+        group_device = self._group_devices_by_number.get(group_index)
+        if group_device is None:
+            raise ValueError(f"Group {group_index} not found")
+        members = self._group_members(group_index)
+        # A member re-reads only what went on the bus; the on/off block is the group's own setting.
+        gear_params = gear_params_only(new_params)
+
+        result = await group_device.apply_parameters(self._dev, new_params)
+
+        for device in members:
+            if not device.is_initialized:
                 continue
             try:
-                if await device.sync_controls_after_broadcast(self._dev, new_params):
+                if await device.sync_controls_after_broadcast(self._dev, gear_params):
                     await self._device_publisher.remove_device(device.mqtt_id)
                     await publish_device(device, self._device_publisher, self._run_on_topic_handler)
                     self._devices_by_mqtt_id[device.mqtt_id] = device
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self.logger.warning("Failed to sync device %s: %s", device.name, exc)
+
+        await self._refresh_group_virtual_devices()
+        group_device = self._group_devices_by_number.get(group_index)
+        if group_device is not None and result.needs_mqtt_controls_refresh:
+            await self._rebuild_group_virtual_device(group_index, group_device)
 
     async def _apply_bus_parameters_task(self, new_params: dict) -> None:
         bus_parameter_handlers = []
@@ -867,6 +875,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 self._gtin_db,
                 mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
                 name=device.name if device.has_custom_name else None,
+                on_off=device.on_off_config,
             )
         else:
             new_device = Dali2Device(
@@ -1219,6 +1228,24 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     def _group_members(self, group_number: int) -> list[DaliDevice]:
         return [d for d in self.dali_devices if group_number in d.groups]
 
+    def _make_group_device(
+        self, group_number: int, on_off_config: Optional[OnOffConfig] = None
+    ) -> GroupVirtualDevice:
+        return GroupVirtualDevice(
+            group_number,
+            self._device_registry,
+            self.uid,
+            self.bus_name,
+            on_off_config=on_off_config,
+        )
+
+    async def _rebuild_group_virtual_device(self, group_number: int, old_device: GroupVirtualDevice) -> None:
+        new_device = self._make_group_device(group_number, old_device.on_off_config)
+        await self._device_publisher.remove_device(old_device.mqtt_id)
+        self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
+        await self._publish_virtual_device(new_device)
+        self._group_devices_by_number[group_number] = new_device
+
     async def _publish_virtual_device(
         self, device: Union[GroupVirtualDevice, BroadcastVirtualDevice]
     ) -> None:
@@ -1286,6 +1313,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         )
 
         for group_number in sorted(existing_groups - active_groups):
+            # An on/off setting keeps its group published; only the editor can take that group away.
+            if self._group_devices_by_number[group_number].on_off_config is not None:
+                continue
             device = self._group_devices_by_number.pop(group_number)
             self.logger.debug(
                 "Removing group virtual device: group=%d mqtt_id=%s",
@@ -1296,8 +1326,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._devices_by_mqtt_id.pop(device.mqtt_id, None)
 
         for group_number in sorted(active_groups - existing_groups):
-            members = self._group_members(group_number)
-            device = GroupVirtualDevice(group_number, members, self.uid, self.bus_name)
+            device = self._make_group_device(group_number)
             self.logger.debug(
                 "Adding group virtual device: group=%d mqtt_id=%s",
                 group_number,
@@ -1307,19 +1336,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._group_devices_by_number[group_number] = device
 
         for group_number in sorted(active_groups & existing_groups):
-            members = self._group_members(group_number)
             old_device = self._group_devices_by_number[group_number]
-            if old_device.update_in_place(members):
+            if old_device.update_in_place():
                 continue
             self.logger.debug(
                 "Rebuilding group virtual device: group=%d capabilities or state-set changed",
                 group_number,
             )
-            new_device = GroupVirtualDevice(group_number, members, self.uid, self.bus_name)
-            await self._device_publisher.remove_device(old_device.mqtt_id)
-            self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
-            await self._publish_virtual_device(new_device)
-            self._group_devices_by_number[group_number] = new_device
+            await self._rebuild_group_virtual_device(group_number, old_device)
 
     async def _refresh_broadcast_device(self) -> None:
         new_caps = self._get_bus_capabilities()

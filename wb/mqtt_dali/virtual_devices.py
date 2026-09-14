@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Sequence
 
 from dali.address import GearBroadcast, GearGroup
 
-from .common_dali_device import MqttControlBase, NotifyResult
+from .common_dali_device import ApplyResult, MqttControlBase, NotifyResult
 from .control_ids import (
     ACTUAL_LEVEL,
     CURRENT_COLOUR_TEMPERATURE,
@@ -18,6 +18,7 @@ from .control_ids import (
 )
 from .control_ids import DAPC as DAPC_ID
 from .control_ids import (
+    ON_OFF,
     PRIMARY_N_MAX,
     SET_COLOUR_TEMPERATURE,
     SET_PRIMARY_N,
@@ -35,7 +36,17 @@ from .dali_type8_rgbwaf import get_mqtt_controls as rgbwaf_mqtt_controls
 from .dali_type8_tc import Type8TcLimits
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_publisher import ControlInfo, TranslatedTitle
+from .device_registry import DeviceRegistry
 from .events import BusEvent
+from .on_off_control import (
+    OnOffConfig,
+    OnOffControl,
+    OnOffSettingsParam,
+    gear_params_only,
+    on_off_config_to_editor_json,
+)
+from .settings import SettingsParamBase
+from .utils import merge_json_schemas
 from .wbdali import WBDALIDriver
 from .wbdali_utils import send_commands_with_retry
 from .wbmqtt import ControlError
@@ -237,14 +248,20 @@ _GROUP_STATE_ANCHOR: dict[ControlId, ControlId] = {
 }
 
 
+def _dimming_state(capabilities: AggregatedCapabilities) -> DimmingCurveState:
+    state = DimmingCurveState()
+    state.curve_type = capabilities.dimming_curve_type
+    return state
+
+
 def build_virtual_device_controls(
     capabilities: AggregatedCapabilities,
     state_controls: Optional[Iterable[MqttControlBase]] = None,
 ) -> dict[ControlId, MqttControlBase]:
-    dimming_state = DimmingCurveState()
-    dimming_state.curve_type = capabilities.dimming_curve_type
-
-    setup_controls: list[MqttControlBase] = [WantedLevelControl(dimming_state), *make_controls()]
+    setup_controls: list[MqttControlBase] = [
+        WantedLevelControl(_dimming_state(capabilities)),
+        *make_controls(),
+    ]
     if capabilities.has_dt8_rgbwaf:
         setup_controls.extend(rgbwaf_mqtt_controls(only_setup_controls=True))
     if capabilities.has_dt8_tc:
@@ -300,6 +317,9 @@ def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilit
     )
 
 
+_ON_OFF_CONTROL_ORDER = 0
+
+
 class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     """Virtual device that aggregates DALI gear in a single group.
 
@@ -308,14 +328,20 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     carries an empty per-control map.
     """
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         group_number: int,
-        members: Sequence[DaliDevice],
+        device_registry: DeviceRegistry,
         mqtt_id_prefix: str,
         bus_name: str,
+        on_off_config: Optional[OnOffConfig] = None,
     ) -> None:
+        self._registry = device_registry
+        self._address = GearGroup(group_number)
+        members = device_registry.resolve(self._address)
         templates, state_candidates = collect_group_state_controls(members)
+        # The Editor-RPC identity of the group
+        self.uid = f"{mqtt_id_prefix}_g{group_number}"
         self.mqtt_id = f"{mqtt_id_prefix}_group_{group_number:02d}"
         self.name = TranslatedTitle(
             f"{bus_name} Group {group_number}",
@@ -328,9 +354,13 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             self.capabilities,
             state_controls=templates.values(),
         )
-        self._address = GearGroup(group_number)
         self._state_config = make_group_state_config(state_candidates)
         self._state_source = GroupStateSource(state_candidates)
+        self._on_off_param = OnOffSettingsParam(on_off_config)
+        if on_off_config is not None:
+            on_off = OnOffControl(self._on_off_param, _dimming_state(self.capabilities))
+            on_off.control_info.state.meta.order = _ON_OFF_CONTROL_ORDER
+            self._controls = {ON_OFF: on_off, **self._controls}
         self._seed_state_from_members(members)
 
     @property
@@ -341,8 +371,28 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     def state_source(self) -> GroupStateSource:
         return self._state_source
 
-    def update_in_place(self, members: Sequence[DaliDevice]) -> bool:
-        """Reconcile this device with ``members`` without republishing if possible.
+    @property
+    def on_off_config(self) -> Optional[OnOffConfig]:
+        """``None`` when the group has no on/off block, so no on_off control."""
+        return self._on_off_param.config
+
+    @property
+    def params(self) -> dict:
+        """Editor config: the group has no setting of its own beyond the on/off block."""
+        return {"on_off": on_off_config_to_editor_json(self.on_off_config)}
+
+    @property
+    def schema(self) -> dict:
+        """Group parameters of the current members, merged, plus the group's own on/off block."""
+        schema: dict = {}
+        for member in self._registry.resolve(self._address):
+            for handler in member.get_group_parameter_handlers():
+                merge_json_schemas(schema, handler.get_schema(group_and_broadcast=True))
+        merge_json_schemas(schema, self._on_off_param.get_schema(group_and_broadcast=True))
+        return schema
+
+    def update_in_place(self) -> bool:
+        """Reconcile this device with its current members without republishing if possible.
 
         Returns ``True`` when the device already matches them or when only the
         candidate lists differ (in which case ``state_config`` and the
@@ -350,6 +400,7 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         MQTT topic layout differs — capabilities mismatch or the set of
         state-control ids changed — and the caller must rebuild the device.
         """
+        members = self._registry.resolve(self._address)
         if self.capabilities != aggregate_capabilities(members):
             return False
         _, state_candidates = collect_group_state_controls(members)
@@ -376,6 +427,8 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             control = self._controls.get(control_id)
             if control is not None and self._take_state(member, event, control_id, control):
                 to_publish.append(control)
+                if control_id == ACTUAL_LEVEL:
+                    to_publish.extend(self._take_on_off(event))
         for control_id, state_id in _SETPOINT_STATE.items():
             control = self._controls.get(control_id)
             if control is not None and self._take_setpoint(member, event, control_id, control, state_id):
@@ -401,6 +454,17 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
                 control.get_setup_commands(self._address, value),
                 self.logger,
             )
+
+    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> ApplyResult:
+        """Writes the members' group parameters, then this group's own on/off setting."""
+        # The setting goes last on purpose: a failed parameter write must leave it untouched.
+        gear_params = gear_params_only(new_values)
+        for handler in self._member_group_handlers(self._registry.resolve(self._address)):
+            await handler.write(driver, self._address, gear_params)
+        written = await self._on_off_param.write(driver, self._address, new_values, self.logger)
+        return ApplyResult(
+            needs_mqtt_controls_refresh=bool(written) and self._on_off_param.requires_mqtt_controls_refresh
+        )
 
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger
@@ -480,6 +544,22 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             group_control.control_info.state.error = ControlError.NONE
             for setpoint_id in _STATE_SETPOINTS.get(control_id, ()):
                 self._seed_setpoint(member, setpoint_id)
+            if control_id == ACTUAL_LEVEL:
+                self._seed_on_off(seeded_value)
+
+    def _take_on_off(self, event: BusEvent) -> list[MqttControlBase]:
+        """The group's on_off follows the level the group has just taken from a member."""
+        control = self._controls.get(ON_OFF)
+        if not isinstance(control, OnOffControl):
+            return []
+        if control.notify(event) is not NotifyResult.PUBLISH_STATE:
+            return []
+        return [control]
+
+    def _seed_on_off(self, level_percent: str) -> None:
+        control = self._controls.get(ON_OFF)
+        if isinstance(control, OnOffControl):
+            control.update_from_percent(level_percent)
 
     def _seed_setpoint(self, member: DaliDevice, setpoint_id: ControlId) -> None:
         """Mirror the member's own setpoint, which already holds the read in the setpoint's terms."""
@@ -504,6 +584,21 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             if control.control_info.state.value is not None:
                 return member, control.control_info.state.value
         return None
+
+    @staticmethod
+    def _member_group_handlers(members: Sequence[DaliDevice]) -> list[SettingsParamBase]:
+        """One handler per parameter: members of the same type would write the same group address."""
+        handlers: list[SettingsParamBase] = []
+        seen: set[tuple[str, str]] = set()
+        for member in members:
+            if not member.is_initialized:
+                continue
+            for handler in member.get_group_parameter_handlers():
+                key = (type(handler).__name__, getattr(handler, "property_name", ""))
+                if key not in seen:
+                    seen.add(key)
+                    handlers.append(handler)
+        return handlers
 
 
 class BroadcastVirtualDevice:

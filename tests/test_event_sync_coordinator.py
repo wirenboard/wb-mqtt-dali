@@ -212,7 +212,9 @@ async def _make_colour_handler(colour_type: ColourType) -> Type8Parameters:
 def _group_with_member(member) -> GroupVirtualDevice:
     """The group virtual device of group 2, composed from ``member`` as its only candidate."""
     member.is_initialized = True
-    return GroupVirtualDevice(2, [member], "bus", "Bus")
+    registry = DeviceRegistry()
+    registry.set_gear_devices([member])
+    return GroupVirtualDevice(2, registry, "bus", "Bus")
 
 
 def _published(publisher) -> dict:

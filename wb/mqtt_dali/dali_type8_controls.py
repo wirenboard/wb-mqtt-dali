@@ -10,7 +10,7 @@ from dali.address import Address
 from dali.command import Command
 
 from .common_dali_device import MqttControl, NotifyResult
-from .dali_type8_common import ColourComponent, is_invalid_component_value
+from .dali_type8_common import ColourComponent, is_unset_component_value
 from .device_publisher import ControlInfo
 from .events import BusEvent, ColourChanged, EventSource
 from .wbmqtt import ControlError
@@ -22,8 +22,8 @@ class ColourComponentControl(MqttControl):
     The colour picture belongs to the DT8 handler, so nothing accumulates here: an event that
     does not carry all of this control's components leaves it alone.
 
-    A component carried empty (the read cycle failed) or at its MASK sentinel (the gear would
-    not name it) is not a measurement: the reading control puts ``ControlError.READ`` on
+    A component carried empty (the read cycle failed) or carrying no colour value (the gear
+    would not name it) is not a measurement: the reading control puts ``ControlError.READ`` on
     itself, while its writable ``set_*`` mirror means "requested", not "measured", and simply
     keeps quiet.
     """
@@ -51,7 +51,7 @@ class ColourComponentControl(MqttControl):
         is_setpoint = self.is_writable()
         if not is_setpoint and event.source is EventSource.OBSERVED and self.control_info.state.error:
             return NotifyResult.NOTHING_TO_PUBLISH
-        if any(raw is None or is_invalid_component_value(c, raw) for c, raw in mine.items()):
+        if any(raw is None or is_unset_component_value(c, raw) for c, raw in mine.items()):
             if is_setpoint:
                 return NotifyResult.NOTHING_TO_PUBLISH
             self.control_info.state.error = ControlError.READ

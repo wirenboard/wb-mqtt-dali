@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.31.0) stable; urgency=medium
+
+  * The wanted colour temperature slider and the colour temperature limits card stay within
+    1000-10000 K, whatever limits the luminaire reports.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 15 Sep 2026 11:20:00 +0500
+
 wb-mqtt-dali (1.30.0) stable; urgency=medium
 
   * Publish every device and group with its real state at once, instead of builder defaults

@@ -47,9 +47,17 @@ from ._on_off_helpers import (
 
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
-_SCHEMA = json.loads(
-    (Path(__file__).resolve().parent.parent / "wb-mqtt-dali.schema.json").read_text(encoding="utf-8")
-)
+
+def _schema_path() -> Path:
+    # Under pybuild the tests run from a build copy, the schema stays in the source root above it.
+    for directory in Path(__file__).resolve().parents:
+        candidate = directory / "wb-mqtt-dali.schema.json"
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("wb-mqtt-dali.schema.json not found above " + __file__)
+
+
+_SCHEMA = json.loads(_schema_path().read_text(encoding="utf-8"))
 
 VALID_ON_OFF = {
     "on_action": {"mode": "level", "percent": 50, "fade_time": 3},

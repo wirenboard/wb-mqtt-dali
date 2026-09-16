@@ -31,7 +31,7 @@ PRIMARY_N_BY_INDEX: dict[int, ColourComponent] = {
 # Component -> the raw "not available / leave unchanged" value (62386-209). Same byte both
 # directions: our own filler for the fields a command does not set when we write it, the gear
 # refusing to name the value when it answers it.
-INVALID_RAW_VALUE: dict[ColourComponent, int] = {
+UNSET_RAW_VALUE: dict[ColourComponent, int] = {
     ColourComponent.RED: MASK,
     ColourComponent.GREEN: MASK,
     ColourComponent.BLUE: MASK,
@@ -45,5 +45,9 @@ INVALID_RAW_VALUE: dict[ColourComponent, int] = {
 }
 
 
-def is_invalid_component_value(component: ColourComponent, value: int) -> bool:
-    return INVALID_RAW_VALUE.get(component) == value
+def is_unset_component_value(component: ColourComponent, value: int) -> bool:
+    """True when the raw value carries no colour information: it is a placeholder, not a reading."""
+    # 62386-209 allows Tc only in 1..65534 mirek; a 0 is not a temperature and has no Kelvin.
+    if component is ColourComponent.COLOUR_TEMPERATURE and value == 0:
+        return True
+    return UNSET_RAW_VALUE.get(component) == value

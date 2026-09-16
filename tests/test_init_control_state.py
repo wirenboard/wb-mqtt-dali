@@ -11,6 +11,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from dali.gear.colour import tc_kelvin_mirek
 from dali.gear.general import QueryActualLevel
 
 from wb.mqtt_dali.application_controller import try_initialize_device
@@ -184,7 +185,10 @@ def _mirrored_control(control_id, default="default"):
 
 def _tc_controls():
     """The real DT8 colour-temperature pair: the state control and the setpoint mirroring it."""
-    return [CurrentColourTemperatureControl(), SetColourTemperatureControl(2000, 6500, 4000)]
+    return [
+        CurrentColourTemperatureControl(),
+        SetColourTemperatureControl(tc_kelvin_mirek(6500), tc_kelvin_mirek(2000)),
+    ]
 
 
 def _tc_read(mirek, failed=False):

@@ -1,3 +1,14 @@
+wb-mqtt-dali (1.33.0) stable; urgency=medium
+
+  * Stop with exit code 2 when the MQTT broker rejects the login instead of reconnecting
+    forever; other connection failures are still retried
+  * Report a broken -b/--broker URL as an argument error (exit code 2) instead of a traceback
+  * SIGINT/SIGTERM during startup end the service with exit code 0
+  * Log an error when the service stops without the broker and cannot remove its retained
+    topics; log the loaded configuration, including an empty one
+
+ -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Thu, 17 Sep 2026 16:38:49 +0000
+
 wb-mqtt-dali (1.32.0) stable; urgency=medium
 
   * Add an on/off control for devices and groups, with a configurable turn-on action

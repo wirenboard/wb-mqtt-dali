@@ -69,6 +69,7 @@ def handle_dapc(short_address: Address, value: str) -> list[Command]:
 
 class ActualLevelControl(SingleQueryControl):
     is_group_state_control = True
+    follows_device_fade = True
 
     def __init__(
         self,
@@ -92,7 +93,6 @@ class ActualLevelControl(SingleQueryControl):
             query_builder=QueryActualLevel,
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
-            startup_reconfirm=True,
         )
         self._dimming_curve_state = dimming_curve_state
         self._max_level = max_level

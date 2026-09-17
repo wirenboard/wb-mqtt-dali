@@ -28,7 +28,6 @@ from dali.gear.general import (
 
 from wb.mqtt_dali.common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
-    EVENT_STARTUP_RECONFIRM_DELAY,
     PERIODIC_STATUS_POLL_INTERVAL,
     NotifyResult,
     SingleQueryControl,
@@ -305,13 +304,12 @@ def _event_control() -> SingleQueryControl:
         query_builder=QueryActualLevel,
         poll_interval=EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval=True,
-        startup_reconfirm=True,
     )
 
 
 def _polled_event_control(at: float) -> SingleQueryControl:
-    """Event control past its first poll, due one exact base interval later — no startup
-    reconfirm, no jitter, so a confirmation has something unambiguous to move."""
+    """Event control past its first poll, due one exact base interval later — no jitter, so a
+    confirmation has something unambiguous to move."""
     control = _event_control()
     control.next_due_at = at + EVENT_RESYNC_BASE_INTERVAL
     return control
@@ -343,53 +341,21 @@ def test_first_read_not_deferred_by_schedule_poll_at():
     assert control.next_due_at == 50.0
 
 
-def test_startup_polls_then_reconfirms_after_settle():
-    """At service start, an event control's first poll fills the topic and schedules one
-    extra confirmation poll at the startup settle delay (in case start caught a transition
-    mid-fade); the next poll then settles to the long re-sync interval. This per-control
-    first-read reconfirm replaces any global READY pass."""
+def test_first_poll_goes_straight_on_the_resync_interval():
+    """The schedule has no startup case of its own: the first poll lands on the re-sync
+    interval like any other. The reconfirm after service start is the device's business."""
     control = _event_control()
     assert control.is_poll_due(0.0) is True
     control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
-    assert control.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
-    # The reconfirm poll itself is not a first poll -> back on the long re-sync interval.
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=6.0)
-    interval = control.next_due_at - 6.0
-    assert EVENT_RESYNC_BASE_INTERVAL * 0.7 <= interval <= EVENT_RESYNC_BASE_INTERVAL * 1.3
-
-
-def test_startup_reconfirm_only_ever_pulls_the_poll_closer():
-    """The reconfirm is a `min`, not an assignment: a pollable whose base interval is shorter
-    than the startup delay keeps its own interval instead of having its first read pushed out.
-    """
-    control = SingleQueryControl(
-        ControlInfo("short", ControlState(ControlMeta(read_only=True), "0")),
-        query_builder=QueryActualLevel,
-        poll_interval=2.0,
-        randomize_poll_interval=True,
-        startup_reconfirm=True,
-    )
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
-    assert control.next_due_at <= 2.0 * 1.3
-
-
-def test_level_and_last_acted_opt_into_the_startup_reconfirm():
-    """The two event controls the coordinator confirms carry `startup_reconfirm`, so a level
-    captured mid-fade at service start is corrected 6 s later, not one re-sync interval later.
-    """
-    for control in (ActualLevelControl(DimmingCurveState()), LastActedControl()):
-        control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
-        assert control.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
+    assert EVENT_RESYNC_BASE_INTERVAL * 0.7 <= control.next_due_at <= EVENT_RESYNC_BASE_INTERVAL * 1.3
 
 
 def test_resync_interval_randomized_within_bounds():
-    """Once the startup reconfirm is consumed, each completed poll re-draws the re-sync
-    interval within base ±30%, and draws differ across controls (no synchronized storm)."""
+    """Each completed poll re-draws the re-sync interval within base ±30%, and draws differ
+    across controls (no synchronized storm)."""
     intervals = set()
     for _ in range(50):
         control = _event_control()
-        # First poll schedules the startup reconfirm; the next lands on the re-sync interval.
-        control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
         control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)
         interval = control.next_due_at - 10.0
         low = EVENT_RESYNC_BASE_INTERVAL * 0.7
@@ -402,8 +368,7 @@ def test_resync_interval_randomized_within_bounds():
 def test_event_param_resynced_after_interval():
     """An event control with no events re-syncs no sooner than its drawn re-sync interval."""
     control = _event_control()
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)  # startup reconfirm
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)  # re-sync interval
+    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)
     interval = control.next_due_at - 10.0
     assert control.is_poll_due(10.0 + interval - 1.0) is False
     assert control.is_poll_due(10.0 + interval + 1.0) is True

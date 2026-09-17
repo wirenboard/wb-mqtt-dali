@@ -397,11 +397,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
 
         pollables = self._build_pollables(mqtt_controls)
         outcomes = await asyncio.gather(*(drain(p) for p in pollables), return_exceptions=True)
-        # A fade started before service start was never seen on the bus, so what was just read
-        # can be mid-transition: re-read once the longest fade it could be is over.
-        reconfirm_at = default_timer() + SettleClock().settle_for(
-            SettleBasis.FADE, self._fade_parameter.fade_time
-        )
+        reconfirm_at = self._startup_reconfirm_moment()
         for pollable, outcome in zip(pollables, outcomes):
             if isinstance(outcome, BaseException):
                 self.logger.warning(
@@ -413,11 +409,21 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
                     exc_info=outcome,
                 )
                 pollable.cancel_pending_poll()
-            elif pollable.follows_device_fade:
+            elif reconfirm_at is not None and pollable.follows_device_fade:
                 pollable.schedule_poll_at(reconfirm_at)
         # Dispatched like any other poll outcome, so the setpoints mirror what was read too.
         for event in events:
             notify_controls(mqtt_controls, event, self.logger)
+
+    def _startup_reconfirm_moment(self) -> Optional[float]:
+        """When to re-read what the fade moves, or None for gear whose fade time is zero.
+
+        A fade started before service start was never seen on the bus, so what the initial read
+        got can be mid-transition. Without a fade the gear is already at its level.
+        """
+        if self._fade_parameter.fade_time == 0:
+            return None
+        return default_timer() + SettleClock().settle_for(SettleBasis.FADE, self._fade_parameter.fade_time)
 
     def _scene_level_source(self) -> Optional[SceneLevelSource]:
         # DT8 keeps scene levels on its colour scenes; other gear on ScenesParam.

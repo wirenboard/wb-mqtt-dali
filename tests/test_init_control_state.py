@@ -1157,6 +1157,18 @@ async def test_startup_reconfirm_waits_out_the_device_fade(make_driver, expected
 
 
 @pytest.mark.asyncio
+async def test_gear_with_no_fade_is_not_reconfirmed():
+    """Fade code 0: the gear jumps to its level, so the initial read already has it and the
+    control stays on its periodic interval."""
+    device = _level_device()
+
+    finished = await _initialize(device, _make_driver_with_fade(0))
+
+    level = device.get_mqtt_control(ACTUAL_LEVEL)
+    assert level.time_until_next_poll(finished) >= EVENT_RESYNC_BASE_INTERVAL * 0.7
+
+
+@pytest.mark.asyncio
 async def test_control_that_does_not_follow_the_fade_keeps_its_own_interval():
     """A control whose value the light transition does not move is left on its periodic
     interval, however long the device's fade is."""

@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, NamedTuple, Optional
+from typing import List, Optional
 
 from dali import command
 from dali.address import Address
@@ -39,7 +39,7 @@ MIN_TC_MIREK = 1
 UI_MIN_TC_K = 1000
 UI_MAX_TC_K = 10000
 
-# The limits for UI if physical limits are not set
+# The UI range: every limit declared to the interface is clamped into it.
 UI_MIN_TC_MIREK = tc_kelvin_mirek(UI_MAX_TC_K)
 UI_MAX_TC_MIREK = tc_kelvin_mirek(UI_MIN_TC_K)
 
@@ -54,13 +54,6 @@ TC_LIMITS_PROPERTY = "tc_limits"
 COLOR_TEMPERATURE_COLOUR_COMPONENTS = [
     ColourComponent.COLOUR_TEMPERATURE,
 ]
-
-
-class TcBounds(NamedTuple):
-    """The Tc bounds a value is clamped to, in mirek."""
-
-    min_mirek: int
-    max_mirek: int
 
 
 @dataclass
@@ -81,17 +74,6 @@ class Type8TcLimits:
         self.tc_max_mirek = tc_max_mirek
         self.tc_phys_min_mirek = tc_phys_min_mirek
         self.tc_phys_max_mirek = tc_phys_max_mirek
-
-    def effective_bounds(self) -> TcBounds:
-        """The user limits, with the UI range standing in for a bound the gear answered MASK for.
-
-        Gear without Tc limit registers answers MASK, and clamping to it would report 15 K
-        for every colour temperature.
-        """
-        return TcBounds(
-            UI_MIN_TC_MIREK if self.tc_min_mirek == MASK_2BYTES else self.tc_min_mirek,
-            UI_MAX_TC_MIREK if self.tc_max_mirek == MASK_2BYTES else self.tc_max_mirek,
-        )
 
     def update_from(self, other: "Type8TcLimits") -> None:
         self.tc_min_mirek = other.tc_min_mirek
@@ -163,7 +145,7 @@ def _set_colour_temperature_commands_builder(short_address: Address, value_k: st
 class _TcControl(ColourComponentControl):
     """Shared Tc representation: the raw mirek published as kelvin.
 
-    Nothing is clamped here: the DT8 handler owns the limits and clamps its predictions.
+    A value is published as the gear named it; only the bounds declared to the UI are clamped.
     """
 
     def __init__(
@@ -204,7 +186,21 @@ class CurrentColourTemperatureControl(_TcControl):
 
 
 class SetColourTemperatureControl(_TcControl):
-    def __init__(self, min_k: int, max_k: int, default_k: int) -> None:
+    def __init__(self, coolest_mirek: int, warmest_mirek: int) -> None:
+        # An unset limit is a large mirek, so its side decides which UI edge stands in for it.
+        if not MIN_TC_MIREK <= coolest_mirek <= MAX_TC_MIREK:
+            coolest_mirek = UI_MIN_TC_MIREK
+        if not MIN_TC_MIREK <= warmest_mirek <= MAX_TC_MIREK:
+            warmest_mirek = UI_MAX_TC_MIREK
+        coolest_mirek = min(max(coolest_mirek, UI_MIN_TC_MIREK), UI_MAX_TC_MIREK)
+        warmest_mirek = min(max(warmest_mirek, UI_MIN_TC_MIREK), UI_MAX_TC_MIREK)
+        if coolest_mirek >= warmest_mirek:
+            coolest_mirek, warmest_mirek = UI_MIN_TC_MIREK, UI_MAX_TC_MIREK
+        min_k = tc_kelvin_mirek(warmest_mirek)
+        max_k = tc_kelvin_mirek(coolest_mirek)
+        default_k = 4000
+        if not min_k < default_k < max_k:
+            default_k = min_k
         super().__init__(
             ControlInfo(
                 SET_COLOUR_TEMPERATURE,
@@ -224,14 +220,7 @@ class SetColourTemperatureControl(_TcControl):
 
 
 def get_wanted_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
-    bounds = limits.effective_bounds()
-    min_k = tc_kelvin_mirek(bounds.max_mirek)
-    max_k = tc_kelvin_mirek(bounds.min_mirek)
-    default_k = 4000
-    if not min_k < default_k < max_k:
-        default_k = min_k
-
-    return [SetColourTemperatureControl(min_k, max_k, default_k)]
+    return [SetColourTemperatureControl(limits.tc_min_mirek, limits.tc_max_mirek)]
 
 
 def get_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
@@ -320,10 +309,10 @@ class TcLimitsSettings(SettingsParamBase):
 
     def _current_values(self) -> dict:
         return {
-            "tc_coolest": self._limits.tc_min_mirek,
-            "tc_warmest": self._limits.tc_max_mirek,
-            "tc_physical_coolest": self._limits.tc_phys_min_mirek,
-            "tc_physical_warmest": self._limits.tc_phys_max_mirek,
+            "tc_coolest": self._shown_limit(self._limits.tc_min_mirek),
+            "tc_warmest": self._shown_limit(self._limits.tc_max_mirek),
+            "tc_physical_coolest": self._shown_limit(self._limits.tc_phys_min_mirek),
+            "tc_physical_warmest": self._shown_limit(self._limits.tc_phys_max_mirek),
         }
 
     async def read(
@@ -481,3 +470,9 @@ class TcLimitsSettings(SettingsParamBase):
                 },
             },
         }
+
+    @staticmethod
+    def _shown_limit(limit_mirek: int) -> int:
+        if limit_mirek == MASK_2BYTES:
+            return MASK_2BYTES
+        return min(max(limit_mirek, UI_MIN_TC_MIREK), UI_MAX_TC_MIREK)

@@ -51,6 +51,7 @@ from wb.mqtt_dali.virtual_devices import (
     build_virtual_device_controls,
     collect_group_state_controls,
 )
+from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
 # ---------------------------------------------------------------------------
@@ -298,6 +299,20 @@ class TestAggregateCapabilities:
         caps = self._agg([d1, d2])
         assert caps.tc_min_mirek == 100  # min of 100, 150
         assert caps.tc_max_mirek == 500  # max of 300, 500
+
+    def test_member_without_a_limit_leaves_the_group_unbounded_on_that_side(self):
+        """An unset limit must reach both sides of the group: its marker is the largest mirek,
+        so a minimum over the raw values would silently drop it."""
+        named = _make_device(
+            colour_type=ColourType.COLOUR_TEMPERATURE,
+            tc_limits=Type8TcLimits(tc_min_mirek=153, tc_max_mirek=370),
+        )
+        unset = _make_device(
+            colour_type=ColourType.COLOUR_TEMPERATURE,
+            tc_limits=Type8TcLimits(tc_min_mirek=MASK_2BYTES, tc_max_mirek=MASK_2BYTES),
+        )
+        caps = self._agg([named, unset])
+        assert (caps.tc_min_mirek, caps.tc_max_mirek) == (MASK_2BYTES, MASK_2BYTES)
 
     def test_tc_device_with_none_limits_uses_zero(self):
         """Device with TC type but no limits object contributes no limit values."""

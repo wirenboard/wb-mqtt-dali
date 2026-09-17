@@ -1,4 +1,4 @@
-wb-mqtt-dali (1.31.0) stable; urgency=medium
+wb-mqtt-dali (1.32.0) stable; urgency=medium
 
   * Add an on/off control for devices and groups, with a configurable turn-on action
     (scene, last active level, level or raw DAPC) and turn-off action (off or DAPC),
@@ -6,7 +6,14 @@ wb-mqtt-dali (1.31.0) stable; urgency=medium
   * Publish a group that has an on/off control from the start of the service, without
     waiting for its ballasts to answer.
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 08 Sep 2026 20:00:00 +0500
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 17 Sep 2026 12:00:00 +0500
+
+wb-mqtt-dali (1.31.0) stable; urgency=medium
+
+  * The wanted colour temperature slider and the colour temperature limits card stay within
+    1000-10000 K, whatever limits the luminaire reports.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 15 Sep 2026 11:20:00 +0500
 
 wb-mqtt-dali (1.30.0) stable; urgency=medium
 

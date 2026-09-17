@@ -41,17 +41,23 @@ from .common_dali_device import (
 from .dali_common_parameters import SCENES_TOTAL
 from .dali_parameters import TypeParameters
 from .dali_type8_common import (
-    INVALID_RAW_VALUE,
+    UNSET_RAW_VALUE,
     ColourComponent,
-    is_invalid_component_value,
+    is_unset_component_value,
 )
-from .dali_type8_tc import TcLimitsSettings, Type8TcLimits
+from .dali_type8_tc import (
+    UI_MAX_TC_MIREK,
+    UI_MIN_TC_MIREK,
+    TcLimitsSettings,
+    Type8TcLimits,
+)
 from .events import BusEvent, ColourChanged, EventSource
 from .settings import SettingsParamBase, SettingsParamName
 from .utils import merge_json_schema_properties, merge_translations
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
+    MASK_2BYTES,
     check_query_response,
     is_broadcast_or_group_address,
     is_transmission_error_response,
@@ -775,7 +781,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         known = {
             component: raw
             for component, raw in self._colour_picture().items()
-            if not is_invalid_component_value(component, raw)
+            if not is_unset_component_value(component, raw)
         }
         if not known:
             return None
@@ -790,7 +796,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         return {
             component: raw
             for component, raw in components.items()
-            if not is_invalid_component_value(component, raw)
+            if not is_unset_component_value(component, raw)
         }
 
     def scene_colour_components(self, scene_index: int) -> dict[ColourComponent, int]:
@@ -952,16 +958,22 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         if ct is None:
             return {}
         return {
-            component: self._colour.get(component, INVALID_RAW_VALUE[component])
+            component: self._colour.get(component, UNSET_RAW_VALUE[component])
             for component in COMPONENTS_BY_COLOUR_TYPE[ct]
         }
 
     def _clamp_tc(self) -> None:
         tc = self._colour.get(ColourComponent.COLOUR_TEMPERATURE)
-        if tc is None or is_invalid_component_value(ColourComponent.COLOUR_TEMPERATURE, tc):
+        if tc is None or is_unset_component_value(ColourComponent.COLOUR_TEMPERATURE, tc):
             return
-        bounds = self._limits.effective_bounds()
-        self._colour[ColourComponent.COLOUR_TEMPERATURE] = min(max(tc, bounds.min_mirek), bounds.max_mirek)
+        # Gear without Tc limit registers answers MASK; clamping to it would report 15 K for every Tc.
+        coolest = self._limits.tc_min_mirek
+        warmest = self._limits.tc_max_mirek
+        if coolest == MASK_2BYTES:
+            coolest = UI_MIN_TC_MIREK
+        if warmest == MASK_2BYTES:
+            warmest = UI_MAX_TC_MIREK
+        self._colour[ColourComponent.COLOUR_TEMPERATURE] = min(max(tc, coolest), warmest)
 
     async def _read_current_colour_type(
         self,

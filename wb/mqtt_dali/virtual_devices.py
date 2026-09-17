@@ -48,7 +48,7 @@ from .on_off_control import (
 from .settings import SettingsParamBase
 from .utils import merge_json_schemas
 from .wbdali import WBDALIDriver
-from .wbdali_utils import send_commands_with_retry
+from .wbdali_utils import MASK_2BYTES, send_commands_with_retry
 from .wbmqtt import ControlError
 
 ControlId = str
@@ -311,7 +311,9 @@ def aggregate_capabilities(devices: Iterable[DaliDevice]) -> AggregatedCapabilit
     return AggregatedCapabilities(
         has_dt8_rgbwaf=has_rgbwaf,
         has_dt8_tc=has_tc,
-        tc_min_mirek=min(tc_min_values) if tc_min_values else 0,
+        # A member with no limit on a side leaves the group unbounded there. Its marker is the
+        # largest mirek there is, so max() keeps it but min() would drop it.
+        tc_min_mirek=MASK_2BYTES if MASK_2BYTES in tc_min_values else min(tc_min_values, default=0),
         tc_max_mirek=max(tc_max_values) if tc_max_values else 0,
         dimming_curve_type=dimming_curve_type,
     )

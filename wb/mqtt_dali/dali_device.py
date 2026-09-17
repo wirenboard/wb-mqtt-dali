@@ -64,6 +64,7 @@ from .events import BusEvent
 from .gtin_db import DaliDatabase
 from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
+from .settle_clock import SettleBasis, SettleClock
 from .wbdali import WBDALIDriver
 from .wbdali_utils import (
     check_query_response,
@@ -396,6 +397,11 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
 
         pollables = self._build_pollables(mqtt_controls)
         outcomes = await asyncio.gather(*(drain(p) for p in pollables), return_exceptions=True)
+        # A fade started before service start was never seen on the bus, so what was just read
+        # can be mid-transition: re-read once the longest fade it could be is over.
+        reconfirm_at = default_timer() + SettleClock().settle_for(
+            SettleBasis.FADE, self._fade_parameter.fade_time
+        )
         for pollable, outcome in zip(pollables, outcomes):
             if isinstance(outcome, BaseException):
                 self.logger.warning(
@@ -407,6 +413,8 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
                     exc_info=outcome,
                 )
                 pollable.cancel_pending_poll()
+            elif pollable.follows_device_fade:
+                pollable.schedule_poll_at(reconfirm_at)
         # Dispatched like any other poll outcome, so the setpoints mirror what was read too.
         for event in events:
             notify_controls(mqtt_controls, event, self.logger)

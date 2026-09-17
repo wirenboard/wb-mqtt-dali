@@ -1,7 +1,8 @@
 """Initial control-state read on device init + value preservation on rebuild.
 
-Covers the three scenarios of ``docs/init_control_state_plan.md``: the pre-publish read and
-seed, what a rebuild carries over, and how a group takes its state from a member.
+Covers the three scenarios of ``docs/init_control_state_plan.md`` — the pre-publish read and
+seed, what a rebuild carries over, how a group takes its state from a member — and the startup
+reconfirm the read schedules (``docs/startup_reconfirm_fade_plan.md``).
 """
 
 import logging
@@ -12,10 +13,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dali.gear.colour import tc_kelvin_mirek
-from dali.gear.general import QueryActualLevel
+from dali.gear.general import QueryActualLevel, QueryFadeTimeFadeRate
 
 from wb.mqtt_dali.application_controller import try_initialize_device
 from wb.mqtt_dali.common_dali_device import (
+    EVENT_RESYNC_BASE_INTERVAL,
     PERIODIC_STATUS_POLL_INTERVAL,
     ControlsPollRequestResult,
     DaliDeviceAddress,
@@ -36,7 +38,9 @@ from wb.mqtt_dali.dali_controls import (
 )
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
+from wb.mqtt_dali.dali_type7_parameters import LastActedControl
 from wb.mqtt_dali.dali_type8_common import ColourComponent
+from wb.mqtt_dali.dali_type8_parameters import Type8Parameters
 from wb.mqtt_dali.dali_type8_tc import (
     CurrentColourTemperatureControl,
     SetColourTemperatureControl,
@@ -1077,3 +1081,122 @@ async def test_group_setpoint_without_a_member_value_keeps_default():
     assert setpoint.control_info.state.value == "0"
     assert setpoint.control_info.state.error == ControlError.NONE
     assert _published_errors(ctrl._device_publisher)[WANTED_LEVEL] == ControlError.NONE
+
+
+# ---------------------------------------------------------------------------
+# Scenario 4 — startup reconfirm scheduled off the initial read
+# ---------------------------------------------------------------------------
+
+
+class _FadeFollowingPollable(_ChunkedPollable):
+    """Chunked pollable in the shape of the DT8 colour handler, whose value the fade moves."""
+
+    follows_device_fade = True
+
+
+def _make_driver_with_fade(fade_time_code):
+    """Driver whose gear reports ``fade_time_code`` for the fade-time query."""
+    driver = _make_driver()
+
+    async def fake_send(cmd, priority=None):
+        del priority
+        resp = _ok_response()
+        if isinstance(cmd, QueryFadeTimeFadeRate):
+            resp.fade_time = fade_time_code
+            resp.fade_rate = 1
+        return resp
+
+    driver.send = AsyncMock(side_effect=fake_send)
+    return driver
+
+
+def _make_driver_without_fade():
+    """Driver whose gear stays silent on the fade-time query, as gear without one does."""
+    driver = _make_driver()
+
+    async def fake_send(cmd, priority=None):
+        del priority
+        return _unanswered_response() if isinstance(cmd, QueryFadeTimeFadeRate) else _ok_response()
+
+    driver.send = AsyncMock(side_effect=fake_send)
+    return driver
+
+
+async def _initialize(device, driver):
+    """Initialize the device and report the moment init finished, the reconfirm's reference."""
+    await try_initialize_device(
+        device, driver, _make_publisher(), DeviceInitScheduler(), MagicMock(), _LOGGER, 0.0
+    )
+    return default_timer()
+
+
+def _level_device():
+    return _make_stub_device(lambda: [ActualLevelControl(DimmingCurveState())])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_driver, expected_delay",
+    [
+        (lambda: _make_driver_with_fade(4), 2.3),  # code 4: a 2 s fade
+        (lambda: _make_driver_with_fade(15), 90.8),  # code 15: the longest fade there is
+        (_make_driver_without_fade, 6.0),  # silent gear: a fade of unknown length
+    ],
+)
+async def test_startup_reconfirm_waits_out_the_device_fade(make_driver, expected_delay):
+    """A fade running since before service start was never seen on the bus, so the level read at
+    init is re-read once the device's own fade time plus margin has passed."""
+    device = _level_device()
+
+    finished = await _initialize(device, make_driver())
+
+    level = device.get_mqtt_control(ACTUAL_LEVEL)
+    assert level.time_until_next_poll(finished) == pytest.approx(expected_delay, abs=0.5)
+    # Even the longest fade only ever pulls the poll closer than the re-sync interval.
+    assert level.time_until_next_poll(finished) < EVENT_RESYNC_BASE_INTERVAL * 0.7
+
+
+@pytest.mark.asyncio
+async def test_control_that_does_not_follow_the_fade_keeps_its_own_interval():
+    """A control whose value the light transition does not move is left on its periodic
+    interval, however long the device's fade is."""
+    device = _make_stub_device(lambda: [_readable_control("illuminance", "77")])
+
+    finished = await _initialize(device, _make_driver_with_fade(15))
+
+    control = device.get_mqtt_control("illuminance")
+    assert control.time_until_next_poll(finished) == pytest.approx(EVENT_RESYNC_BASE_INTERVAL, abs=1.0)
+
+
+@pytest.mark.asyncio
+async def test_chunked_pollable_shares_the_moment_with_the_level_control():
+    """One fade time per device: the colour handler's multi-tick read is reconfirmed at the same
+    moment as the level control next to it."""
+    colour = _FadeFollowingPollable([_tc_read(200)])
+    device = _make_stub_device(lambda: [ActualLevelControl(DimmingCurveState())], extra_pollables=[colour])
+
+    finished = await _initialize(device, _make_driver_with_fade(4))
+
+    level = device.get_mqtt_control(ACTUAL_LEVEL)
+    assert colour.next_due_at == level.next_due_at
+    assert colour.time_until_next_poll(finished) == pytest.approx(2.3, abs=0.5)
+
+
+@pytest.mark.asyncio
+async def test_pollable_whose_initial_read_raised_is_not_reconfirmed():
+    """A read that blew up leaves nothing to confirm, so the pollable keeps its own interval
+    instead of being pulled in to the reconfirm."""
+    colour = _FadeFollowingPollable([RuntimeError("bus exploded")])
+    device = _make_stub_device(lambda: [], extra_pollables=[colour])
+
+    finished = await _initialize(device, _make_driver_with_fade(4))
+
+    assert colour.time_until_next_poll(finished) == pytest.approx(PERIODIC_STATUS_POLL_INTERVAL, abs=1.0)
+
+
+def test_the_pollables_that_follow_the_fade_are_level_last_acted_and_colour():
+    """The startup reconfirm covers exactly the pollables the light transition moves."""
+    assert ActualLevelControl(DimmingCurveState()).follows_device_fade is True
+    assert LastActedControl().follows_device_fade is True
+    assert Type8Parameters().follows_device_fade is True
+    assert _readable_control("illuminance", "0").follows_device_fade is False

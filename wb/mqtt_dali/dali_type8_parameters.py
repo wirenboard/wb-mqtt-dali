@@ -670,11 +670,11 @@ class _Type8ColourReadProgress:
 
 
 class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
+    follows_device_fade = True
+
     def __init__(self) -> None:
         TypeParameters.__init__(self)
-        EventPollSchedule.__init__(
-            self, EVENT_RESYNC_BASE_INTERVAL, randomize_poll_interval=True, startup_reconfirm=True
-        )
+        EventPollSchedule.__init__(self, EVENT_RESYNC_BASE_INTERVAL, randomize_poll_interval=True)
 
         self._current_colour_type: Optional[ColourType] = None
         self._limits = Type8TcLimits()

@@ -433,6 +433,15 @@ async def send_command_service(  # pylint: disable=too-many-locals, too-many-bra
     return EXIT_SUCCESS
 
 
+def _broker_url(value: str) -> str:
+    """argparse type for -b: the URL as given, once parse_broker_url() accepts it; exit 2 otherwise"""
+    try:
+        parse_broker_url(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value
+
+
 async def main(argv):  # pylint: disable=too-many-return-statements
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
@@ -456,7 +465,7 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         "--broker",
         "--broker_url",
         dest="broker_url",
-        type=str,
+        type=_broker_url,
         help="MQTT broker url",
         default=DEFAULT_BROKER_URL,
     )
@@ -567,10 +576,6 @@ async def main(argv):  # pylint: disable=too-many-return-statements
     )
 
     args = parser.parse_args(argv[1:])
-    try:
-        parse_broker_url(args.broker_url)
-    except ValueError as exc:
-        parser.error(f"argument -b/--broker: {exc}")  # exits with 2 like any other argument error
 
     logging.basicConfig(level=args.log_level, handlers=[_make_log_handler()], force=True)
     logging.getLogger("mqtt_client").setLevel(logging.INFO)

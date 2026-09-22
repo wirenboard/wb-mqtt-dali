@@ -12,7 +12,6 @@ from dali.gear.general import DTR0, QueryActualLevel, QueryContentDTR0
 from wb.mqtt_dali.application_controller import PollScheduler
 from wb.mqtt_dali.common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
-    EVENT_STARTUP_RECONFIRM_DELAY,
     DaliDeviceAddress,
     DaliDeviceBase,
     MqttControlBase,
@@ -371,7 +370,6 @@ async def test_type8_subbatch_failure_publishes_error_and_reschedules():
     assert driver.send_commands.await_count == MAX_COLOUR_SUBBATCH_RETRIES
     assert not handler.has_in_progress_read()
 
-    assert handler.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
     # Colour is an event control: it re-syncs on the long jittered base interval, not
     # the 5s bus default. So it is not due at 5s but is due past the jitter ceiling.
     assert handler.is_poll_due(5.0) is False
@@ -513,10 +511,10 @@ async def test_type8_unfinished_cycle_stays_in_round_regardless_of_interval():
     assert handler.has_in_progress_read()
     # The schedule has already moved on, so a *finished* cycle would back off here — but
     # this cycle is unfinished, so the handler must stay eligible at the same instant.
-    assert handler.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
+    assert handler.next_due_at >= EVENT_RESYNC_BASE_INTERVAL * 0.7
     assert handler.is_poll_due(0.0) is True
     # The bypass lives in `is_poll_due` only; the wait still reports the real schedule.
-    assert handler.time_until_next_poll(0.0) == pytest.approx(EVENT_STARTUP_RECONFIRM_DELAY)
+    assert handler.time_until_next_poll(0.0) == pytest.approx(handler.next_due_at)
 
     # pylint: disable-next=protected-access
     assert handler in dev._current_round
@@ -558,8 +556,8 @@ async def test_type8_failed_component_backs_off_at_nonzero_time_then_resumes():
     # t0: opening subbatch succeeds; a multi-component read is now in progress.
     await dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3).poll_coroutine()
     assert handler.has_in_progress_read()
-    # First-poll reconfirm pulls the due moment in to the startup delay.
-    assert handler.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
+    # The schedule has moved on by one re-sync interval; every tick below is before it.
+    assert handler.next_due_at >= EVENT_RESYNC_BASE_INTERVAL * 0.7
 
     # t=2.0: the first component subbatch fails and ends the cycle.
     await dev.poll_controls(driver, now=2.0, max_commands=3, default_max_commands=3).poll_coroutine()
@@ -571,7 +569,7 @@ async def test_type8_failed_component_backs_off_at_nonzero_time_then_resumes():
     assert sibling.next_due_at == 102.0  # sibling reached in the same round, not starved
 
     # Next tick, still t=2.0 and before the due moment: the handler backs off.
-    assert 2.0 < EVENT_STARTUP_RECONFIRM_DELAY
+    assert 2.0 < handler.next_due_at
     sends_before_backoff = len(sent_calls)
     res_backoff = dev.poll_controls(driver, now=2.0, max_commands=3, default_max_commands=3)
     # pylint: disable-next=protected-access
@@ -580,7 +578,7 @@ async def test_type8_failed_component_backs_off_at_nonzero_time_then_resumes():
     assert len(sent_calls) == sends_before_backoff  # no colour subbatch on the bus this tick
 
     # now past the due moment: guard falls through, handler opens a fresh read (first subbatch).
-    resume_now = EVENT_STARTUP_RECONFIRM_DELAY + 1.0
+    resume_now = handler.next_due_at + 1.0
     sends_before_resume = len(sent_calls)
     res_resume = dev.poll_controls(driver, now=resume_now, max_commands=3, default_max_commands=3)
     assert res_resume.poll_coroutine is not None
@@ -617,21 +615,6 @@ async def test_type8_component_failure_ends_the_cycle_without_asking_the_rest():
     component_subbatches = [cmds for cmds in sent_calls if not _is_first_subbatch(cmds)]
     assert len(component_subbatches) == MAX_COLOUR_SUBBATCH_RETRIES
     assert {cmds[0].param for cmds in component_subbatches} == {QueryColourValueDTR.RedDimLevel.value}
-
-
-@pytest.mark.asyncio
-async def test_type8_first_poll_schedules_startup_reconfirm():
-    """A DT8 colour control's first ever poll pulls one reconfirm in at the startup delay,
-    mirroring the gear-control first-poll behaviour."""
-    handler = _make_type8_handler(ColourType.RGBWAF)
-    dev = _make_dali_device(type8_handler=handler)
-
-    driver = AsyncMock()
-    driver.send_commands = AsyncMock(side_effect=lambda cmds, source=None: [_bad_response() for _ in cmds])
-
-    dev.poll_controls(driver, now=0.0, max_commands=3, default_max_commands=3)
-
-    assert handler.next_due_at == EVENT_STARTUP_RECONFIRM_DELAY
 
 
 @pytest.mark.asyncio
@@ -940,10 +923,7 @@ async def test_colour_read_failure_errors_every_topic_of_the_type():
         return [_bad_response() for _ in cmds]
 
     driver.send_commands = AsyncMock(side_effect=fake_send)
-    # The handler is due again once the startup reconfirm delay has passed.
-    published_per_tick = await _published_per_tick(
-        device, handler, driver, ticks=2, now=EVENT_STARTUP_RECONFIRM_DELAY
-    )
+    published_per_tick = await _published_per_tick(device, handler, driver, ticks=2, now=handler.next_due_at)
 
     assert published_per_tick == [[], ["current_rgb", "current_white"]]
     assert not handler.has_in_progress_read()

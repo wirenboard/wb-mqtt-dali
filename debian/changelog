@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.32.1) stable; urgency=medium
+
+  * Re-read a luminaire that was still dimming when the service started once its own fade
+    time has passed, instead of a flat six seconds.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 17 Sep 2026 17:40:00 +0500
+
 wb-mqtt-dali (1.32.0) stable; urgency=medium
 
   * Add an on/off control for devices and groups, with a configurable turn-on action

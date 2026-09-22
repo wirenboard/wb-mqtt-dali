@@ -118,6 +118,8 @@ class LastActedControl(SingleQueryControl):
     device-specific, so this is a confirmation-poll hint, not an authoritative value.
     """
 
+    follows_device_fade = True
+
     def __init__(
         self,
         up_on: Optional[NumberGearParam] = None,
@@ -146,7 +148,6 @@ class LastActedControl(SingleQueryControl):
             query_builder=QuerySwitchStatus,
             poll_interval=EVENT_RESYNC_BASE_INTERVAL,
             randomize_poll_interval=True,
-            startup_reconfirm=True,
         )
         self._up_on = up_on
         self._up_off = up_off

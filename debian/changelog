@@ -1,3 +1,15 @@
+wb-mqtt-dali (1.33.0) stable; urgency=medium
+
+  * Stop with exit code 2 when the MQTT broker rejects the login instead of reconnecting
+    forever; other connection failures are still retried
+  * Report a broken -b/--broker URL as an argument error (exit code 2) instead of a traceback
+  * SIGINT/SIGTERM during startup end the service with exit code 0
+  * Log an error when the service stops without the broker and cannot remove its retained
+    topics; log the loaded configuration, including an empty one
+  * Require python3-wb-common >= 2.4.0, the version all WB services are aligned on
+
+ -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Wed, 23 Sep 2026 07:41:55 +0000
+
 wb-mqtt-dali (1.32.1) stable; urgency=medium
 
   * Re-read a luminaire that was still dimming when the service started once its own fade

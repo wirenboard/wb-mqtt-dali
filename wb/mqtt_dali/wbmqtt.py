@@ -394,17 +394,18 @@ async def remove_topics_by_driver(
         await mqtt_dispatcher.publish(topic, None, retain=True)
 
 
-def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
+BROKER_URL_TRANSPORTS = {"unix": "unix", "tcp": "tcp", "ws": "websockets"}
+
+
+def parse_broker_url(broker_url: str) -> dict:
+    """The aiomqtt.Client connection kwargs for the URL; ValueError when no client could connect to it."""
     urlparse_result = urlparse(broker_url)
-    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-    client_kwargs = {
-        "identifier": f"wb-mqtt-dali-{client_id_suffix}",
-        "keepalive": MQTT_KEEPALIVE_S,
-        "logger": logging.getLogger("mqtt_client"),
-        "transport": "websockets" if urlparse_result.scheme == "ws" else urlparse_result.scheme,
-        "timeout": MQTT_PUBLISH_TIMEOUT_S,
-    }
+    if urlparse_result.scheme not in BROKER_URL_TRANSPORTS:
+        raise ValueError(f"unknown MQTT URL scheme {urlparse_result.scheme!r}, expected unix, tcp or ws")
+    client_kwargs = {"transport": BROKER_URL_TRANSPORTS[urlparse_result.scheme]}
     if urlparse_result.scheme == "unix":
+        if not urlparse_result.path:
+            raise ValueError("No MQTT socket path specified")
         client_kwargs["hostname"] = urlparse_result.path
     else:
         if urlparse_result.hostname is None:
@@ -418,4 +419,15 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         client_kwargs["username"] = urlparse_result.username
     if urlparse_result.password:
         client_kwargs["password"] = urlparse_result.password
-    return aiomqtt.Client(**client_kwargs)
+    return client_kwargs
+
+
+def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
+    client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
+    return aiomqtt.Client(
+        identifier=f"wb-mqtt-dali-{client_id_suffix}",
+        keepalive=MQTT_KEEPALIVE_S,
+        logger=logging.getLogger("mqtt_client"),
+        timeout=MQTT_PUBLISH_TIMEOUT_S,
+        **parse_broker_url(broker_url),
+    )

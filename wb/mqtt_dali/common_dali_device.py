@@ -87,10 +87,6 @@ EVENT_RESYNC_BASE_INTERVAL = 300.0
 # Event controls jitter their re-sync interval by ±this fraction (re-drawn after each
 # poll) so devices don't re-sync in lockstep.
 _POLL_JITTER_FRACTION = 0.3
-# At service start, a pollable that opts in via `startup_reconfirm` re-reads once more at
-# this delay after its first poll, in case start caught a transition mid-fade. The pre-start
-# command (and its fade) is unknown, so this mirrors the default fade delay used for one.
-EVENT_STARTUP_RECONFIRM_DELAY = 6.0
 # Periodic status/alarm controls (error status, thermal failure status, demand-response
 # load shedding, integrated power supply) change rarely and are not event-driven, so they
 # are read on this fixed interval with no re-sync jitter.
@@ -100,18 +96,19 @@ PERIODIC_STATUS_POLL_INTERVAL = 120.0
 class EventPollSchedule:
     """Poll schedule mixed into pollables."""
 
+    # Marks a pollable whose value follows the device's fade (gets the startup reconfirm).
+    follows_device_fade: bool = False
+
     def __init__(
         self,
         poll_interval: float,
         randomize_poll_interval: bool,
-        startup_reconfirm: bool = False,
     ) -> None:
         # None means never polled: such a pollable is due immediately. Nothing sets it
         # back to None, so None is also how the first poll is recognised.
         self.next_due_at: Optional[float] = None
         self.randomize_poll_interval = randomize_poll_interval
         self._base_poll_interval = poll_interval
-        self._startup_reconfirm = startup_reconfirm
 
     def is_poll_due(self, now: float) -> bool:
         return self.next_due_at is None or now >= self.next_due_at
@@ -122,15 +119,8 @@ class EventPollSchedule:
         return max(0.0, self.next_due_at - now)
 
     def schedule_next_periodic_poll(self, polled_at: float) -> None:
-        """Account a poll made at ``polled_at`` and move the schedule on by one interval.
-
-        A first poll with `startup_reconfirm` set is pulled in to
-        `EVENT_STARTUP_RECONFIRM_DELAY` instead, never pushed out.
-        """
-        due = polled_at + self._next_interval()
-        if self.next_due_at is None and self._startup_reconfirm:
-            due = min(due, polled_at + EVENT_STARTUP_RECONFIRM_DELAY)
-        self.next_due_at = due
+        """Account a poll made at ``polled_at`` and move the schedule on by one interval."""
+        self.next_due_at = polled_at + self._next_interval()
 
     def schedule_poll_at(self, at: float) -> None:
         """Poll at ``at`` instead of on the periodic schedule; the most recent call wins."""
@@ -159,9 +149,8 @@ class MqttControlBase(EventPollSchedule):
         control_info: ControlInfo,
         poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval: bool = False,
-        startup_reconfirm: bool = False,
     ) -> None:
-        super().__init__(poll_interval, randomize_poll_interval, startup_reconfirm)
+        super().__init__(poll_interval, randomize_poll_interval)
         # the property value is used as default value for the control
         self.control_info = control_info
 
@@ -301,9 +290,8 @@ class SingleQueryControl(MqttControlBase, Pollable):
         query_builder: Callable[[Address], Command],
         poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval: bool = False,
-        startup_reconfirm: bool = False,
     ) -> None:
-        super().__init__(control_info, poll_interval, randomize_poll_interval, startup_reconfirm)
+        super().__init__(control_info, poll_interval, randomize_poll_interval)
         self._query_builder = query_builder
 
     def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments

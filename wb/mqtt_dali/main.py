@@ -251,11 +251,6 @@ async def default_service(args, client_factory=make_mqtt_client, gateway_factory
     except Exception as e:  # pylint: disable=broad-exception-caught
         logging.error("Failed to load configuration: %s", e)
         return EXIT_NOTCONFIGURED
-    logging.info(
-        "Configuration %s loaded: %d gateway(s)",
-        args.config,
-        len(config.get("gateways", [])),
-    )
 
     if config.get("debug"):
         logging.getLogger().setLevel(logging.DEBUG)

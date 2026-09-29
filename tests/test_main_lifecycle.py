@@ -80,20 +80,17 @@ class TestDefaultServiceExitCodes(unittest.IsolatedAsyncioTestCase):
 
     async def test_sigterm_while_loading_exits_with_0(self):
         """The handlers are installed before the config load: a SIGTERM there ends the service with 0
-        instead of killing it, and the loaded (empty) config is logged."""
+        instead of killing it."""
         client = _FakeClient()
 
         def load_config_and_stop(_path):
             self.signals.handlers[signal.SIGTERM]()
             return {}
 
-        with patch("wb.mqtt_dali.main.load_config", side_effect=load_config_and_stop), self.assertLogs(
-            level=logging.INFO
-        ) as logs:
+        with patch("wb.mqtt_dali.main.load_config", side_effect=load_config_and_stop), self.assertNoLogs(
+            level=logging.ERROR
+        ):
             self.assertEqual(await self._run_service(client), EXIT_SUCCESS)
-
-        self.assertTrue(any("loaded: 0 gateway(s)" in line for line in logs.output))
-        self.assertFalse(any("cannot be removed" in line for line in logs.output))
 
     async def test_stop_during_an_outage_logs_that_the_topics_stay(self):
         """After a session was up, a stop with the link down cannot remove the retained topics: one

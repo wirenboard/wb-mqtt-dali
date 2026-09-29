@@ -12,7 +12,7 @@ from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 
 from wb.mqtt_dali.main import EXIT_INVALIDARGUMENT, EXIT_SUCCESS, default_service, main
-from wb.mqtt_dali.wbmqtt import parse_broker_url
+from wb.mqtt_dali.wbmqtt import BrokerAddress, parse_broker_url
 
 from .test_main_reconnect import (
     _FakeClient,
@@ -128,16 +128,10 @@ class TestParseBrokerUrl(unittest.TestCase):
     def test_transports(self):
         self.assertEqual(
             parse_broker_url("unix:///var/run/mosquitto/mosquitto.sock"),
-            {"transport": "unix", "hostname": "/var/run/mosquitto/mosquitto.sock"},
+            BrokerAddress("unix", "/var/run/mosquitto/mosquitto.sock"),
         )
         self.assertEqual(
             parse_broker_url("tcp://user:pw@host:1883"),
-            {
-                "transport": "tcp",
-                "hostname": "host",
-                "port": 1883,
-                "username": "user",
-                "password": "pw",
-            },
+            BrokerAddress("tcp", "host", 1883, "user", "pw"),
         )
-        self.assertEqual(parse_broker_url("ws://host:9001")["transport"], "websockets")
+        self.assertEqual(parse_broker_url("ws://host:9001"), BrokerAddress("websockets", "host", 9001))

@@ -397,37 +397,45 @@ async def remove_topics_by_driver(
 BROKER_URL_TRANSPORTS = {"unix": "unix", "tcp": "tcp", "ws": "websockets"}
 
 
-def parse_broker_url(broker_url: str) -> dict:
-    """The aiomqtt.Client connection kwargs for the URL; ValueError when no client could connect to it."""
+@dataclass(frozen=True)
+class BrokerAddress:
+    transport: str
+    hostname: str  # the socket path for the unix transport
+    port: int = 1883
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+def parse_broker_url(broker_url: str) -> BrokerAddress:
+    """The broker address the URL names; ValueError when no client could connect to it."""
     urlparse_result = urlparse(broker_url)
     if urlparse_result.scheme not in BROKER_URL_TRANSPORTS:
         raise ValueError(f"unknown MQTT URL scheme {urlparse_result.scheme!r}, expected unix, tcp or ws")
-    client_kwargs = {"transport": BROKER_URL_TRANSPORTS[urlparse_result.scheme]}
+    transport = BROKER_URL_TRANSPORTS[urlparse_result.scheme]
+    username = urlparse_result.username or None
+    password = urlparse_result.password or None
     if urlparse_result.scheme == "unix":
         if not urlparse_result.path:
             raise ValueError("No MQTT socket path specified")
-        client_kwargs["hostname"] = urlparse_result.path
-    else:
-        if urlparse_result.hostname is None:
-            raise ValueError("No MQTT hostname specified")
-        if urlparse_result.port is None:
-            raise ValueError("No MQTT port specified")
-        client_kwargs["hostname"] = urlparse_result.hostname
-        client_kwargs["port"] = urlparse_result.port
-
-    if urlparse_result.username:
-        client_kwargs["username"] = urlparse_result.username
-    if urlparse_result.password:
-        client_kwargs["password"] = urlparse_result.password
-    return client_kwargs
+        return BrokerAddress(transport, urlparse_result.path, username=username, password=password)
+    if urlparse_result.hostname is None:
+        raise ValueError("No MQTT hostname specified")
+    if urlparse_result.port is None:
+        raise ValueError("No MQTT port specified")
+    return BrokerAddress(transport, urlparse_result.hostname, urlparse_result.port, username, password)
 
 
 def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
+    address = parse_broker_url(broker_url)
     client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
     return aiomqtt.Client(
+        address.hostname,
+        address.port,
+        username=address.username,
+        password=address.password,
+        transport=address.transport,
         identifier=f"wb-mqtt-dali-{client_id_suffix}",
         keepalive=MQTT_KEEPALIVE_S,
         logger=logging.getLogger("mqtt_client"),
         timeout=MQTT_PUBLISH_TIMEOUT_S,
-        **parse_broker_url(broker_url),
     )

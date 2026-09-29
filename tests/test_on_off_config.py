@@ -409,6 +409,45 @@ class OnOffDeviceEditorTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(device.on_off_config)
                 self.assertEqual(save_mock.call_count, 4)
 
+    async def test_get_device_sends_use_device_fade_time_for_absent_key(self):
+        """A config block without fade_time reads back as -1 in every fade-capable action;
+        sending that answer back leaves the config and the control unchanged."""
+        on_off = {"on_action": {"mode": "last_active_level"}, "off_action": {"mode": "dapc"}}
+        config = {
+            "gateways": [
+                {"device_id": "gw1", "buses": [{"devices": [{"short": 5, "random": 1, "on_off": on_off}]}]}
+            ]
+        }
+        async with ScriptedBus() as harness:
+            with patch("wb.mqtt_dali.gateway.save_configuration"):
+                gateway = Gateway(
+                    config=config,
+                    mqtt_dispatcher=harness.dispatcher,
+                    config_path="",
+                    gtin_db=MagicMock(),
+                    command_registry={},
+                )
+                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
+                device = bus.dali_devices[0]
+                await harness.wait_until(lambda: device.is_initialized)
+                original = device.on_off_config
+                control = device.get_mqtt_control(ON_OFF)
+
+                settings = await gateway.get_device_rpc_handler({"deviceId": device.uid})
+                self.assertEqual(
+                    settings["config"]["on_off"],
+                    {
+                        "enabled": True,
+                        "on_action": {"mode": "last_active_level", "fade_time": FADE_TIME_USE_DEVICE},
+                        "off_action": {"mode": "dapc", "fade_time": FADE_TIME_USE_DEVICE},
+                    },
+                )
+
+                await gateway.set_device_rpc_handler({"deviceId": device.uid, "config": settings["config"]})
+                self.assertEqual(device.on_off_config, original)
+                self.assertIs(device.get_mqtt_control(ON_OFF), control)
+                self.assertEqual(on_off_config_to_json(device.on_off_config), on_off)
+
     async def test_device_schema_generation_exposes_on_off_block(self):
         """OnOffSettingsParam is one of the device's parameter handlers, so load_info merges
         its editor schema into the GetDevice schema instead of the block being hand-merged."""

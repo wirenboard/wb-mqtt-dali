@@ -130,7 +130,13 @@ def on_off_config_from_editor_json(data: dict) -> Optional[OnOffConfig]:
 def on_off_config_to_editor_json(config: Optional[OnOffConfig]) -> dict:
     if config is None:
         return {"enabled": False}
-    return {"enabled": True, **on_off_config_to_json(config)}
+    data = on_off_config_to_json(config)
+    # The editor fills an absent fade_time with its default, so send that default explicitly.
+    if config.on_action.mode is not OnActionMode.SCENE:
+        data["on_action"].setdefault("fade_time", FADE_TIME_USE_DEVICE)
+    if config.off_action.mode is OffActionMode.DAPC:
+        data["off_action"].setdefault("fade_time", FADE_TIME_USE_DEVICE)
+    return {"enabled": True, **data}
 
 
 class OnOffSettingsParam(SettingsParamBase):

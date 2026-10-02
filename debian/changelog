@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.33.2) stable; urgency=medium
+
+  * Remove the "Current colour" setting from DT8 device settings: the current colour is shown
+    and set with the device controls
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 08:24:14 +0000
+
 wb-mqtt-dali (1.33.1) stable; urgency=medium
 
   * Update the DALI product database

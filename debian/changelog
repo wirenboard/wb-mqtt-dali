@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.33.1) stable; urgency=medium
+
+  * Update the DALI product database
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 07:47:15 +0000
+
 wb-mqtt-dali (1.33.0) stable; urgency=medium
 
   * Stop with exit code 2 when the MQTT broker rejects the login instead of reconnecting

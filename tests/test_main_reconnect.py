@@ -1,12 +1,13 @@
-"""The service across broker sessions, driven with fakes; the stop request is a real SIGTERM."""
+"""The service across broker sessions, driven with fakes; the stop request is the recorded SIGTERM
+handler, called directly."""
 
 import asyncio
-import os
+import functools
 import signal
 import unittest
 from enum import Enum
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional
 from unittest.mock import patch
 
 import aiomqtt
@@ -93,6 +94,21 @@ class _FakeGateway:
         self._events.append("stop")
 
 
+class _FakeSignals:
+    """Stand-in for the loop's `add_signal_handler`: the handlers land in `handlers`, keyed by signal
+    number, and never in the pytest process."""
+
+    def __init__(self):
+        self.handlers: Dict[int, Callable[[], None]] = {}
+
+    def add_signal_handler(self, signum: int, callback: Callable, *args) -> None:
+        self.handlers[signum] = functools.partial(callback, *args)
+
+    def patch_loop(self):
+        """Routes every event loop's `add_signal_handler` here while the patch is active."""
+        return patch.object(asyncio.SelectorEventLoop, "add_signal_handler", self.add_signal_handler)
+
+
 async def _poll_until(condition):
     while not condition():
         await asyncio.sleep(0.001)
@@ -103,16 +119,18 @@ class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
         self.events: List[str] = []
 
     async def _run_service(self, client, dispatcher, gateway, stop_when) -> int:
+        signals = _FakeSignals()
+
         async def send_sigterm():
             # `stop_when` completes inside a session, after the service installed its handlers.
             await stop_when()
-            os.kill(os.getpid(), signal.SIGTERM)
+            signals.handlers[signal.SIGTERM]()
 
         with patch("wb.mqtt_dali.main.load_config", return_value={}), patch(
             "wb.mqtt_dali.main.DaliDatabase", return_value=object()
         ), patch("wb.mqtt_dali.main.MQTTDispatcher", return_value=dispatcher), patch(
             "wb.mqtt_dali.main.RECONNECT_DELAY_S", 0.001
-        ):
+        ), signals.patch_loop():
             stopper = asyncio.create_task(send_sigterm())
             try:
                 return await asyncio.wait_for(

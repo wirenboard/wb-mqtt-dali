@@ -10,12 +10,7 @@ from typing import Callable, Generator, List, Optional, Union
 
 from dali import command
 from dali.address import Address, GearShort
-from dali.gear.colour import (
-    Activate,
-    QueryColourStatus,
-    QueryColourValue,
-    QueryColourValueDTR,
-)
+from dali.gear.colour import QueryColourStatus, QueryColourValue, QueryColourValueDTR
 from dali.gear.general import (
     DTR0,
     QueryActualLevel,
@@ -256,7 +251,6 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         property_order: int,
         default_colour_type: ColourType,
         limits: Type8TcLimits,
-        read_after_save: bool = True,
     ) -> None:
         super().__init__(name)
         self.property_name = property_name
@@ -265,7 +259,6 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         self._setup_command_class = setup_command_class
         self._property_order = property_order
         self._colour_tags = colour_tags
-        self._read_after_save = read_after_save
         self._default_colour_type = default_colour_type
         self._limits = limits
 
@@ -293,7 +286,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         cmds = new_state.colour.get_write_commands(short_address)
         cmds.extend([DTR0(new_state.level), self._setup_command_class(short_address)])
         await send_commands_with_retry(driver, cmds, logger, priority=FramePriority.CONFIGURATION)
-        if is_for_single_device and self._read_after_save:
+        if is_for_single_device:
             return await self._read_impl(driver, short_address)
         self.value = new_state
         return {self.property_name: new_state.to_json()}
@@ -615,21 +608,6 @@ class ColourGroupScenesSettings(ColourState):
         return schema
 
 
-class CurrentColourState(ColourState):
-    def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
-        super().__init__(
-            SettingsParamName("Current colour", "Текущий цвет"),
-            f"current_colour_{default_colour_type.value}",
-            QueryActualLevel,
-            Activate,
-            ACTUAL_LEVEL_COLOUR_TAGS,
-            PropertyStartOrder.SYSTEM_FAILURE_LEVEL.value + 1,
-            default_colour_type,
-            limits,
-            read_after_save=False,
-        )
-
-
 class PowerOnColourState(ColourState):
     def __init__(self, default_colour_type: ColourType, limits: Type8TcLimits) -> None:
         super().__init__(
@@ -720,7 +698,6 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
                     self._limits.update_from(result)
         self._scenes_settings = ScenesSettings(self.default_colour_type, self._limits)
         parameters: list[SettingsParamBase] = [
-            CurrentColourState(self.default_colour_type, self._limits),
             PowerOnColourState(self.default_colour_type, self._limits),
             SystemFailureColourState(self.default_colour_type, self._limits),
             self._scenes_settings,

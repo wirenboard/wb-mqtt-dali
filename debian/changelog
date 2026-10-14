@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.34.0) stable; urgency=medium
+
+  * Identification numbers, the OEM one included, are sent as strings: long numbers no longer
+    lose their last digits in the web interface
+  * The device settings schema no longer describes the GTIN, the identification numbers, the
+    gear types and the firmware and hardware versions; the values are still sent, and the web
+    interface shows them on its own
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 14 Oct 2026 08:15:57 +0000
+
 wb-mqtt-dali (1.33.3) stable; urgency=medium
 
   * No changes for the service: the repository now holds the scripts that find, review and

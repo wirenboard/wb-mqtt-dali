@@ -16,9 +16,9 @@ import os
 import urllib.request
 from pathlib import Path
 
-import numpy as np
-from PIL import Image, ImageOps
-from scipy import ndimage
+import numpy as np  # pylint: disable=import-error
+from PIL import Image, ImageOps  # pylint: disable=import-error
+from scipy import ndimage  # pylint: disable=import-error
 
 Image.MAX_IMAGE_PIXELS = None
 

@@ -33,7 +33,7 @@ from pictures import (  # pylint: disable=import-error  # resolved from the scri
     process_file,
     save_registry,
 )
-from PIL import Image
+from PIL import Image  # pylint: disable=import-error
 
 SMALL = 600
 CACHE = NEW / "cache"

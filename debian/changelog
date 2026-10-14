@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.33.3) stable; urgency=medium
+
+  * No changes for the service: the repository now holds the scripts that find, review and
+    prepare the pictures of DALI devices
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 14 Oct 2026 08:07:39 +0000
+
 wb-mqtt-dali (1.33.2) stable; urgency=medium
 
   * Remove the "Current colour" setting from DT8 device settings: the current colour is shown

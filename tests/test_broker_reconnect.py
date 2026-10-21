@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import unittest
-from typing import List
+from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from dali.command import Command
@@ -14,7 +14,10 @@ from wb.mqtt_dali.gateway import Gateway, bus_from_json
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali_error_response import GatewayUnavailable
 
+from ._app_controller_helpers import wait_until
 from ._broker_link_helpers import Publish, RecordingClient
+
+_LAST_ENDPOINT_MARKER = "/rpc/v1/wb-mqtt-dali/Bus/ListCommands"
 
 
 class _MockCommand(Command):
@@ -57,13 +60,22 @@ class GatewayRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.dispatcher = MQTTDispatcher(self.client)
         config = {"gateways": [{"device_id": "gw", "buses": [{"devices": []}, {"devices": []}]}]}
         self.gateway = Gateway(config, self.dispatcher, "/nonexistent.conf", MagicMock(), command_registry={})
+        self.run_task: Optional[asyncio.Task] = None
 
     async def asyncSetUp(self):
         with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()), patch(
             "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", AsyncMock()
         ), patch("wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=asyncio.TimeoutError)):
-            await self.gateway.start()
+            self.run_task = asyncio.create_task(self.gateway.run())
+            # the last endpoint run() registers before it starts serving
+            await asyncio.wait_for(
+                wait_until(lambda: _LAST_ENDPOINT_MARKER in [p.topic for p in self.client.publishes]),
+                timeout=1.0,
+            )
         self.client.clear()
+
+    async def asyncTearDown(self):
+        await asyncio.wait_for(self.run_task, timeout=1.0)
 
     async def test_reconnect_restores_subscriptions_then_replays_devices_commissioning_and_markers(self):
         """Subscribes first, then the retained state in start order; no queue reset among them,
@@ -114,7 +126,7 @@ class BusStartDuringOutageTests(unittest.IsolatedAsyncioTestCase):
         client = RecordingClient()
         dispatcher = MQTTDispatcher(client)
         dispatcher.connection_lost()
-        bus = bus_from_json("gw", 1, {"devices": []}, dispatcher, MagicMock())
+        bus = bus_from_json("gw", 1, {"devices": []}, dispatcher, MagicMock(), MagicMock())
 
         await bus.start()
 

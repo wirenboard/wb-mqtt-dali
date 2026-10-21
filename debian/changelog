@@ -1,3 +1,12 @@
+wb-mqtt-dali (1.33.4) stable; urgency=medium
+
+  * Fix a bus stopping polling after a device had not answered for about 17 hours
+  * On an unexpected error the service now restarts instead of leaving the bus silent
+  * A device MQTT ID or gateway device ID that is empty or contains $ # + / " or ' is now
+    a configuration error
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 19 Oct 2026 09:00:00 +0000
+
 wb-mqtt-dali (1.33.3) stable; urgency=medium
 
   * No changes for the service: the repository now holds the scripts that find, review and

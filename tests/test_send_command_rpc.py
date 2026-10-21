@@ -1,4 +1,4 @@
-# pylint: disable=duplicate-code  # shared gateway.start() boilerplate with tests/test_reset_device.py
+# pylint: disable=duplicate-code  # shared gateway.run() boilerplate with tests/test_reset_device.py
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +19,12 @@ from wb.mqtt_dali.application_controller import (
 from wb.mqtt_dali.send_command import build_command_registry, parse_expression
 from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway
 
-from ._app_controller_helpers import make_bare_gateway, make_loop_controller, stop_loop
+from ._app_controller_helpers import (
+    make_bare_gateway,
+    make_loop_controller,
+    stop_loop,
+    wait_until,
+)
 
 # `registry` is a module-scope pytest fixture; tests receive it as a parameter,
 # which pylint sees as redefining the fixture's outer name.
@@ -602,31 +607,35 @@ class TestSendCommandRpcHandler:
 
 
 # ---------------------------------------------------------------------------
-# Endpoints registered on Gateway.start
+# Endpoints registered on Gateway.run
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_bus_endpoints_registered_on_start():
-    """Bus/SendCommand and Bus/ListCommands are wired up by Gateway.start()."""
+    """Bus/SendCommand and Bus/ListCommands are wired up while Gateway.run() starts up."""
     gateway = _make_bare_gateway()
     gateway.rpc_server = MagicMock()
     gateway.rpc_server.start = AsyncMock()
+    gateway.rpc_server.stop = AsyncMock()
     gateway.rpc_server.add_endpoint = AsyncMock()
     gateway.wb_dali_gateways = []
     gateway._update_gateways = AsyncMock()  # pylint: disable=protected-access
+    expected = {("Bus", "SendCommand"), ("Bus", "ListCommands")}
+
+    def registered():
+        return {
+            (call_args.args[0], call_args.args[1])
+            for call_args in gateway.rpc_server.add_endpoint.await_args_list
+        }
 
     with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", new=AsyncMock()), patch(
         "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", new=AsyncMock()
     ):
-        await gateway.start()
-
-    registered = {
-        (call_args.args[0], call_args.args[1])
-        for call_args in gateway.rpc_server.add_endpoint.await_args_list
-    }
-    assert ("Bus", "SendCommand") in registered
-    assert ("Bus", "ListCommands") in registered
+        run_task = asyncio.create_task(gateway.run())
+        await asyncio.wait_for(wait_until(lambda: expected <= registered()), timeout=1.0)
+        await gateway.stop()
+        await run_task
 
 
 # ---------------------------------------------------------------------------

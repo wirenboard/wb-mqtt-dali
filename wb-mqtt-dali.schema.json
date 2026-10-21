@@ -82,7 +82,9 @@
                 },
                 "mqtt_id": {
                     "type": "string",
-                    "title": "MQTT ID"
+                    "title": "MQTT ID",
+                    "pattern": "^[^$#+\\/\"']+$",
+                    "minLength": 1
                 },
                 "name": {
                     "type": "string",
@@ -138,7 +140,9 @@
             "type": "object",
             "properties": {
                 "device_id": {
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[^$#+\\/\"']+$",
+                    "minLength": 1
                 },
                 "websocket_enabled": {
                     "type": "boolean"

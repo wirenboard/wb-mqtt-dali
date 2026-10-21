@@ -13,7 +13,7 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .commissioning import Commissioning, check_presence, search_short
 from .config_validator import validate_config
-from .gateway import Gateway
+from .gateway import BusPollingError, Gateway
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
 from .send_command import (
@@ -35,6 +35,7 @@ GTIN_DB_FILEPATH = "/usr/share/wb-mqtt-dali/products.csv"
 
 
 EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
 EXIT_INVALIDARGUMENT = 2
 EXIT_NOTCONFIGURED = 6
 SEND_BATCH_SIZE = 16
@@ -123,7 +124,7 @@ async def _cancel_tasks(tasks: Iterable[asyncio.Task]) -> None:
             task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, aiomqtt.MqttError):
+        except (asyncio.CancelledError, aiomqtt.MqttError, BusPollingError):
             pass
         except Exception:  # pylint: disable=broad-exception-caught
             logging.exception("Error while awaiting service child task during teardown")
@@ -137,7 +138,7 @@ def _is_login_rejected(error: aiomqtt.MqttError) -> bool:
 class BrokerSessions:
     """The service across broker sessions.
 
-    A lost link ends the session, not the buses: `gateway.start()` runs once; every later session
+    A lost link ends the session, not the buses: `gateway.run()` runs once; every later session
     only has the dispatcher restore its subscriptions and replay its retained mirror.
     """
 
@@ -151,7 +152,7 @@ class BrokerSessions:
         self._client = client
         self._mqtt_dispatcher = mqtt_dispatcher
         self._gateway = gateway
-        self._gateway_start: Optional[asyncio.Task] = None
+        self._gateway_task: Optional[asyncio.Task] = None
         self._stop_requested = stop_requested or asyncio.Event()
         # Log the loss once per outage, not once per failed reconnect attempt.
         self._log_next_link_error = True
@@ -160,11 +161,13 @@ class BrokerSessions:
         self._stop_requested.set()
 
     async def run(self) -> int:
-        """Serve until a stop request or a rejected login; returns the exit code."""
+        """Serve until a stop request, a rejected login or a failed bus; returns the exit code."""
         while not self._stop_requested.is_set():
             try:
                 await self._serve_connection()
                 return EXIT_SUCCESS
+            except BusPollingError:
+                return EXIT_FAILURE
             except aiomqtt.MqttError as e:
                 if _is_login_rejected(e):
                     # a configuration problem no reconnect fixes, at startup and later alike
@@ -176,7 +179,7 @@ class BrokerSessions:
                     logging.error("%s. Reconnecting", str(e))
                 await self._wait_before_reconnect()
         # Stopped during an outage: the buses still come down; the next start cleans the broker.
-        if self._gateway_start is not None:
+        if self._gateway_task is not None:
             logging.error("MQTT broker is not connected, retained topics cannot be removed")
         await self._stop_gateway()
         return EXIT_SUCCESS
@@ -184,12 +187,14 @@ class BrokerSessions:
     # --- Private ---
 
     async def _serve_connection(self) -> None:
-        """Run one broker session: return on a stop request, raise `MqttError` when the link drops."""
+        """Run one broker session: return on a stop request, raise `MqttError` when the link drops.
+
+        Raises `BusPollingError` when the polling loop of a bus dies."""
         async with self._client:
             self._log_next_link_error = True
             await self._mqtt_dispatcher.connection_restored()
-            if self._gateway_start is None:
-                self._gateway_start = asyncio.create_task(self._gateway.start())
+            if self._gateway_task is None:
+                self._gateway_task = asyncio.create_task(self._gateway.run())
             # The replay runs beside the message loop: a bus command sent meanwhile needs its reply.
             replay_task = asyncio.create_task(self._mqtt_dispatcher.replay_retained())
             dispatcher_task = asyncio.create_task(dispatcher(self._mqtt_dispatcher))
@@ -201,6 +206,10 @@ class BrokerSessions:
                 await _cancel_tasks(session_tasks)
                 self._mqtt_dispatcher.connection_lost()
                 raise
+            except BusPollingError:
+                await _cancel_tasks(session_tasks)
+                await self._stop_gateway()
+                raise
             await _cancel_tasks(session_tasks)
             await self._stop_gateway()
 
@@ -210,7 +219,7 @@ class BrokerSessions:
         dispatcher_task: asyncio.Task,
         stop_task: asyncio.Task,
     ) -> None:
-        pending = {self._gateway_start, replay_task, dispatcher_task, stop_task}
+        pending = {self._gateway_task, replay_task, dispatcher_task, stop_task}
         while True:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             if stop_task in done:
@@ -219,7 +228,7 @@ class BrokerSessions:
                 # The message stream ends only with the connection.
                 dispatcher_task.result()
                 raise aiomqtt.MqttError("Message stream ended")
-            # A finished start or replay is just done; a failed one propagates.
+            # A finished replay is just done; a failed one or a failed gateway run propagates.
             for task in done:
                 task.result()
 
@@ -230,8 +239,8 @@ class BrokerSessions:
             pass
 
     async def _stop_gateway(self) -> None:
-        if self._gateway_start is not None:
-            await _cancel_tasks([self._gateway_start])
+        if self._gateway_task is not None:
+            await _cancel_tasks([self._gateway_task])
         try:
             await self._gateway.stop()
         except Exception:  # pylint: disable=broad-exception-caught

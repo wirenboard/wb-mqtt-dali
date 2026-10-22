@@ -170,6 +170,17 @@ class TestDeviceInitScheduler:
 
         assert delay == INIT_RETRY_MAX_DELAY
 
+    def test_backoff_survives_long_failure_streak(self):
+        """Past the float overflow of multiplier**N (1025 failures) the delay stays at max."""
+        scheduler = DeviceInitScheduler()
+        scheduler.schedule("dev_1", current_time=0.0)
+
+        for _ in range(2000):
+            delay = scheduler.record_failure("dev_1", current_time=100.0)
+
+        assert delay == INIT_RETRY_MAX_DELAY
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_MAX_DELAY - 1) is None
+
     def test_clear(self):
         """clear() removes all pending devices."""
         scheduler = DeviceInitScheduler()

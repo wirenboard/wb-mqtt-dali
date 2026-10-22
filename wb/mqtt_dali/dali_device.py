@@ -67,7 +67,9 @@ from .settings import SettingsParamBase
 from .settle_clock import SettleBasis, SettleClock
 from .wbdali import WBDALIDriver
 from .wbdali_utils import (
+    NoAnswerError,
     check_query_response,
+    is_transmission_error_response,
     query_response,
     send_commands_with_retry,
     send_with_retry,
@@ -97,20 +99,29 @@ class DaliDeviceType(IntEnum):
     DIAGNOSTICS_AND_MAINTENANCE = 52
 
 
-def request_with_retry_sequence(cmd):
+def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
     """Helper function to perform a sequence with retries on failure"""
     last_error = "unknown error"
+    all_silent = True
     for _ in range(3):
         result = yield cmd
         try:
             check_query_response(result)
             return result
-        except RuntimeError as e:
+        except NoAnswerError as e:
             last_error = str(e)
-    raise RuntimeError(f"No response to {cmd} after 3 attempts; last error: {last_error}")
+        except RuntimeError as e:
+            if not retry_framing_error and not is_transmission_error_response(result):
+                raise RuntimeError(f"Framing error in answer to {cmd}") from e
+            last_error = str(e)
+            all_silent = False
+    message = f"No response to {cmd} after 3 attempts; last error: {last_error}"
+    if all_silent:
+        raise NoAnswerError(message)
+    raise RuntimeError(message)
 
 
-def query_device_types_sequence(addr: Address):
+def query_device_types_sequence(addr: Address, logger: Optional[logging.Logger] = None):
     """Obtain a list of part 2xx device types supported by control gear"""
     r = yield from request_with_retry_sequence(QueryDeviceType(addr))
     if r.raw_value.as_integer < 254:
@@ -124,7 +135,21 @@ def query_device_types_sequence(addr: Address):
     last_seen = -1
     result = []
     while True:
-        r = yield from request_with_retry_sequence(QueryNextDeviceType(addr))
+        try:
+            # A garbled answer still advances the gear to the next type: a retry would skip one.
+            r = yield from request_with_retry_sequence(QueryNextDeviceType(addr), retry_framing_error=False)
+        except NoAnswerError:
+            if len(result) == 0:
+                raise
+            # Non-compliant gear may stay silent instead of answering 254 at the end of the list.
+            if logger is not None:
+                logger.warning(
+                    "%s did not answer QueryNextDeviceType with 254 after device types %s; "
+                    "taking them as the complete list",
+                    addr,
+                    result,
+                )
+            return result
         if r.raw_value.as_integer == 254:
             if len(result) == 0:
                 raise RuntimeError("No device types returned by QueryNextDeviceType")
@@ -275,7 +300,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
     ) -> InitializationResult:
         address = GearShort(self.address.short)
 
-        types = await driver.run_sequence(query_device_types_sequence(address))
+        types = await driver.run_sequence(query_device_types_sequence(address, self.logger))
         if types is None:
             raise RuntimeError(
                 f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"

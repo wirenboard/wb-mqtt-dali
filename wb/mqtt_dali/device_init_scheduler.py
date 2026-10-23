@@ -10,6 +10,7 @@ INIT_RETRY_MAX_DELAY = 60.0
 class DeviceInitState:
     next_retry_time: float = 0.0
     retry_count: int = 0
+    retry_delay: float = 0.0
 
 
 class DeviceInitScheduler:
@@ -56,12 +57,12 @@ class DeviceInitScheduler:
         if state is None:
             return 0.0
         state.retry_count += 1
-        delay = min(
-            self._initial_delay * (self._multiplier ** (state.retry_count - 1)),
+        state.retry_delay = min(
+            state.retry_delay * self._multiplier if state.retry_count > 1 else self._initial_delay,
             self._max_delay,
         )
-        state.next_retry_time = current_time + delay
-        return delay
+        state.next_retry_time = current_time + state.retry_delay
+        return state.retry_delay
 
     def get_retry_count(self, mqtt_id: str) -> int:
         state = self._pending.get(mqtt_id)

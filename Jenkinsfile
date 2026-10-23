@@ -1,5 +1,6 @@
 buildDebSbuild defaultRunLintian: true,
-               defaultRepoRelease: 'testing',
+               defaultWbdevImage: 'contactless/devenv:latest_bullseye',
+               defaultRepoRelease: 'wb-2606',
                defaultRunPythonChecks: true,
                defaultRunCoverage: true,
                defaultAngryPylint: true,

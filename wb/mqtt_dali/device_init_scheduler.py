@@ -9,20 +9,15 @@ INIT_RETRY_MAX_DELAY = 60.0
 @dataclass
 class DeviceInitState:
     next_retry_time: float = 0.0
-    retry_count: int = 0
+    retry_delay: float = 0.0
+
+    def has_failed(self) -> bool:
+        return self.retry_delay > 0.0
 
 
 class DeviceInitScheduler:
-    def __init__(
-        self,
-        initial_delay: float = INIT_RETRY_INITIAL_DELAY,
-        multiplier: float = INIT_RETRY_MULTIPLIER,
-        max_delay: float = INIT_RETRY_MAX_DELAY,
-    ) -> None:
+    def __init__(self) -> None:
         self._pending: dict[str, DeviceInitState] = {}
-        self._initial_delay = initial_delay
-        self._multiplier = multiplier
-        self._max_delay = max_delay
 
     @property
     def has_pending(self) -> bool:
@@ -39,12 +34,12 @@ class DeviceInitScheduler:
         return [
             mqtt_id
             for mqtt_id, state in self._pending.items()
-            if state.retry_count == 0 and state.next_retry_time <= current_time
+            if not state.has_failed() and state.next_retry_time <= current_time
         ]
 
     def get_one_retry_ready(self, current_time: float) -> Optional[str]:
         for mqtt_id, state in self._pending.items():
-            if state.retry_count > 0 and state.next_retry_time <= current_time:
+            if state.has_failed() and state.next_retry_time <= current_time:
                 return mqtt_id
         return None
 
@@ -55,17 +50,16 @@ class DeviceInitScheduler:
         state = self._pending.get(mqtt_id)
         if state is None:
             return 0.0
-        state.retry_count += 1
-        delay = min(
-            self._initial_delay * (self._multiplier ** (state.retry_count - 1)),
-            self._max_delay,
+        state.retry_delay = min(
+            state.retry_delay * INIT_RETRY_MULTIPLIER if state.has_failed() else INIT_RETRY_INITIAL_DELAY,
+            INIT_RETRY_MAX_DELAY,
         )
-        state.next_retry_time = current_time + delay
-        return delay
+        state.next_retry_time = current_time + state.retry_delay
+        return state.retry_delay
 
-    def get_retry_count(self, mqtt_id: str) -> int:
+    def has_failed(self, mqtt_id: str) -> bool:
         state = self._pending.get(mqtt_id)
-        return state.retry_count if state is not None else 0
+        return state is not None and state.has_failed()
 
     def clear(self) -> None:
         self._pending.clear()

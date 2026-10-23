@@ -555,8 +555,7 @@ async def test_a_later_poll_heals_a_failed_initial_read():
     assert control.control_info.state.error == ControlError.READ
     assert control.control_info.state.value == "0"
 
-    now = default_timer()
-    step = device.poll_controls(_make_driver(), now + control.time_until_next_poll(now), 100, 100)
+    step = device.poll_controls(_make_driver(), control.next_due_at, 100, 100)
     for event in await step.poll_coroutine():
         device.notify_all(event)
 

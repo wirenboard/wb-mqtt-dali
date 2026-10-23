@@ -48,7 +48,7 @@ class TestDeviceInitScheduler:
 
         scheduler.schedule("dev_1", current_time=100.0)
 
-        assert scheduler.get_retry_count("dev_1") == 1
+        assert scheduler.has_failed("dev_1")
 
     def test_schedule_with_delay(self):
         """Device scheduled with delay is not ready until the delay elapses."""
@@ -73,7 +73,7 @@ class TestDeviceInitScheduler:
         scheduler.remove("nonexistent")
 
     def test_get_first_attempt_ready_filters_retries(self):
-        """Only devices with retry_count == 0 are returned as first attempts."""
+        """Only devices that never failed are returned as first attempts."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
         scheduler.schedule("dev_2", current_time=100.0)
@@ -128,14 +128,14 @@ class TestDeviceInitScheduler:
 
         assert not scheduler.has_pending
 
-    def test_record_failure_increments_count(self):
-        """Each failure increments the retry counter."""
+    def test_record_failure_marks_failed(self):
+        """A recorded failure is reported by has_failed()."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
 
         scheduler.record_failure("dev_1", current_time=100.0)
 
-        assert scheduler.get_retry_count("dev_1") == 1
+        assert scheduler.has_failed("dev_1")
 
     def test_record_failure_returns_delay(self):
         """First failure returns the initial delay value."""
@@ -178,6 +178,17 @@ class TestDeviceInitScheduler:
 
         assert delay == INIT_RETRY_MAX_DELAY
 
+    def test_backoff_survives_long_failure_streak(self):
+        """Past the float overflow of multiplier**N (1025 failures) the delay stays at max."""
+        scheduler = DeviceInitScheduler()
+        scheduler.schedule("dev_1", current_time=0.0)
+
+        for _ in range(2000):
+            delay = scheduler.record_failure("dev_1", current_time=100.0)
+
+        assert delay == INIT_RETRY_MAX_DELAY
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_MAX_DELAY - 1) is None
+
     def test_clear(self):
         """clear() removes all pending devices."""
         scheduler = DeviceInitScheduler()
@@ -188,33 +199,10 @@ class TestDeviceInitScheduler:
 
         assert not scheduler.has_pending
 
-    def test_get_retry_count_nonexistent(self):
-        """Retry count for unknown device is 0."""
+    def test_has_failed_nonexistent(self):
+        """Unknown device has not failed."""
         scheduler = DeviceInitScheduler()
-        assert scheduler.get_retry_count("nonexistent") == 0
-
-    def test_custom_parameters(self):
-        """Scheduler respects custom initial_delay, multiplier, max_delay."""
-        scheduler = DeviceInitScheduler(initial_delay=1.0, multiplier=3.0, max_delay=10.0)
-        scheduler.schedule("dev_1", current_time=0.0)
-
-        d1 = scheduler.record_failure("dev_1", current_time=0.0)
-        d2 = scheduler.record_failure("dev_1", current_time=0.0)
-        d3 = scheduler.record_failure("dev_1", current_time=0.0)
-
-        assert d1 == 1.0
-        assert d2 == 3.0
-        assert d3 == 9.0
-
-    def test_custom_parameters_cap(self):
-        """Custom max_delay caps the backoff correctly."""
-        scheduler = DeviceInitScheduler(initial_delay=1.0, multiplier=3.0, max_delay=10.0)
-        scheduler.schedule("dev_1", current_time=0.0)
-
-        for _ in range(10):
-            delay = scheduler.record_failure("dev_1", current_time=0.0)
-
-        assert delay == 10.0
+        assert not scheduler.has_failed("nonexistent")
 
     def test_batch_first_attempt(self):
         """All 10 devices scheduled at once are returned together for first attempt."""
@@ -299,7 +287,7 @@ class TestTryInitializeDevice:
 
     @pytest.mark.asyncio
     async def test_failure_stays_in_scheduler(self):
-        """Failed init keeps device in scheduler with incremented retry count."""
+        """Failed init keeps device in scheduler as a retry."""
         driver, publisher, scheduler, handler, logger = _make_init_deps()
         device = _make_mock_device()
         device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
@@ -309,7 +297,7 @@ class TestTryInitializeDevice:
 
         assert result is False
         assert scheduler.has_pending
-        assert scheduler.get_retry_count(device.mqtt_id) == 1
+        assert scheduler.has_failed(device.mqtt_id)
 
     @pytest.mark.asyncio
     async def test_failure_publishes_error_controls(self):
@@ -426,7 +414,7 @@ class TestPollStep:
 
         await ctrl._poll_step(t)
         assert ctrl._poll_scheduler.poll_turn is True
-        assert ctrl._init_scheduler.get_retry_count("r1") == 2
+        retry_dev.initialize.assert_awaited_once()
 
         ctrl._poll_devices.reset_mock()
         await ctrl._poll_step(t)

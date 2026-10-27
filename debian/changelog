@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.36.0) stable; urgency=medium
+
+  * Identification numbers, the OEM one included, are sent as strings: long numbers no longer
+    lose their last digits in the web interface
+  * The device settings schema no longer describes the GTIN, the identification numbers, the
+    gear types and the firmware and hardware versions; the values are still sent, and the web
+    interface shows them on its own
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 27 Oct 2026 07:55:32 +0000
+
 wb-mqtt-dali (1.35.0) stable; urgency=medium
 
   * Fix a bus stopping polling after a device had not answered for about 17 hours

@@ -13,6 +13,7 @@ from typing import (
     Awaitable,
     Callable,
     Iterable,
+    NamedTuple,
     Optional,
     Protocol,
     Union,
@@ -599,15 +600,20 @@ async def read_product_name(
     return product_info.get("product_name")
 
 
+class MemoryFieldParam(NamedTuple):
+    name: str
+    to_json: Callable[[Any], Any] = lambda value: value
+
+
 class GeneralMemoryParams(SettingsParamBase):
     memory_fields_to_json_params = {
-        info.GTIN: "gtin",
-        info.FirmwareVersion: "firmware_version",
-        info.IdentificationNumber: "identification_number",
-        info.IdentifictionNumber_legacy: "identification_number",
-        info.HardwareVersion: "hardware_version",
-        oem.ManufacturerGTIN: "oem_gtin",
-        oem.LuminaireID: "oem_identification_number",
+        info.GTIN: MemoryFieldParam("gtin"),
+        info.FirmwareVersion: MemoryFieldParam("firmware_version"),
+        info.IdentificationNumber: MemoryFieldParam("identification_number", str),
+        info.IdentifictionNumber_legacy: MemoryFieldParam("identification_number", str),
+        info.HardwareVersion: MemoryFieldParam("hardware_version"),
+        oem.ManufacturerGTIN: MemoryFieldParam("oem_gtin"),
+        oem.LuminaireID: MemoryFieldParam("oem_identification_number", str),
     }
 
     def __init__(
@@ -675,7 +681,7 @@ class GeneralMemoryParams(SettingsParamBase):
             if value is not None:
                 if isinstance(value, int) and _is_empty_memory_int(value):
                     continue
-                dst[param] = value
+                dst[param.name] = param.to_json(value)
 
 
 @dataclass

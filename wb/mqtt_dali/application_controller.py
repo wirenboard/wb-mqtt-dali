@@ -359,7 +359,7 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
 ) -> bool:
     """Try to initialize device. Publish on success or error. Returns True on success."""
     mqtt_id = device.mqtt_id
-    is_retry = scheduler.get_retry_count(mqtt_id) > 0
+    is_retry = scheduler.has_failed(mqtt_id)
     try:
         await device.initialize(driver)
         if publisher.has_device(mqtt_id):
@@ -404,6 +404,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
         gtin_db: DaliDatabase,
+        on_polling_failure: Callable[[], None],
     ) -> None:
         self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
         self.bus_name = f"Bus {config.bus}"
@@ -422,6 +423,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
 
         self._polling_task: Optional[asyncio.Task] = None
+        self._on_polling_failure = on_polling_failure
 
         # Special gear commands are preceded by EnableDeviceType
         # Store the type to correctly decode the following command frame
@@ -549,6 +551,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._state = ApplicationControllerState.READY
 
         self._polling_task = asyncio.create_task(self._polling_loop())
+        self._polling_task.add_done_callback(self._report_polling_failure)
 
     async def stop(self) -> None:
         async with self._state_lock:
@@ -582,6 +585,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 pass
             except asyncio.TimeoutError:
                 self.logger.warning("Polling task did not stop within 2s; abandoning")
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass  # already reported by _report_polling_failure
             self._polling_task = None
 
         # Cancel any queued ApplicationControllerTasks so that callers awaiting
@@ -1414,113 +1419,125 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         item = None
         while not self._stop_requested:
             try:
-                try:
-                    if item is None:
-                        queue_timeout = max(0.001, next_poll_time - default_timer())
-                        item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
-                except asyncio.TimeoutError:
-                    if self._in_quiescent_mode:
-                        next_poll_time = default_timer() + 1.0
-                        continue
-                    next_poll_time = default_timer() + await self._poll_step(default_timer())
-                    continue
-
+                if item is None:
+                    queue_timeout = max(0.001, next_poll_time - default_timer())
+                    item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
+            except asyncio.TimeoutError:
+                pass
+            # Polled outside the except block: an error from the poll step must not chain the timeout.
+            if item is None:
                 if self._in_quiescent_mode:
-                    if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
-                        _device, control = item.data
-                        control.value_to_set = None
-                    item.future.set_exception(RuntimeError("Cannot execute tasks while in quiescent mode"))
-                    item = None
+                    next_poll_time = default_timer() + 1.0
                     continue
+                next_poll_time = default_timer() + await self._poll_step(default_timer())
+                continue
 
+            if self._in_quiescent_mode:
                 if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
-                    controls = []
-                    try:
-                        while (
-                            item is not None
-                            and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
-                        ):
-                            _device, control = item.data
-                            controls.append((item, control.value_to_set))
-                            control.value_to_set = None
-                            try:
-                                item = self._tasks_queue.get_nowait()
-                            except asyncio.QueueEmpty:
-                                item = None
-                        results = await asyncio.gather(
-                            *[
-                                control_task.data[0].execute_control(
-                                    self._dev, control_task.data[1].control_info.id, value_to_set
-                                )
-                                for control_task, value_to_set in controls
-                            ],
-                            return_exceptions=True,
-                        )
-                        for (control_task, value_to_set), result in zip(controls, results):
-                            _device, control = control_task.data
-                            if control_task.future.done():
-                                continue
-                            if isinstance(result, Exception):
-                                control_task.future.set_exception(result)
-                                continue
-                            control_task.future.set_result(result)
-                            control.control_info.state.value = value_to_set
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        # Guard against an unexpected failure while draining/resolving the
-                        # batch: resolve every still-pending pulled-off future so no
-                        # one-shot on-topic task hangs, then let the loop continue.
-                        self.logger.exception("Unexpected error while processing EXECUTE_CONTROL batch")
-                        for control_task, _value_to_set in controls:
-                            if not control_task.future.done():
-                                control_task.future.set_exception(e)
-
-                else:
-                    try:
-                        if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
-                            await self._run_commissioning_in_child_task()
-                            self._poll_scheduler.clear()
-                        elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
-                            await self._load_device_info_task(*item.data)
-                        elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
-                            device, new_params = item.data
-                            if not item.future.done():
-                                item.future.set_result(await device.apply_parameters(self._dev, new_params))
-                        elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
-                            group_index, new_params = item.data
-                            await self._apply_group_parameters_task(group_index, new_params)
-                        elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
-                            await self._apply_bus_parameters_task(item.data)
-                        elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
-                            await item.data.identify(self._dev)
-                        elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE_SETTINGS:
-                            await self._reset_device_settings_task(item.data)
-                        elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE:
-                            await self._reset_device_task(item.data)
-                        elif item.task_type == ApplicationControllerTaskType.SEND_COMMAND_BATCH:
-                            batch_result = await self._send_command_batch_task(item.data)
-                            if not item.future.done():
-                                item.future.set_result(batch_result)
-                        if not item.future.done():
-                            item.future.set_result(None)
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        if not item.future.done():
-                            item.future.set_exception(e)
-                    finally:
-                        item = None
-
-                # Slip a poll into the gap between bursts of tasks: if the queue
-                # is now empty and the polling interval has elapsed, run a poll
-                # step immediately instead of waiting for the queue_timeout to fire.
-                if (
-                    not self._in_quiescent_mode
-                    and self._tasks_queue.empty()
-                    and next_poll_time <= default_timer()
-                ):
-                    next_poll_time = default_timer() + await self._poll_step(default_timer())
-
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
+                    _device, control = item.data
+                    control.value_to_set = None
+                if not item.future.done():
+                    item.future.set_exception(RuntimeError("Cannot execute tasks while in quiescent mode"))
                 item = None
+                continue
+
+            if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
+                controls = []
+                try:
+                    while (
+                        item is not None and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
+                    ):
+                        _device, control = item.data
+                        controls.append((item, control.value_to_set))
+                        control.value_to_set = None
+                        try:
+                            item = self._tasks_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            item = None
+                    results = await asyncio.gather(
+                        *[
+                            control_task.data[0].execute_control(
+                                self._dev, control_task.data[1].control_info.id, value_to_set
+                            )
+                            for control_task, value_to_set in controls
+                        ],
+                        return_exceptions=True,
+                    )
+                    for (control_task, value_to_set), result in zip(controls, results):
+                        _device, control = control_task.data
+                        if control_task.future.done():
+                            continue
+                        if isinstance(result, Exception):
+                            control_task.future.set_exception(result)
+                            continue
+                        control_task.future.set_result(result)
+                        control.control_info.state.value = value_to_set
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    # Guard against an unexpected failure while draining/resolving the
+                    # batch: resolve every still-pending pulled-off future so no
+                    # one-shot on-topic task hangs, then let the loop continue.
+                    self.logger.exception("Unexpected error while processing EXECUTE_CONTROL batch")
+                    for control_task, _value_to_set in controls:
+                        if not control_task.future.done():
+                            control_task.future.set_exception(e)
+
+            else:
+                try:
+                    if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
+                        await self._run_commissioning_in_child_task()
+                        self._poll_scheduler.clear()
+                    elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
+                        await self._load_device_info_task(*item.data)
+                    elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
+                        device, new_params = item.data
+                        if not item.future.done():
+                            item.future.set_result(await device.apply_parameters(self._dev, new_params))
+                    elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
+                        group_index, new_params = item.data
+                        await self._apply_group_parameters_task(group_index, new_params)
+                    elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
+                        await self._apply_bus_parameters_task(item.data)
+                    elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
+                        await item.data.identify(self._dev)
+                    elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE_SETTINGS:
+                        await self._reset_device_settings_task(item.data)
+                    elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE:
+                        await self._reset_device_task(item.data)
+                    elif item.task_type == ApplicationControllerTaskType.SEND_COMMAND_BATCH:
+                        batch_result = await self._send_command_batch_task(item.data)
+                        if not item.future.done():
+                            item.future.set_result(batch_result)
+                    if not item.future.done():
+                        item.future.set_result(None)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    if not item.future.done():
+                        item.future.set_exception(e)
+                finally:
+                    item = None
+
+            # Slip a poll into the gap between bursts of tasks: if the queue
+            # is now empty and the polling interval has elapsed, run a poll
+            # step immediately instead of waiting for the queue_timeout to fire.
+            if (
+                not self._in_quiescent_mode
+                and self._tasks_queue.empty()
+                and next_poll_time <= default_timer()
+            ):
+                next_poll_time = default_timer() + await self._poll_step(default_timer())
+
+    def _report_polling_failure(self, task: asyncio.Task) -> None:
+        error = None if task.cancelled() else task.exception()
+        if error is None and self._stop_requested:
+            return
+        self.logger.critical(
+            (
+                "Polling loop failed, exiting"
+                if error is not None
+                else "Polling loop ended without a stop request, exiting"
+            ),
+            exc_info=error,
+        )
+        self._on_polling_failure()
 
     async def _run_commissioning_in_child_task(self) -> None:
         child = asyncio.create_task(self._commissioning_task())
@@ -1534,17 +1551,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._current_commissioning_task = None
 
     async def _poll_devices(self, poll_scheduler: PollScheduler, current_time: float) -> None:
-        try:
-            responses = await poll_scheduler.poll(self._dev, current_time)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.exception("Error polling devices %s", str(e))
-        else:
-            for device, device_responses in responses:
-                if isinstance(device_responses, BaseException):
-                    self.logger.error("Error polling device %s: %s", device.name, device_responses)
-                else:
-                    for event in device_responses:
-                        await self._event_sync.notify_poll_event(device, event)
+        responses = await poll_scheduler.poll(self._dev, current_time)
+        for device, device_responses in responses:
+            if isinstance(device_responses, BaseException):
+                self.logger.error("Error polling device %s: %s", device.name, device_responses)
+            else:
+                for event in device_responses:
+                    await self._event_sync.notify_poll_event(device, event)
 
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True

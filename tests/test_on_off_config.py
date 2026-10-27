@@ -245,6 +245,7 @@ class OnOffPersistenceTest(unittest.IsolatedAsyncioTestCase):
             },
             MagicMock(),
             MagicMock(),
+            MagicMock(),
         )
         gateway = WbDaliGateway(uid="gw1", buses=[bus])
 
@@ -262,6 +263,7 @@ class OnOffPersistenceTest(unittest.IsolatedAsyncioTestCase):
             "gw1",
             1,
             {"devices": [{"short": 5, "random": 123, "dali2": True, "on_off": VALID_ON_OFF}]},
+            MagicMock(),
             MagicMock(),
             MagicMock(),
         )

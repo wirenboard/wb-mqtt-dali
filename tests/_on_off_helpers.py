@@ -261,7 +261,7 @@ class ScriptedBus:
     async def start_bus(self, data: dict) -> ApplicationController:
         """Build a bus from its config entry over this gateway and start it."""
         return await self.start(
-            bus_from_json(self._gateway_id, self._bus_index, data, self.dispatcher, MagicMock())
+            bus_from_json(self._gateway_id, self._bus_index, data, self.dispatcher, MagicMock(), MagicMock())
         )
 
     async def write(self, device_id: str, control_id: str, payload: str) -> None:

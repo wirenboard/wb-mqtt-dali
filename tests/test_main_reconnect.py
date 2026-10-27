@@ -12,8 +12,11 @@ from unittest.mock import patch
 
 import aiomqtt
 
-from wb.mqtt_dali.main import default_service
+from wb.mqtt_dali.gateway import BusPollingError
+from wb.mqtt_dali.main import EXIT_FAILURE, default_service
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
+
+from ._app_controller_helpers import wait_until
 
 
 class _FakeClient:
@@ -83,10 +86,13 @@ class _FakeGateway:
         self.start_calls = 0
         self.stop_calls = 0
         self.connected_at_stop = None
+        self.bus_failed = asyncio.Event()
 
-    async def start(self):
+    async def run(self):
         self.start_calls += 1
         self._events.append("start")
+        await self.bus_failed.wait()
+        raise BusPollingError("bus failed")
 
     async def stop(self):
         self.stop_calls += 1
@@ -107,11 +113,6 @@ class _FakeSignals:
     def patch_loop(self):
         """Routes every event loop's `add_signal_handler` here while the patch is active."""
         return patch.object(asyncio.SelectorEventLoop, "add_signal_handler", self.add_signal_handler)
-
-
-async def _poll_until(condition):
-    while not condition():
-        await asyncio.sleep(0.001)
 
 
 class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
@@ -183,7 +184,7 @@ class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
         gateway = _FakeGateway(dispatcher, self.events)
 
         result = await self._run_service(
-            client, dispatcher, gateway, lambda: _poll_until(lambda: gateway.start_calls == 1)
+            client, dispatcher, gateway, lambda: wait_until(lambda: gateway.start_calls == 1)
         )
 
         self.assertEqual(result, 0)
@@ -199,13 +200,32 @@ class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
         gateway = _FakeGateway(dispatcher, self.events)
 
         result = await self._run_service(
-            client, dispatcher, gateway, lambda: _poll_until(lambda: client.enter_calls >= 3)
+            client, dispatcher, gateway, lambda: wait_until(lambda: client.enter_calls >= 3)
         )
 
         self.assertEqual(result, 0)
         self.assertEqual(gateway.stop_calls, 1)
         self.assertFalse(gateway.connected_at_stop)
         self.assertEqual(self.events, ["restored", "start", "replay", "lost", "stop"])
+
+    async def test_failed_bus_stops_the_gateway_and_exits_with_failure(self):
+        """A bus polling loop dies with the session up: the gateway is stopped while connected
+        and the service exits with EXIT_FAILURE."""
+        client = _FakeClient()
+        dispatcher = _FakeDispatcher([_SessionStream.HOLD], self.events)
+        gateway = _FakeGateway(dispatcher, self.events)
+
+        async def fail_bus_and_hold():
+            await wait_until(lambda: gateway.start_calls == 1)
+            gateway.bus_failed.set()
+            await asyncio.Event().wait()
+
+        result = await self._run_service(client, dispatcher, gateway, fail_bus_and_hold)
+
+        self.assertEqual(result, EXIT_FAILURE)
+        self.assertEqual(gateway.stop_calls, 1)
+        self.assertTrue(gateway.connected_at_stop)
+        self.assertNotIn("lost", self.events)
 
 
 class TestMqttClientFactory(unittest.TestCase):

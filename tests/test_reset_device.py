@@ -1,4 +1,4 @@
-# pylint: disable=duplicate-code  # shared gateway.start() boilerplate with tests/test_send_command_rpc.py
+# pylint: disable=duplicate-code  # shared gateway.run() boilerplate with tests/test_send_command_rpc.py
 import asyncio
 import logging
 from types import SimpleNamespace
@@ -19,6 +19,8 @@ from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.wbdali_utils import MASK, AsyncDeviceInstanceTypeMapper
+
+from ._app_controller_helpers import make_bare_gateway, wait_until
 
 # Prevent file system access inside DaliDeviceBase.__init__
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
@@ -41,7 +43,7 @@ def _make_bare_controller():
     controller._init_scheduler = MagicMock(
         remove=MagicMock(),
         schedule=MagicMock(),
-        get_retry_count=MagicMock(return_value=0),
+        has_failed=MagicMock(return_value=False),
     )
     controller._poll_scheduler = MagicMock(remove_device=MagicMock(), clear=MagicMock())
     controller._fetch_scheduler = SettingsFetchScheduler()
@@ -493,24 +495,25 @@ async def test_reset_device_rpc_does_not_save_when_bus_call_fails():
 @pytest.mark.asyncio
 async def test_reset_endpoints_registered_on_start():
     # pylint: disable=protected-access
-    """Verify both reset endpoints are registered with the RPC server during start()."""
-    gateway = Gateway.__new__(Gateway)
+    """Verify both reset endpoints are registered with the RPC server while run() starts up."""
+    gateway = make_bare_gateway(command_registry={})
     gateway.rpc_server = MagicMock()
     gateway.rpc_server.start = AsyncMock()
+    gateway.rpc_server.stop = AsyncMock()
     gateway.rpc_server.add_endpoint = AsyncMock()
-    gateway.wb_dali_gateways = []
-    gateway._mqtt_dispatcher = AsyncMock()
     gateway._update_gateways = AsyncMock()
-    gateway._gtin_db = MagicMock()
+    expected = {("Editor", "ResetDeviceSettings"), ("Editor", "ResetDevice")}
+
+    def registered():
+        return {
+            (call_args.args[0], call_args.args[1])
+            for call_args in gateway.rpc_server.add_endpoint.await_args_list
+        }
 
     with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", new=AsyncMock()), patch(
         "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", new=AsyncMock()
     ):
-        await gateway.start()
-
-    registered = {
-        (call_args.args[0], call_args.args[1])
-        for call_args in gateway.rpc_server.add_endpoint.await_args_list
-    }
-    assert ("Editor", "ResetDeviceSettings") in registered
-    assert ("Editor", "ResetDevice") in registered
+        run_task = asyncio.create_task(gateway.run())
+        await asyncio.wait_for(wait_until(lambda: expected <= registered()), timeout=1.0)
+        await gateway.stop()
+        await run_task

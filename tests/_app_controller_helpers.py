@@ -25,6 +25,10 @@ from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
 
 
+class LoopKiller(Exception):
+    """An error no production code expects, so nothing on the polling path handles it."""
+
+
 def make_loop_controller() -> ApplicationController:
     # pylint: disable=protected-access
     controller = ApplicationController.__new__(ApplicationController)
@@ -98,6 +102,11 @@ def make_bare_gateway(
         gtin_db=MagicMock(),
         command_registry=command_registry if command_registry is not None else build_command_registry(),
     )
+
+
+async def wait_until(condition) -> None:
+    while not condition():
+        await asyncio.sleep(0.001)
 
 
 async def stop_loop(controller: ApplicationController, task: asyncio.Task) -> None:

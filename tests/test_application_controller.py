@@ -6,9 +6,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dali.address import DeviceShort, GearShort, InstanceNumber
+from dali.address import DeviceBroadcast, DeviceShort, GearShort, InstanceNumber
 from dali.command import Response, from_frame
-from dali.device.general import EnableInstance
+from dali.device.general import EnableInstance, StartQuiescentMode
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
 from dali.gear.general import QueryActualLevel, QueryControlGearPresent
 
@@ -34,14 +34,21 @@ from wb.mqtt_dali.commissioning import (
 )
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
+from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import bus_from_json
-from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError
+from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
-from ._app_controller_helpers import make_loop_controller, stop_loop
+from ._app_controller_helpers import (
+    LoopKiller,
+    make_loop_controller,
+    stop_loop,
+    wait_until,
+)
+from ._broker_link_helpers import RecordingClient
 
 # pylint: disable=duplicate-code
 
@@ -1529,7 +1536,7 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
             dali_devices=[],
             dali2_devices=[],
         )
-        controller = ApplicationController(config, MagicMock(), MagicMock())
+        controller = ApplicationController(config, MagicMock(), MagicMock(), MagicMock())
 
         with pytest.raises(RuntimeError, match="broker down"):
             await controller.start()
@@ -1542,6 +1549,80 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         # re-publish the broadcast device without a duplicate-handler error.
         await controller.start()
         await controller.stop()
+
+
+def _bus_with_device(device, on_polling_failure) -> ApplicationController:
+    config = ApplicationControllerConfig(
+        gateway_mqtt_device_id="gw",
+        bus=1,
+        dali_devices=[device],
+        dali2_devices=[],
+    )
+    return ApplicationController(config, MQTTDispatcher(RecordingClient()), MagicMock(), on_polling_failure)
+
+
+def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
+    device = MagicMock(spec=DaliDevice)
+    device.address = DaliDeviceAddress(5, 123)
+    device.mqtt_id = "gw_bus_1_dev"
+    device.name = "dev"
+    device.is_initialized = False
+    device.initialize = initialize
+    return device
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_ended_by_stop_does_not_call_failure_handler():
+    """start() then stop() on a bus whose device keeps failing init: the failure handler is never called."""
+    on_failure = MagicMock()
+    initialize = AsyncMock(side_effect=RuntimeError("no response"))
+    bus = _bus_with_device(_uninitialized_device(initialize), on_failure)
+
+    await bus.start()
+    await asyncio.wait_for(wait_until(lambda: initialize.await_count > 0), timeout=1.0)
+    await bus.stop()
+    await asyncio.sleep(0)
+
+    on_failure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_survives_a_task_its_caller_gave_up_on_in_quiescent_mode():
+    """In quiescent mode a task whose caller was cancelled is dropped: the loop goes on
+    and rejects the next task, the failure handler is never called."""
+    on_failure = MagicMock()
+    device = _uninitialized_device(AsyncMock(side_effect=RuntimeError("no response")))
+    bus = _bus_with_device(device, on_failure)
+    await bus.start()
+    bus.driver.bus_traffic.notify_bus_frame(StartQuiescentMode(DeviceBroadcast()).frame, 1)
+    await asyncio.sleep(0.01)
+
+    abandoned = asyncio.create_task(bus.identify_device(device))
+    await asyncio.sleep(0)
+    abandoned.cancel()
+
+    with pytest.raises(RuntimeError, match="quiescent"):
+        await asyncio.wait_for(bus.identify_device(device), timeout=1.0)
+    on_failure.assert_not_called()
+    await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_ends_when_polling_a_device_raises():
+    """Building the poll of an initialized device raises: the polling loop ends,
+    the failure handler is called once and stop() still completes."""
+    failed = asyncio.Event()
+    on_failure = MagicMock(side_effect=failed.set)
+    device = _uninitialized_device(AsyncMock())
+    device.is_initialized = True
+    device.poll_controls.side_effect = LoopKiller()
+    bus = _bus_with_device(device, on_failure)
+
+    await bus.start()
+    await asyncio.wait_for(failed.wait(), timeout=3.0)
+    await bus.stop()
+
+    on_failure.assert_called_once_with()
 
 
 # --- bus-monitor syslog mirroring --------------------------------------------
@@ -1588,6 +1669,7 @@ def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[Appl
         uid_bus,
         {"devices": [], "bus_monitor_enabled": monitor, "bus_monitor_syslog_enabled": syslog},
         dispatcher,
+        MagicMock(),
         MagicMock(),
     )
     return bus, dispatcher

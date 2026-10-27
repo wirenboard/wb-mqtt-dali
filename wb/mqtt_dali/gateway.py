@@ -4,7 +4,7 @@ import logging
 import os
 import tempfile
 from itertools import chain
-from typing import Dict, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 from .application_controller import (
     ApplicationController,
@@ -37,6 +37,10 @@ MAX_WEBSOCKET_PORT = 65535
 def commissioning_topic(bus_uid: str) -> str:
     """Retained MQTT topic that carries commissioning state for a bus."""
     return f"/wb-dali/{bus_uid}/commissioning"
+
+
+class BusPollingError(Exception):
+    pass
 
 
 def check_short_address_conflict(
@@ -150,12 +154,13 @@ def check_mqtt_id_conflict(
                 raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
 
 
-def bus_from_json(
+def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     gateway_mqtt_device_id: str,
     bus_index: int,
     data: dict,
     mqtt_dispatcher: MQTTDispatcher,
     gtin_db: DaliDatabase,
+    on_polling_failure: Callable[[], None],
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
     dali2_devices: list[Dali2Device] = []
@@ -195,7 +200,7 @@ def bus_from_json(
         },
     )
 
-    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db)
+    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db, on_polling_failure)
     return res
 
 
@@ -235,6 +240,8 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         if command_registry is None:
             command_registry = build_command_registry()
         self.rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
+        self._finished = asyncio.Event()
+        self._bus_failed = False
         self.wb_dali_gateways: list[WbDaliGateway] = list(
             map(
                 lambda gw_conf: WbDaliGateway(
@@ -242,7 +249,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                     buses=list(
                         map(
                             lambda bus: bus_from_json(
-                                gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher, gtin_db
+                                gw_conf["device_id"],
+                                bus[0],
+                                bus[1],
+                                mqtt_dispatcher,
+                                gtin_db,
+                                self._on_bus_failure,
                             ),
                             enumerate(gw_conf.get("buses", []), 1),
                         )
@@ -264,7 +276,8 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
 
         self._command_registry = command_registry
 
-    async def start(self) -> None:
+    async def run(self) -> None:
+        """Serve until stop(); raise BusPollingError once the polling loop of any bus has died."""
         try:
             await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -371,8 +384,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
             "ListCommands",
             self.list_commands_rpc_handler,
         )
+        await self._finished.wait()
+        if self._bus_failed:
+            raise BusPollingError("Polling loop of a DALI bus failed")
 
     async def stop(self) -> None:
+        self._finished.set()
         await self.rpc_server.stop()
         await self._clear_commissioning_state_for_all_buses()
         res = await asyncio.gather(
@@ -382,6 +399,10 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         for r in res:
             if isinstance(r, Exception):
                 raise r
+
+    def _on_bus_failure(self) -> None:
+        self._bus_failed = True
+        self._finished.set()
 
     def _iter_buses(self):
         for gw in self.wb_dali_gateways:
@@ -705,7 +726,9 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 bus_count = 3
                 for bus_index in range(1, bus_count + 1):
                     apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
-                    apc = ApplicationController(apc_conf, self._mqtt_dispatcher, self._gtin_db)
+                    apc = ApplicationController(
+                        apc_conf, self._mqtt_dispatcher, self._gtin_db, self._on_bus_failure
+                    )
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)
                 new_gateways.append(gw)

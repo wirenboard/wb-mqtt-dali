@@ -878,7 +878,7 @@ async def search_short(  # pylint: disable=too-many-branches
     try:
         if dali2:
             mapper = AsyncDeviceInstanceTypeMapper()
-            await mapper.async_autodiscover(driver, logger=log)
+            await mapper.async_autodiscover(driver, (0, 63), log)
             sorted_items = sorted(mapper.mapping.items(), key=lambda x: x[0][0] * 100 + x[0][1])
             last_short_addr = None
             for (addr, inst_num), inst_type in sorted_items:

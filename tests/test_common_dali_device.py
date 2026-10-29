@@ -1,3 +1,4 @@
+import logging
 from typing import NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -483,7 +484,7 @@ def test_pollable_requires_schedule_poll_at():
 
 async def _run_poll_tick(control, driver, address, now: float = 0.0) -> list:
     """One poll tick of a single-query control, through the public `Pollable` entry point."""
-    step = control.next_poll_step(driver, address, max_commands=1, default_max_commands=1, now=now)
+    step = control.next_poll_step(driver, address, 1, 1, now, logging.getLogger("test"))
     assert step.poll_coroutine is not None
     return await step.poll_coroutine()
 

@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,7 +38,7 @@ async def test_read_not_implemented(number_settings_param):
     mock_driver = MagicMock()
     mock_address = MagicMock()
     with pytest.raises(NotImplementedError):
-        await number_settings_param.read(mock_driver, mock_address)
+        await number_settings_param.read(mock_driver, mock_address, logging.getLogger("test"))
 
 
 @pytest.mark.asyncio
@@ -51,9 +52,9 @@ async def test_read(number_settings_param):
         patch.object(number_settings_param, "get_read_command", return_value=mock_commands_list),
         patch("wb.mqtt_dali.settings.query_int", mock_query_int),
     ):
-        result = await number_settings_param.read(mock_driver, mock_address)
+        result = await number_settings_param.read(mock_driver, mock_address, logging.getLogger("test"))
         mock_query_int.assert_called_once_with(
-            mock_driver, mock_commands_list, None, FramePriority.CONFIGURATION
+            mock_driver, mock_commands_list, logging.getLogger("test"), FramePriority.CONFIGURATION
         )
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100
@@ -77,7 +78,9 @@ async def test_write(number_settings_param):
         patch.object(number_settings_param, "get_write_commands", return_value=[mock_write_command]),
         patch.object(number_settings_param, "get_read_command", return_value=mock_read_command),
     ):
-        result = await number_settings_param.write(mock_driver, mock_address, value_to_set)
+        result = await number_settings_param.write(
+            mock_driver, mock_address, value_to_set, logging.getLogger("test")
+        )
         mock_driver.send_commands.assert_called_once_with(
             [mock_write_command, mock_read_command],
             BusTrafficSource.WB,
@@ -94,7 +97,9 @@ async def test_write_no_change(number_settings_param):
     number_settings_param.value = 100
     value_to_set = {"test_property": 100}
 
-    result = await number_settings_param.write(mock_driver, mock_address, value_to_set)
+    result = await number_settings_param.write(
+        mock_driver, mock_address, value_to_set, logging.getLogger("test")
+    )
     assert result == {}
     assert number_settings_param.value == 100
 
@@ -106,7 +111,9 @@ async def test_write_missing_property_name(number_settings_param):
     number_settings_param.value = 50
     value_to_set = {}  # Missing property_name
 
-    result = await number_settings_param.write(mock_driver, mock_address, value_to_set)
+    result = await number_settings_param.write(
+        mock_driver, mock_address, value_to_set, logging.getLogger("test")
+    )
     assert result == {}
     assert number_settings_param.value == 50  # Value should remain unchanged
 
@@ -119,7 +126,7 @@ async def test_write_no_write_commands(number_settings_param):
     value_to_set = {"test_property": 100}
 
     with pytest.raises(NotImplementedError, match="Write commands for test_name are not defined"):
-        await number_settings_param.write(mock_driver, mock_address, value_to_set)
+        await number_settings_param.write(mock_driver, mock_address, value_to_set, logging.getLogger("test"))
 
 
 def test_get_schema(number_settings_param):
@@ -138,7 +145,7 @@ async def test_read_with_multiplier(number_settings_param):
         patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
         patch("wb.mqtt_dali.settings.query_int", mock_query_int),
     ):
-        result = await number_settings_param.read(mock_driver, MagicMock())
+        result = await number_settings_param.read(mock_driver, MagicMock(), logging.getLogger("test"))
         assert result == {"test_property": 1500}
         assert number_settings_param.value == 1500
 
@@ -165,7 +172,9 @@ async def test_write_with_multiplier(number_settings_param):
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
         patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
     ):
-        result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 1600})
+        result = await number_settings_param.write(
+            mock_driver, MagicMock(), {"test_property": 1600}, logging.getLogger("test")
+        )
         assert captured_raw == [32]  # 1600 / 50 = 32
         assert result == {"test_property": 1600}
         assert number_settings_param.value == 1600
@@ -176,7 +185,9 @@ async def test_write_no_change_with_multiplier(number_settings_param):
     number_settings_param.multiplier = 50
     number_settings_param.value = 1500
     mock_driver = MagicMock()
-    result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 1500})
+    result = await number_settings_param.write(
+        mock_driver, MagicMock(), {"test_property": 1500}, logging.getLogger("test")
+    )
     assert result == {}
     assert number_settings_param.value == 1500
 
@@ -203,7 +214,9 @@ async def test_write_rounding_with_multiplier(number_settings_param):
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
         patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
     ):
-        result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 55})
+        result = await number_settings_param.write(
+            mock_driver, MagicMock(), {"test_property": 55}, logging.getLogger("test")
+        )
         assert captured_raw == [1]
         assert result == {"test_property": 50}
         assert number_settings_param.value == 50
@@ -230,7 +243,9 @@ async def test_write_multiplier_one_sends_raw_unchanged(number_settings_param):
         patch.object(number_settings_param, "get_write_commands", side_effect=capture_write_commands),
         patch.object(number_settings_param, "get_read_command", return_value=MagicMock()),
     ):
-        result = await number_settings_param.write(mock_driver, MagicMock(), {"test_property": 100})
+        result = await number_settings_param.write(
+            mock_driver, MagicMock(), {"test_property": 100}, logging.getLogger("test")
+        )
         assert captured_raw == [100]
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100
@@ -291,7 +306,7 @@ async def test_settings_param_group_read(number_settings_param):
     group._parameters = [number_settings_param]
 
     with patch.object(number_settings_param, "read", return_value={"test_property": 50}):
-        result = await group.read(mock_driver, mock_address)
+        result = await group.read(mock_driver, mock_address, logging.getLogger("test"))
         assert result == {"group_property": {"test_property": 50}}
 
 
@@ -306,7 +321,7 @@ async def test_settings_param_group_write(number_settings_param):
 
     value = {"group_property": {"test_property": 100}}
     with patch.object(number_settings_param, "write", return_value={"test_property": 100}):
-        result = await group.write(mock_driver, mock_address, value)
+        result = await group.write(mock_driver, mock_address, value, logging.getLogger("test"))
         assert result == {"group_property": {"test_property": 100}}
 
 
@@ -319,7 +334,7 @@ async def test_settings_param_group_write_missing_property(number_settings_param
     group = SettingsParamGroup(name=SettingsParamName("group_name"), property_name="group_property")
     group._parameters = [number_settings_param]
 
-    result = await group.write(mock_driver, mock_address, {})
+    result = await group.write(mock_driver, mock_address, {}, logging.getLogger("test"))
     assert result == {}
 
 
@@ -334,7 +349,7 @@ async def test_settings_param_group_read_exception(number_settings_param):
 
     with patch.object(number_settings_param, "read", side_effect=ValueError("Test error")):
         with pytest.raises(RuntimeError, match='Error reading "test_name"'):
-            await group.read(mock_driver, mock_address)
+            await group.read(mock_driver, mock_address, logging.getLogger("test"))
 
 
 @pytest.mark.asyncio

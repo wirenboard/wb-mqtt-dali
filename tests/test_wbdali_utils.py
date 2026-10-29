@@ -212,7 +212,7 @@ async def test_query_responses_retry_from_first_failed_retries_tail_only():
         ]
     )
 
-    result = await query_responses_retry_from_first_failed(driver, commands, logger=LOGGER)
+    result = await query_responses_retry_from_first_failed(driver, commands, 1, LOGGER)
 
     assert result == ["ok1", "ok2", "ok3"]
     assert driver.send_commands_history == [commands, commands[1:]]
@@ -230,14 +230,14 @@ async def test_query_responses_retry_from_first_failed_raises_after_exhausted():
     )
 
     with pytest.raises(RuntimeError, match="retry-from-first failed"):
-        await query_responses_retry_from_first_failed(driver, commands, logger=LOGGER)
+        await query_responses_retry_from_first_failed(driver, commands, 1, LOGGER)
 
 
 @pytest.mark.asyncio
 async def test_query_responses_retry_from_first_failed_empty_commands_returns_empty():
     driver = FakeDriver(send_commands_results=[])
 
-    result = await query_responses_retry_from_first_failed(driver, [], logger=LOGGER)
+    result = await query_responses_retry_from_first_failed(driver, [], 1, LOGGER)
 
     assert result == []
     assert driver.send_commands_calls == 0
@@ -250,7 +250,7 @@ async def test_query_responses_retry_from_first_failed_invalid_batch_size_raises
     driver = FakeDriver(send_commands_results=[["ok1"]])
 
     with pytest.raises(ValueError, match="positive integer"):
-        await query_responses_retry_from_first_failed(driver, commands, batch_size=batch_size, logger=LOGGER)
+        await query_responses_retry_from_first_failed(driver, commands, batch_size, LOGGER)
 
 
 @pytest.mark.asyncio
@@ -263,7 +263,7 @@ async def test_query_responses_retry_from_first_failed_batch_rounding_retries_fr
         ]
     )
 
-    result = await query_responses_retry_from_first_failed(driver, commands, batch_size=2, logger=LOGGER)
+    result = await query_responses_retry_from_first_failed(driver, commands, 2, LOGGER)
 
     assert result == ["ok1", "ok2", "ok3", "ok4"]
     assert driver.send_commands_history == [commands, commands[2:]]

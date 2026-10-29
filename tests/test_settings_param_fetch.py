@@ -157,7 +157,9 @@ async def test_scenesparam_fetch_two_chunks():
     assert driver.batches[1] == list(range(SCENES_FETCH_CHUNK, SCENES_TOTAL))
 
     fresh = ScenesParam()
-    assert await param.read(driver, addr, _LOGGER) == await fresh.read(_SceneLevelDriver(levels), addr)
+    assert await param.read(driver, addr, _LOGGER) == await fresh.read(
+        _SceneLevelDriver(levels), addr, _LOGGER
+    )
 
 
 @pytest.mark.asyncio
@@ -184,7 +186,7 @@ async def test_scenessettings_fetch_one_scene_per_call():
     fresh = ScenesSettings(ColourType.RGBWAF, Type8TcLimits())
     fresh_driver = AsyncMock()
     fresh_driver.run_sequence = AsyncMock(side_effect=lambda *a, **k: ColourSettings(ColourType.RGBWAF, 5))
-    assert fetched == await fresh.read(fresh_driver, addr)
+    assert fetched == await fresh.read(fresh_driver, addr, _LOGGER)
 
 
 # --- read() vs background fetch -----------------------------------------

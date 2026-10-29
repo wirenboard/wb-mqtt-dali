@@ -58,8 +58,8 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
     async def async_autodiscover(
         self,
         driver,
-        addresses: int | tuple[int, int] | Iterable[int] = (0, 63),
-        logger: Optional[logging.Logger] = None,
+        addresses: int | tuple[int, int] | Iterable[int],
+        logger: logging.Logger,
         priority: FramePriority = FramePriority.USER_ACTION,
     ) -> None:
         """
@@ -70,7 +70,7 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         for use in decoding "Device/Instance" event messages.
 
         :param driver: The async DALI driver to use for sending commands.
-        :param addresses: Optional specifier of which addresses to scan. Can
+        :param addresses: Specifier of which addresses to scan. Can
         either be a single int, in which case all addresses from zero to that
         value will be scanned; or can be a tuple in the form (start, end), in
         which case all addresses between the provided values will be scanned;
@@ -80,7 +80,7 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
         Needs to be used through an appropriate driver for example:
         ```
         dev_inst_map = AsyncDeviceInstanceTypeMapper()
-        await dev_inst_map.async_autodiscover(driver)
+        await dev_inst_map.async_autodiscover(driver, (0, 63), logger)
         ```
         instead of
         ```
@@ -189,7 +189,7 @@ class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
 async def query_int(
     driver: WBDALIDriver,
     cmd: Command,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> int:
     return (await query_response(driver, cmd, logger, priority)).raw_value.as_integer
@@ -198,7 +198,7 @@ async def query_int(
 async def query_response(
     driver: WBDALIDriver,
     cmd: Command,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> Response:
     last_error: Optional[RuntimeError] = None
@@ -206,14 +206,13 @@ async def query_response(
         resp = await driver.send(cmd, priority=priority)
         last_error = check_command_failed(cmd, resp)
         if last_error is not None:
-            if logger is not None:
-                logger.warning(
-                    "DALI send retry %d/%d for %s: %s",
-                    attempt,
-                    MAX_COMMAND_RETRIES,
-                    str(cmd),
-                    last_error,
-                )
+            logger.warning(
+                "DALI send retry %d/%d for %s: %s",
+                attempt,
+                MAX_COMMAND_RETRIES,
+                str(cmd),
+                last_error,
+            )
             continue
         return resp
     raise _query_failure_error(f"Error in response for {cmd}: {last_error}", [last_error])
@@ -222,7 +221,7 @@ async def query_response(
 async def query_responses(
     driver: WBDALIDriver,
     cmds: list[Command],
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Response]:
     last_error: Optional[RuntimeError] = None
@@ -231,14 +230,13 @@ async def query_responses(
         for command, resp in zip(cmds, responses):
             last_error = check_command_failed(command, resp)
             if last_error is not None:
-                if logger is not None:
-                    logger.warning(
-                        "DALI send retry %d/%d for %s: %s",
-                        attempt,
-                        MAX_COMMAND_RETRIES,
-                        [str(cmd) for cmd in cmds],
-                        last_error,
-                    )
+                logger.warning(
+                    "DALI send retry %d/%d for %s: %s",
+                    attempt,
+                    MAX_COMMAND_RETRIES,
+                    [str(cmd) for cmd in cmds],
+                    last_error,
+                )
                 break
         if last_error is None:
             return responses
@@ -296,8 +294,8 @@ def _query_failure_error(message: str, failures: Sequence[Optional[RuntimeError]
 async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
     driver: WBDALIDriver,
     commands: Sequence[Command],
-    batch_size: int = 1,
-    logger: Optional[logging.Logger] = None,
+    batch_size: int,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Optional[Response]]:
@@ -339,15 +337,14 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
         pending_commands = pending_commands[first_failed_pos:]
         pending_indexes = pending_indexes[first_failed_pos:]
 
-        if logger is not None:
-            logger.warning(
-                "DALI batch retry-from-first %d/%d: failed at index %d (%s): %s",
-                attempt,
-                MAX_COMMAND_RETRIES,
-                last_failed_index,
-                str(last_failed_command),
-                last_failed_reason,
-            )
+        logger.warning(
+            "DALI batch retry-from-first %d/%d: failed at index %d (%s): %s",
+            attempt,
+            MAX_COMMAND_RETRIES,
+            last_failed_index,
+            str(last_failed_command),
+            last_failed_reason,
+        )
 
     raise _query_failure_error(
         "DALI batch retry-from-first failed after "
@@ -360,7 +357,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
 async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
     driver: WBDALIDriver,
     commands: Sequence[Command],
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Optional[Response]]:
@@ -396,13 +393,12 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
         pending_indexes = next_pending_indexes
         pending_commands = next_pending_commands
 
-        if logger is not None:
-            logger.warning(
-                "DALI batch retry-only-failed %d/%d for %s",
-                attempt,
-                MAX_COMMAND_RETRIES,
-                [str(command) for command in commands],
-            )
+        logger.warning(
+            "DALI batch retry-only-failed %d/%d for %s",
+            attempt,
+            MAX_COMMAND_RETRIES,
+            [str(command) for command in commands],
+        )
 
     commands_str = [str(command) for command in commands]
     reasons = {index: str(failure) for index, failure in last_failed_reasons.items()}
@@ -416,7 +412,7 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
 async def send_with_retry(
     driver: WBDALIDriver,
     cmd: Command,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> Response:
@@ -425,17 +421,14 @@ async def send_with_retry(
         response = await driver.send(cmd, source, priority)
         if not is_transmission_error_response(response):
             return response
-        if logger is not None:
-            logger.warning(
-                "DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response
-            )
+        logger.warning("DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response)
     return response
 
 
 async def send_commands_with_retry(
     driver: WBDALIDriver,
     commands: Sequence[Command],
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Response]:
@@ -444,11 +437,10 @@ async def send_commands_with_retry(
         responses = await driver.send_commands(commands, source, priority)
         if not has_transmission_error(responses):
             return responses
-        if logger is not None:
-            logger.warning(
-                "DALI send_commands retry %d/%d failed for %s",
-                attempt,
-                MAX_COMMAND_RETRIES,
-                [str(cmd) for cmd in commands],
-            )
+        logger.warning(
+            "DALI send_commands retry %d/%d failed for %s",
+            attempt,
+            MAX_COMMAND_RETRIES,
+            [str(cmd) for cmd in commands],
+        )
     return responses

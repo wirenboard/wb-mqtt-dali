@@ -42,7 +42,7 @@ class OptionalSetting:
     def is_absent(self) -> bool:
         return self._is_absent
 
-    def note_absent(self, short_address: Address, logger: Optional[logging.Logger]) -> bool:
+    def note_absent(self, short_address: Address, logger: logging.Logger) -> bool:
         """Whether this silence means the setting is absent, and say so once if it does.
 
         Gear that answered the query before does implement it, so a lost answer is a bus problem
@@ -51,7 +51,7 @@ class OptionalSetting:
         if self._ever_answered:
             return False
         self._is_absent = True
-        if not self._absence_logged and logger is not None:
+        if not self._absence_logged:
             self._absence_logged = True
             logger.info(
                 'Gear at %s does not report "%s"; the setting is not shown',
@@ -72,9 +72,7 @@ class SettingsParamBase:
         self.name = name
         self.description: Optional[TranslatedTitle] = None
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         """Read the param from the device and return ``{property_name: <full value>}``.
 
         Performs device I/O and returns a freshly-built, independent object holding the full
@@ -85,9 +83,7 @@ class SettingsParamBase:
         del driver, short_address, logger
         return {}
 
-    async def fetch(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> bool:
+    async def fetch(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> bool:
         """Read the next chunk into the param's internal state, returning whether it is now complete.
 
         The base reads everything in one call (full ``read()`` then ``True``); heavy params override
@@ -104,7 +100,7 @@ class SettingsParamBase:
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         """
         Write extended gear parameters to a DALI device.
@@ -153,9 +149,7 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
         self.value = None
         self._is_read_only = False
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         response = await query_response(
             driver, self._query_factory(short_address), logger, FramePriority.CONFIGURATION
         )
@@ -169,7 +163,7 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}
@@ -233,9 +227,7 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         self.value = None
         self._is_read_only = False
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         self.value = (
             await query_int(
                 driver,
@@ -252,7 +244,7 @@ class NumberSettingsParam(SettingsParamBase):  # pylint: disable=too-many-instan
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}
@@ -341,9 +333,7 @@ class SettingsParamGroup(SettingsParamBase):
         self._parameters: list[SettingsParamBase] = []
         self._cached_value: dict = {}
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         res = {}
         awaitables = [param.read(driver, short_address, logger) for param in self._parameters]
         results = await asyncio.gather(*awaitables, return_exceptions=True)
@@ -360,7 +350,7 @@ class SettingsParamGroup(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self._property_name not in value:
             return {}

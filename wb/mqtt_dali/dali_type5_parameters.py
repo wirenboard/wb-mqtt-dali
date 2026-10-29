@@ -1,7 +1,6 @@
 # Type 5 Conversion from digital signal into d. c. voltage
 
 import logging
-from typing import Optional
 
 from dali.address import GearShort
 from dali.gear.converter import (
@@ -31,7 +30,7 @@ class Type5Parameters(TypeParameters):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         try:
             features = await query_response(

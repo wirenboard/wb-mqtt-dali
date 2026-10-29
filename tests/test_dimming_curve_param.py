@@ -3,6 +3,7 @@ DaliDevice integration that injects the read-only fallback for device
 types without dimming curve support.
 """
 
+import logging
 from contextlib import ExitStack
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -122,7 +123,7 @@ async def test_read_only_param_read_does_not_touch_bus(monkeypatch):
     param = DimmingCurveParam(state)
     driver = AsyncMock()
     address = MagicMock()
-    result = await param.read(driver, address)
+    result = await param.read(driver, address, logging.getLogger("test"))
 
     assert result == {param.property_name: DimmingCurveType.LOGARITHMIC}
     assert param.value == DimmingCurveType.LOGARITHMIC
@@ -145,11 +146,13 @@ async def test_read_only_param_write_is_noop_and_does_not_touch_bus(monkeypatch)
     address = MagicMock()
 
     # Value dict containing our property — must not raise.
-    res_with_key = await param.write(driver, address, {param.property_name: DimmingCurveType.LINEAR})
+    res_with_key = await param.write(
+        driver, address, {param.property_name: DimmingCurveType.LINEAR}, logging.getLogger("test")
+    )
     assert res_with_key == {}
 
     # Value dict without our property — also no-op.
-    res_without_key = await param.write(driver, address, {"other": 1})
+    res_without_key = await param.write(driver, address, {"other": 1}, logging.getLogger("test"))
     assert res_without_key == {}
 
     # State must remain at LOGARITHMIC — write on a read-only param cannot
@@ -336,7 +339,7 @@ async def test_unsupported_types_get_read_only_fallback(device_type):
     driver = AsyncMock()
     driver.send = AsyncMock(side_effect=AssertionError("Bus access forbidden"))
     address = MagicMock()
-    result = await param.read(driver, address)
+    result = await param.read(driver, address, logging.getLogger("test"))
     assert result == {"dimming_curve": DimmingCurveType.LOGARITHMIC}
     assert param.value == DimmingCurveType.LOGARITHMIC
 

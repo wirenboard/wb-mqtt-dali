@@ -1,5 +1,6 @@
 """Tests for DT51 (Energy reporting) support."""
 
+import logging
 from decimal import Decimal
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -103,7 +104,7 @@ async def test_type51_load_info_bank_202_only(mock_driver):
     mock_driver.run_sequence.side_effect = _make_run_sequence_dispatcher(
         {202: _bank_data_active(energy=1000, power=42)}
     )
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
 
     assert set(result.keys()) == {"energy_reporting"}
     assert result["energy_reporting"] == {"active_energy": 1.0, "active_power": 42}
@@ -120,7 +121,7 @@ async def test_type51_load_info_all_three_banks(mock_driver):
         }
     )
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert set(result.keys()) == {"energy_reporting"}
     assert result["energy_reporting"] == {
         "active_energy": 0.1,
@@ -139,7 +140,7 @@ async def test_type51_load_info_bank_202_failure_raises(mock_driver):
         {202: ResponseError("framing error")}
     )
     with pytest.raises(RuntimeError, match="Failed to read DT51 memory bank 202"):
-        await param.read(mock_driver, short_address=1)
+        await param.read(mock_driver, 1, logging.getLogger("test"))
 
 
 @pytest.mark.asyncio
@@ -147,7 +148,7 @@ async def test_type51_load_info_bank_202_not_implemented_raises(mock_driver):
     param = Type51EnergyParam()
     mock_driver.run_sequence.side_effect = _make_run_sequence_dispatcher({})
     with pytest.raises(RuntimeError, match="Failed to read DT51 memory bank 202"):
-        await param.read(mock_driver, short_address=1)
+        await param.read(mock_driver, 1, logging.getLogger("test"))
 
 
 @pytest.mark.asyncio
@@ -159,7 +160,7 @@ async def test_type51_load_info_field_flagvalue_skipped(mock_driver):
             203: {ApparentEnergy: FlagValue.TMASK, ApparentPower: 7},
         }
     )
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert result["energy_reporting"] == {"active_energy": 0.555, "apparent_power": 7}
 
 
@@ -173,7 +174,7 @@ async def test_type51_load_info_energy_in_kwh_three_decimals(mock_driver):
             204: {ActiveEnergyLoadside: Decimal("5000"), ActivePowerLoadside: 3},
         }
     )
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     fields = result["energy_reporting"]
     assert fields["active_energy"] == 12.345
     assert isinstance(fields["active_energy"], float)
@@ -207,7 +208,7 @@ async def test_type51_schema_includes_present_sections_after_read(mock_driver):
             203: _bank_data_apparent(),
         }
     )
-    await param.read(mock_driver, short_address=1)
+    await param.read(mock_driver, 1, logging.getLogger("test"))
     schema = param.get_schema(False)
     inner = schema["properties"]["energy_reporting"]["properties"]
     assert "apparent_energy" in inner
@@ -573,7 +574,7 @@ async def test_type51_unfinished_cycle_continues_regardless_of_the_schedule():
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
     def step(now: float):
-        return handler.next_poll_step(driver, GearShort(3), max_commands=3, default_max_commands=3, now=now)
+        return handler.next_poll_step(driver, GearShort(3), 3, 3, now, logging.getLogger("test"))
 
     assert await step(0.0).poll_coroutine() == []  # cycle open, 2 of 6 bytes read
     assert handler.has_in_progress_read()

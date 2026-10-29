@@ -833,7 +833,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         bus_parameter_types.add(handler_key)
                         bus_parameter_handlers.append(handler)
         for handler in bus_parameter_handlers:
-            await handler.write(self._dev, GearBroadcast(), new_params)
+            await handler.write(self._dev, GearBroadcast(), new_params, self.logger)
         for device in self.dali_devices:
             if not device.is_initialized:
                 continue

@@ -249,7 +249,7 @@ async def test_mqtt_level_write_uses_user_action_priority(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        send_commands_with_retry(driver, [DAPC(GearShort(0), 128)]),
+        send_commands_with_retry(driver, [DAPC(GearShort(0), 128)], driver.logger),
         1,
     )
     assert len(frames) == 1
@@ -268,13 +268,7 @@ async def test_polling_loop_uses_periodic_query_priority(initialized_driver):
         ControlInfo(id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))),
         QueryActualLevel,
     )
-    step = control.next_poll_step(
-        driver=driver,
-        address=GearShort(0),
-        max_commands=1,
-        default_max_commands=3,
-        now=0.0,
-    )
+    step = control.next_poll_step(driver, GearShort(0), 1, 3, 0.0, logging.getLogger("test"))
     assert step.poll_coroutine is not None
     frames = await _capture_one_batch(
         driver, mqtt_client, dispatcher, step.poll_coroutine(), 1, with_response=True
@@ -620,7 +614,9 @@ async def test_run_sequence_query_device_types_caller_prio(initialized_driver):
         _pump_publishes_and_reply_scripted(mqtt_client, dispatcher, driver, script, observed)
     )
     try:
-        result = await driver.run_sequence(query_device_types_sequence(GearShort(0)))
+        result = await driver.run_sequence(
+            query_device_types_sequence(GearShort(0), logging.getLogger("test"))
+        )
     finally:
         await _cancel_background_tasks(pump_task)
     assert result == [5]

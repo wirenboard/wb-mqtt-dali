@@ -233,7 +233,7 @@ class Type7Parameters(TypeParameters):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         try:
             features = await query_response(

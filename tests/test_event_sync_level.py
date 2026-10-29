@@ -6,6 +6,7 @@ exercised directly with lightweight stubs (no bus). `SettleClock` and the event-
 scheduling additions (`schedule_poll_at`, randomized re-draw) are tested in isolation too.
 """
 
+import logging
 from types import SimpleNamespace
 from typing import Optional
 
@@ -346,7 +347,7 @@ def test_first_poll_goes_straight_on_the_resync_interval():
     interval like any other. The reconfirm after service start is the device's business."""
     control = _event_control()
     assert control.is_poll_due(0.0) is True
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
+    control.next_poll_step(None, ADDR, 3, 3, 0.0, logging.getLogger("test"))
     assert EVENT_RESYNC_BASE_INTERVAL * 0.7 <= control.next_due_at <= EVENT_RESYNC_BASE_INTERVAL * 1.3
 
 
@@ -356,7 +357,7 @@ def test_resync_interval_randomized_within_bounds():
     intervals = set()
     for _ in range(50):
         control = _event_control()
-        control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)
+        control.next_poll_step(None, ADDR, 3, 3, 10.0, logging.getLogger("test"))
         interval = control.next_due_at - 10.0
         low = EVENT_RESYNC_BASE_INTERVAL * 0.7
         high = EVENT_RESYNC_BASE_INTERVAL * 1.3
@@ -368,7 +369,7 @@ def test_resync_interval_randomized_within_bounds():
 def test_event_param_resynced_after_interval():
     """An event control with no events re-syncs no sooner than its drawn re-sync interval."""
     control = _event_control()
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=10.0)
+    control.next_poll_step(None, ADDR, 3, 3, 10.0, logging.getLogger("test"))
     interval = control.next_due_at - 10.0
     assert control.is_poll_due(10.0 + interval - 1.0) is False
     assert control.is_poll_due(10.0 + interval + 1.0) is True
@@ -385,7 +386,7 @@ def test_rescheduled_poll_restores_the_base_interval_without_jitter():
     err.schedule_poll_at(2.0)
     assert err.is_poll_due(2.0) is True
 
-    err.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=2.0)
+    err.next_poll_step(None, ADDR, 3, 3, 2.0, logging.getLogger("test"))
     assert err.next_due_at == 2.0 + PERIODIC_STATUS_POLL_INTERVAL
     assert err.is_poll_due(4.0) is False
 
@@ -395,7 +396,7 @@ def test_confirmation_poll_resets_resync_timer():
     does not fire a second read right behind it."""
     control = _polled_event_control(100.0)
     control.schedule_poll_at(102.0)  # pull confirm to +2s
-    control.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=102.0)
+    control.next_poll_step(None, ADDR, 3, 3, 102.0, logging.getLogger("test"))
     assert control.next_due_at >= 102.0 + EVENT_RESYNC_BASE_INTERVAL * 0.7
     assert control.is_poll_due(103.0) is False  # back on the long interval
 
@@ -404,7 +405,7 @@ def test_periodic_param_still_polled():
     """Periodic controls keep a fixed (un-jittered) interval and are unaffected by event poll logic."""
     err = ErrorStatusControl()
     assert err.randomize_poll_interval is False
-    err.next_poll_step(None, ADDR, max_commands=3, default_max_commands=3, now=0.0)
+    err.next_poll_step(None, ADDR, 3, 3, 0.0, logging.getLogger("test"))
     assert err.next_due_at == 120.0  # fixed interval, no jitter re-draw
     assert err.is_poll_due(119.0) is False
     assert err.is_poll_due(120.0) is True

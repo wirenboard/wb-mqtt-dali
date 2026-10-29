@@ -112,7 +112,7 @@ async def _query_feature_types(
     driver: WBDALIDriver,
     short_address: Address,
     scope: _FeedbackScope,
-    logger: Optional[logging.Logger],
+    logger: logging.Logger,
 ) -> list[int]:
     try:
         first_value = (
@@ -130,12 +130,11 @@ async def _query_feature_types(
     if _FEATURE_TYPE_MIN <= first_value <= _FEATURE_TYPE_MAX:
         return [first_value]
     if first_value != _FEATURE_TYPE_MASK:
-        if logger is not None:
-            logger.info(
-                "%s: unexpected QueryFeatureType response %d, ignoring",
-                scope.label,
-                first_value,
-            )
+        logger.info(
+            "%s: unexpected QueryFeatureType response %d, ignoring",
+            scope.label,
+            first_value,
+        )
         return []
     feature_types: list[int] = []
     for _ in range(_FEATURE_TYPE_ITERATION_LIMIT):
@@ -154,7 +153,7 @@ async def _query_feature_types(
             break
         if _FEATURE_TYPE_MIN <= value <= _FEATURE_TYPE_MAX:
             feature_types.append(value)
-        elif logger is not None:
+        else:
             logger.info(
                 "%s: unexpected QueryNextFeatureType response %d, ignoring",
                 scope.label,
@@ -167,7 +166,7 @@ async def _query_feedback_capability(
     driver: WBDALIDriver,
     short_address: Address,
     feature_address: Instance,
-    logger: Optional[logging.Logger],
+    logger: logging.Logger,
 ) -> Optional[int]:
     try:
         return (
@@ -186,17 +185,17 @@ async def _discover_feedback_capability(
     driver: WBDALIDriver,
     short_address: Address,
     scope: _FeedbackScope,
-    logger: Optional[logging.Logger],
+    logger: logging.Logger,
 ) -> Optional[int]:
     feature_types = await _query_feature_types(driver, short_address, scope, logger)
     has_feedback = feedback.feature_type in feature_types
     other_features = [ft for ft in feature_types if ft != feedback.feature_type]
-    if other_features and logger is not None:
+    if other_features:
         for other in other_features:
             logger.info("%s: feature type %d is not implemented", scope.label, other)
     if has_feedback:
         capability = await _query_feedback_capability(driver, short_address, scope.feature_address, logger)
-        if capability is None and logger is not None:
+        if capability is None:
             logger.debug(
                 "%s: feedback feature present but capability query had no answer",
                 scope.label,
@@ -207,7 +206,7 @@ async def _discover_feedback_capability(
     # Some firmware doesn't advertise feature 32 via QueryFeatureType but still
     # implements Part 332. Probe capability directly before giving up.
     capability = await _query_feedback_capability(driver, short_address, scope.feature_address, logger)
-    if capability is not None and logger is not None:
+    if capability is not None:
         logger.debug("%s: feedback discovered via heuristic fallback", scope.label)
     return capability
 
@@ -270,7 +269,7 @@ class InstanceParameters(SettingsParamGroup):  # pylint: disable=too-many-instan
         self._parameters = list(self._base_parameters)
 
     async def discover_feedback(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+        self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger
     ) -> None:
         scope = _FeedbackScope(
             query_address=self.instance_number,
@@ -279,9 +278,7 @@ class InstanceParameters(SettingsParamGroup):  # pylint: disable=too-many-instan
         )
         self.feedback_capability = await _discover_feedback_capability(driver, short_address, scope, logger)
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         self._parameters = list(self._base_parameters)
         if self.feedback_capability is not None:
             self._parameters.extend(
@@ -301,7 +298,7 @@ class DeviceFeedbackParameters(SettingsParamGroup):
         self.feedback_capability: Optional[int] = None
 
     async def discover_feedback(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
+        self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger
     ) -> None:
         scope = _FeedbackScope(
             query_address=Device(),
@@ -310,9 +307,7 @@ class DeviceFeedbackParameters(SettingsParamGroup):
         )
         self.feedback_capability = await _discover_feedback_capability(driver, short_address, scope, logger)
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         if self.feedback_capability is None:
             return {}
         self._parameters = build_type32_feedback_parameters(FeatureDevice(), self.feedback_capability)
@@ -488,9 +483,7 @@ class InstanceTypeParam(SettingsParamBase):
         self.property_name = "instance_type"
         self.instance_type = instance_type
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         return {self.property_name: self.instance_type}
 
     def get_schema(self, group_and_broadcast: bool) -> dict:
@@ -531,9 +524,7 @@ class DeviceGroupsParam(SettingsParamBase):
         self._groups = [False] * self.TOTAL_GROUPS
         self._group_indexes: set[int] = set()
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         updated_groups = await self._query_all_groups(driver, short_address, logger)
         self._groups = updated_groups
         self._group_indexes = {i for i, is_member in enumerate(updated_groups) if is_member}
@@ -544,7 +535,7 @@ class DeviceGroupsParam(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         groups_to_set = value.get(self.property_name)
         if groups_to_set is None:
@@ -633,7 +624,7 @@ class DeviceGroupsParam(SettingsParamBase):
         self,
         driver: WBDALIDriver,
         short_address: Address,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> list[bool]:
         responses = await query_responses_retry_only_failed(
             driver,

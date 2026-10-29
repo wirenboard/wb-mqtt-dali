@@ -1,7 +1,6 @@
 # Type 1 self-contained emergency lighting parameters
 
 import logging
-from typing import Optional
 
 from dali.address import Address, GearShort
 from dali.gear.emergency import (
@@ -30,9 +29,7 @@ class EmergencyLevelParam(NumberGearParam):
         self.format = "dali-level"
         self.property_order = PropertyStartOrder.SPECIFIC.value
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         res = await super().read(driver, short_address, logger)
         try:
             self.minimum = await query_int(
@@ -60,7 +57,7 @@ class Type1Parameters(TypeParameters):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         try:
             features = await query_response(

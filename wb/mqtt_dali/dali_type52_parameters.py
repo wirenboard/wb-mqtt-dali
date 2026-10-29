@@ -1,7 +1,6 @@
 # Type 52 Diagnostics and maintenance (IEC 62386-253:2023)
 
 import logging
-from typing import Optional
 
 from dali.address import Address
 from dali.memory.diagnostics import (
@@ -84,9 +83,7 @@ class Type52Parameters(TypeParameters):
         super().__init__()
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, _logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, _logger: logging.Logger) -> dict:
         cg: dict = {}
         ls: dict = {}
         data = await read_bank_as_dict(

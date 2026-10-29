@@ -129,9 +129,7 @@ class Type51EnergyParam(SettingsParamBase):
         self._has_apparent = False
         self._has_loadside = False
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         del logger
 
         active_data = await read_bank_as_dict(
@@ -343,15 +341,14 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         # Cache the ROM scale byte at init time so chunked cycles can decode
         # without re-reading it; in-cycle fallback covers init-time failures.
         try:
             self._scale_byte = await _read_active_scale(driver, short_address, self._compat)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            if logger is not None:
-                logger.info("DT51 scale factor not available yet for %s: %s", short_address, e)
+            logger.info("DT51 scale factor not available yet for %s: %s", short_address, e)
             self._scale_byte = None
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
@@ -381,7 +378,7 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ControlsPollRequestResult:
         del logger
         # DT51 chunks are 4 cmds and the default tick budget is 3 — overshoot

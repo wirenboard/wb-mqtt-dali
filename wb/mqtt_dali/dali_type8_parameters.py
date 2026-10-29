@@ -262,9 +262,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         self._default_colour_type = default_colour_type
         self._limits = limits
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         return await self._read_impl(driver, short_address)
 
     async def write(
@@ -272,7 +270,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}
@@ -366,9 +364,7 @@ class SceneSettings(ColourState):
         )
         self._scene_number = scene_number
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         return self._to_json(await super().read(driver, short_address, logger))
 
     async def write(
@@ -376,7 +372,7 @@ class SceneSettings(ColourState):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if not value.get("enabled", True):
             return await self._remove_from_scene(driver, short_address, logger)
@@ -390,7 +386,7 @@ class SceneSettings(ColourState):
     # --- Private ---
 
     async def _remove_from_scene(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger]
+        self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger
     ) -> dict:
         """Disable = remove the gear from the scene. REMOVE FROM SCENE stores MASK in both the
         scene level and (62386-209 §9.11.3) the scene colour type, so the gear stops being a
@@ -429,18 +425,14 @@ class ScenesSettings(SettingsParamBase):
         # Index of the next scene not yet read; 0 = nothing read, SCENES_TOTAL = complete.
         self._fetch_cursor = 0
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         # Always a full read of all 16 scenes (refresh paths rely on this); marks fetch
         # complete (full read => nothing left for the background fetch).
         await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
         self._fetch_cursor = SCENES_TOTAL
         return {self.property_name: deepcopy(self._scene_values)}
 
-    async def fetch(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> bool:
+    async def fetch(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> bool:
         # One scene per call: a scene is a colour sequence on the shared DTR0 and cannot be split.
         if self._fetch_cursor >= SCENES_TOTAL:
             return True
@@ -453,7 +445,7 @@ class ScenesSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self._scenes[0].value is None:
             raise RuntimeError("Cannot write scenes before reading them")
@@ -533,7 +525,7 @@ class ScenesSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         scene_indices: Iterable[int],
-        logger: Optional[logging.Logger],
+        logger: logging.Logger,
     ) -> None:
         indices = list(scene_indices)
         results = await asyncio.gather(
@@ -561,7 +553,7 @@ class ColourGroupScenesSettings(ColourState):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         scene_data = value.get(self.property_name)
         if scene_data is None:
@@ -680,7 +672,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         async with self._colour_type_lock:
             if self._current_colour_type is None:
@@ -814,7 +806,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ControlsPollRequestResult:
         del default_max_commands, logger
         if not self.is_poll_due(now):
@@ -956,7 +948,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         self,
         driver: WBDALIDriver,
         short_address: Address,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ColourType:
         res = await query_response(
             driver, QueryColourStatus(short_address), logger, FramePriority.CONFIGURATION

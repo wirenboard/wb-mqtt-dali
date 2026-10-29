@@ -1,7 +1,6 @@
 # Type 50 Memory bank 1 extension (luminaire information)
 
 import logging
-from typing import Optional
 
 from dali.address import Address
 from dali.memory import oem
@@ -99,9 +98,7 @@ class Type50MemoryBankParam(SettingsParamBase):
         self._values: dict = {}
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         raw = await read_bank_as_dict(
             driver,
             oem.BANK_1,

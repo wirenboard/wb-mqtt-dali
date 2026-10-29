@@ -7,6 +7,7 @@ SetDevice/SetGroup/GetGroup editor flows with the ``enabled`` RPC representation
 """
 
 import json
+import logging
 import os
 import tempfile
 import unittest
@@ -353,7 +354,10 @@ class OnOffDeviceEditorTest(unittest.IsolatedAsyncioTestCase):
         """SetDevice add / rewrite / change / remove flow for the device on_off block: the
         control follows without a restart, foreign-mode residue is dropped, the config is saved."""
         param = OnOffSettingsParam()
-        self.assertEqual(await param.read(AsyncMock(), GearShort(1)), {"on_off": {"enabled": False}})
+        self.assertEqual(
+            await param.read(AsyncMock(), GearShort(1), logging.getLogger("test")),
+            {"on_off": {"enabled": False}},
+        )
 
         config = {"gateways": [{"device_id": "gw1", "buses": [{"devices": [{"short": 5, "random": 1}]}]}]}
         async with ScriptedBus() as harness:

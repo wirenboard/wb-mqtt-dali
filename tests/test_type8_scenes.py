@@ -6,6 +6,7 @@ brightness") stays enabled, and disabling must REMOVE FROM SCENE (both registers
 not just mask the level (which would leave a still-member colour-only scene).
 """
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -34,7 +35,7 @@ async def test_colour_only_scene_reads_enabled():
     brightness" state) rather than being reset to 0."""
     colour_only = ColourSettings(ColourType.RGBWAF, MASK)  # colour_masked stays False
     colour_only.colour.red = 10
-    res = await _scene().read(_read_returning(colour_only), GearShort(5))
+    res = await _scene().read(_read_returning(colour_only), GearShort(5), logging.getLogger("test"))
     assert res["enabled"] is True
     assert res["level"] == MASK
 
@@ -43,7 +44,7 @@ async def test_colour_only_scene_reads_enabled():
 async def test_level_only_scene_reads_enabled():
     """A scene with a level but MASK colour type (colour_masked) is a member by its level."""
     level_only = ColourSettings(ColourType.RGBWAF, 100, colour_masked=True)
-    res = await _scene().read(_read_returning(level_only), GearShort(5))
+    res = await _scene().read(_read_returning(level_only), GearShort(5), logging.getLogger("test"))
     assert res["enabled"] is True
 
 
@@ -51,7 +52,7 @@ async def test_level_only_scene_reads_enabled():
 async def test_removed_scene_reads_disabled():
     """Both level and colour type MASK = not a member: reads back disabled."""
     removed = ColourSettings(ColourType.RGBWAF, MASK, colour_masked=True)
-    res = await _scene().read(_read_returning(removed), GearShort(5))
+    res = await _scene().read(_read_returning(removed), GearShort(5), logging.getLogger("test"))
     assert res["enabled"] is False
 
 
@@ -64,7 +65,10 @@ async def test_disable_removes_from_scene(monkeypatch):
     driver = _read_returning(ColourSettings(ColourType.RGBWAF, MASK, colour_masked=True))
 
     res = await _scene(3).write(
-        driver, GearShort(5), {"enabled": False, "rgb": "1;2;3", "white": 4, "level": 100}
+        driver,
+        GearShort(5),
+        {"enabled": False, "rgb": "1;2;3", "white": 4, "level": 100},
+        logging.getLogger("test"),
     )
 
     cmds = sent.await_args.args[1]
@@ -82,7 +86,10 @@ async def test_enable_with_mask_level_stores_colour_only_scene(monkeypatch):
     driver = _read_returning(ColourSettings(ColourType.RGBWAF, MASK))  # colour-only read-back
 
     res = await _scene(3).write(
-        driver, GearShort(5), {"enabled": True, "rgb": "1;2;3", "white": 4, "level": MASK}
+        driver,
+        GearShort(5),
+        {"enabled": True, "rgb": "1;2;3", "white": 4, "level": MASK},
+        logging.getLogger("test"),
     )
 
     cmds = sent.await_args.args[1]

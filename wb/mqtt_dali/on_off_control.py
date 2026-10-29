@@ -157,9 +157,7 @@ class OnOffSettingsParam(SettingsParamBase):
         """``None`` when no on/off block is set: absence is how the setting is switched off."""
         return self._config
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         del driver, short_address, logger
         return {"on_off": on_off_config_to_editor_json(self._config)}
 
@@ -168,7 +166,7 @@ class OnOffSettingsParam(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         del driver, logger
         if "on_off" not in value:

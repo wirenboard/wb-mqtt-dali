@@ -2,6 +2,7 @@
 
 # pylint: disable=duplicate-code
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -73,9 +74,9 @@ async def _make_type8_handler_with_scene(colour_type: ColourType, scene: ColourS
     public way in). The colour type is already known, so nothing is read for it."""
     handler = _make_type8_handler(colour_type)
     driver = AsyncMock()
-    await handler.read_mandatory_info(driver, GearShort(1))
+    await handler.read_mandatory_info(driver, GearShort(1), logging.getLogger("test"))
     driver.run_sequence = AsyncMock(return_value=scene)
-    await handler.scenes_settings.read(driver, GearShort(1))
+    await handler.scenes_settings.read(driver, GearShort(1), logging.getLogger("test"))
     return handler
 
 
@@ -839,7 +840,7 @@ class _ColourControlsDevice(DaliDevice):
 async def _colour_chunk_events(handler: Type8Parameters, driver, now: float = 0.0) -> list:
     """One tick of the split colour read: what the chunk that just landed produced -- nothing
     until the cycle ends or fails."""
-    step = handler.next_poll_step(driver, GearShort(1), max_commands=3, default_max_commands=3, now=now)
+    step = handler.next_poll_step(driver, GearShort(1), 3, 3, now, logging.getLogger("test"))
     assert step.poll_coroutine is not None
     return await step.poll_coroutine()
 

@@ -34,6 +34,7 @@ from .device_publisher import ControlInfo
 from .events import ActiveEnergyRead, BusEvent
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
+from .wbdali_utils import check_command_failed
 from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 # Bank 202 / 203 / 204 layout per IEC 62386-252:2023.
@@ -249,6 +250,10 @@ class Type51EnergyParam(SettingsParamBase):
         }
 
 
+def _has_failed_command(cmds: list, responses: list) -> bool:
+    return any(check_command_failed(cmd, response) is not None for cmd, response in zip(cmds, responses))
+
+
 async def _read_active_scale(
     driver: WBDALIDriver, short_address: Address, compat: DaliCommandsCompatibilityLayer
 ) -> int:
@@ -416,11 +421,9 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
             responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
         except Exception:  # pylint: disable=broad-exception-caught
             return self._fail_cycle()
-        scale_resp = responses[2]
-        raw = getattr(scale_resp, "raw_value", None)
-        if raw is None or getattr(raw, "error", False):
+        if _has_failed_command(cmds[:3], responses[:3]):
             return self._fail_cycle()
-        self._scale_byte = raw.as_integer
+        self._scale_byte = responses[2].raw_value.as_integer
         return []
 
     async def _do_chunk(
@@ -440,15 +443,11 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         except Exception:  # pylint: disable=broad-exception-caught
             return self._fail_cycle()
 
-        read_responses = responses[-_ENERGY_CHUNK_SIZE:]
-        new_bytes: list = []
-        for response in read_responses:
-            raw = getattr(response, "raw_value", None)
-            if raw is None or getattr(raw, "error", False):
-                return self._fail_cycle()
-            new_bytes.append(raw.as_integer)
-
-        progress.bytes_read.extend(new_bytes)
+        if _has_failed_command(cmds, responses):
+            return self._fail_cycle()
+        progress.bytes_read.extend(
+            response.raw_value.as_integer for response in responses[-_ENERGY_CHUNK_SIZE:]
+        )
 
         if not progress.is_complete():
             return []

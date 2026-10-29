@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.36.1) stable; urgency=medium
+
+  * DT51 energy meter shows a read error when the gateway fails (e.g. no power on the bus)
+    instead of logging "Error polling device" on every poll cycle
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 28 Oct 2026 11:22:47 +0000
+
 wb-mqtt-dali (1.36.0) stable; urgency=medium
 
   * Identification numbers, the OEM one included, are sent as strings: long numbers no longer

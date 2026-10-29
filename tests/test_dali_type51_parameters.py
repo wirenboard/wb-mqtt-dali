@@ -22,6 +22,7 @@ from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam, Type51Parameters
 from wb.mqtt_dali.events import ActiveEnergyRead
+from wb.mqtt_dali.wbdali_error_response import NoPowerOnBus
 from wb.mqtt_dali.wbmqtt import ControlError
 
 # pylint: disable=redefined-outer-name
@@ -475,6 +476,22 @@ async def test_type51_failed_cycle_reports_the_error_with_no_value_to_publish():
     assert dev.notify_all(result[0]) == [control]
     assert control.control_info.state.error == ControlError.READ
     assert control.control_info.state.value == value_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scale_byte", [None, 0], ids=["scale_chunk", "energy_chunk"])
+async def test_type51_gateway_error_reply_fails_the_cycle(scale_byte):
+    """A gateway error reply in a chunk ends the cycle with a read error instead of raising."""
+    dev = await _make_initialized_device_with_type51(scale_byte=scale_byte)
+
+    async def fake_send(cmds, priority=None):
+        del cmds, priority
+        return [MagicMock(), MagicMock(), NoPowerOnBus(), _ok_byte_response(0)]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+
+    assert await _run_one_chunk(dev, driver, now=0.0) == [ActiveEnergyRead(None, True)]
 
 
 @pytest.mark.asyncio

@@ -61,7 +61,7 @@ async def test_disable_removes_from_scene(monkeypatch):
     """Disabling a scene issues REMOVE FROM SCENE (clears both registers), not a level=MASK
     write that would keep the colour, and reads back disabled."""
     sent = AsyncMock()
-    monkeypatch.setattr("wb.mqtt_dali.dali_type8_parameters.send_commands_with_retry", sent)
+    monkeypatch.setattr("wb.mqtt_dali.dali_type8_parameters.query_responses", sent)
     driver = _read_returning(ColourSettings(ColourType.RGBWAF, MASK, colour_masked=True))
 
     res = await _scene(3).write(
@@ -82,7 +82,7 @@ async def test_enable_with_mask_level_stores_colour_only_scene(monkeypatch):
     REMOVE FROM SCENE) and reads back enabled — the reported bug where enabling + MASK level
     turned the switch back off."""
     sent = AsyncMock()
-    monkeypatch.setattr("wb.mqtt_dali.dali_type8_parameters.send_commands_with_retry", sent)
+    monkeypatch.setattr("wb.mqtt_dali.dali_type8_parameters.query_responses", sent)
     driver = _read_returning(ColourSettings(ColourType.RGBWAF, MASK))  # colour-only read-back
 
     res = await _scene(3).write(

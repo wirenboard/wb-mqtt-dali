@@ -39,9 +39,10 @@ class _SequenceDriver:
         self._bank_bytes = bank_bytes
         self._raise = set(raise_not_implemented_for)
         self.commands: list = []
+        self.logger = logging.getLogger(__name__)
 
-    async def send_commands(self, cmds, source=None, priority=None):
-        del source, priority
+    async def send_commands(self, cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         cmd_list = list(cmds)
         self.commands.extend(cmd_list)
         bank = None

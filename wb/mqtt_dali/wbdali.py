@@ -47,6 +47,24 @@ class GatewayMetaErrorPayload(Enum):
     UNREACHABLE = "r"
 
 
+class GatewayCondition(Enum):
+    """Bus state reported by the gateway's status of the last answered command."""
+
+    NORMAL = "normal"
+    NO_POWER_ON_BUS = "no power on bus"
+    OVERHEAT = "overheat"
+
+
+# Statuses absent here (0 and unknown ones) say nothing about the bus and keep the condition.
+_GATEWAY_CONDITION_BY_STATUS = {
+    1: GatewayCondition.NORMAL,
+    2: GatewayCondition.NORMAL,
+    3: GatewayCondition.NORMAL,
+    4: GatewayCondition.NO_POWER_ON_BUS,
+    5: GatewayCondition.OVERHEAT,
+}
+
+
 class FramePriority(Enum):
     """DALI forward-frame priority per IEC 62386-103:2022 §9.14.1.
 
@@ -420,6 +438,7 @@ class SendQueueItem:
     command: Command
     source: BusTrafficSource
     priority: FramePriority
+    logger: logging.Logger
 
 
 @dataclass
@@ -485,7 +504,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         logger: logging.Logger,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ) -> None:
-        self.logger = logger.getChild(f"{config.device_name}_bus{config.bus}")
+        self.logger = logger
         self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
 
         self.config = config
@@ -507,6 +526,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         self._mqtt_dispatcher = mqtt_dispatcher
         self._overheat_rate_limiter = OverheatRateLimiter()
+        self._gateway_condition = GatewayCondition.NORMAL
 
         client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
         self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
@@ -806,15 +826,17 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             )
             return
 
+        logger = resp_waiter.send_item.logger
         backward_frame_byte = resp & 0xFF
         status = (resp >> 8) & 0xFF
 
         if status != 5:
             self._overheat_rate_limiter.on_non_overheat_response()
+        self._update_gateway_condition(status)
 
         if status == 0:
             # No transmission
-            self.logger.debug(
+            logger.debug(
                 "%s (%d) status 0: No transmission",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -830,7 +852,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
         if status == 1:
             # Transmission with backward response
-            self.logger.debug(
+            logger.debug(
                 "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -850,7 +872,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
         if status == 2:
             # Transmission without response
-            self.logger.debug(
+            logger.debug(
                 "%s (%d) status 2: Transmission without response",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -869,7 +891,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
         if status == 3:
             # Broken response (framing error)
-            self.logger.error(
+            logger.debug(
                 "%s (%d) status 3: Broken response, backward_frame=0x%02x",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -889,7 +911,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
         if status == 4:
             # Transmission impossible (no power on bus)
-            self.logger.error(
+            logger.debug(
                 "%s (%d) status 4: Transmission impossible - no power on bus",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -905,7 +927,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
         if status == 5:
             # Gateway overheat
-            self.logger.error(
+            logger.debug(
                 "%s (%d) status 5: Gateway overheat",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -922,7 +944,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
 
         # Unknown status
-        self.logger.error(
+        logger.debug(
             "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
             LazyCommandExpression(resp_waiter.send_item.command),
             resp_pointer,
@@ -939,11 +961,25 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             resp_waiter.sequence_id,
         )
 
+    def _update_gateway_condition(self, status: int) -> None:
+        condition = _GATEWAY_CONDITION_BY_STATUS.get(status)
+        if condition is None or condition == self._gateway_condition:
+            return
+        if self._gateway_condition == GatewayCondition.NO_POWER_ON_BUS:
+            self.logger.info("DALI bus power restored")
+        elif self._gateway_condition == GatewayCondition.OVERHEAT:
+            self.logger.info("DALI gateway overheat is over")
+        if condition == GatewayCondition.NO_POWER_ON_BUS:
+            self.logger.warning("No power on DALI bus")
+        elif condition == GatewayCondition.OVERHEAT:
+            self.logger.warning("DALI gateway overheat")
+        self._gateway_condition = condition
+
     async def run_sequence(
         self,
         seq,
-        priority: FramePriority = FramePriority.USER_ACTION,
-        progress=None,
+        priority: FramePriority,
+        logger: logging.Logger,
     ) -> Any:
         """Run a generator-based DALI command sequence.
 
@@ -954,10 +990,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         available in various places in the python-dali library.
         :param priority: Forward-frame arbitration priority applied to every
         frame emitted by the sequence.
-        :param progress: A function to call with progress updates, used by
-        some sequences to provide status information. The function must
-        accept a single argument. A suitable example is `progress=print` to
-        use the built-in `print()` function.
+        :param logger: Logger of the sender for the commands' exchange.
         :return: Depends on the sequence being used
         """
 
@@ -981,16 +1014,15 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     if isinstance(cmd, seq_sleep):
                         await asyncio.sleep(cmd.delay)
                     elif isinstance(cmd, seq_progress):
-                        if progress:
-                            progress(cmd)
+                        pass
                     elif isinstance(cmd, list):
                         response = await self._send_commands_internal(
-                            cmd, BusTrafficSource.WB, priority, lock_queue=False
+                            cmd, BusTrafficSource.WB, priority, False, logger
                         )
                     else:
                         response = (
                             await self._send_commands_internal(
-                                [cmd], BusTrafficSource.WB, priority, lock_queue=False
+                                [cmd], BusTrafficSource.WB, priority, False, logger
                             )
                         )[0]
         finally:
@@ -999,27 +1031,30 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     async def send(
         self,
         cmd: Command,
-        source: BusTrafficSource = BusTrafficSource.WB,
-        priority: FramePriority = FramePriority.USER_ACTION,
+        source: BusTrafficSource,
+        priority: FramePriority,
+        logger: logging.Logger,
     ) -> Response:
         """Send a single DALI command and optionally wait for a response.
         Args:
             cmd: The DALI command to send.
             source: Source identifier for bus-traffic logging.
             priority: Forward-frame arbitration priority.
+            logger: Logger of the sender for the command's exchange.
         Returns:
             Response from the DALI device when ``cmd.response`` is set,
             otherwise ``Response(None)``. Internal transmission errors are
             returned as ``WbGatewayTransmissionError`` or its subclasses.
         """
 
-        return (await self.send_commands([cmd], source, priority))[0]
+        return (await self.send_commands([cmd], source, priority, logger))[0]
 
     async def send_commands(
         self,
         commands: Sequence[Command],
-        source: BusTrafficSource = BusTrafficSource.WB,
-        priority: FramePriority = FramePriority.USER_ACTION,
+        source: BusTrafficSource,
+        priority: FramePriority,
+        logger: logging.Logger,
     ) -> List[Response]:
         """Send a sequence of DALI commands as one ordered batch.
 
@@ -1035,6 +1070,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             commands: DALI commands to send.
             source: Source identifier for bus-traffic logging.
             priority: Forward-frame arbitration priority for the first frame.
+            logger: Logger of the sender for the commands' exchange.
         Returns:
             List of responses aligned with ``commands``: response objects
             when the command has ``response`` set, otherwise
@@ -1042,7 +1078,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             as ``WbGatewayTransmissionError`` or its subclasses.
         """
 
-        return await self._send_commands_internal(commands, source, priority, lock_queue=True)
+        return await self._send_commands_internal(commands, source, priority, True, logger)
 
     # pylint: disable-next=too-many-return-statements, too-many-branches, too-many-statements
     async def _queue_sender(self) -> None:
@@ -1139,7 +1175,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                             waiter_to_clear.send_item.source,
                             waiter_to_clear.sequence_id,
                         )
-                        self.logger.error(
+                        waiter_to_clear.send_item.logger.debug(
                             "Timeout waiting for response %s for queue index %d",
                             LazyCommandExpression(waiter_to_clear.send_item.command),
                             index,
@@ -1174,15 +1210,17 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             self._drain_pending_with_gateway_unavailable()
             self._fail_batch_gateway_unavailable(items)
 
+    # pylint: disable-next=too-many-arguments, too-many-positional-arguments, too-many-locals
     async def _send_commands_internal(
         self,
         commands: Sequence[Command],
         source: BusTrafficSource,
         priority: FramePriority,
         lock_queue: bool,
+        logger: logging.Logger,
     ) -> list[Response]:
-        if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("send: %s", ", ".join(format_command_expression(cmd) for cmd in commands))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("send: %s", ", ".join(format_command_expression(cmd) for cmd in commands))
         if self.gateway_unavailable:
             # Synthesise bus-traffic so listeners see the dropped frames just like real errors.
             for cmd in commands:
@@ -1203,7 +1241,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             for cmd, frame_priority in zip(commands_to_send, priorities):
                 fut = asyncio.get_running_loop().create_future()
                 response_futures.append(fut)
-                await self._send_queue.put(SendQueueItem(fut, cmd, source, frame_priority))
+                await self._send_queue.put(SendQueueItem(fut, cmd, source, frame_priority, logger))
         finally:
             if lock_queue:
                 self._send_queue_lock.release()

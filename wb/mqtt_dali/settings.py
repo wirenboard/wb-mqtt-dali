@@ -174,12 +174,13 @@ class BooleanSettingsParam(SettingsParamBase):  # pylint: disable=too-many-insta
             return {}
 
         command_factory = self._enable_factory if bool(value_to_set) else self._disable_factory
+        if is_for_single_device:
+            await query_response(driver, command_factory(short_address), logger, FramePriority.CONFIGURATION)
+            return await self.read(driver, short_address, logger)
         await send_with_retry(
             driver, command_factory(short_address), logger, priority=FramePriority.CONFIGURATION
         )
-        if not is_for_single_device:
-            return {}
-        return await self.read(driver, short_address, logger)
+        return {}
 
     def has_changes(self, new_params: dict) -> bool:
         return self.property_name in new_params and self.value != new_params[self.property_name]

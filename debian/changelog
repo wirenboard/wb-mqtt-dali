@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.37.0) stable; urgency=medium
+
+  * Less journal spam: no power on the bus, gateway overheat and unresponsive devices are
+    reported once instead of on every command
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 05:40:05 +0000
+
 wb-mqtt-dali (1.36.2) stable; urgency=medium
 
   * Wait for wb-mqtt-serial at startup instead of exiting with a traceback and restarting:

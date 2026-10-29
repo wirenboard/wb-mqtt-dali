@@ -513,7 +513,9 @@ async def run_burst(
         ]
         t1 = loop.time()
         # Pushbutton eventPriority defaults to 3 (IEC 62386-301:2017 §9.4.1);
-        responses = await driver.send_commands(events, BusTrafficSource.WB, FramePriority.CONFIGURATION)
+        responses = await driver.send_commands(
+            events, BusTrafficSource.WB, FramePriority.CONFIGURATION, driver.logger
+        )
         transmission_error_instances: Set[int] = {
             i for i, r in enumerate(responses) if isinstance(r, WbGatewayTransmissionError)
         }

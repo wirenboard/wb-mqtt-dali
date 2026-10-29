@@ -10,8 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from dali.command import Command
 from dali.frame import ForwardFrame
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.gateway import Gateway, bus_from_json
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbdali_error_response import GatewayUnavailable
 
 from ._app_controller_helpers import wait_until
@@ -132,7 +134,13 @@ class BusStartDuringOutageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.publishes, [])
         self.assertIsInstance(
-            await asyncio.wait_for(bus.driver.send(_MockCommand()), timeout=0.5), GatewayUnavailable
+            await asyncio.wait_for(
+                bus.driver.send(
+                    _MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, bus.driver.logger
+                ),
+                timeout=0.5,
+            ),
+            GatewayUnavailable,
         )
         await dispatcher.connection_restored()
         await dispatcher.replay_retained()

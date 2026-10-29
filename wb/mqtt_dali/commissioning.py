@@ -10,9 +10,11 @@ from dali.command import Command, Response
 from dali.device import general as control_device
 from dali.gear import general as control_gear
 
+from .bus_traffic import BusTrafficSource
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDeviceAddress
+from .wbdali import FramePriority
 from .wbdali_utils import (
     FLASH_WRITE_TIME_S,
     MASK,
@@ -800,7 +802,10 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     control_device.StartQuiescentMode(DeviceBroadcast()),
                     self._cmds.Terminate(),
                     self._cmds.Initialise(MASK),
-                ]
+                ],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                log,
             )
             low = 0
             last_found_rand_addr: Optional[int] = None
@@ -838,7 +843,10 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 res.append(found_addr)
         finally:
             await self.driver.send_commands(
-                [self._cmds.Terminate(), control_device.StopQuiescentMode(DeviceBroadcast())]
+                [self._cmds.Terminate(), control_device.StopQuiescentMode(DeviceBroadcast())],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                log,
             )
         return res
 
@@ -872,7 +880,10 @@ async def search_short(  # pylint: disable=too-many-branches
         [
             cmds.Terminate(),
             control_device.StartQuiescentMode(DeviceBroadcast()),
-        ]
+        ],
+        BusTrafficSource.WB,
+        FramePriority.USER_ACTION,
+        log,
     )
     res = []
     try:
@@ -896,7 +907,10 @@ async def search_short(  # pylint: disable=too-many-branches
                 print(f"    instance {inst_num}: type {inst_type}")
         else:
             responses = await driver.send_commands(
-                [control_gear.QueryControlGearPresent(GearShort(i)) for i in range(MAX_SHORT_ADDRESS + 1)]
+                [control_gear.QueryControlGearPresent(GearShort(i)) for i in range(MAX_SHORT_ADDRESS + 1)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                log,
             )
             for i, resp in enumerate(responses):
                 if resp and resp.value:
@@ -910,7 +924,12 @@ async def search_short(  # pylint: disable=too-many-branches
                     else:
                         print(f"Control gear {i}, random address 0x{random_address:06x}")
     finally:
-        await driver.send(control_device.StopQuiescentMode(DeviceBroadcast()))
+        await driver.send(
+            control_device.StopQuiescentMode(DeviceBroadcast()),
+            BusTrafficSource.WB,
+            FramePriority.USER_ACTION,
+            log,
+        )
     return res
 
 
@@ -933,10 +952,13 @@ async def check_presence(driver: WBDALIDriver, dali2: bool) -> bool:
                 cmds.SetSearchAddrL(0xFF),
                 cmds.Compare(),
             ],
+            BusTrafficSource.WB,
+            FramePriority.USER_ACTION,
+            log,
         )
         return r[-1].value is True
     finally:
-        await driver.send(cmds.Terminate())
+        await driver.send(cmds.Terminate(), BusTrafficSource.WB, FramePriority.USER_ACTION, log)
 
 
 def print_commissioning_summary(res: CommissioningResult) -> None:

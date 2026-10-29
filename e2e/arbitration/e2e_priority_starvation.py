@@ -194,7 +194,7 @@ async def run_test(  # pylint: disable=too-many-locals
             addr = GearShort(short_address)
             logging.info("Setting arc-power level %d on short=%d", LEVEL, short_address)
             await driver_hammer.send_commands(
-                [DAPC(addr, LEVEL)], BusTrafficSource.WB, FramePriority.USER_ACTION
+                [DAPC(addr, LEVEL)], BusTrafficSource.WB, FramePriority.USER_ACTION, driver_hammer.logger
             )
 
             events: List[TrafficEvent] = []
@@ -224,7 +224,9 @@ async def run_test(  # pylint: disable=too-many-locals
                 )
                 long_cmds = [QueryActualLevel(addr) for _ in range(LONG_BURST)]
                 long_task = asyncio.create_task(
-                    driver_long.send_commands(long_cmds, BusTrafficSource.WB, LONG_DRIVER_PRIORITY)
+                    driver_long.send_commands(
+                        long_cmds, BusTrafficSource.WB, LONG_DRIVER_PRIORITY, driver_long.logger
+                    )
                 )
 
                 await asyncio.wait_for(trigger_event.wait(), timeout=5.0)
@@ -238,7 +240,9 @@ async def run_test(  # pylint: disable=too-many-locals
                     HAMMER_DRIVER_PRIORITY.value,
                 )
                 hammer_task = asyncio.create_task(
-                    driver_hammer.send_commands(hammer_cmds, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY)
+                    driver_hammer.send_commands(
+                        hammer_cmds, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY, driver_hammer.logger
+                    )
                 )
 
                 await hammer_task

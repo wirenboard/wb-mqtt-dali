@@ -671,6 +671,8 @@ class DeviceGroupsParam(SettingsParamBase):
 
 
 class Dali2Device(DaliDeviceBase):
+    logger_name_prefix = "dali2_"
+
     def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         address: DaliDeviceAddress,

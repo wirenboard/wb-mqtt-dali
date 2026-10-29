@@ -64,7 +64,7 @@ class PerDeviceFakeDALIBus:
         self.next_random = NEW_RANDOM_START
 
     async def send(
-        self, cmd, source=BusTrafficSource.WB, priority=None
+        self, cmd, source=BusTrafficSource.WB, priority=None, logger=None
     ):  # pylint: disable=R0911 disable=R0912 disable=unused-argument
         self.sent_commands.append(cmd)
 
@@ -155,7 +155,7 @@ class PerDeviceFakeDALIBus:
         return MockResponse()
 
     async def send_commands(
-        self, cmds, source=BusTrafficSource.WB, priority=None
+        self, cmds, source=BusTrafficSource.WB, priority=None, logger=None
     ):  # pylint: disable=unused-argument
         return [await self.send(cmd, source, priority) for cmd in cmds]
 
@@ -181,7 +181,7 @@ class WithdrawIgnoringBus(PerDeviceFakeDALIBus):
         super().__init__(devices)
         self.ignoring = ignoring
 
-    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
         response = await super().send(cmd, source, priority)
         if isinstance(cmd, Withdraw):
             for device in self.ignoring:

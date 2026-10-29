@@ -203,10 +203,10 @@ async def query_response(
 ) -> Response:
     last_error: Optional[RuntimeError] = None
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        resp = await driver.send(cmd, priority=priority)
+        resp = await driver.send(cmd, BusTrafficSource.WB, priority, logger)
         last_error = check_command_failed(cmd, resp)
         if last_error is not None:
-            logger.warning(
+            logger.debug(
                 "DALI send retry %d/%d for %s: %s",
                 attempt,
                 MAX_COMMAND_RETRIES,
@@ -226,11 +226,11 @@ async def query_responses(
 ) -> list[Response]:
     last_error: Optional[RuntimeError] = None
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(cmds, BusTrafficSource.WB, priority)
+        responses = await driver.send_commands(cmds, BusTrafficSource.WB, priority, logger)
         for command, resp in zip(cmds, responses):
             last_error = check_command_failed(command, resp)
             if last_error is not None:
-                logger.warning(
+                logger.debug(
                     "DALI send retry %d/%d for %s: %s",
                     attempt,
                     MAX_COMMAND_RETRIES,
@@ -314,7 +314,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
     last_failed_reason: Optional[RuntimeError] = None
 
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(pending_commands, source, priority)
+        responses = await driver.send_commands(pending_commands, source, priority, logger)
 
         first_failed_pos: Optional[int] = None
         for pos, (index, cmd, resp) in enumerate(zip(pending_indexes, pending_commands, responses)):
@@ -337,7 +337,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
         pending_commands = pending_commands[first_failed_pos:]
         pending_indexes = pending_indexes[first_failed_pos:]
 
-        logger.warning(
+        logger.debug(
             "DALI batch retry-from-first %d/%d: failed at index %d (%s): %s",
             attempt,
             MAX_COMMAND_RETRIES,
@@ -371,7 +371,7 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
     last_failed_reasons: dict[int, RuntimeError] = {}
 
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(pending_commands, source, priority)
+        responses = await driver.send_commands(pending_commands, source, priority, logger)
 
         next_pending_indexes: list[int] = []
         next_pending_commands: list[Command] = []
@@ -393,7 +393,7 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
         pending_indexes = next_pending_indexes
         pending_commands = next_pending_commands
 
-        logger.warning(
+        logger.debug(
             "DALI batch retry-only-failed %d/%d for %s",
             attempt,
             MAX_COMMAND_RETRIES,
@@ -418,10 +418,11 @@ async def send_with_retry(
 ) -> Response:
     response: Response = Response(None)
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        response = await driver.send(cmd, source, priority)
+        response = await driver.send(cmd, source, priority, logger)
         if not is_transmission_error_response(response):
             return response
-        logger.warning("DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response)
+        logger.debug("DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response)
+    logger.warning("DALI %s failed after %d attempts: %s", cmd, MAX_COMMAND_RETRIES, response)
     return response
 
 
@@ -434,13 +435,19 @@ async def send_commands_with_retry(
 ) -> list[Response]:
     responses: list[Response] = []
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(commands, source, priority)
+        responses = await driver.send_commands(commands, source, priority, logger)
         if not has_transmission_error(responses):
             return responses
-        logger.warning(
+        logger.debug(
             "DALI send_commands retry %d/%d failed for %s",
             attempt,
             MAX_COMMAND_RETRIES,
             [str(cmd) for cmd in commands],
         )
+    logger.warning(
+        "DALI %s failed after %d attempts: %s",
+        [str(cmd) for cmd in commands],
+        MAX_COMMAND_RETRIES,
+        next(resp for resp in responses if is_transmission_error_response(resp)),
+    )
     return responses

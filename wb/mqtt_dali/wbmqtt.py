@@ -21,6 +21,8 @@ MQTT_KEEPALIVE_S = 15
 # default would hold it for 10 s.
 MQTT_PUBLISH_TIMEOUT_S = 5.0
 
+MQTT_PENDING_PUBLISH_WARNING_THRESHOLD = 100
+
 
 @dataclass
 class TranslatedTitle:
@@ -428,7 +430,7 @@ def parse_broker_url(broker_url: str) -> BrokerAddress:
 def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
     address = parse_broker_url(broker_url)
     client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-    return aiomqtt.Client(
+    client = aiomqtt.Client(
         address.hostname,
         address.port,
         username=address.username,
@@ -439,3 +441,5 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         logger=logging.getLogger("mqtt_client"),
         timeout=MQTT_PUBLISH_TIMEOUT_S,
     )
+    client.pending_calls_threshold = MQTT_PENDING_PUBLISH_WARNING_THRESHOLD
+    return client

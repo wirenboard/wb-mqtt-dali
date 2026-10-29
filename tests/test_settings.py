@@ -1,5 +1,5 @@
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -85,6 +85,7 @@ async def test_write(number_settings_param):
             [mock_write_command, mock_read_command],
             BusTrafficSource.WB,
             FramePriority.CONFIGURATION,
+            ANY,
         )
         assert result == {"test_property": 100}
         assert number_settings_param.value == 100

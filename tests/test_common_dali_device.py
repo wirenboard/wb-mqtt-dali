@@ -1,6 +1,6 @@
 import logging
 from typing import NamedTuple
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from dali.address import GearShort
@@ -499,7 +499,7 @@ async def test_run_single_query_reports_failure_when_response_is_none():
 
     events = await _run_poll_tick(control, driver, GearShort(1))
 
-    sent_commands, source, priority = driver.send_commands.await_args.args
+    sent_commands, source, priority, _logger = driver.send_commands.await_args.args
     assert isinstance(sent_commands[0], QueryStatus)
     assert (source, priority) == (BusTrafficSource.WB, FramePriority.PERIODIC_QUERY)
     assert events == [StatusRead(None, True)]
@@ -724,8 +724,8 @@ async def test_poll_controls_multiple_controls_and_queries_order():
 
     issued_queries: list[str] = []
 
-    async def fake_send(cmds, _src=BusTrafficSource.WB, priority=None):
-        del priority
+    async def fake_send(cmds, _src=BusTrafficSource.WB, priority=None, logger=None):
+        del priority, logger
         assert len(cmds) == 1
         issued_queries.append(cmds[0])
         return [ok_responses.get(cmds[0])]
@@ -795,16 +795,16 @@ async def test_short_address_change_writes_the_address_and_moves_the_auto_name()
     d.schema = {"type": "object"}
     driver = AsyncMock()
     driver.run_sequence.return_value = 9
+    logger_at_old_address = d.logger
 
     with patch("wb.mqtt_dali.common_dali_device.set_short_address_sequence") as make_sequence:
         await d.apply_parameters(
             driver, {"short_address": 9, "name": d.default_name, "mqtt_id": d.default_mqtt_id}
         )
 
-    make_sequence.assert_called_once_with(d._compat, 1, 9, d.logger)  # pylint: disable=protected-access
-    driver.run_sequence.assert_awaited_once_with(
-        make_sequence.return_value, priority=FramePriority.CONFIGURATION
-    )
+    make_sequence.assert_called_once_with(d.dali_commands, 1, 9, logger_at_old_address)
+    driver.run_sequence.assert_awaited_once_with(make_sequence.return_value, FramePriority.CONFIGURATION, ANY)
+    assert driver.run_sequence.await_args.args[2] is logger_at_old_address
     assert d.address.short == 9
     assert d.params["short_address"] == 9
     assert d.has_custom_name is False

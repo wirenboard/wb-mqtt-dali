@@ -18,6 +18,7 @@ from dali.memory.energy import (
     ApparentPower,
 )
 
+from .bus_traffic import BusTrafficSource
 from .common_dali_device import (
     ControlsPollRequestResult,
     EventPollSchedule,
@@ -130,14 +131,13 @@ class Type51EnergyParam(SettingsParamBase):
         self._has_loadside = False
 
     async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
-        del logger
-
         active_data = await read_bank_as_dict(
             driver,
             BANK_202,
             short_address,
             self._compat,
-            error_label="DT51 memory bank 202",
+            "DT51 memory bank 202",
+            logger,
         )
 
         self._has_apparent = False
@@ -147,7 +147,7 @@ class Type51EnergyParam(SettingsParamBase):
             _extract_energy_power(active_data, ActiveEnergy, ActivePower, "active_energy", "active_power")
         )
 
-        apparent_data = await try_read_bank_as_dict(driver, BANK_203, short_address, self._compat)
+        apparent_data = await try_read_bank_as_dict(driver, BANK_203, short_address, self._compat, logger)
         if apparent_data is not None:
             self._has_apparent = True
             fields.update(
@@ -156,7 +156,7 @@ class Type51EnergyParam(SettingsParamBase):
                 )
             )
 
-        loadside_data = await try_read_bank_as_dict(driver, BANK_204, short_address, self._compat)
+        loadside_data = await try_read_bank_as_dict(driver, BANK_204, short_address, self._compat, logger)
         if loadside_data is not None:
             self._has_loadside = True
             fields.update(
@@ -248,12 +248,18 @@ class Type51EnergyParam(SettingsParamBase):
         }
 
 
-def _has_failed_command(cmds: list, responses: list) -> bool:
-    return any(check_command_failed(cmd, response) is not None for cmd, response in zip(cmds, responses))
+def _first_command_error(cmds: list, responses: list) -> Optional[RuntimeError]:
+    return next(
+        (err for err in (check_command_failed(c, r) for c, r in zip(cmds, responses)) if err is not None),
+        None,
+    )
 
 
 async def _read_active_scale(
-    driver: WBDALIDriver, short_address: Address, compat: DaliCommandsCompatibilityLayer
+    driver: WBDALIDriver,
+    short_address: Address,
+    compat: DaliCommandsCompatibilityLayer,
+    logger: logging.Logger,
 ) -> int:
     """Read the active-energy ROM scale factor (bank 202, addr 0x04)."""
     responses = await driver.send_commands(
@@ -262,7 +268,9 @@ async def _read_active_scale(
             compat.DTR0(_ENERGY_SCALE_ADDR),
             compat.ReadMemoryLocation(short_address),
         ],
-        priority=FramePriority.CONFIGURATION,
+        BusTrafficSource.WB,
+        FramePriority.CONFIGURATION,
+        logger,
     )
     response = responses[-1]
     if response.raw_value is None:
@@ -346,7 +354,7 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         # Cache the ROM scale byte at init time so chunked cycles can decode
         # without re-reading it; in-cycle fallback covers init-time failures.
         try:
-            self._scale_byte = await _read_active_scale(driver, short_address, self._compat)
+            self._scale_byte = await _read_active_scale(driver, short_address, self._compat, logger)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.info("DT51 scale factor not available yet for %s: %s", short_address, e)
             self._scale_byte = None
@@ -380,7 +388,6 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         now: float,
         logger: logging.Logger,
     ) -> ControlsPollRequestResult:
-        del logger
         # DT51 chunks are 4 cmds and the default tick budget is 3 — overshoot
         # is allowed but only when no other commands have been issued this tick.
         if max_commands < default_max_commands:
@@ -395,17 +402,19 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         if self._scale_byte is None and not progress.bytes_read:
             return ControlsPollRequestResult(
                 has_more=True,
-                poll_coroutine=lambda: self._do_scale_chunk(driver, address),
+                poll_coroutine=lambda: self._do_scale_chunk(driver, address, logger),
                 commands_count=4,
             )
         more_after_this = progress.next_chunk_index < (_ENERGY_DATA_LEN // _ENERGY_CHUNK_SIZE) - 1
         return ControlsPollRequestResult(
             has_more=more_after_this,
-            poll_coroutine=lambda: self._do_chunk(driver, address, progress),
+            poll_coroutine=lambda: self._do_chunk(driver, address, progress, logger),
             commands_count=4,
         )
 
-    async def _do_scale_chunk(self, driver: WBDALIDriver, address: Address) -> list[BusEvent]:
+    async def _do_scale_chunk(
+        self, driver: WBDALIDriver, address: Address, logger: logging.Logger
+    ) -> list[BusEvent]:
         # 4-cmd chunk reading scale at 0x04. The second ReadMemoryLocation advances
         # DTR0 past addr 0x05; its result is discarded and energy re-read next tick.
         cmds = [
@@ -415,11 +424,14 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
             self._compat.ReadMemoryLocation(address),
         ]
         try:
-            responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
-        except Exception:  # pylint: disable=broad-exception-caught
-            return self._fail_cycle()
-        if _has_failed_command(cmds[:3], responses[:3]):
-            return self._fail_cycle()
+            responses = await driver.send_commands(
+                cmds, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY, logger
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return self._fail_cycle(cmds, e, logger)
+        error = _first_command_error(cmds[:3], responses[:3])
+        if error is not None:
+            return self._fail_cycle(cmds, error, logger)
         self._scale_byte = responses[2].raw_value.as_integer
         return []
 
@@ -428,6 +440,7 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
         driver: WBDALIDriver,
         address: Address,
         progress: _Type51EnergyReadProgress,
+        logger: logging.Logger,
     ) -> list[BusEvent]:
         cmds = [
             self._compat.DTR1(BANK_202.address),
@@ -436,12 +449,15 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
             self._compat.ReadMemoryLocation(address),
         ]
         try:
-            responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
-        except Exception:  # pylint: disable=broad-exception-caught
-            return self._fail_cycle()
+            responses = await driver.send_commands(
+                cmds, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY, logger
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return self._fail_cycle(cmds, e, logger)
 
-        if _has_failed_command(cmds, responses):
-            return self._fail_cycle()
+        error = _first_command_error(cmds, responses)
+        if error is not None:
+            return self._fail_cycle(cmds, error, logger)
         progress.bytes_read.extend(
             response.raw_value.as_integer for response in responses[-_ENERGY_CHUNK_SIZE:]
         )
@@ -451,7 +467,10 @@ class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
 
         return self._finish_cycle(progress.bytes_read)
 
-    def _fail_cycle(self) -> list[BusEvent]:
+    def _fail_cycle(self, cmds: list, error: Exception, logger: logging.Logger) -> list[BusEvent]:
+        logger.warning(
+            "Failed to poll control %s with %s: %s", _ACTIVE_ENERGY_CONTROL_ID, [str(c) for c in cmds], error
+        )
         self._read_progress = None
         return [ActiveEnergyRead(None, True)]
 

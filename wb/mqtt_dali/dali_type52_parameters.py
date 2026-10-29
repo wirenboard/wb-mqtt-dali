@@ -83,7 +83,7 @@ class Type52Parameters(TypeParameters):
         super().__init__()
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(self, driver: WBDALIDriver, short_address: Address, _logger: logging.Logger) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         cg: dict = {}
         ls: dict = {}
         data = await read_bank_as_dict(
@@ -91,7 +91,8 @@ class Type52Parameters(TypeParameters):
             BANK_205,
             short_address,
             self._compat,
-            error_label="DT52 memory bank 205",
+            "DT52 memory bank 205",
+            logger,
         )
         cg.update(self._extract_bank205(data))
         data = await read_bank_as_dict(
@@ -99,7 +100,8 @@ class Type52Parameters(TypeParameters):
             BANK_206,
             short_address,
             self._compat,
-            error_label="DT52 memory bank 206",
+            "DT52 memory bank 206",
+            logger,
         )
         ls.update(self._extract_bank206(data))
         data = await read_bank_as_dict(
@@ -107,7 +109,8 @@ class Type52Parameters(TypeParameters):
             BANK_207,
             short_address,
             self._compat,
-            error_label="DT52 memory bank 207",
+            "DT52 memory bank 207",
+            logger,
         )
         v = _get(data, InternalControlGearReferenceTemperature)
         if v is not None:

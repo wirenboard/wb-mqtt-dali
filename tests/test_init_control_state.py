@@ -325,16 +325,16 @@ def _unanswered_response():
 def _make_driver(raw_value=0):
     """Driver reporting no device types and answering every query with ``raw_value``."""
 
-    async def fake_run_sequence(seq, priority=None):
-        del priority
+    async def fake_run_sequence(seq, priority=None, logger=None):
+        del priority, logger
         name = seq.gi_code.co_name
         seq.close()
         if name == "query_device_types_sequence":
             return []
         raise AssertionError(f"unexpected run_sequence target: {name}")
 
-    async def fake_send_commands(cmds, source=None, priority=None):
-        del source, priority
+    async def fake_send_commands(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         return [_ok_response(raw_value) for _ in cmds]
 
     driver = AsyncMock()
@@ -346,8 +346,8 @@ def _make_driver(raw_value=0):
 def _make_driver_silent_on(command_type):
     """Driver answering everything except queries of ``command_type``, as silent gear does."""
 
-    async def fake_send_commands(cmds, source=None, priority=None):
-        del source, priority
+    async def fake_send_commands(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         return [_unanswered_response() if isinstance(cmd, command_type) else _ok_response() for cmd in cmds]
 
     driver = _make_driver()
@@ -1097,8 +1097,8 @@ def _make_driver_with_fade(fade_time_code):
     """Driver whose gear reports ``fade_time_code`` for the fade-time query."""
     driver = _make_driver()
 
-    async def fake_send(cmd, priority=None):
-        del priority
+    async def fake_send(cmd, source=None, priority=None, logger=None):
+        del source, priority, logger
         resp = _ok_response()
         if isinstance(cmd, QueryFadeTimeFadeRate):
             resp.fade_time = fade_time_code
@@ -1113,8 +1113,8 @@ def _make_driver_without_fade():
     """Driver whose gear stays silent on the fade-time query, as gear without one does."""
     driver = _make_driver()
 
-    async def fake_send(cmd, priority=None):
-        del priority
+    async def fake_send(cmd, source=None, priority=None, logger=None):
+        del source, priority, logger
         return _unanswered_response() if isinstance(cmd, QueryFadeTimeFadeRate) else _ok_response()
 
     driver.send = AsyncMock(side_effect=fake_send)

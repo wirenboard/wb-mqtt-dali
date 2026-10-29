@@ -46,20 +46,15 @@ class DeviceInitScheduler:
     def record_success(self, mqtt_id: str) -> None:
         self._pending.pop(mqtt_id, None)
 
-    def record_failure(self, mqtt_id: str, current_time: float) -> float:
+    def record_failure(self, mqtt_id: str, current_time: float) -> None:
         state = self._pending.get(mqtt_id)
         if state is None:
-            return 0.0
+            return
         state.retry_delay = min(
             state.retry_delay * INIT_RETRY_MULTIPLIER if state.has_failed() else INIT_RETRY_INITIAL_DELAY,
             INIT_RETRY_MAX_DELAY,
         )
         state.next_retry_time = current_time + state.retry_delay
-        return state.retry_delay
-
-    def has_failed(self, mqtt_id: str) -> bool:
-        state = self._pending.get(mqtt_id)
-        return state is not None and state.has_failed()
 
     def clear(self) -> None:
         self._pending.clear()

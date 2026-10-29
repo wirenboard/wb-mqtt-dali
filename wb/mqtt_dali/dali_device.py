@@ -65,7 +65,7 @@ from .gtin_db import DaliDatabase
 from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
 from .settle_clock import SettleBasis, SettleClock
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     NoAnswerError,
     check_query_response,
@@ -166,6 +166,7 @@ def _pollable_name(pollable: Pollable) -> str:
 
 
 class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
+    logger_name_prefix = "dali_"
 
     def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
@@ -299,7 +300,9 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
     ) -> InitializationResult:
         address = GearShort(self.address.short)
 
-        types = await driver.run_sequence(query_device_types_sequence(address, self.logger))
+        types = await driver.run_sequence(
+            query_device_types_sequence(address, self.logger), FramePriority.USER_ACTION, self.logger
+        )
         if types is None:
             raise RuntimeError(
                 f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"

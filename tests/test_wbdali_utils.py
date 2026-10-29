@@ -34,6 +34,9 @@ class FakeLogger:
     def warning(self, message: str, *args: object) -> None:
         self.messages.append(message % args)
 
+    def debug(self, message: str, *args: object) -> None:
+        del message, args
+
 
 LOGGER = FakeLogger()
 
@@ -49,14 +52,14 @@ class FakeDriver:
     send_commands_history: list[list[FakeCommand]] = field(default_factory=list)
 
     # pylint: disable=unused-argument
-    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
         self.send_calls += 1
         self.last_send_cmd = cmd
         result = self.send_results[self.send_calls - 1]
         return result
 
     # pylint: disable=unused-argument
-    async def send_commands(self, commands, source=BusTrafficSource.WB, priority=None):
+    async def send_commands(self, commands, source=BusTrafficSource.WB, priority=None, logger=None):
         self.send_commands_calls += 1
         self.last_send_commands = commands
         self.send_commands_history.append(list(commands))
@@ -99,7 +102,7 @@ async def test_send_with_retry_retries_then_succeeds():
 
     assert result == "ok"
     assert driver.send_calls == 3
-    assert len(logger.messages) == 2
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -143,7 +146,7 @@ async def test_send_commands_with_retry_retries_whole_batch():
 
     assert result == ["ok", "ok", "ok"]
     assert driver.send_commands_calls == 2
-    assert len(logger.messages) == 1
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -175,7 +178,7 @@ async def test_query_response_retries_after_transmission_error():
 
     assert result is response
     assert driver.send_calls == 3
-    assert len(logger.messages) == 2
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -189,7 +192,7 @@ async def test_query_response_retries_after_check_query_error():
 
     assert result is response
     assert driver.send_calls == 3
-    assert len(logger.messages) == 2
+    assert not logger.messages
 
 
 @pytest.mark.asyncio

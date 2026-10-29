@@ -104,7 +104,8 @@ class Type50MemoryBankParam(SettingsParamBase):
             oem.BANK_1,
             short_address,
             self._compat,
-            error_label="DT50 memory bank",
+            "DT50 memory bank",
+            logger,
         )
 
         self._values = {}

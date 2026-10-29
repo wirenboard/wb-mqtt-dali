@@ -14,6 +14,7 @@ from typing import List, Optional
 
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
     Commissioning,
     print_commissioning_summary,
@@ -23,7 +24,7 @@ from wb.mqtt_dali.dali2_compat import Dali2CommandsCompatibilityLayer
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.short_address import set_short_address_sequence
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_utils import MASK
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
@@ -105,12 +106,14 @@ async def reset_bus(driver: WBDALIDriver, bus: int, logger: logging.Logger) -> N
         (False, DaliCommandsCompatibilityLayer()),
         (True, Dali2CommandsCompatibilityLayer()),
     ):
-        await driver.send(cmds.Reset(None))
+        await driver.send(cmds.Reset(None), BusTrafficSource.WB, FramePriority.USER_ACTION, logger)
         await asyncio.sleep(0.5)
         for address in await search_short(driver, dali2=dali2):
             try:
                 reported = await driver.run_sequence(
-                    set_short_address_sequence(cmds, address.short, MASK, logger)
+                    set_short_address_sequence(cmds, address.short, MASK, logger),
+                    FramePriority.USER_ACTION,
+                    logger,
                 )
             except RuntimeError as exc:
                 # One unreachable device must not stop the others; verify_reset decides.

@@ -429,12 +429,13 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
     return result
 
 
-async def read_bank_as_dict(
+async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-    error_label: Optional[str] = None,
+    error_label: Optional[str],
+    logger: logging.Logger,
 ) -> dict[str, Any]:
     """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
 
@@ -444,7 +445,7 @@ async def read_bank_as_dict(
     """
     try:
         data = await driver.run_sequence(
-            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION
+            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION, logger
         )
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
@@ -457,6 +458,7 @@ async def try_read_bank_as_dict(
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    logger: logging.Logger,
 ) -> Optional[dict[str, Any]]:
     """Like ``read_bank_as_dict`` but returns ``None`` instead of raising on bank failure.
 
@@ -464,7 +466,7 @@ async def try_read_bank_as_dict(
     can proceed without it.
     """
     try:
-        return await read_bank_as_dict(driver, bank, short_address, compat)
+        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger)
     except RuntimeError:
         return None
 
@@ -651,6 +653,7 @@ class GeneralMemoryParams(SettingsParamBase):
                 await driver.run_sequence(
                     read_memory_bank(bank0, short_address, self._compat),
                     FramePriority.CONFIGURATION,
+                    logger,
                 ),
             )
         except MemoryLocationNotImplemented:
@@ -662,6 +665,7 @@ class GeneralMemoryParams(SettingsParamBase):
                 await driver.run_sequence(
                     read_memory_bank(oem.BANK_1, short_address, self._compat),
                     FramePriority.CONFIGURATION,
+                    logger,
                 ),
             )
         except MemoryLocationNotImplemented:
@@ -746,6 +750,8 @@ def notify_controls(
 
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
     _common_schema = {}
+    # Device logger name under the bus logger, followed by the short address, for a default mqtt_id.
+    logger_name_prefix: str = ""
 
     def __init__(
         self,
@@ -762,8 +768,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self.address = address
         self.params: dict = {}
         self.schema: dict = {}
-        self.logger = logging.getLogger()
         self.is_initialized = False
+
+        self._bus_logger = logging.getLogger()
+        self._initialization_failed = False
 
         self._bus_id = bus_id
         self._default_name_prefix = default_name_prefix
@@ -833,6 +841,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return f"{self._bus_id}_{self._default_mqtt_id_part}{self.address.short}"
 
     @property
+    def logger(self) -> logging.Logger:
+        name = self.mqtt_id if self.has_custom_mqtt_id else f"{self.logger_name_prefix}{self.address.short}"
+        return self._bus_logger.getChild(name)
+
+    @property
     def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
         return self._compat
 
@@ -840,12 +853,21 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         async with self._initialize_lock:
             if self.is_initialized:
                 return
-            initialization = await self._initialize_impl(driver)
+            try:
+                initialization = await self._initialize_impl(driver)
+            except Exception as e:
+                if not self._initialization_failed:
+                    self.logger.warning("Failed to initialize device %s: %s", self.name, e)
+                self._initialization_failed = True
+                raise
             initialization.parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
             self._parameter_handlers = initialization.parameter_handlers
             self._group_parameter_handlers = initialization.group_parameter_handlers
             self._install_mqtt_controls(initialization.mqtt_controls)
             self.is_initialized = True
+            if self._initialization_failed:
+                self.logger.info("Device %s initialized successfully after retry", self.name)
+            self._initialization_failed = False
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         """Read every settings param and cache params/schema.
@@ -1044,7 +1066,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return controls_updated
 
     def set_logger(self, logger: logging.Logger) -> None:
-        self.logger = logger
+        """Set the bus logger the device's own logger is a child of."""
+        self._bus_logger = logger
 
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
@@ -1098,7 +1121,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if new_short_address != self.address.short:
             reported = await driver.run_sequence(
                 set_short_address_sequence(self._compat, self.address.short, new_short_address, self.logger),
-                priority=FramePriority.CONFIGURATION,
+                FramePriority.CONFIGURATION,
+                self.logger,
             )
             if reported == new_short_address:
                 self.address.short = new_short_address

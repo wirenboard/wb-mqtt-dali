@@ -116,8 +116,8 @@ class _FakeGear:
         self.sent: list[Command] = []
         self._types_left: list[int] = []
 
-    async def send(self, cmd, source=None, priority=None) -> Response:
-        del source, priority
+    async def send(self, cmd, source=None, priority=None, logger=None) -> Response:
+        del source, priority, logger
         self.sent.append(cmd)
         if isinstance(cmd, self.gateway_error):
             return NoTransmission()
@@ -136,11 +136,11 @@ class _FakeGear:
         value = None if isinstance(cmd, self.silent) else self.answers.get(type(cmd))
         return None if value is None else BackwardFrame(value)
 
-    async def send_commands(self, cmds, source=None, priority=None) -> list[Response]:
-        return [await self.send(cmd, source, priority) for cmd in cmds]
+    async def send_commands(self, cmds, source=None, priority=None, logger=None) -> list[Response]:
+        return [await self.send(cmd, source, priority, logger) for cmd in cmds]
 
-    async def run_sequence(self, seq, priority=None, progress=None):
-        del priority, progress
+    async def run_sequence(self, seq, priority=None, logger=None):
+        del priority, logger
         response = None
         try:
             while True:

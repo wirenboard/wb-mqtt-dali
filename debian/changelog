@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.36.2) stable; urgency=medium
+
+  * Wait for wb-mqtt-serial at startup instead of exiting with a traceback and restarting:
+    one critical message while waiting, the buses start as soon as wb-mqtt-serial is up
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 29 Oct 2026 10:00:00 +0000
+
 wb-mqtt-dali (1.36.1) stable; urgency=medium
 
   * DT51 energy meter shows a read error when the gateway fails (e.g. no power on the bus)

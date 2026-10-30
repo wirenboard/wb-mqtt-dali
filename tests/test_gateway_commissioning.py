@@ -18,6 +18,7 @@ from wb.mqtt_dali.gateway import (
     bus_to_json,
     commissioning_topic,
 )
+from wb.mqtt_dali.wbmqtt import TranslatedTitle
 
 
 def _make_gateway_shell():
@@ -236,7 +237,7 @@ async def test_clear_retained_state_on_stop():
 def test_bus_to_json_includes_commissioning():
     bus = MagicMock()
     bus.uid = "bus_1"
-    bus.bus_name = "Bus 1"
+    bus.bus_name = TranslatedTitle("Bus 1", "Шина 1")
     bus.dali_devices = []
     bus.dali2_devices = []
     bus.commissioning_state = CommissioningState(status=CommissioningStatus.IDLE, progress=0)

@@ -2,7 +2,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence, Union
 
 from dali.address import GearBroadcast, GearGroup
 
@@ -49,7 +49,7 @@ from .settings import SettingsParamBase
 from .utils import merge_json_schemas
 from .wbdali import WBDALIDriver
 from .wbdali_utils import MASK_2BYTES, send_commands_with_retry
-from .wbmqtt import ControlError
+from .wbmqtt import ControlError, as_translated_title
 
 ControlId = str
 # Stable per-bus identity for a candidate device. ``device.uid`` (UUID4) survives
@@ -335,7 +335,7 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         group_number: int,
         device_registry: DeviceRegistry,
         mqtt_id_prefix: str,
-        bus_name: str,
+        bus_name: Union[str, TranslatedTitle],
         on_off_config: Optional[OnOffConfig] = None,
     ) -> None:
         self._registry = device_registry
@@ -345,9 +345,10 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         # The Editor-RPC identity of the group
         self.uid = f"{mqtt_id_prefix}_g{group_number}"
         self.mqtt_id = f"{mqtt_id_prefix}_group_{group_number:02d}"
+        bus_title = as_translated_title(bus_name)
         self.name = TranslatedTitle(
-            f"{bus_name} Group {group_number}",
-            f"{bus_name} группа {group_number}",
+            f"{bus_title.en} Group {group_number}",
+            f"{bus_title.ru or bus_title.en} группа {group_number}",
         )
         self.capabilities = aggregate_capabilities(members)
         self.logger = logging.getLogger()
@@ -610,12 +611,13 @@ class BroadcastVirtualDevice:
         self,
         capabilities: AggregatedCapabilities,
         mqtt_id_prefix: str,
-        bus_name: str,
+        bus_name: Union[str, TranslatedTitle],
     ) -> None:
         self.mqtt_id = f"{mqtt_id_prefix}_broadcast"
+        bus_title = as_translated_title(bus_name)
         self.name = TranslatedTitle(
-            f"{bus_name} Broadcast",
-            f"{bus_name} широковещательный",
+            f"{bus_title.en} Broadcast",
+            f"{bus_title.ru or bus_title.en} широковещательный",
         )
         self.capabilities = capabilities
         self.logger = logging.getLogger()

@@ -30,6 +30,8 @@ from .send_command import (
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_WEBSOCKET_PORT = 8080
+# How long the start waits for wb-mqtt-serial before reporting it missing; it waits on after that.
+WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S = 5.0
 MIN_WEBSOCKET_PORT = 1
 MAX_WEBSOCKET_PORT = 65535
 
@@ -289,10 +291,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 "config",
                 "Load",
                 self._mqtt_dispatcher,
+                WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S,
             )
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.warning("wb-mqtt-serial RPC endpoint is not available: %s", e)
-            raise RuntimeError("Required RPC endpoint wb-mqtt-serial/config/Load is not available") from e
+        except TimeoutError:
+            logging.critical("RPC endpoint wb-mqtt-serial/config/Load is not available, waiting for it")
+            await wait_for_rpc_endpoint("wb-mqtt-serial", "config", "Load", self._mqtt_dispatcher, None)
+            logging.info("RPC endpoint wb-mqtt-serial/config/Load is available, starting")
 
         res = await asyncio.gather(
             *[gw.start() for gw in self.wb_dali_gateways],

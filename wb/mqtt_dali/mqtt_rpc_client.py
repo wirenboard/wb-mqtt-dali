@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import uuid
+from typing import Optional
 
 import aiomqtt
 from jsonrpc.exceptions import JSONRPCDispatchException
@@ -15,8 +16,9 @@ async def wait_for_rpc_endpoint(
     service: str,
     method: str,
     mqtt_dispatcher: MQTTDispatcher,
-    timeout: float = 5.0,
+    timeout: Optional[float] = 5.0,
 ) -> None:
+    """Wait for the endpoint to be published; a `timeout` of None waits indefinitely."""
     fut = asyncio.get_running_loop().create_future()
 
     def on_response(_mqtt_message) -> None:
@@ -27,9 +29,8 @@ async def wait_for_rpc_endpoint(
         if not fut.done():
             fut.set_exception(TimeoutError("Timeout waiting for RPC endpoint"))
 
-    timeout_handler = asyncio.get_running_loop().call_later(
-        timeout,
-        timeout_callback,
+    timeout_handler = (
+        None if timeout is None else asyncio.get_running_loop().call_later(timeout, timeout_callback)
     )
 
     topic = get_topic_path(driver, service, method)
@@ -37,7 +38,8 @@ async def wait_for_rpc_endpoint(
     try:
         await fut
     finally:
-        timeout_handler.cancel()
+        if timeout_handler is not None:
+            timeout_handler.cancel()
         await mqtt_dispatcher.unsubscribe(topic, on_response)
 
 

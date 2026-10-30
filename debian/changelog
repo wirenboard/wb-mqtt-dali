@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.37.1) stable; urgency=medium
+
+  * The package is now distributed under the WB License (MIT-WB): the software may only be
+    used on Wiren Board controllers
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 11:34:55 +0000
+
 wb-mqtt-dali (1.37.0) stable; urgency=medium
 
   * Less journal spam: no power on the bus, gateway overheat and unresponsive devices are

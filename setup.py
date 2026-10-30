@@ -14,5 +14,5 @@ setup(
     description="Wiren Board MQTT DALI Bridge",
     url="https://github.com/wirenboard/wb-mqtt-dali",
     packages=["wb.mqtt_dali", "wb.mqtt_dali.device", "wb.mqtt_dali.gear"],
-    license="MIT",
+    license="MIT-WB",
 )

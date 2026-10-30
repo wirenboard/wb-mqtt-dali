@@ -99,14 +99,14 @@ class RandomiseOnlyFakeBus:
             QueryControlGearPresent: self._query_present,
         }
 
-    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
-        del source, priority
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
+        del source, priority, logger
         self.sent_commands.append(cmd)
         handler = self._handlers.get(type(cmd))
         return handler(cmd) if handler is not None else FakeResponse()
 
-    async def send_commands(self, cmds, source=BusTrafficSource.WB, priority=None):
-        return [await self.send(cmd, source, priority) for cmd in cmds]
+    async def send_commands(self, cmds, source=BusTrafficSource.WB, priority=None, logger=None):
+        return [await self.send(cmd, source, priority, logger) for cmd in cmds]
 
     def programmed_shorts(self) -> list[int]:
         """Every short address PROGRAM SHORT ADDRESS put on the bus."""

@@ -2,6 +2,7 @@
 # Tests for TC limits feature: reading limits, TcLimitsSettings handler,
 # rebuild_mqtt_controls, ApplyResult propagation, sync_controls_after_broadcast
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -101,7 +102,7 @@ async def test_read_limits_returns_four_values():
             phys_coolest_lsb,  # 12: QueryContentDTR0
         ]
     )
-    result = await read_colour_temperature_limits_mirek(driver, GearShort(1))
+    result = await read_colour_temperature_limits_mirek(driver, GearShort(1), logging.getLogger("test"))
     assert result.tc_min_mirek == 100
     assert result.tc_max_mirek == 400
     assert result.tc_phys_min_mirek == 50
@@ -135,7 +136,7 @@ async def test_read_limits_defaults_none_to_extremes():
             none_resp,
         ]
     )
-    result = await read_colour_temperature_limits_mirek(driver, GearShort(1))
+    result = await read_colour_temperature_limits_mirek(driver, GearShort(1), logging.getLogger("test"))
     assert result.tc_min_mirek == MIN_TC_MIREK
     assert result.tc_max_mirek == MAX_TC_MIREK
     assert result.tc_phys_min_mirek == MIN_TC_MIREK
@@ -193,7 +194,7 @@ async def test_tc_limits_read_mutates_shared_limits():
 
     # New values: cool=120, warm=380, phys_cool=130, phys_warm=480
     driver.send_commands = AsyncMock(return_value=_make_reread_response(380, 120, 480, 130))
-    result = await handler.read(driver, GearShort(1))
+    result = await handler.read(driver, GearShort(1), logging.getLogger("test"))
     assert result == {
         "tc_limits": {
             "tc_coolest": 120,
@@ -223,7 +224,7 @@ async def _tc_handler(tc_min_mirek: int, tc_max_mirek: int) -> Type8Parameters:
         return_value=_make_reread_response(tc_max_mirek, tc_min_mirek, MAX_TC_MIREK, MIN_TC_MIREK)
     )
     handler = Type8Parameters()
-    await handler.read_mandatory_info(driver, GearShort(1))
+    await handler.read_mandatory_info(driver, GearShort(1), logging.getLogger("test"))
     return handler
 
 
@@ -249,7 +250,9 @@ async def _card(warmest, coolest, phys_warmest, phys_coolest) -> dict:
     driver.send_commands = AsyncMock(
         return_value=_make_reread_response(warmest, coolest, phys_warmest, phys_coolest)
     )
-    return (await TcLimitsSettings(_make_limits()).read(driver, GearShort(1)))["tc_limits"]
+    return (await TcLimitsSettings(_make_limits()).read(driver, GearShort(1), logging.getLogger("test")))[
+        "tc_limits"
+    ]
 
 
 def test_slider_keeps_limits_inside_the_ui_range():
@@ -378,7 +381,7 @@ async def test_tc_limits_write_empty_input_returns_empty():
     limits = _make_limits()
     handler = TcLimitsSettings(limits)
     driver = AsyncMock()
-    result = await handler.write(driver, GearShort(1), {})
+    result = await handler.write(driver, GearShort(1), {}, logging.getLogger("test"))
     assert result == {}
     driver.send_commands.assert_not_called()
 
@@ -399,6 +402,7 @@ async def test_tc_limits_write_no_changes_returns_empty():
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     assert result == {}
     driver.send_commands.assert_not_called()
@@ -411,8 +415,8 @@ async def test_tc_limits_write_single_field_sends_correct_commands():
     driver = AsyncMock()
     reread_resp = _make_reread_response(400, 150, 500, 110)
 
-    async def mock_send_commands(cmds, _source=None, priority=None):
-        del priority
+    async def mock_send_commands(cmds, _source=None, priority=None, logger=None):
+        del priority, logger
         if len(cmds) == 4:
             return [MagicMock() for _ in cmds]
         return reread_resp
@@ -430,6 +434,7 @@ async def test_tc_limits_write_single_field_sends_correct_commands():
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     # Should have sent one store command batch + one re-read batch
     assert driver.send_commands.call_count == 2
@@ -459,8 +464,8 @@ async def test_tc_limits_write_physical_before_user():
     reread_resp = _make_reread_response(420, 80, 520, 40)
     sent_selectors = []
 
-    async def mock_send_commands(cmds, _source=None, priority=None):
-        del priority
+    async def mock_send_commands(cmds, _source=None, priority=None, logger=None):
+        del priority, logger
         if len(cmds) == 4 and isinstance(cmds[3], StoreColourTemperatureTcLimit):
             sent_selectors.append(cmds[2].param)
             return [MagicMock() for _ in cmds]
@@ -480,6 +485,7 @@ async def test_tc_limits_write_physical_before_user():
                 "tc_physical_warmest": 520,
             }
         },
+        logging.getLogger("test"),
     )
     # Physical limits should be sent first
     assert sent_selectors == [
@@ -508,6 +514,7 @@ async def test_tc_limits_write_broadcast_returns_empty():
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     assert result == {}
 
@@ -530,6 +537,7 @@ async def test_tc_limits_write_group_returns_empty():
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     assert result == {}
 

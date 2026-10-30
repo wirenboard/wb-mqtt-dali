@@ -230,7 +230,11 @@ async def test_send_commands_priority_propagates_to_payload(
     """Each FramePriority value reaches the encoded Modbus payload unchanged for a single-frame send."""
     driver, mqtt_client, dispatcher = initialized_driver
     frames = await _capture_one_batch(
-        driver, mqtt_client, dispatcher, driver.send(_MockCommand(), priority=priority), 1
+        driver,
+        mqtt_client,
+        dispatcher,
+        driver.send(_MockCommand(), BusTrafficSource.WB, priority, driver.logger),
+        1,
     )
     assert len(frames) == 1
     assert frames[0].priority_value == expected_priority_bits
@@ -249,7 +253,7 @@ async def test_mqtt_level_write_uses_user_action_priority(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        send_commands_with_retry(driver, [DAPC(GearShort(0), 128)]),
+        send_commands_with_retry(driver, [DAPC(GearShort(0), 128)], driver.logger),
         1,
     )
     assert len(frames) == 1
@@ -268,13 +272,7 @@ async def test_polling_loop_uses_periodic_query_priority(initialized_driver):
         ControlInfo(id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))),
         QueryActualLevel,
     )
-    step = control.next_poll_step(
-        driver=driver,
-        address=GearShort(0),
-        max_commands=1,
-        default_max_commands=3,
-        now=0.0,
-    )
+    step = control.next_poll_step(driver, GearShort(0), 1, 3, 0.0, logging.getLogger("test"))
     assert step.poll_coroutine is not None
     frames = await _capture_one_batch(
         driver, mqtt_client, dispatcher, step.poll_coroutine(), 1, with_response=True
@@ -381,13 +379,13 @@ async def test_commissioning_smart_extend_uses_user_action_priority():
     recorded: list[Optional[FramePriority]] = []
 
     class _RecordingBus:
-        async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
+        async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
             recorded.append(priority)
-            return await inner.send(cmd, source=source, priority=priority)
+            return await inner.send(cmd, source=source, priority=priority, logger=logger)
 
-        async def send_commands(self, cmds, source=BusTrafficSource.WB, priority=None):
+        async def send_commands(self, cmds, source=BusTrafficSource.WB, priority=None, logger=None):
             recorded.append(priority)
-            return await inner.send_commands(cmds, source=source, priority=priority)
+            return await inner.send_commands(cmds, source=source, priority=priority, logger=logger)
 
     commissioning = Commissioning(_RecordingBus(), [])
     await commissioning.smart_extend()
@@ -407,7 +405,7 @@ async def test_first_frame_always_caller_priority(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        driver.send_commands([DTR0(5)], priority=FramePriority.CONFIGURATION),
+        driver.send_commands([DTR0(5)], BusTrafficSource.WB, FramePriority.CONFIGURATION, driver.logger),
         1,
     )
     assert len(frames) == 1
@@ -423,7 +421,9 @@ async def test_dtr_chain_promotes_after_first(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        driver.send_commands([DTR0(1), DTR1(2), DTR2(3)], priority=FramePriority.CONFIGURATION),
+        driver.send_commands(
+            [DTR0(1), DTR1(2), DTR2(3)], BusTrafficSource.WB, FramePriority.CONFIGURATION, driver.logger
+        ),
         3,
     )
     assert [f.priority_value for f in frames] == [
@@ -441,7 +441,12 @@ async def test_dtr_consumer_after_dtr_set_promoted(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        driver.send_commands([DTR0(5), SetFadeTime(GearShort(0))], priority=FramePriority.CONFIGURATION),
+        driver.send_commands(
+            [DTR0(5), SetFadeTime(GearShort(0))],
+            BusTrafficSource.WB,
+            FramePriority.CONFIGURATION,
+            driver.logger,
+        ),
         2,
     )
     assert [f.priority_value for f in frames] == [
@@ -464,7 +469,9 @@ async def test_uses_dtr_promoted_regardless_of_prev(initialized_driver):
         dispatcher,
         driver.send_commands(
             [QueryColourValue(GearShort(0)), QueryContentDTR0(GearShort(0))],
-            priority=FramePriority.CONFIGURATION,
+            BusTrafficSource.WB,
+            FramePriority.CONFIGURATION,
+            driver.logger,
         ),
         3,
         with_response=True,
@@ -488,7 +495,9 @@ async def test_dt_cmd_after_auto_edt_promoted(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        driver.send(QueryColourValue(GearShort(0))),
+        driver.send(
+            QueryColourValue(GearShort(0)), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger
+        ),
         2,
         with_response=True,
     )
@@ -511,7 +520,9 @@ async def test_dtr_chain_with_edt_all_continuations(initialized_driver):
         dispatcher,
         driver.send_commands(
             [DTR0(0), DTR1(0), DTR2(0), StoreColourTemperatureTcLimit(GearShort(0))],
-            priority=FramePriority.CONFIGURATION,
+            BusTrafficSource.WB,
+            FramePriority.CONFIGURATION,
+            driver.logger,
         ),
         5,
     )
@@ -540,7 +551,9 @@ async def test_read_memory_location_chain_promoted(initialized_driver):
                 ReadMemoryLocation(GearShort(0)),
                 ReadMemoryLocation(GearShort(0)),
             ],
-            priority=FramePriority.PERIODIC_QUERY,
+            BusTrafficSource.WB,
+            FramePriority.PERIODIC_QUERY,
+            driver.logger,
         ),
         4,
         with_response=True,
@@ -562,7 +575,12 @@ async def test_unrelated_commands_not_promoted(initialized_driver):
         driver,
         mqtt_client,
         dispatcher,
-        driver.send_commands([GoToLastActiveLevel(GearShort(0)), Off(GearShort(1))]),
+        driver.send_commands(
+            [GoToLastActiveLevel(GearShort(0)), Off(GearShort(1))],
+            BusTrafficSource.WB,
+            FramePriority.USER_ACTION,
+            driver.logger,
+        ),
         2,
     )
     assert [f.priority_value for f in frames] == [
@@ -590,7 +608,9 @@ async def test_multi_segment_dtr_partial_promotion(initialized_driver):
                 DTR0(0x81),
                 SetScene(GearShort(0), 1),
             ],
-            priority=FramePriority.CONFIGURATION,
+            BusTrafficSource.WB,
+            FramePriority.CONFIGURATION,
+            driver.logger,
         ),
         4,
     )
@@ -620,7 +640,11 @@ async def test_run_sequence_query_device_types_caller_prio(initialized_driver):
         _pump_publishes_and_reply_scripted(mqtt_client, dispatcher, driver, script, observed)
     )
     try:
-        result = await driver.run_sequence(query_device_types_sequence(GearShort(0)))
+        result = await driver.run_sequence(
+            query_device_types_sequence(GearShort(0), logging.getLogger("test")),
+            FramePriority.USER_ACTION,
+            driver.logger,
+        )
     finally:
         await _cancel_background_tasks(pump_task)
     assert result == [5]
@@ -653,7 +677,8 @@ async def test_run_sequence_read_memory_bank_caller_prio(initialized_driver):
     try:
         await driver.run_sequence(
             read_memory_bank(info.BANK_0, GearShort(0), DaliCommandsCompatibilityLayer()),
-            priority=FramePriority.CONFIGURATION,
+            FramePriority.CONFIGURATION,
+            driver.logger,
         )
     finally:
         await _cancel_background_tasks(pump_task)
@@ -686,7 +711,8 @@ async def test_run_sequence_query_colour_with_level_caller_prio(initialized_driv
         addr = GearShort(0)
         await driver.run_sequence(
             query_colour_with_level(addr, QueryActualLevel(addr), {}, ColourType.COLOUR_TEMPERATURE),
-            priority=FramePriority.CONFIGURATION,
+            FramePriority.CONFIGURATION,
+            driver.logger,
         )
     finally:
         await _cancel_background_tasks(pump_task)

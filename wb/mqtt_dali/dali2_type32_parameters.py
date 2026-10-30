@@ -240,9 +240,7 @@ class FeedbackTimingParam(SettingsParamBase):
         self.property_order = 16
         self.value: Optional[dict[str, int]] = None
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         try:
             byte_value = await query_int(
                 driver,
@@ -262,7 +260,7 @@ class FeedbackTimingParam(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}

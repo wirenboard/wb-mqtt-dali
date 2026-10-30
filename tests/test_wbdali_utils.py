@@ -34,6 +34,9 @@ class FakeLogger:
     def warning(self, message: str, *args: object) -> None:
         self.messages.append(message % args)
 
+    def debug(self, message: str, *args: object) -> None:
+        del message, args
+
 
 LOGGER = FakeLogger()
 
@@ -49,14 +52,14 @@ class FakeDriver:
     send_commands_history: list[list[FakeCommand]] = field(default_factory=list)
 
     # pylint: disable=unused-argument
-    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
         self.send_calls += 1
         self.last_send_cmd = cmd
         result = self.send_results[self.send_calls - 1]
         return result
 
     # pylint: disable=unused-argument
-    async def send_commands(self, commands, source=BusTrafficSource.WB, priority=None):
+    async def send_commands(self, commands, source=BusTrafficSource.WB, priority=None, logger=None):
         self.send_commands_calls += 1
         self.last_send_commands = commands
         self.send_commands_history.append(list(commands))
@@ -99,7 +102,7 @@ async def test_send_with_retry_retries_then_succeeds():
 
     assert result == "ok"
     assert driver.send_calls == 3
-    assert len(logger.messages) == 2
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -143,7 +146,7 @@ async def test_send_commands_with_retry_retries_whole_batch():
 
     assert result == ["ok", "ok", "ok"]
     assert driver.send_commands_calls == 2
-    assert len(logger.messages) == 1
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -175,7 +178,7 @@ async def test_query_response_retries_after_transmission_error():
 
     assert result is response
     assert driver.send_calls == 3
-    assert len(logger.messages) == 2
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -189,7 +192,7 @@ async def test_query_response_retries_after_check_query_error():
 
     assert result is response
     assert driver.send_calls == 3
-    assert len(logger.messages) == 2
+    assert not logger.messages
 
 
 @pytest.mark.asyncio
@@ -212,7 +215,7 @@ async def test_query_responses_retry_from_first_failed_retries_tail_only():
         ]
     )
 
-    result = await query_responses_retry_from_first_failed(driver, commands, logger=LOGGER)
+    result = await query_responses_retry_from_first_failed(driver, commands, 1, LOGGER)
 
     assert result == ["ok1", "ok2", "ok3"]
     assert driver.send_commands_history == [commands, commands[1:]]
@@ -230,14 +233,14 @@ async def test_query_responses_retry_from_first_failed_raises_after_exhausted():
     )
 
     with pytest.raises(RuntimeError, match="retry-from-first failed"):
-        await query_responses_retry_from_first_failed(driver, commands, logger=LOGGER)
+        await query_responses_retry_from_first_failed(driver, commands, 1, LOGGER)
 
 
 @pytest.mark.asyncio
 async def test_query_responses_retry_from_first_failed_empty_commands_returns_empty():
     driver = FakeDriver(send_commands_results=[])
 
-    result = await query_responses_retry_from_first_failed(driver, [], logger=LOGGER)
+    result = await query_responses_retry_from_first_failed(driver, [], 1, LOGGER)
 
     assert result == []
     assert driver.send_commands_calls == 0
@@ -250,7 +253,7 @@ async def test_query_responses_retry_from_first_failed_invalid_batch_size_raises
     driver = FakeDriver(send_commands_results=[["ok1"]])
 
     with pytest.raises(ValueError, match="positive integer"):
-        await query_responses_retry_from_first_failed(driver, commands, batch_size=batch_size, logger=LOGGER)
+        await query_responses_retry_from_first_failed(driver, commands, batch_size, LOGGER)
 
 
 @pytest.mark.asyncio
@@ -263,7 +266,7 @@ async def test_query_responses_retry_from_first_failed_batch_rounding_retries_fr
         ]
     )
 
-    result = await query_responses_retry_from_first_failed(driver, commands, batch_size=2, logger=LOGGER)
+    result = await query_responses_retry_from_first_failed(driver, commands, 2, LOGGER)
 
     assert result == ["ok1", "ok2", "ok3", "ok4"]
     assert driver.send_commands_history == [commands, commands[2:]]

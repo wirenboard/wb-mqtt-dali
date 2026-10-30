@@ -40,7 +40,7 @@ from .virtual_devices import (
     GroupVirtualDevice,
     aggregate_capabilities,
 )
-from .wbdali import WBDALIConfig, WBDALIDriver
+from .wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
     MASK,
@@ -359,20 +359,17 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
 ) -> bool:
     """Try to initialize device. Publish on success or error. Returns True on success."""
     mqtt_id = device.mqtt_id
-    is_retry = scheduler.has_failed(mqtt_id)
     try:
         await device.initialize(driver)
         if publisher.has_device(mqtt_id):
             await publisher.remove_device(mqtt_id)
         await publish_device(device, publisher, control_handler)
         scheduler.record_success(mqtt_id)
-        if is_retry:
-            logger.info("Device %s initialized successfully after retry", device.name)
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
-        delay = scheduler.record_failure(mqtt_id, current_time)
-        if not is_retry:
-            logger.warning("Failed to initialize device %s, retrying in %.0fs: %s", device.name, delay, e)
+        scheduler.record_failure(mqtt_id, current_time)
+        if device.is_initialized:
+            logger.warning("Failed to publish device %s: %s", device.name, e)
         if not publisher.has_device(mqtt_id):
             await publish_device(device, publisher, control_handler, error=True)
         return False
@@ -833,7 +830,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         bus_parameter_types.add(handler_key)
                         bus_parameter_handlers.append(handler)
         for handler in bus_parameter_handlers:
-            await handler.write(self._dev, GearBroadcast(), new_params)
+            await handler.write(self._dev, GearBroadcast(), new_params, self.logger)
         for device in self.dali_devices:
             if not device.is_initialized:
                 continue
@@ -870,7 +867,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._update_dali2_devices(res_dali2, on_device_initialized)
 
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), device.logger)
         await asyncio.sleep(RESET_SETTLE_TIME_S)
 
         if isinstance(device, DaliDevice):
@@ -940,10 +937,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         return results
 
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), device.logger)
         await asyncio.sleep(RESET_SETTLE_TIME_S)
         reported = await self._dev.run_sequence(
-            set_short_address_sequence(device.dali_commands, device.address.short, MASK, self.logger)
+            set_short_address_sequence(device.dali_commands, device.address.short, MASK, device.logger),
+            FramePriority.USER_ACTION,
+            device.logger,
         )
         if reported != MASK:
             self.logger.warning(

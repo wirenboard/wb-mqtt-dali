@@ -56,19 +56,19 @@ class ScriptedDriver:
     def __init__(self):
         self.sent = []
 
-    async def send(self, cmd, source=None, priority=None):
-        del source, priority
+    async def send(self, cmd, source=None, priority=None, logger=None):
+        del source, priority, logger
         self.sent.append(cmd)
         if cmd.response is None:
             return Response(None)
         return cmd.response(BackwardFrame(_QUERY_RESPONSES.get(type(cmd).__name__, 0)))
 
-    async def send_commands(self, cmds, source=None, priority=None):
-        return [await self.send(cmd, source, priority) for cmd in cmds]
+    async def send_commands(self, cmds, source=None, priority=None, logger=None):
+        return [await self.send(cmd, source, priority, logger) for cmd in cmds]
 
-    async def run_sequence(self, seq, priority=None, progress=None):
+    async def run_sequence(self, seq, priority=None, logger=None):
         """Mirror WBDALIDriver.run_sequence's generator protocol."""
-        del priority, progress
+        del priority, logger
         response = None
         started = False
         try:

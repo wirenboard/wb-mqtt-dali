@@ -11,8 +11,9 @@ import aiomqtt
 from dali.command import Command
 from dali.frame import ForwardFrame
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import (
     GatewayUnavailable,
     NoResponseFromGateway,
@@ -108,12 +109,22 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         """Link drops with three commands in flight: a new one is refused at once, the in-flight
         ones end by the response timeout."""
         driver = await self._make_driver(response_timeout=0.3)
-        in_flight = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(3)]))
+        in_flight = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(3)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
         await self.mock_client.wait_for_publish(self._rpc_topic(driver))
 
         await self._fail_message_stream()
 
-        fresh = await asyncio.wait_for(driver.send(_MockCommand()), timeout=0.1)
+        fresh = await asyncio.wait_for(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger),
+            timeout=0.1,
+        )
         self.assertIsInstance(fresh, GatewayUnavailable)
         results = await asyncio.wait_for(in_flight, timeout=1.0)
         self.assertEqual([type(r) for r in results], [NoResponseFromGateway] * 3)
@@ -123,13 +134,22 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         """Link back before the in-flight commands time out: the next request fails them and
         goes out after the queue reset, at slot 0."""
         driver = await self._make_driver()
-        in_flight = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(3)]))
+        in_flight = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(3)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
         await self.mock_client.wait_for_publish(self._rpc_topic(driver))
         await self._fail_message_stream()
         await self._restore_link()
         self.assertFalse(in_flight.done())
 
-        send_task = asyncio.create_task(driver.send(_MockCommand()))
+        send_task = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
 
         results = await asyncio.wait_for(in_flight, timeout=0.5)
         self.assertEqual([type(r) for r in results], [GatewayUnavailable] * 3)
@@ -142,12 +162,25 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         and the commands in flight fail at once; the next batch takes the slots after them."""
         driver = await self._make_driver()
         topic = self._rpc_topic(driver)
-        in_flight = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(2)]))
+        in_flight = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(2)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
         await self.mock_client.wait_for_publish(topic)
         self.mock_client.fail("publish", topic)
 
         results = await asyncio.wait_for(
-            driver.send_commands([_MockCommand() for _ in range(3)]), timeout=0.5
+            driver.send_commands(
+                [_MockCommand() for _ in range(3)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            ),
+            timeout=0.5,
         )
 
         self.assertEqual([type(r) for r in results], [GatewayUnavailable] * 3)
@@ -156,7 +189,9 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.mock_client.drain_publishes(), [])
         self.mock_client.failures.clear()
-        send_task = asyncio.create_task(driver.send(_MockCommand()))
+        send_task = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
         batch = _rpc_params(await self.mock_client.wait_for_publish(topic))
         self.assertEqual((batch["function"], batch["address"]), (16, 1410))
         self._deliver_reply(driver, 5, 0x0200)
@@ -167,7 +202,14 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         is preceded by the pointer reset and written to slot 0."""
         driver = await self._make_driver()
         topic = self._rpc_topic(driver)
-        pre = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(5)]))
+        pre = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(5)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
         await self.mock_client.wait_for_publish(topic)
         for slot in range(5):
             self._deliver_reply(driver, slot, 0x0200)
@@ -176,7 +218,9 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         await self._restore_link()
         self.assertEqual(self.mock_client.drain_publishes(), [])
 
-        send_task = asyncio.create_task(driver.send(_MockCommand()))
+        send_task = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
 
         await self._expect_reset_then_batch_at_slot_zero(driver)
         self._deliver_reply(driver, 0, 0x0200)
@@ -190,7 +234,9 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         await self._fail_message_stream()
         await self._restore_link()
 
-        send_task = asyncio.create_task(driver.send(_MockCommand()))
+        send_task = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
 
         await self._expect_reset_then_batch_at_slot_zero(driver)
         self.assertFalse(driver.gateway_unavailable)
@@ -199,7 +245,11 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
 
         await self._deliver_retained_r(driver)
         self.assertIsInstance(
-            await asyncio.wait_for(driver.send(_MockCommand()), timeout=0.5), GatewayUnavailable
+            await asyncio.wait_for(
+                driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger),
+                timeout=0.5,
+            ),
+            GatewayUnavailable,
         )
         self.assertEqual(self.mock_client.drain_publishes(), [])
 
@@ -212,7 +262,10 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         await self._restore_link()
         await self._deliver_retained_r(driver)
 
-        result = await asyncio.wait_for(driver.send(_MockCommand()), timeout=0.5)
+        result = await asyncio.wait_for(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger),
+            timeout=0.5,
+        )
 
         self.assertIsInstance(result, GatewayUnavailable)
         self.assertTrue(driver.gateway_unavailable)
@@ -228,10 +281,16 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.mock_client.drain_publishes(), [])
         self.assertIsInstance(
-            await asyncio.wait_for(driver.send(_MockCommand()), timeout=0.5), GatewayUnavailable
+            await asyncio.wait_for(
+                driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger),
+                timeout=0.5,
+            ),
+            GatewayUnavailable,
         )
         await self._restore_link()
-        send_task = asyncio.create_task(driver.send(_MockCommand()))
+        send_task = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
         await self._expect_reset_then_batch_at_slot_zero(driver)
         self.assertFalse(driver.gateway_unavailable)
         send_task.cancel()
@@ -244,7 +303,14 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         await self._deliver_retained_r(driver)
         await self._fail_message_stream()
         await self._restore_link()
-        in_flight = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(3)]))
+        in_flight = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(3)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
         await self._expect_reset_then_batch_at_slot_zero(driver)
 
         await self._deliver_retained_r(driver)
@@ -257,24 +323,32 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         the batch goes to slot 0 whole, the next one right after it."""
         driver = await self._make_driver()
         topic = self._rpc_topic(driver)
-        pre = asyncio.create_task(driver.send(_MockCommand()))
+        pre = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
         await self.mock_client.wait_for_publish(topic)
         self._deliver_reply(driver, 0, 0x0200)
         await pre
         with patch("wb.mqtt_dali.wbdali.WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S", 10.0):
-            held = asyncio.create_task(driver.send(_MockCommand()))
+            held = asyncio.create_task(
+                driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+            )
             await asyncio.sleep(0.05)
         await self._fail_message_stream()
         await self._restore_link()
 
-        joined = asyncio.create_task(driver.send(_MockCommand()))
+        joined = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
 
         await self._expect_reset_then_batch_at_slot_zero(driver)
         self._deliver_reply(driver, 0, 0x0200)
         self._deliver_reply(driver, 1, 0x0200)
         for task in (held, joined):
             self.assertNotIsInstance(await asyncio.wait_for(task, timeout=1.0), WbGatewayTransmissionError)
-        following = asyncio.create_task(driver.send(_MockCommand()))
+        following = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
         batch = _rpc_params(await self.mock_client.wait_for_publish(topic))
         self.assertEqual((batch["function"], batch["address"]), (16, 1404))
         self._deliver_reply(driver, 2, 0x0200)
@@ -286,7 +360,14 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         driver = await self._make_driver()
         topic = self._rpc_topic(driver)
         size = driver.config.queue_size
-        pre = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(size // 2)]))
+        pre = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(size // 2)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
         await self.mock_client.wait_for_publish(topic)
         for slot in range(size // 2):
             self._deliver_reply(driver, slot, 0x0200)
@@ -294,7 +375,14 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         await self._fail_message_stream()
         await self._restore_link()
 
-        send_task = asyncio.create_task(driver.send_commands([_MockCommand() for _ in range(size)]))
+        send_task = asyncio.create_task(
+            driver.send_commands(
+                [_MockCommand() for _ in range(size)],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        )
 
         await self._expect_reset_then_batch_at_slot_zero(driver)
         second = _rpc_params(await self.mock_client.wait_for_publish(topic))

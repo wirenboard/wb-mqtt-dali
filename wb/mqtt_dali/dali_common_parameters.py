@@ -140,9 +140,7 @@ class FadeTimeFadeRateParam(SettingsParamBase, OptionalSetting):
         """Update the cached fade-time code from a sniffed DTR0+SetFadeTime (no bus write)."""
         self._fade_time = code
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         try:
             value = await query_response(
                 driver, QueryFadeTimeFadeRate(short_address), logger, FramePriority.CONFIGURATION
@@ -164,7 +162,7 @@ class FadeTimeFadeRateParam(SettingsParamBase, OptionalSetting):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         fade_rate_to_set = value.get("fade_rate")
         fade_time_to_set = value.get("fade_time")
@@ -273,9 +271,7 @@ class GroupsParam(SettingsParamBase, OptionalSetting):
         self._groups = [False for _ in range(GROUPS_TOTAL)]
         self._group_indexes = set()
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         groups = []
         commands = [QueryGroupsZeroToSeven(short_address), QueryGroupsEightToFifteen(short_address)]
         try:
@@ -298,7 +294,7 @@ class GroupsParam(SettingsParamBase, OptionalSetting):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         groups_to_set = value.get("groups")
         if groups_to_set is None or self.is_absent:
@@ -323,7 +319,7 @@ class GroupsParam(SettingsParamBase, OptionalSetting):
         commands.append(QueryGroupsZeroToSeven(short_address))
         commands.append(QueryGroupsEightToFifteen(short_address))
         responses = await query_responses_retry_from_first_failed(
-            driver, commands, logger=logger, priority=FramePriority.CONFIGURATION
+            driver, commands, 1, logger, priority=FramePriority.CONFIGURATION
         )
         groups = []
         for response in responses[-2:]:
@@ -365,9 +361,7 @@ class ScenesParam(SettingsParamBase, OptionalSetting):
         # Index of the next scene not yet read; 0 = nothing read, SCENES_TOTAL = complete.
         self._fetch_cursor = 0
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         # Always a full read of all 16 scenes (refresh paths rely on this); marks fetch
         # complete (full read => nothing left for the background fetch).
         try:
@@ -380,9 +374,7 @@ class ScenesParam(SettingsParamBase, OptionalSetting):
         self._fetch_cursor = SCENES_TOTAL
         return self._scenes_to_json()
 
-    async def fetch(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> bool:
+    async def fetch(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> bool:
         if self._fetch_cursor >= SCENES_TOTAL:
             return True
         end = min(self._fetch_cursor + SCENES_FETCH_CHUNK, SCENES_TOTAL)
@@ -401,7 +393,7 @@ class ScenesParam(SettingsParamBase, OptionalSetting):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         scenes = value.get("scenes")
         if scenes is None or self.is_absent:
@@ -440,7 +432,7 @@ class ScenesParam(SettingsParamBase, OptionalSetting):
         driver: WBDALIDriver,
         short_address: Address,
         values_to_set: list,
-        logger: Optional[logging.Logger],
+        logger: logging.Logger,
     ) -> dict:
         commands = []
         for i in range(SCENES_TOTAL):
@@ -515,7 +507,7 @@ class ScenesParam(SettingsParamBase, OptionalSetting):
         driver: WBDALIDriver,
         short_address: Address,
         scene_indices: Iterable[int],
-        logger: Optional[logging.Logger],
+        logger: logging.Logger,
     ) -> None:
         indices = list(scene_indices)
         commands = [QuerySceneLevel(short_address, scene_number) for scene_number in indices]
@@ -545,7 +537,7 @@ class GroupScenesSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         scenes = value.get(self.property_name)
         if scenes is None:

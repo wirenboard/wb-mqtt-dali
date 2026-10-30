@@ -462,7 +462,7 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         # The setting goes last on purpose: a failed parameter write must leave it untouched.
         gear_params = gear_params_only(new_values)
         for handler in self._member_group_handlers(self._registry.resolve(self._address)):
-            await handler.write(driver, self._address, gear_params)
+            await handler.write(driver, self._address, gear_params, self.logger)
         written = await self._on_off_param.write(driver, self._address, new_values, self.logger)
         return ApplyResult(
             needs_mqtt_controls_refresh=bool(written) and self._on_off_param.requires_mqtt_controls_refresh

@@ -205,7 +205,7 @@ async def _make_colour_handler(colour_type: ColourType) -> Type8Parameters:
     limit = MagicMock()
     limit.raw_value = None
     driver.send_commands = AsyncMock(return_value=[limit for _ in range(13)])
-    await handler.read_mandatory_info(driver, GearShort(5))
+    await handler.read_mandatory_info(driver, GearShort(5), logging.getLogger("test"))
     return handler
 
 
@@ -317,7 +317,7 @@ async def test_confirmation_poll_is_single_read():
     assert actual.next_due_at < NOW + RESYNC_INTERVAL  # pulled in for the confirm
 
     # The read fires; the control re-draws its interval back to the long base.
-    actual.next_poll_step(None, GearShort(5), max_commands=3, default_max_commands=3, now=NOW + 2.0)
+    actual.next_poll_step(None, GearShort(5), 3, 3, NOW + 2.0, logging.getLogger("test"))
     assert actual.next_due_at >= NOW + 2.0 + RESYNC_INTERVAL * 0.7
 
 
@@ -737,7 +737,9 @@ async def test_goto_scene_uses_cached_scene_colour():
     scene_colour.colour.y_coordinate = 1111
     driver = AsyncMock()
     driver.run_sequence = AsyncMock(return_value=scene_colour)
-    await handler.scenes_settings.read(driver, GearShort(5))  # populate scene colours
+    await handler.scenes_settings.read(
+        driver, GearShort(5), logging.getLogger("test")
+    )  # populate scene colours
 
     device = _GearDevice(5, fade_code=2, scene_source=handler.scenes_settings)
     device.dt8_handler = handler
@@ -759,7 +761,9 @@ async def test_goto_scene_colour_published_without_a_level_control():
     scene_colour.colour.x_coordinate = 4242
     driver = AsyncMock()
     driver.run_sequence = AsyncMock(return_value=scene_colour)
-    await handler.scenes_settings.read(driver, GearShort(5))  # populate scene colours
+    await handler.scenes_settings.read(
+        driver, GearShort(5), logging.getLogger("test")
+    )  # populate scene colours
 
     device = _TestGearDevice(5, [], dt8_handler=handler)
     coordinator, publisher = _coordinator([device])

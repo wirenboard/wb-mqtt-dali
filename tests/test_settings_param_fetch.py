@@ -67,9 +67,10 @@ class _SceneLevelDriver:  # pylint: disable=too-few-public-methods
     def __init__(self, levels: dict) -> None:
         self._levels = levels
         self.batches: list[list[int]] = []
+        self.logger = logging.getLogger(__name__)
 
-    async def send_commands(self, commands, source=None, priority=None):
-        del source, priority
+    async def send_commands(self, commands, source=None, priority=None, logger=None):
+        del source, priority, logger
         scenes = [cmd.param for cmd in commands]
         self.batches.append(scenes)
         return [_query_response(self._levels[s]) for s in scenes]
@@ -83,6 +84,7 @@ class _FakeFetchDevice:  # pylint: disable=too-few-public-methods
         self.address = DaliDeviceAddress(short=short, random=0)
         self.dali_commands = DaliCommandsCompatibilityLayer()
         self._params = params
+        self.logger = _LOGGER
 
     def get_settings_parameter_handlers(self):
         return self._params
@@ -157,7 +159,9 @@ async def test_scenesparam_fetch_two_chunks():
     assert driver.batches[1] == list(range(SCENES_FETCH_CHUNK, SCENES_TOTAL))
 
     fresh = ScenesParam()
-    assert await param.read(driver, addr, _LOGGER) == await fresh.read(_SceneLevelDriver(levels), addr)
+    assert await param.read(driver, addr, _LOGGER) == await fresh.read(
+        _SceneLevelDriver(levels), addr, _LOGGER
+    )
 
 
 @pytest.mark.asyncio
@@ -184,7 +188,7 @@ async def test_scenessettings_fetch_one_scene_per_call():
     fresh = ScenesSettings(ColourType.RGBWAF, Type8TcLimits())
     fresh_driver = AsyncMock()
     fresh_driver.run_sequence = AsyncMock(side_effect=lambda *a, **k: ColourSettings(ColourType.RGBWAF, 5))
-    assert fetched == await fresh.read(fresh_driver, addr)
+    assert fetched == await fresh.read(fresh_driver, addr, _LOGGER)
 
 
 # --- read() vs background fetch -----------------------------------------

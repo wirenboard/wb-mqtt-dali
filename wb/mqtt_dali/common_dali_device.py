@@ -27,6 +27,7 @@ from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import info, location, oem
 from dali.memory.location import FlagValue
 
+from .bus_traffic import BusTrafficSource
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .device_publisher import ControlInfo
@@ -261,7 +262,7 @@ class Pollable(Protocol):
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ControlsPollRequestResult:
         """Plan for the current tick: optional coroutine + command-cost + has_more.
 
@@ -302,7 +303,7 @@ class SingleQueryControl(MqttControlBase, Pollable):
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ControlsPollRequestResult:
         del default_max_commands
         if max_commands < 1:
@@ -329,11 +330,13 @@ class SingleQueryControl(MqttControlBase, Pollable):
         self,
         driver: WBDALIDriver,
         address: Address,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> list[BusEvent]:
         try:
             query = self._query_builder(address)
-            responses = await send_commands_with_retry(driver, [query], priority=FramePriority.PERIODIC_QUERY)
+            responses = await send_commands_with_retry(
+                driver, [query], logger, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY
+            )
             response = responses[0]
             try:
                 check_query_response(response)
@@ -342,8 +345,7 @@ class SingleQueryControl(MqttControlBase, Pollable):
 
             return [self.decode_response(response)]
         except Exception as e:  # pylint: disable=broad-exception-caught
-            if logger is not None:
-                logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
+            logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
             return [self.decode_response(None)]
 
 
@@ -427,12 +429,13 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
     return result
 
 
-async def read_bank_as_dict(
+async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-    error_label: Optional[str] = None,
+    error_label: Optional[str],
+    logger: logging.Logger,
 ) -> dict[str, Any]:
     """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
 
@@ -442,7 +445,7 @@ async def read_bank_as_dict(
     """
     try:
         data = await driver.run_sequence(
-            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION
+            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION, logger
         )
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
@@ -455,6 +458,7 @@ async def try_read_bank_as_dict(
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    logger: logging.Logger,
 ) -> Optional[dict[str, Any]]:
     """Like ``read_bank_as_dict`` but returns ``None`` instead of raising on bank failure.
 
@@ -462,7 +466,7 @@ async def try_read_bank_as_dict(
     can proceed without it.
     """
     try:
-        return await read_bank_as_dict(driver, bank, short_address, compat)
+        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger)
     except RuntimeError:
         return None
 
@@ -490,12 +494,13 @@ _GTIN_START_ADDRESS = 0x03
 _GTIN_LENGTH = 6
 
 
-async def _read_gtin_from_bank(
+async def _read_gtin_from_bank(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank_address: int,
     gtin_value_cls,
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+    logger: logging.Logger,
 ) -> Optional[int]:
     """Read the 6 GTIN bytes from a single memory bank and decode them.
 
@@ -512,7 +517,9 @@ async def _read_gtin_from_bank(
         compat.DTR0(_GTIN_START_ADDRESS),
         *[compat.ReadMemoryLocation(short_address) for _ in range(_GTIN_LENGTH)],
     ]
-    responses = await send_commands_with_retry(driver, commands, priority=FramePriority.CONFIGURATION)
+    responses = await send_commands_with_retry(
+        driver, commands, logger, BusTrafficSource.WB, FramePriority.CONFIGURATION
+    )
     read_responses = responses[2:]
     raw_bytes: list[int] = []
     for response in read_responses:
@@ -534,6 +541,7 @@ async def read_gtin_fast(
     driver: WBDALIDriver,
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+    logger: logging.Logger,
 ) -> Optional[int]:
     """Read the GTIN from bank 0, falling back to bank 1 only when necessary.
 
@@ -547,7 +555,9 @@ async def read_gtin_fast(
     absent"; all other driver errors propagate to the caller.
     """
     try:
-        gtin = await _read_gtin_from_bank(driver, info.BANK_0.address, info.GTIN, short_address, compat)
+        gtin = await _read_gtin_from_bank(
+            driver, info.BANK_0.address, info.GTIN, short_address, compat, logger
+        )
         if gtin is not None:
             return gtin
     except MemoryLocationNotImplemented:
@@ -555,7 +565,7 @@ async def read_gtin_fast(
 
     try:
         return await _read_gtin_from_bank(
-            driver, oem.BANK_1.address, oem.ManufacturerGTIN, short_address, compat
+            driver, oem.BANK_1.address, oem.ManufacturerGTIN, short_address, compat, logger
         )
     except MemoryLocationNotImplemented:
         return None
@@ -566,7 +576,7 @@ async def read_product_name(
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
     gtin_db: DaliDatabase,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
 ) -> Optional[str]:
     """Read the GTIN from memory banks and look up the product name.
 
@@ -575,27 +585,24 @@ async def read_product_name(
     Does not raise.
     """
     try:
-        gtin = await read_gtin_fast(driver, short_address, compat)
+        gtin = await read_gtin_fast(driver, short_address, compat, logger)
     except Exception as e:  # pylint: disable=broad-exception-caught
-        if logger is not None:
-            logger.warning(
-                "Failed to read memory banks for %s while looking up product name: %s",
-                short_address,
-                e,
-            )
+        logger.warning(
+            "Failed to read memory banks for %s while looking up product name: %s",
+            short_address,
+            e,
+        )
         return None
     if gtin is None:
-        if logger is not None:
-            logger.debug("No GTIN reported by device at %s; using default name", short_address)
+        logger.debug("No GTIN reported by device at %s; using default name", short_address)
         return None
     product_info = gtin_db.get_info_by_gtin(gtin)
     if product_info is None:
-        if logger is not None:
-            logger.debug(
-                "GTIN %s of device at %s not found in product database; using default name",
-                gtin,
-                short_address,
-            )
+        logger.debug(
+            "GTIN %s of device at %s not found in product database; using default name",
+            gtin,
+            short_address,
+        )
         return None
     return product_info.get("product_name")
 
@@ -625,9 +632,7 @@ class GeneralMemoryParams(SettingsParamBase):
         self._compat = compat
         self._gtin_db = gtin_db
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         res = {}
         try:
             try:
@@ -648,6 +653,7 @@ class GeneralMemoryParams(SettingsParamBase):
                 await driver.run_sequence(
                     read_memory_bank(bank0, short_address, self._compat),
                     FramePriority.CONFIGURATION,
+                    logger,
                 ),
             )
         except MemoryLocationNotImplemented:
@@ -659,6 +665,7 @@ class GeneralMemoryParams(SettingsParamBase):
                 await driver.run_sequence(
                     read_memory_bank(oem.BANK_1, short_address, self._compat),
                     FramePriority.CONFIGURATION,
+                    logger,
                 ),
             )
         except MemoryLocationNotImplemented:
@@ -743,6 +750,8 @@ def notify_controls(
 
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
     _common_schema = {}
+    # Device logger name under the bus logger, followed by the short address, for a default mqtt_id.
+    logger_name_prefix: str = ""
 
     def __init__(
         self,
@@ -759,8 +768,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self.address = address
         self.params: dict = {}
         self.schema: dict = {}
-        self.logger = logging.getLogger()
         self.is_initialized = False
+
+        self._bus_logger = logging.getLogger()
+        self._initialization_failed = False
 
         self._bus_id = bus_id
         self._default_name_prefix = default_name_prefix
@@ -830,6 +841,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return f"{self._bus_id}_{self._default_mqtt_id_part}{self.address.short}"
 
     @property
+    def logger(self) -> logging.Logger:
+        name = self.mqtt_id if self.has_custom_mqtt_id else f"{self.logger_name_prefix}{self.address.short}"
+        return self._bus_logger.getChild(name)
+
+    @property
     def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
         return self._compat
 
@@ -837,12 +853,21 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         async with self._initialize_lock:
             if self.is_initialized:
                 return
-            initialization = await self._initialize_impl(driver)
+            try:
+                initialization = await self._initialize_impl(driver)
+            except Exception as e:
+                if not self._initialization_failed:
+                    self.logger.warning("Failed to initialize device %s: %s", self.name, e)
+                self._initialization_failed = True
+                raise
             initialization.parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
             self._parameter_handlers = initialization.parameter_handlers
             self._group_parameter_handlers = initialization.group_parameter_handlers
             self._install_mqtt_controls(initialization.mqtt_controls)
             self.is_initialized = True
+            if self._initialization_failed:
+                self.logger.info("Device %s initialized successfully after retry", self.name)
+            self._initialization_failed = False
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         """Read every settings param and cache params/schema.
@@ -1041,7 +1066,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return controls_updated
 
     def set_logger(self, logger: logging.Logger) -> None:
-        self.logger = logger
+        """Set the bus logger the device's own logger is a child of."""
+        self._bus_logger = logger
 
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
@@ -1095,7 +1121,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if new_short_address != self.address.short:
             reported = await driver.run_sequence(
                 set_short_address_sequence(self._compat, self.address.short, new_short_address, self.logger),
-                priority=FramePriority.CONFIGURATION,
+                FramePriority.CONFIGURATION,
+                self.logger,
             )
             if reported == new_short_address:
                 self.address.short = new_short_address

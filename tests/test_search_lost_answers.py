@@ -87,7 +87,7 @@ class LossyPerDeviceBus(PerDeviceFakeDALIBus):
         super().__init__(devices)
         self.faults = faults or CompareFaults()
 
-    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
         response = await super().send(cmd, source, priority)
         if not isinstance(cmd, Compare):
             return response

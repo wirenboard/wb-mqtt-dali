@@ -12,8 +12,9 @@ import aiomqtt
 from dali.command import Command
 from dali.frame import ForwardFrame
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import Overheat
 
 # pylint: disable=duplicate-code
@@ -76,7 +77,9 @@ class TestWBDALIStatusOverheat(unittest.IsolatedAsyncioTestCase):
         await driver.initialize()
         await self.mock_mqtt_client.clear_publishes()
 
-        fut = asyncio.create_task(driver.send(_MockCommand()))
+        fut = asyncio.create_task(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )

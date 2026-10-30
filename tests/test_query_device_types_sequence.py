@@ -27,7 +27,7 @@ def _resp(value: int) -> SimpleNamespace:
 def _run_sequence(values: list[int]) -> list[int]:
     """Drive the sequence, feeding one response value per yielded command, and
     return its result (or propagate whatever it raises)."""
-    gen = query_device_types_sequence(GearShort(0))
+    gen = query_device_types_sequence(GearShort(0), logging.getLogger("test"))
     value_iter = iter(values)
     to_send = None
     try:
@@ -101,7 +101,7 @@ def test_silence_before_any_type_raises():
 def test_framing_error_after_types_raises_without_retry():
     """A garbled answer to QueryNextDeviceType fails the chain at once, with no retry."""
     framing_error = SimpleNamespace(raw_value=SimpleNamespace(as_integer=0, error=True))
-    gen = query_device_types_sequence(GearShort(0))
+    gen = query_device_types_sequence(GearShort(0), logging.getLogger("test"))
     gen.send(None)
     gen.send(_resp(255))
     gen.send(_resp(6))

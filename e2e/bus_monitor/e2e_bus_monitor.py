@@ -10,9 +10,9 @@ from dali.address import GearShort
 from dali.gear.general import QueryActualLevel
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
-from wb.mqtt_dali.bus_traffic import BusTrafficItem
+from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.wbdali import FRAME_COUNTER_MODULO
+from wb.mqtt_dali.wbdali import FRAME_COUNTER_MODULO, FramePriority
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
@@ -151,13 +151,19 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
             loop.add_signal_handler(signal.SIGINT, signal_handler)
             loop.add_signal_handler(signal.SIGTERM, signal_handler)
 
-            current_task = asyncio.create_task(sender.send_commands(cmds))
+            current_task = asyncio.create_task(
+                sender.send_commands(cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, sender.logger)
+            )
             total_frames += len(cmds)
             next_task = None
             try:
                 while not cancel_event.is_set():
                     if not cancel_event.is_set():
-                        next_task = asyncio.create_task(sender.send_commands(cmds))
+                        next_task = asyncio.create_task(
+                            sender.send_commands(
+                                cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, sender.logger
+                            )
+                        )
                         total_frames += len(cmds)
                     else:
                         next_task = None

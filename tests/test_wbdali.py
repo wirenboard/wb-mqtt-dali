@@ -131,7 +131,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         if driver.batch_start_index != 0:
             batch_start_index = driver.batch_start_index
             cmds = [_MockCommand() for _ in range(self.config.queue_size - driver.batch_start_index)]
-            fut = asyncio.gather(driver.send_commands(cmds))
+            fut = asyncio.gather(
+                driver.send_commands(cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+            )
             await self.mock_mqtt_client.wait_for_publish(
                 topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
             )
@@ -182,7 +184,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         await self.prepare_driver(driver)
         cmd = _MockCommand(sendtwice=False, response_class=None)
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -197,7 +199,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
 
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -221,7 +223,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         cmd = _MockCommand(sendtwice=True, response_class=None)
 
-        fut = asyncio.gather(driver.send(cmd, priority=FramePriority.AUTOMATIC))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger))
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -240,7 +242,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         await self.prepare_driver(driver)
         cmd = _MockCommand(sendtwice=False, response_class=None)
-        fut = asyncio.gather(driver.send(cmd, priority=FramePriority.AUTOMATIC))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger))
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -265,7 +267,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             _MockCommand(sendtwice=False, data=[0x56, 0x78], response_class=MockResponse),
             _MockCommand(sendtwice=False, data=[0x9A, 0xBC], response_class=None),
         ]
-        fut = asyncio.gather(driver.send_commands(cmds, priority=FramePriority.AUTOMATIC))
+        fut = asyncio.gather(
+            driver.send_commands(cmds, BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger)
+        )
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -298,9 +302,15 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
         await self.prepare_driver(driver)
         cmds = [
-            driver.send(_MockCommand(data=[0x12, 0x34]), priority=FramePriority.AUTOMATIC),
-            driver.send(_MockCommand(data=[0x56, 0x78]), priority=FramePriority.AUTOMATIC),
-            driver.send(_MockCommand(data=[0x9A, 0xBC]), priority=FramePriority.AUTOMATIC),
+            driver.send(
+                _MockCommand(data=[0x12, 0x34]), BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger
+            ),
+            driver.send(
+                _MockCommand(data=[0x56, 0x78]), BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger
+            ),
+            driver.send(
+                _MockCommand(data=[0x9A, 0xBC]), BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger
+            ),
         ]
         fut = asyncio.gather(*cmds)
         payload = await self.mock_mqtt_client.wait_for_publish(
@@ -319,7 +329,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         rpc_id = driver.rpc_id_counter
         cmd = _MockCommand(sendtwice=False, response_class=None)
         for i in range(3):
-            fut = asyncio.gather(driver.send(cmd))
+            fut = asyncio.gather(
+                driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+            )
             await self.mock_mqtt_client.wait_for_publish(
                 topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
             )
@@ -336,7 +348,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
 
         # Don't send any response, let it timeout
-        result = await driver.send(cmd)
+        result = await driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         self.assertIsNotNone(result)
         self.assertIsInstance(result, NoResponseFromGateway)
 
@@ -347,7 +359,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
 
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -375,7 +387,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.prepare_driver(driver)
 
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -403,7 +415,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.response_timeout = 0.2
 
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -430,7 +442,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.prepare_driver(driver)
 
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
-        fut = asyncio.gather(driver.send(cmd))
+        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
         )
@@ -471,7 +483,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         driver.bus_traffic.register(traffic_callback)
 
         cmd = _MockCommand(sendtwice=False, response_class=None)
-        fut = asyncio.gather(driver.send(cmd, source=BusTrafficSource.LUNATONE))
+        fut = asyncio.gather(
+            driver.send(cmd, BusTrafficSource.LUNATONE, FramePriority.USER_ACTION, driver.logger)
+        )
 
         await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
@@ -530,7 +544,9 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             _MockCommand(data=[0x9A, 0xBC]),
         ]
 
-        fut = asyncio.gather(driver.send_commands(commands, priority=FramePriority.AUTOMATIC))
+        fut = asyncio.gather(
+            driver.send_commands(commands, BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger)
+        )
 
         payload = await self.mock_mqtt_client.wait_for_publish(
             topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"

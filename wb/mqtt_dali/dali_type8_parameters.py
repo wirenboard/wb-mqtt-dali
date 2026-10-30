@@ -25,6 +25,7 @@ from dali.gear.general import (
 )
 
 from . import dali_type8_primary_n, dali_type8_rgbwaf, dali_type8_tc, dali_type8_xy
+from .bus_traffic import BusTrafficSource
 from .common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
     ControlsPollRequestResult,
@@ -53,10 +54,12 @@ from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     MASK,
     MASK_2BYTES,
+    check_command_failed,
     check_query_response,
     is_broadcast_or_group_address,
     is_transmission_error_response,
     query_response,
+    query_responses,
     send_commands_with_retry,
 )
 
@@ -262,17 +265,15 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         self._default_colour_type = default_colour_type
         self._limits = limits
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
-        return await self._read_impl(driver, short_address)
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
+        return await self._read_impl(driver, short_address, logger)
 
     async def write(
         self,
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}
@@ -285,9 +286,10 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
             return {}
         cmds = new_state.colour.get_write_commands(short_address)
         cmds.extend([DTR0(new_state.level), self._setup_command_class(short_address)])
-        await send_commands_with_retry(driver, cmds, logger, priority=FramePriority.CONFIGURATION)
         if is_for_single_device:
-            return await self._read_impl(driver, short_address)
+            await query_responses(driver, cmds, logger, FramePriority.CONFIGURATION)
+            return await self._read_impl(driver, short_address, logger)
+        await send_commands_with_retry(driver, cmds, logger, priority=FramePriority.CONFIGURATION)
         self.value = new_state
         return {self.property_name: new_state.to_json()}
 
@@ -336,7 +338,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
         merge_translations(schema, colour_schema)
         return schema
 
-    async def _read_impl(self, driver: WBDALIDriver, short_address: Address) -> dict:
+    async def _read_impl(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         resp = await driver.run_sequence(
             query_colour_with_level(
                 short_address,
@@ -345,6 +347,7 @@ class ColourState(SettingsParamBase):  # pylint: disable=too-many-instance-attri
                 self._default_colour_type,
             ),
             FramePriority.CONFIGURATION,
+            logger,
         )
         if resp is None:
             raise RuntimeError(f"Error reading {self.name.en}")
@@ -366,9 +369,7 @@ class SceneSettings(ColourState):
         )
         self._scene_number = scene_number
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         return self._to_json(await super().read(driver, short_address, logger))
 
     async def write(
@@ -376,7 +377,7 @@ class SceneSettings(ColourState):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if not value.get("enabled", True):
             return await self._remove_from_scene(driver, short_address, logger)
@@ -390,20 +391,26 @@ class SceneSettings(ColourState):
     # --- Private ---
 
     async def _remove_from_scene(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger]
+        self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger
     ) -> dict:
         """Disable = remove the gear from the scene. REMOVE FROM SCENE stores MASK in both the
         scene level and (62386-209 §9.11.3) the scene colour type, so the gear stops being a
         member. A plain level=MASK write would keep the colour and leave a still-member
         colour-only scene."""
+        if not is_broadcast_or_group_address(short_address):
+            await query_responses(
+                driver,
+                [RemoveFromScene(short_address, self._scene_number)],
+                logger,
+                FramePriority.CONFIGURATION,
+            )
+            return self._to_json(await self._read_impl(driver, short_address, logger))
         await send_commands_with_retry(
             driver,
             [RemoveFromScene(short_address, self._scene_number)],
             logger,
             priority=FramePriority.CONFIGURATION,
         )
-        if not is_broadcast_or_group_address(short_address):
-            return self._to_json(await self._read_impl(driver, short_address))
         self.value = ColourSettings(self._default_colour_type, MASK, colour_masked=True)
         return self._to_json({self.property_name: self.value.to_json()})
 
@@ -429,18 +436,14 @@ class ScenesSettings(SettingsParamBase):
         # Index of the next scene not yet read; 0 = nothing read, SCENES_TOTAL = complete.
         self._fetch_cursor = 0
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         # Always a full read of all 16 scenes (refresh paths rely on this); marks fetch
         # complete (full read => nothing left for the background fetch).
         await self._read_scenes(driver, short_address, range(SCENES_TOTAL), logger)
         self._fetch_cursor = SCENES_TOTAL
         return {self.property_name: deepcopy(self._scene_values)}
 
-    async def fetch(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> bool:
+    async def fetch(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> bool:
         # One scene per call: a scene is a colour sequence on the shared DTR0 and cannot be split.
         if self._fetch_cursor >= SCENES_TOTAL:
             return True
@@ -453,7 +456,7 @@ class ScenesSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self._scenes[0].value is None:
             raise RuntimeError("Cannot write scenes before reading them")
@@ -533,7 +536,7 @@ class ScenesSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         scene_indices: Iterable[int],
-        logger: Optional[logging.Logger],
+        logger: logging.Logger,
     ) -> None:
         indices = list(scene_indices)
         results = await asyncio.gather(
@@ -561,7 +564,7 @@ class ColourGroupScenesSettings(ColourState):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         scene_data = value.get(self.property_name)
         if scene_data is None:
@@ -680,7 +683,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         async with self._colour_type_lock:
             if self._current_colour_type is None:
@@ -814,9 +817,9 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ControlsPollRequestResult:
-        del default_max_commands, logger
+        del default_max_commands
         if not self.is_poll_due(now):
             return ControlsPollRequestResult(has_more=False)
         if self.peek_next_subbatch_size() > max_commands:
@@ -829,7 +832,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         if progress.colour_type is None:
             return ControlsPollRequestResult(
                 has_more=True,
-                poll_coroutine=lambda: self._do_first_subbatch(driver, progress),
+                poll_coroutine=lambda: self._do_first_subbatch(driver, progress, logger),
                 commands_count=3,
             )
 
@@ -838,21 +841,24 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         more_after_this = len(progress.pending_components) > 1
         return ControlsPollRequestResult(
             has_more=more_after_this,
-            poll_coroutine=lambda: self._do_component_subbatch(driver, progress),
+            poll_coroutine=lambda: self._do_component_subbatch(driver, progress, logger),
             commands_count=commands_count,
         )
 
     # --- Private ---
 
     async def _do_first_subbatch(
-        self, driver: WBDALIDriver, progress: _Type8ColourReadProgress
+        self,
+        driver: WBDALIDriver,
+        progress: _Type8ColourReadProgress,
+        logger: logging.Logger,
     ) -> list[BusEvent]:
         cmds = [
             QueryActualLevel(progress.address),
             DTR0(QueryColourValueDTR.ReportColourType),
             QueryColourValue(progress.address),
         ]
-        responses = await self._send_subbatch_with_retries(driver, cmds)
+        responses = await self._send_subbatch_with_retries(driver, cmds, logger)
         if responses is None:
             self._read_progress = None
             return self._build_error_results()
@@ -874,7 +880,10 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         return []
 
     async def _do_component_subbatch(
-        self, driver: WBDALIDriver, progress: _Type8ColourReadProgress
+        self,
+        driver: WBDALIDriver,
+        progress: _Type8ColourReadProgress,
+        logger: logging.Logger,
     ) -> list[BusEvent]:
         component = progress.pending_components[0]
         is_rgbwaf = progress.colour_type == ColourType.RGBWAF
@@ -884,7 +893,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         ]
         if not is_rgbwaf:
             cmds.append(QueryContentDTR0(progress.address))
-        responses = await self._send_subbatch_with_retries(driver, cmds)
+        responses = await self._send_subbatch_with_retries(driver, cmds, logger)
         if responses is None:
             # Gear that went silent after the opening subbatch would otherwise be asked for
             # every remaining component, with a full round of retries each.
@@ -907,15 +916,29 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         return [ColourChanged(self._colour_picture(), EventSource.READ)]
 
     @staticmethod
-    async def _send_subbatch_with_retries(driver: WBDALIDriver, cmds: list) -> Optional[list]:
-        responses = None
+    async def _send_subbatch_with_retries(
+        driver: WBDALIDriver, cmds: list, logger: logging.Logger
+    ) -> Optional[list]:
+        last_error: Optional[Exception] = None
         for _ in range(MAX_COLOUR_SUBBATCH_RETRIES):
             try:
-                responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
-            except Exception:  # pylint: disable=broad-exception-caught
+                responses = await driver.send_commands(
+                    cmds, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY, logger
+                )
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                last_error = e
                 continue
-            if all(is_valid_colour_query_response(c, r) for c, r in zip(cmds, responses)):
+            last_error = next(
+                (
+                    err
+                    for err in (check_command_failed(c, r) for c, r in zip(cmds, responses))
+                    if err is not None
+                ),
+                None,
+            )
+            if last_error is None:
                 return responses
+        logger.warning("Failed to poll colour with %s: %s", [str(cmd) for cmd in cmds], last_error)
         return None
 
     def _build_error_results(self) -> list[BusEvent]:
@@ -956,7 +979,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         self,
         driver: WBDALIDriver,
         short_address: Address,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ColourType:
         res = await query_response(
             driver, QueryColourStatus(short_address), logger, FramePriority.CONFIGURATION

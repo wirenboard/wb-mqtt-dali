@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from dali import command
 from dali.address import Address
@@ -253,7 +253,7 @@ def get_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
 async def read_colour_temperature_limits_mirek(
     driver: WBDALIDriver,
     short_address: Address,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
 ) -> Type8TcLimits:
     cmds = [
         QueryActualLevel(short_address),
@@ -315,9 +315,7 @@ class TcLimitsSettings(SettingsParamBase):
             "tc_physical_warmest": self._shown_limit(self._limits.tc_phys_max_mirek),
         }
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         result = await read_colour_temperature_limits_mirek(driver, short_address, logger)
         self._limits.update_from(result)
         return {self.property_name: self._current_values()}
@@ -327,7 +325,7 @@ class TcLimitsSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}

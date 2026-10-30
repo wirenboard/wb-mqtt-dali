@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from dali.device.general import Reset as DeviceReset
@@ -18,6 +18,7 @@ from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
+from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbdali_utils import MASK, AsyncDeviceInstanceTypeMapper
 
 from ._app_controller_helpers import make_bare_gateway, wait_until
@@ -43,7 +44,6 @@ def _make_bare_controller():
     controller._init_scheduler = MagicMock(
         remove=MagicMock(),
         schedule=MagicMock(),
-        has_failed=MagicMock(return_value=False),
     )
     controller._poll_scheduler = MagicMock(remove_device=MagicMock(), clear=MagicMock())
     controller._fetch_scheduler = SettingsFetchScheduler()
@@ -258,7 +258,9 @@ async def test_reset_device_dali_sends_reset_and_clears_short_address_and_remove
     # cleared by the verified addressing sequence, not by a bare SET SHORT ADDRESS
     make_sequence.assert_called_once()
     assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
-    controller._dev.run_sequence.assert_awaited_once_with(make_sequence.return_value)
+    controller._dev.run_sequence.assert_awaited_once_with(
+        make_sequence.return_value, FramePriority.USER_ACTION, ANY
+    )
     # device removed from active configuration
     assert controller.dali_devices == []
     assert device.mqtt_id not in controller._devices_by_mqtt_id

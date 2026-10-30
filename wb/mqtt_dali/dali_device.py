@@ -65,7 +65,7 @@ from .gtin_db import DaliDatabase
 from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
 from .settle_clock import SettleBasis, SettleClock
-from .wbdali import WBDALIDriver
+from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     NoAnswerError,
     check_query_response,
@@ -121,7 +121,7 @@ def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
     raise RuntimeError(message)
 
 
-def query_device_types_sequence(addr: Address, logger: Optional[logging.Logger] = None):
+def query_device_types_sequence(addr: Address, logger: logging.Logger):
     """Obtain a list of part 2xx device types supported by control gear"""
     r = yield from request_with_retry_sequence(QueryDeviceType(addr))
     if r.raw_value.as_integer < 254:
@@ -142,13 +142,12 @@ def query_device_types_sequence(addr: Address, logger: Optional[logging.Logger] 
             if len(result) == 0:
                 raise
             # Non-compliant gear may stay silent instead of answering 254 at the end of the list.
-            if logger is not None:
-                logger.warning(
-                    "%s did not answer QueryNextDeviceType with 254 after device types %s; "
-                    "taking them as the complete list",
-                    addr,
-                    result,
-                )
+            logger.warning(
+                "%s did not answer QueryNextDeviceType with 254 after device types %s; "
+                "taking them as the complete list",
+                addr,
+                result,
+            )
             return result
         if r.raw_value.as_integer == 254:
             if len(result) == 0:
@@ -167,6 +166,7 @@ def _pollable_name(pollable: Pollable) -> str:
 
 
 class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
+    logger_name_prefix = "dali_"
 
     def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
@@ -300,7 +300,9 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
     ) -> InitializationResult:
         address = GearShort(self.address.short)
 
-        types = await driver.run_sequence(query_device_types_sequence(address, self.logger))
+        types = await driver.run_sequence(
+            query_device_types_sequence(address, self.logger), FramePriority.USER_ACTION, self.logger
+        )
         if types is None:
             raise RuntimeError(
                 f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
@@ -461,7 +463,7 @@ async def legacy_identify_sequence(
     driver: WBDALIDriver,
     address: GearShort,
     setup_rgb: bool,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
 ) -> None:
 
     await send_with_retry(driver, Initialise(address=address.address), logger)

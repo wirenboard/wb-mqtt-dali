@@ -1,5 +1,6 @@
 """Tests for ``read_gtin_fast`` — the low-traffic commissioning-path GTIN read."""
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -38,9 +39,10 @@ class _SequenceDriver:
         self._bank_bytes = bank_bytes
         self._raise = set(raise_not_implemented_for)
         self.commands: list = []
+        self.logger = logging.getLogger(__name__)
 
-    async def send_commands(self, cmds, source=None, priority=None):
-        del source, priority
+    async def send_commands(self, cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         cmd_list = list(cmds)
         self.commands.extend(cmd_list)
         bank = None
@@ -76,7 +78,9 @@ async def test_read_gtin_fast_returns_decoded_gtin_from_bank_0():
     known_gtin = 8721103129109
     driver = _SequenceDriver({0: _bytes_for_gtin(known_gtin)})
 
-    result = await read_gtin_fast(driver, GearShort(5), DaliCommandsCompatibilityLayer())
+    result = await read_gtin_fast(
+        driver, GearShort(5), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+    )
 
     assert result == known_gtin
 
@@ -102,7 +106,9 @@ async def test_read_gtin_fast_returns_decoded_gtin_from_bank_0():
 async def test_read_gtin_fast_skips_bank_1_when_bank_0_has_valid_gtin():
     driver = _SequenceDriver({0: _bytes_for_gtin(42), 1: _bytes_for_gtin(999)})
 
-    result = await read_gtin_fast(driver, GearShort(3), DaliCommandsCompatibilityLayer())
+    result = await read_gtin_fast(
+        driver, GearShort(3), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+    )
 
     assert result == 42
 
@@ -121,7 +127,9 @@ async def test_read_gtin_fast_falls_back_to_bank_1_when_bank_0_is_all_ff():
         }
     )
 
-    result = await read_gtin_fast(driver, GearShort(4), DaliCommandsCompatibilityLayer())
+    result = await read_gtin_fast(
+        driver, GearShort(4), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+    )
 
     assert result == 7777
 
@@ -140,7 +148,9 @@ async def test_read_gtin_fast_returns_none_when_both_banks_are_empty():
         }
     )
 
-    result = await read_gtin_fast(driver, GearShort(2), DaliCommandsCompatibilityLayer())
+    result = await read_gtin_fast(
+        driver, GearShort(2), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+    )
 
     assert result is None
 
@@ -153,7 +163,9 @@ async def test_read_gtin_fast_silently_handles_bank_0_memory_not_implemented():
         raise_not_implemented_for=(0,),
     )
 
-    result = await read_gtin_fast(driver, GearShort(1), DaliCommandsCompatibilityLayer())
+    result = await read_gtin_fast(
+        driver, GearShort(1), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+    )
 
     assert result == 12345
 
@@ -166,7 +178,9 @@ async def test_read_gtin_fast_raises_when_bank_0_has_no_responses():
     driver = _SequenceDriver({0: None, 1: _bytes_for_gtin(5555)})
 
     with pytest.raises(RuntimeError):
-        await read_gtin_fast(driver, GearShort(6), DaliCommandsCompatibilityLayer())
+        await read_gtin_fast(
+            driver, GearShort(6), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+        )
 
     # Bank 1 must NOT have been attempted after the bank 0 failure.
     dtr1_banks = [c.frame.as_integer & 0xFF for c in driver.commands if isinstance(c, DTR1)]
@@ -186,7 +200,9 @@ async def test_read_gtin_fast_raises_when_bank_0_has_partial_response():
     )
 
     with pytest.raises(RuntimeError):
-        await read_gtin_fast(driver, GearShort(8), DaliCommandsCompatibilityLayer())
+        await read_gtin_fast(
+            driver, GearShort(8), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
+        )
 
     dtr1_banks = [c.frame.as_integer & 0xFF for c in driver.commands if isinstance(c, DTR1)]
     assert 1 not in dtr1_banks
@@ -203,7 +219,9 @@ async def test_read_product_name_delegates_to_read_gtin_fast():
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=8721103129109),
     ) as fast_spy:
-        name = await read_product_name(driver, GearShort(7), DaliCommandsCompatibilityLayer(), gtin_db)
+        name = await read_product_name(
+            driver, GearShort(7), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        )
 
     assert name == "FastLamp"
     fast_spy.assert_awaited_once()

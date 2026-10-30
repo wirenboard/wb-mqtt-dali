@@ -14,7 +14,9 @@ from dali.address import GearShort
 from dali.gear.general import QueryActualLevel
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
@@ -94,9 +96,17 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
 
         try:
 
-            bus1_task = asyncio.create_task(driver_bus1.send_commands(cmds))
+            bus1_task = asyncio.create_task(
+                driver_bus1.send_commands(
+                    cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver_bus1.logger
+                )
+            )
             await asyncio.sleep(0.1)  # Let the first batch start sending
-            bus2_task = asyncio.create_task(driver_bus2.send_commands(cmds))
+            bus2_task = asyncio.create_task(
+                driver_bus2.send_commands(
+                    cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver_bus2.logger
+                )
+            )
             await asyncio.gather(bus1_task, bus2_task, return_exceptions=True)
             for task in (bus1_task, bus2_task):
                 if task.exception() is not None:

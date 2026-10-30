@@ -48,7 +48,7 @@ class TestDeviceInitScheduler:
 
         scheduler.schedule("dev_1", current_time=100.0)
 
-        assert scheduler.has_failed("dev_1")
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == "dev_1"
 
     def test_schedule_with_delay(self):
         """Device scheduled with delay is not ready until the delay elapses."""
@@ -129,28 +129,30 @@ class TestDeviceInitScheduler:
         assert not scheduler.has_pending
 
     def test_record_failure_marks_failed(self):
-        """A recorded failure is reported by has_failed()."""
+        """A recorded failure turns the device into a retry."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
 
         scheduler.record_failure("dev_1", current_time=100.0)
 
-        assert scheduler.has_failed("dev_1")
+        assert scheduler.get_first_attempt_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == []
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == "dev_1"
 
-    def test_record_failure_returns_delay(self):
-        """First failure returns the initial delay value."""
+    def test_record_failure_delays_retry_by_initial_delay(self):
+        """First failure makes the device a retry candidate exactly after the initial delay."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
 
-        delay = scheduler.record_failure("dev_1", current_time=100.0)
+        scheduler.record_failure("dev_1", current_time=100.0)
 
-        assert delay == INIT_RETRY_INITIAL_DELAY
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY - 0.1) is None
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == "dev_1"
 
     def test_record_failure_nonexistent(self):
-        """Recording failure for unknown device returns 0 and does not raise."""
+        """Recording failure for unknown device does not raise and schedules nothing."""
         scheduler = DeviceInitScheduler()
-        delay = scheduler.record_failure("nonexistent", current_time=100.0)
-        assert delay == 0.0
+        scheduler.record_failure("nonexistent", current_time=100.0)
+        assert not scheduler.has_pending
 
     def test_exponential_backoff(self):
         """Each consecutive failure doubles the delay: 5 -> 10 -> 20 -> 40."""
@@ -165,8 +167,9 @@ class TestDeviceInitScheduler:
         ]
 
         for expected in expected_delays:
-            delay = scheduler.record_failure("dev_1", current_time=0.0)
-            assert delay == expected
+            scheduler.record_failure("dev_1", current_time=0.0)
+            assert scheduler.get_one_retry_ready(expected - 0.1) is None
+            assert scheduler.get_one_retry_ready(expected) == "dev_1"
 
     def test_backoff_caps_at_max(self):
         """Delay never exceeds INIT_RETRY_MAX_DELAY regardless of failure count."""
@@ -174,9 +177,10 @@ class TestDeviceInitScheduler:
         scheduler.schedule("dev_1", current_time=0.0)
 
         for _ in range(20):
-            delay = scheduler.record_failure("dev_1", current_time=0.0)
+            scheduler.record_failure("dev_1", current_time=0.0)
 
-        assert delay == INIT_RETRY_MAX_DELAY
+        assert scheduler.get_one_retry_ready(INIT_RETRY_MAX_DELAY - 0.1) is None
+        assert scheduler.get_one_retry_ready(INIT_RETRY_MAX_DELAY) == "dev_1"
 
     def test_backoff_survives_long_failure_streak(self):
         """Past the float overflow of multiplier**N (1025 failures) the delay stays at max."""
@@ -184,10 +188,10 @@ class TestDeviceInitScheduler:
         scheduler.schedule("dev_1", current_time=0.0)
 
         for _ in range(2000):
-            delay = scheduler.record_failure("dev_1", current_time=100.0)
+            scheduler.record_failure("dev_1", current_time=100.0)
 
-        assert delay == INIT_RETRY_MAX_DELAY
         assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_MAX_DELAY - 1) is None
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_MAX_DELAY) == "dev_1"
 
     def test_clear(self):
         """clear() removes all pending devices."""
@@ -198,11 +202,6 @@ class TestDeviceInitScheduler:
         scheduler.clear()
 
         assert not scheduler.has_pending
-
-    def test_has_failed_nonexistent(self):
-        """Unknown device has not failed."""
-        scheduler = DeviceInitScheduler()
-        assert not scheduler.has_failed("nonexistent")
 
     def test_batch_first_attempt(self):
         """All 10 devices scheduled at once are returned together for first attempt."""
@@ -297,7 +296,7 @@ class TestTryInitializeDevice:
 
         assert result is False
         assert scheduler.has_pending
-        assert scheduler.has_failed(device.mqtt_id)
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == device.mqtt_id
 
     @pytest.mark.asyncio
     async def test_failure_publishes_error_controls(self):

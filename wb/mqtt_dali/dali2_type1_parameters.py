@@ -106,9 +106,7 @@ class EventFilterParam(SettingsParamBase):
         self.property_order = 7
         self.value: Optional[int] = None
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         if is_broadcast_or_group_address(short_address):
             return {}
         raw = await query_int(
@@ -126,7 +124,7 @@ class EventFilterParam(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.PROPERTY_NAME not in value:
             return {}

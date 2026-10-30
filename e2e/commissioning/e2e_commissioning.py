@@ -9,6 +9,7 @@ import sys
 
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
     Commissioning,
     print_commissioning_summary,
@@ -18,7 +19,7 @@ from wb.mqtt_dali.dali2_compat import Dali2CommandsCompatibilityLayer
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.short_address import set_short_address_sequence
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_utils import MASK
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
@@ -53,7 +54,11 @@ async def run_cmd(cmd: str):
 
 async def clear_short_addresses(driver: WBDALIDriver, cmds, dali2: bool) -> None:
     for address in await search_short(driver, dali2):
-        await driver.run_sequence(set_short_address_sequence(cmds, address.short, MASK, logging.getLogger()))
+        await driver.run_sequence(
+            set_short_address_sequence(cmds, address.short, MASK, driver.logger),
+            FramePriority.USER_ACTION,
+            driver.logger,
+        )
 
 
 async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
@@ -126,7 +131,9 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
             )
             try:
                 await driver.initialize()
-                await driver.send(cmds.Reset(None))
+                await driver.send(
+                    cmds.Reset(None), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger
+                )
                 await asyncio.sleep(0.5)  # Wait for devices to reset
                 await clear_short_addresses(driver, cmds, args.dali2)
                 if len(await search_short(driver, args.dali2)):

@@ -2,6 +2,7 @@
 
 # pylint: disable=duplicate-code
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -73,9 +74,9 @@ async def _make_type8_handler_with_scene(colour_type: ColourType, scene: ColourS
     public way in). The colour type is already known, so nothing is read for it."""
     handler = _make_type8_handler(colour_type)
     driver = AsyncMock()
-    await handler.read_mandatory_info(driver, GearShort(1))
+    await handler.read_mandatory_info(driver, GearShort(1), logging.getLogger("test"))
     driver.run_sequence = AsyncMock(return_value=scene)
-    await handler.scenes_settings.read(driver, GearShort(1))
+    await handler.scenes_settings.read(driver, GearShort(1), logging.getLogger("test"))
     return handler
 
 
@@ -150,7 +151,7 @@ def _is_first_subbatch(cmds) -> bool:
 
 
 def _make_send_commands(level: int, colour_type_int: int, component_values: dict[int, int]):
-    async def _send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def _send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         if _is_first_subbatch(cmds):
             return [_ok_response(level), _ok_response(0), _ok_response(colour_type_int)]
         tag_val = cmds[0].param
@@ -177,7 +178,7 @@ async def test_type8_colour_poll_split_into_subbatches():
 
     sent_calls: list[list] = []
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         sent_calls.append(list(cmds))
         return await _make_send_commands(180, ColourType.RGBWAF.value, component_values)(cmds, source)
 
@@ -230,7 +231,7 @@ async def test_type8_colour_poll_does_not_hold_bus_lock_across_subbatches():
 
     sent_log: list[str] = []
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         sent_log.append("dt8" if _is_first_subbatch(cmds) or len(cmds) == 2 else "other")
         return await base_send(cmds, source)
 
@@ -315,7 +316,7 @@ async def test_execute_control_latency_under_150ms_in_4_rgbwaf_setup():
     base_send = _make_send_commands(50, ColourType.RGBWAF.value, component_values)
     sent_per_tick: list[int] = []
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         sent_per_tick[-1] += len(cmds)
         return await base_send(cmds, source)
 
@@ -337,7 +338,7 @@ async def test_type8_subbatch_retries_up_to_three_times():
 
     attempts: list[int] = [0]
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         attempts[0] += 1
         if attempts[0] < 3:
             return [_bad_response() for _ in cmds]
@@ -542,7 +543,7 @@ async def test_type8_failed_component_backs_off_at_nonzero_time_then_resumes():
 
     sent_calls: list[list] = []
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         sent_calls.append(list(cmds))
         if _is_first_subbatch(cmds):
             return [_ok_response(60), _ok_response(0), _ok_response(ColourType.RGBWAF.value)]
@@ -598,7 +599,7 @@ async def test_type8_component_failure_ends_the_cycle_without_asking_the_rest():
 
     sent_calls: list[list] = []
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         sent_calls.append(list(cmds))
         if _is_first_subbatch(cmds):
             return [_ok_response(60), _ok_response(0), _ok_response(ColourType.RGBWAF.value)]
@@ -625,7 +626,7 @@ async def test_type8_confirmation_survives_the_end_of_the_cycle_it_interrupted()
     handler = _make_type8_handler(ColourType.RGBWAF)
     dev = _make_dali_device(type8_handler=handler)
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         if _is_first_subbatch(cmds):
             return [_ok_response(60), _ok_response(0), _ok_response(ColourType.RGBWAF.value)]
         return [_bad_response() for _ in cmds]  # component subbatch fails -> cycle ends
@@ -774,7 +775,7 @@ async def test_dt8_subbatch_does_not_bundle_with_single_cmd_controls_in_one_send
 
     sent_calls: list[list] = []
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         sent_calls.append(list(cmds))
         return [_ok_response(), _ok_response(0), _ok_response(ColourType.RGBWAF.value)][: len(cmds)]
 
@@ -800,7 +801,7 @@ async def test_xy_component_batch_is_3_cmds():
         QueryColourValueDTR.YCoordinate.value: 0x5678,
     }
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         if _is_first_subbatch(cmds):
             return [_ok_response(50), _ok_response(0), _ok_response(ColourType.XY.value)]
         assert len(cmds) == 3
@@ -839,7 +840,7 @@ class _ColourControlsDevice(DaliDevice):
 async def _colour_chunk_events(handler: Type8Parameters, driver, now: float = 0.0) -> list:
     """One tick of the split colour read: what the chunk that just landed produced -- nothing
     until the cycle ends or fails."""
-    step = handler.next_poll_step(driver, GearShort(1), max_commands=3, default_max_commands=3, now=now)
+    step = handler.next_poll_step(driver, GearShort(1), 3, 3, now, logging.getLogger("test"))
     assert step.poll_coroutine is not None
     return await step.poll_coroutine()
 
@@ -917,7 +918,7 @@ async def test_colour_read_failure_errors_every_topic_of_the_type():
     await _published_per_tick(device, handler, driver, ticks=5)
     assert _value(device, "current_rgb") == "10;20;30"
 
-    async def fake_send(cmds, source=None, priority=None):  # pylint: disable=unused-argument
+    async def fake_send(cmds, source=None, priority=None, logger=None):  # pylint: disable=unused-argument
         if _is_first_subbatch(cmds):
             return [_ok_response(180), _ok_response(0), _ok_response(ColourType.RGBWAF.value)]
         return [_bad_response() for _ in cmds]
@@ -996,3 +997,21 @@ def test_observed_command_leaves_a_component_it_did_not_name_alone():
     )
 
     assert with_filler.components[ColourComponent.WHITE] == 40
+
+
+@pytest.mark.asyncio
+async def test_type8_failed_subbatch_leaves_one_warning_with_the_last_error(caplog):
+    """The opening subbatch fails every retry: one WARNING naming its commands and the last error."""
+    handler = _make_type8_handler(ColourType.RGBWAF)
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=lambda cmds, *args: [_bad_response() for _ in cmds])
+
+    with caplog.at_level(logging.DEBUG):
+        events = await _colour_chunk_events(handler, driver)
+
+    assert events == [_whole_cycle_failure(ColourType.RGBWAF)]
+    assert driver.send_commands.await_count == MAX_COLOUR_SUBBATCH_RETRIES
+    warnings = [record.getMessage() for record in caplog.records if record.levelno > logging.DEBUG]
+    assert len(warnings) == 1
+    assert str(QueryActualLevel(GearShort(1))) in warnings[0]
+    assert "framing error" in warnings[0]

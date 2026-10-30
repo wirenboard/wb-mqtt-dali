@@ -209,7 +209,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
 def bus_to_json(bus: ApplicationController) -> dict:
     return {
         "id": bus.uid,
-        "name": bus.bus_name,
+        "name": bus.bus_name.en,
         "devices": list(
             map(
                 lambda dev: {

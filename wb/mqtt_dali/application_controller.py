@@ -49,7 +49,7 @@ from .wbdali_utils import (
     is_transmission_error_response,
     send_with_retry,
 )
-from .wbmqtt import ControlError, is_pushbutton
+from .wbmqtt import ControlError, TranslatedTitle, is_pushbutton
 
 # A device is allowed to ignore commands until 300 ms after Reset started
 # (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
@@ -404,7 +404,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         on_polling_failure: Callable[[], None],
     ) -> None:
         self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
-        self.bus_name = f"Bus {config.bus}"
+        self.bus_name = TranslatedTitle(f"Bus {config.bus}", f"Шина {config.bus}")
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
         self.logger = logging.getLogger(self.uid)

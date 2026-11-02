@@ -132,11 +132,11 @@ BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND = BUS_MONITOR_RING_SIZE
 
 
 # Frame sizes a DALI bus can carry: FF16 (IEC 62386-102), FF24 (IEC 62386-103),
-# FF25 (proprietary), BF8.
-FORWARD_FRAME_BIT_LENGTHS = frozenset((16, 24, 25))
+# FF25 (proprietary), FF17 (proprietary, Helvar), BF8.
+FORWARD_FRAME_BIT_LENGTHS = frozenset((16, 17, 24, 25))
 BACKWARD_FRAME_BIT_LENGTH = 8
 
-# Forward-frame sizes `dali.command.from_frame` can decode; FF25 has no decoding.
+# Forward-frame sizes `dali.command.from_frame` can decode; FF17 and FF25 have no decoding.
 DECODABLE_FRAME_BIT_LENGTHS = frozenset((16, 24))
 
 UNREADABLE_FRAME_BIT_LENGTH = 16

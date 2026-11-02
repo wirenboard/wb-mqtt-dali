@@ -733,23 +733,25 @@ def test_backward_frame_with_wrong_length_is_dropped(harness, caplog):
 
 
 def test_all_dali_frame_lengths_are_published(harness, caplog):
-    """Every length a DALI bus can carry stays supported: FF16/24/25 and BF8."""
+    """Every length a DALI bus can carry stays supported: FF16/17/24/25 and BF8."""
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         harness.handler.handle(_MockMessage(_raw(10, data=0xFF00, frame_length=16)))
         harness.handler.handle(_MockMessage(_raw(11, data=0x018802, frame_length=24)))
         harness.handler.handle(_MockMessage(_raw(12, data=0x1234567, frame_length=25)))
         harness.handler.handle(_MockMessage(_raw(13, data=0x2A, frame_length=8, is_backward=True)))
-    assert harness.dispatched_counters() == [10, 11, 12, 13]
-    assert [len(item.request) for item in harness.received] == [16, 24, 25, 8]
+        harness.handler.handle(_MockMessage(_raw(14, data=0x014602, frame_length=17)))
+    assert harness.dispatched_counters() == [10, 11, 12, 13, 14]
+    assert [len(item.request) for item in harness.received] == [16, 24, 25, 8, 17]
     assert [item.request.as_integer for item in harness.received] == [
         0xFF00,
         0x018802,
         0x1234567,
         0x2A,
+        0x014602,
     ]
     # A clean slot must not come out flagged: everything downstream of the monitor
     # is gated on `not request.error`.
-    assert [item.request.error for item in harness.received] == [False] * 4
+    assert [item.request.error for item in harness.received] == [False] * 5
     assert isinstance(harness.received[3].request, BackwardFrame)
     assert not isinstance(harness.received[3].request, BackwardFrameError)
     assert _warning_messages(caplog) == []

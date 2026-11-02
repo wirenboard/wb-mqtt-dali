@@ -1846,6 +1846,18 @@ async def test_monitor_problems_logged_at_warning_normal_at_info():
     assert log.levels == [logging.WARNING, logging.WARNING, logging.INFO, logging.WARNING]
 
 
+@pytest.mark.asyncio
+async def test_monitor_shows_undecodable_forward_frames_as_raw_data():
+    """FF17 and FF25 from the bus go out as hex and `FF<n>`, not as a command."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(17, 0x014602), 7)
+    bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(25, 0x1234567), 8)
+    await asyncio.sleep(0)
+
+    bodies = [call.args[1].partition(" ")[2] for call in dispatcher.publish.call_args_list]
+    assert bodies == ["<< 014602 FF17 (fc: 7)", "<< 1234567 FF25 (fc: 8)"]
+
+
 # --- monitor line formatting -------------------------------------------------
 
 

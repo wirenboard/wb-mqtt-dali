@@ -1,42 +1,48 @@
+wb-mqtt-dali (1.39.0) stable; urgency=medium
+
+  * Show 17-bit Helvar frames in the bus monitor
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 18:27:52 +0500
+
 wb-mqtt-dali (1.38.0) stable; urgency=medium
 
   * Support gateway reply statuses 6 (legacy broken reply) and 7 (failed to send)
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 11:15:12 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 16:15:12 +0500
 
 wb-mqtt-dali (1.37.2) stable; urgency=medium
 
   * Translate the bus name in group and broadcast device titles
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 11:54:02 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 16:54:02 +0500
 
 wb-mqtt-dali (1.37.1) stable; urgency=medium
 
   * The package is now distributed under the WB License (MIT-WB): the software may only be
     used on Wiren Board controllers
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 11:34:55 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 16:34:55 +0500
 
 wb-mqtt-dali (1.37.0) stable; urgency=medium
 
   * Less journal spam: no power on the bus, gateway overheat and unresponsive devices are
     reported once instead of on every command
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 05:40:05 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 10:40:05 +0500
 
 wb-mqtt-dali (1.36.2) stable; urgency=medium
 
   * Wait for wb-mqtt-serial at startup instead of exiting with a traceback and restarting:
     one critical message while waiting, the buses start as soon as wb-mqtt-serial is up
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 29 Oct 2026 10:00:00 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 29 Oct 2026 15:00:00 +0500
 
 wb-mqtt-dali (1.36.1) stable; urgency=medium
 
   * DT51 energy meter shows a read error when the gateway fails (e.g. no power on the bus)
     instead of logging "Error polling device" on every poll cycle
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 28 Oct 2026 11:22:47 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 28 Oct 2026 16:22:47 +0500
 
 wb-mqtt-dali (1.36.0) stable; urgency=medium
 
@@ -46,7 +52,7 @@ wb-mqtt-dali (1.36.0) stable; urgency=medium
     gear types and the firmware and hardware versions; the values are still sent, and the web
     interface shows them on its own
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 27 Oct 2026 07:55:32 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 27 Oct 2026 12:55:32 +0500
 
 wb-mqtt-dali (1.35.0) stable; urgency=medium
 
@@ -55,34 +61,34 @@ wb-mqtt-dali (1.35.0) stable; urgency=medium
   * A device MQTT ID or gateway device ID that is empty or contains $ # + / " or ' is now
     a configuration error
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 23 Oct 2026 05:38:28 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 23 Oct 2026 10:38:28 +0500
 
 wb-mqtt-dali (1.34.0) stable; urgency=medium
 
   * DALI devices that stay silent instead of reporting the end of their device type list no
     longer fail to initialize
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 22 Oct 2026 07:19:55 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 22 Oct 2026 12:19:55 +0500
 
 wb-mqtt-dali (1.33.3) stable; urgency=medium
 
   * No changes for the service: the repository now holds the scripts that find, review and
     prepare the pictures of DALI devices
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 14 Oct 2026 08:07:39 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 14 Oct 2026 13:07:39 +0500
 
 wb-mqtt-dali (1.33.2) stable; urgency=medium
 
   * Remove the "Current colour" setting from DT8 device settings: the current colour is shown
     and set with the device controls
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 08:24:14 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 13:24:14 +0500
 
 wb-mqtt-dali (1.33.1) stable; urgency=medium
 
   * Update the DALI product database
 
- -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 07:47:15 +0000
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 12:47:15 +0500
 
 wb-mqtt-dali (1.33.0) stable; urgency=medium
 

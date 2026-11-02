@@ -232,6 +232,7 @@ Device types (DT), определённые частными стандарта�
 | `no response` | устройство не ответило на запрос |
 | `no response from gateway` | шлюз не прислал ответ на команду (таймаут) |
 | `no transmission, internal gateway error` | шлюз не выполнил передачу из-за внутренней ошибки |
+| `gateway failed to send the frame` | шлюз не смог отправить пакет на шину |
 | `no power on bus` | на шине нет питания |
 | `gateway overheated` | перегрев шлюза — передача временно заблокирована |
 | `transmission cancelled` | передача отменена по инициативе wb-mqtt-dali |

@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.38.0) stable; urgency=medium
+
+  * Support gateway reply statuses 6 (legacy broken reply) and 7 (failed to send)
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 11:15:12 +0000
+
 wb-mqtt-dali (1.37.2) stable; urgency=medium
 
   * Translate the bus name in group and broadcast device titles

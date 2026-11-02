@@ -40,7 +40,12 @@ from .virtual_devices import (
     GroupVirtualDevice,
     aggregate_capabilities,
 )
-from .wbdali import FramePriority, WBDALIConfig, WBDALIDriver
+from .wbdali import (
+    DECODABLE_FRAME_BIT_LENGTHS,
+    FramePriority,
+    WBDALIConfig,
+    WBDALIDriver,
+)
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
     MASK,
@@ -1579,7 +1584,11 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
     def _handle_bus_traffic_frame(self, item: BusTrafficItem) -> None:
         incoming_command = None
-        if not item.request.error and isinstance(item.request, ForwardFrame):
+        if (
+            not item.request.error
+            and isinstance(item.request, ForwardFrame)
+            and len(item.request) in DECODABLE_FRAME_BIT_LENGTHS
+        ):
             incoming_command = from_frame(
                 item.request, dev_inst_map=self._dev_inst_map, devicetype=self._last_bus_traffic_device_type
             )

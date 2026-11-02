@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.12.0+wb101) stable; urgency=medium
+
+  * Support gateway reply statuses 6 (legacy broken reply) and 7 (failed to send)
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 18:33:11 +0500
+
 wb-mqtt-dali (1.12.0+wb100) stable; urgency=medium
 
   * Fix a bus stopping polling after a device had not answered for about 17 hours

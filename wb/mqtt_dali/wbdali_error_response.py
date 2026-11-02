@@ -72,6 +72,19 @@ class TransmissionCancelled(WbGatewayTransmissionError):
         return "transmission cancelled"
 
 
+class TransmissionFailed(WbGatewayTransmissionError):
+    @property
+    def raw_value(self):
+        raise RuntimeError("Gateway failed to send the frame")
+
+    @property
+    def value(self):
+        raise RuntimeError("Gateway failed to send the frame")
+
+    def __str__(self) -> str:
+        return "gateway failed to send the frame"
+
+
 class Overheat(WbGatewayTransmissionError):
     @property
     def raw_value(self):

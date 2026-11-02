@@ -8,13 +8,14 @@ from typing import List, Optional
 from unittest.mock import patch
 
 import aiomqtt
-from dali.command import Command
+from dali.command import Command, Response
 from dali.frame import ForwardFrame
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.overheat_rate_limiter import OverheatRateLimiter
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali_error_response import TransmissionFailed
 
 from ._broker_link_helpers import RecordingClient
 
@@ -26,7 +27,9 @@ STATUS_WITHOUT_RESPONSE = 0x0200
 STATUS_BROKEN_RESPONSE = 0x0312
 STATUS_NO_POWER = 0x0400
 STATUS_OVERHEAT = 0x0500
-STATUS_UNKNOWN = 0x0700
+STATUS_LEGACY_BROKEN_RESPONSE = 0x0612
+STATUS_TRANSMISSION_FAILED = 0x0700
+STATUS_UNKNOWN = 0x0800
 
 
 class _MockCommand(Command):
@@ -87,6 +90,33 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
         """Status 4, an unknown status, status 4: one WARNING, no INFO about power coming back."""
         await self._check_no_power_kept(STATUS_UNKNOWN)
 
+    async def test_transmission_failed_status_keeps_the_no_power_state(self):
+        """Status 4, status 7, status 4: one WARNING, no INFO about power coming back."""
+        await self._check_no_power_kept(STATUS_TRANSMISSION_FAILED)
+
+    async def test_transmission_failed_status_fails_the_command(self):
+        """A status 7 reply: the command gets TransmissionFailed."""
+        result = await self._exchange(STATUS_TRANSMISSION_FAILED, self.device_logger)
+
+        self.assertIsInstance(result, TransmissionFailed)
+
+    async def test_legacy_status_6_is_a_broken_response_that_ends_the_no_power_state(self):
+        """Status 4, then legacy status 6: a response with a framing error, as for status 3,
+        and the bus power reported restored."""
+        with self.assertLogs(BUS_LOGGER_NAME, logging.DEBUG) as logs:
+            await self._exchange(STATUS_NO_POWER, self.device_logger)
+            result = await self._exchange(STATUS_LEGACY_BROKEN_RESPONSE, self.device_logger)
+
+        self.assertTrue(result.raw_value.error)
+        self.assertEqual(
+            _above_debug(logs.records),
+            [
+                (BUS_LOGGER_NAME, logging.WARNING, "No power on DALI bus"),
+                (BUS_LOGGER_NAME, logging.INFO, "DALI bus power restored"),
+            ],
+        )
+        self.assertEqual(self._device_debug(logs.records, "status 6: Broken response"), 1)
+
     async def test_broken_and_unknown_status_and_timeout_are_logged_at_debug_into_the_sender_logger(self):
         """Status 3, an unknown status and a reply timeout: nothing above DEBUG, the command
         errors in the sender's logger."""
@@ -98,7 +128,7 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(_above_debug(logs.records), [])
         self.assertEqual(self._device_debug(logs.records, "status 3"), 1)
-        self.assertEqual(self._device_debug(logs.records, "unknown status 7"), 1)
+        self.assertEqual(self._device_debug(logs.records, "unknown status 8"), 1)
         self.assertEqual(self._device_debug(logs.records, "Timeout waiting for response"), 1)
 
     async def test_command_sent_with_the_bus_logger_is_logged_into_it(self):
@@ -137,7 +167,7 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
             _above_debug(logs.records), [(BUS_LOGGER_NAME, logging.WARNING, "No power on DALI bus")]
         )
 
-    async def _exchange(self, status_word: Optional[int], logger: logging.Logger) -> None:
+    async def _exchange(self, status_word: Optional[int], logger: logging.Logger) -> Response:
         """One command answered with ``status_word`` in its slot, or left unanswered if None."""
         task = asyncio.create_task(
             self.driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, logger)
@@ -149,7 +179,7 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
             )
             self.client.messages.deliver(aiomqtt.Message(topic, str(status_word), 0, False, 0, None))
         self._next_slot += 1
-        await asyncio.wait_for(task, 1.0)
+        return await asyncio.wait_for(task, 1.0)
 
     @staticmethod
     def _device_debug(records: List[logging.LogRecord], text: str) -> int:

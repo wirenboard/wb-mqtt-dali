@@ -35,6 +35,7 @@ from .wbdali_error_response import (
     NoTransmission,
     Overheat,
     TransmissionCancelled,
+    TransmissionFailed,
     UnknownResponseStatus,
     WbGatewayTransmissionError,
 )
@@ -116,6 +117,24 @@ def get_int_payload(message: aiomqtt.Message) -> int:
         return int(message.payload)
     except (AttributeError, TypeError) as exc:
         raise ValueError(f"unsupported payload type {type(message.payload).__name__}: {exc}") from exc
+
+
+class GatewayReplyStatus(Enum):
+    """Status byte [15..8] of the gateway's reply to a sent frame."""
+
+    UNKNOWN = -1
+    NO_TRANSMISSION = 0
+    BACKWARD_FRAME = 1
+    NO_BACKWARD_FRAME = 2
+    BROKEN_BACKWARD_FRAME = 3
+    NO_POWER_ON_BUS = 4
+    OVERHEAT = 5
+    LEGACY_BROKEN_BACKWARD_FRAME = 6  # legacy code, same as BROKEN_BACKWARD_FRAME
+    TRANSMISSION_FAILED = 7
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.UNKNOWN
 
 
 @dataclass
@@ -709,13 +728,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         Message payload format:
         [7..0]   - Backward Frame (8 bit)
-        [15..8]  - status:
-                   0 - no transmission
-                   1 - transmission with backward response
-                   2 - transmission without response
-                   3 - broken response
-                   4 - transmission impossible (no power on bus)
-                   5 - gateway overheat
+        [15..8]  - status, see GatewayReplyStatus
         """
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
@@ -763,12 +776,13 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return
 
         backward_frame_byte = resp & 0xFF
-        status = (resp >> 8) & 0xFF
+        status_byte = (resp >> 8) & 0xFF
+        status = GatewayReplyStatus(status_byte)
 
-        if status != 5:
+        if status != GatewayReplyStatus.OVERHEAT:
             self._overheat_rate_limiter.on_non_overheat_response()
 
-        if status == 0:
+        if status == GatewayReplyStatus.NO_TRANSMISSION:
             # No transmission
             self.logger.debug(
                 "%s (%d) status 0: No transmission",
@@ -784,7 +798,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 1:
+        if status == GatewayReplyStatus.BACKWARD_FRAME:
             # Transmission with backward response
             self.logger.debug(
                 "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
@@ -804,7 +818,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 2:
+        if status == GatewayReplyStatus.NO_BACKWARD_FRAME:
             # Transmission without response
             self.logger.debug(
                 "%s (%d) status 2: Transmission without response",
@@ -823,12 +837,16 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 3:
+        if status in (
+            GatewayReplyStatus.BROKEN_BACKWARD_FRAME,
+            GatewayReplyStatus.LEGACY_BROKEN_BACKWARD_FRAME,
+        ):
             # Broken response (framing error)
             self.logger.error(
-                "%s (%d) status 3: Broken response, backward_frame=0x%02x",
+                "%s (%d) status %d: Broken response, backward_frame=0x%02x",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
+                status_byte,
                 backward_frame_byte,
             )
             if resp_waiter.send_item.command.response is not None:
@@ -843,7 +861,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 4:
+        if status == GatewayReplyStatus.NO_POWER_ON_BUS:
             # Transmission impossible (no power on bus)
             self.logger.error(
                 "%s (%d) status 4: Transmission impossible - no power on bus",
@@ -859,7 +877,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 5:
+        if status == GatewayReplyStatus.OVERHEAT:
             # Gateway overheat
             self.logger.error(
                 "%s (%d) status 5: Gateway overheat",
@@ -876,13 +894,28 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
+        if status == GatewayReplyStatus.TRANSMISSION_FAILED:
+            self.logger.debug(
+                "%s (%d) status 7: Transmission failed",
+                LazyCommandExpression(resp_waiter.send_item.command),
+                resp_pointer,
+            )
+            response = TransmissionFailed()
+            resp_future.set_result(response)
+            self.bus_traffic.notify_command(
+                resp_waiter.send_item.command.frame,
+                response,
+                resp_waiter.send_item.source,
+                resp_waiter.sequence_id,
+            )
+            return
 
         # Unknown status
         self.logger.error(
             "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
             LazyCommandExpression(resp_waiter.send_item.command),
             resp_pointer,
-            status,
+            status_byte,
             backward_frame_byte,
             resp,
         )

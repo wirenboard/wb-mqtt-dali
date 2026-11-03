@@ -6,6 +6,7 @@ import logging
 import random
 import string
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, List, Optional, Sequence, Union
 
 import paho.mqtt.client as mqtt
@@ -26,6 +27,7 @@ from .wbdali_error_response import (
     NoTransmission,
     Overheat,
     TransmissionCancelled,
+    TransmissionFailed,
     UnknownResponseStatus,
     WbGatewayTransmissionError,
 )
@@ -38,6 +40,24 @@ WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS /
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
 FRAME_COUNTER_MODULO = 1 << 16
+
+
+class GatewayReplyStatus(Enum):
+    """Status byte [15..8] of the gateway's reply to a sent frame."""
+
+    UNKNOWN = -1
+    NO_TRANSMISSION = 0
+    BACKWARD_FRAME = 1
+    NO_BACKWARD_FRAME = 2
+    BROKEN_BACKWARD_FRAME = 3
+    NO_POWER_ON_BUS = 4
+    OVERHEAT = 5
+    LEGACY_BROKEN_BACKWARD_FRAME = 6  # legacy code, same as BROKEN_BACKWARD_FRAME
+    TRANSMISSION_FAILED = 7
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.UNKNOWN
 
 
 @dataclass
@@ -398,13 +418,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         Message payload format:
         [7..0]   - Backward Frame (8 bit)
-        [15..8]  - status:
-                   0 - no transmission
-                   1 - transmission with backward response
-                   2 - transmission without response
-                   3 - broken response
-                   4 - transmission impossible (no power on bus)
-                   5 - gateway overheat
+        [15..8]  - status, see GatewayReplyStatus
         """
         resp = int(message.payload.decode())
 
@@ -413,7 +427,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             return  # Ignore retained messages
 
         backward_frame_byte = resp & 0xFF
-        status = (resp >> 8) & 0xFF
+        status_byte = (resp >> 8) & 0xFF
+        status = GatewayReplyStatus(status_byte)
 
         # Process the message as needed
         resp_pointer = int(
@@ -432,10 +447,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             self.logger.debug("Response future already done for pointer: %d", resp_pointer)
             return
 
-        if status != 5:
+        if status != GatewayReplyStatus.OVERHEAT:
             self._overheat_rate_limiter.on_non_overheat_response()
 
-        if status == 0:
+        if status == GatewayReplyStatus.NO_TRANSMISSION:
             # No transmission
             self.logger.debug(
                 "%s (%d) status 0: No transmission", resp_waiter.send_item.command, resp_pointer
@@ -449,7 +464,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 1:
+        if status == GatewayReplyStatus.BACKWARD_FRAME:
             # Transmission with backward response
             self.logger.debug(
                 "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
@@ -469,7 +484,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 2:
+        if status == GatewayReplyStatus.NO_BACKWARD_FRAME:
             # Transmission without response
             self.logger.debug(
                 "%s (%d) status 2: Transmission without response", resp_waiter.send_item.command, resp_pointer
@@ -486,12 +501,16 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 3:
+        if status in (
+            GatewayReplyStatus.BROKEN_BACKWARD_FRAME,
+            GatewayReplyStatus.LEGACY_BROKEN_BACKWARD_FRAME,
+        ):
             # Broken response (framing error)
             self.logger.error(
-                "%s (%d) status 3: Broken response, backward_frame=0x%02x",
+                "%s (%d) status %d: Broken response, backward_frame=0x%02x",
                 resp_waiter.send_item.command,
                 resp_pointer,
+                status_byte,
                 backward_frame_byte,
             )
             if resp_waiter.send_item.command.response is not None:
@@ -506,7 +525,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 4:
+        if status == GatewayReplyStatus.NO_POWER_ON_BUS:
             # Transmission impossible (no power on bus)
             self.logger.error(
                 "%s (%d) status 4: Transmission impossible - no power on bus",
@@ -522,7 +541,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 5:
+        if status == GatewayReplyStatus.OVERHEAT:
             # Gateway overheat
             self.logger.error(
                 "%s (%d) status 5: Gateway overheat",
@@ -539,13 +558,28 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
+        if status == GatewayReplyStatus.TRANSMISSION_FAILED:
+            self.logger.debug(
+                "%s (%d) status 7: Transmission failed",
+                resp_waiter.send_item.command,
+                resp_pointer,
+            )
+            response = TransmissionFailed()
+            resp_future.set_result(response)
+            self.bus_traffic.notify_command(
+                resp_waiter.send_item.command.frame,
+                response,
+                resp_waiter.send_item.source,
+                resp_waiter.sequence_id,
+            )
+            return
 
         # Unknown status
         self.logger.error(
             "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
             resp_waiter.send_item.command,
             resp_pointer,
-            status,
+            status_byte,
             backward_frame_byte,
             resp,
         )

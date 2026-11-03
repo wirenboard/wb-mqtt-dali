@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.12.0+wb102) stable; urgency=medium
+
+  * Disable Python checks in CI: the dev-tools repository is available only
+    for trixie, so they cannot run in the bullseye build image
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 03 Nov 2026 20:58:14 +0500
+
 wb-mqtt-dali (1.12.0+wb101) stable; urgency=medium
 
   * Support gateway reply statuses 6 (legacy broken reply) and 7 (failed to send)

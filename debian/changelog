@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.39.1) stable; urgency=medium
+
+  * Stop logging a second error with a traceback ("Future exception was never
+    retrieved") after a failed bus scan; the scan failure itself is still logged
+    and reported in the scan state
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 05 Nov 2026 15:21:38 +0500
+
 wb-mqtt-dali (1.39.0) stable; urgency=medium
 
   * Show 17-bit Helvar frames in the bus monitor

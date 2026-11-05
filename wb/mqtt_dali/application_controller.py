@@ -1013,7 +1013,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self.logger.error("Commissioning failed: %s", error)
             self._commissioning_state.mark_failed(error, self._build_commissioning_summary())
             self._publish_commissioning_state()
-            raise
+            return
 
         self._commissioning_state.mark_completed(self._build_commissioning_summary())
         self._publish_commissioning_state()

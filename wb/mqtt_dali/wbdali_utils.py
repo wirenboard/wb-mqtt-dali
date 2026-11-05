@@ -49,141 +49,127 @@ class NoAnswerError(RuntimeError):
     """
 
 
-class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
-    # pylint: disable=too-many-locals, too-many-branches
-    """A version of DeviceInstanceTypeMapper taking advantage of
-    sending of multiple DALI commands in parallel
+async def async_autodiscover(  # pylint: disable=too-many-locals, too-many-branches
+    mapper: DeviceInstanceTypeMapper,
+    driver,
+    addresses: int | tuple[int, int] | Iterable[int],
+    logger: logging.Logger,
+    priority: FramePriority = FramePriority.USER_ACTION,
+) -> None:
     """
+    An async function to scan a DALI bus for control device instances,
+    and query their types. Internally it uses asyncio.gather to wait for
+    completion of multiple DALI commands in parallel.
+    This information is stored within `mapper`,
+    for use in decoding "Device/Instance" event messages.
 
-    async def async_autodiscover(
-        self,
-        driver,
-        addresses: int | tuple[int, int] | Iterable[int],
-        logger: logging.Logger,
-        priority: FramePriority = FramePriority.USER_ACTION,
-    ) -> None:
-        """
-        An async function to scan a DALI bus for control device instances,
-        and query their types. Internally it uses asyncio.gather to wait for
-        completion of multiple DALI commands in parallel.
-        This information is stored within this AsyncDeviceInstanceTypeMapper,
-        for use in decoding "Device/Instance" event messages.
+    :param mapper: The DeviceInstanceTypeMapper to store the found instance types in.
+    :param driver: The async DALI driver to use for sending commands.
+    :param addresses: Specifier of which addresses to scan. Can
+    either be a single int, in which case all addresses from zero to that
+    value will be scanned; or can be a tuple in the form (start, end), in
+    which case all addresses between the provided values will be scanned;
+    or finally can be an iterable of ints in which case each address, in
+    the iterator will be scanned.
 
-        :param driver: The async DALI driver to use for sending commands.
-        :param addresses: Specifier of which addresses to scan. Can
-        either be a single int, in which case all addresses from zero to that
-        value will be scanned; or can be a tuple in the form (start, end), in
-        which case all addresses between the provided values will be scanned;
-        or finally can be an iterable of ints in which case each address, in
-        the iterator will be scanned.
+    Needs to be used through an appropriate driver for example:
+    ```
+    dev_inst_map = DeviceInstanceTypeMapper()
+    await async_autodiscover(dev_inst_map, driver, (0, 63), logger)
+    ```
+    instead of
+    ```
+    await driver.run_sequence(dev_inst_map.autodiscover())
+    ```
 
-        Needs to be used through an appropriate driver for example:
-        ```
-        dev_inst_map = AsyncDeviceInstanceTypeMapper()
-        await dev_inst_map.async_autodiscover(driver, (0, 63), logger)
-        ```
-        instead of
-        ```
-        await driver.run_sequence(dev_inst_map.autodiscover())
-        ```
+    """
+    logging.debug("Starting autodiscover with addresses: %s", addresses)
 
-        """
-        logging.debug("Starting autodiscover with addresses: %s", addresses)
+    if isinstance(addresses, int):
+        addresses = list(range(0, addresses + 1))
+    elif isinstance(addresses, tuple) and len(addresses) == 2:
+        addresses = list(range(addresses[0], addresses[1] + 1))
 
-        if isinstance(addresses, int):
-            addresses = list(range(0, addresses + 1))
-        elif isinstance(addresses, tuple) and len(addresses) == 2:
-            addresses = list(range(addresses[0], addresses[1] + 1))
-
-        # Use quiescent mode to reduce bus contention from input devices
-        await send_with_retry(driver, StartQuiescentMode(DeviceBroadcast()), logger, priority=priority)
-        responses = await asyncio.gather(
-            *[
-                send_with_retry(
-                    driver,
-                    QueryDeviceStatus(device=DeviceShort(addr_int)),
-                    logger,
-                    priority=priority,
-                )
-                for addr_int in addresses
-            ],
-        )
-
-        queries = []
-        logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
-        for addr_int, rsp in zip(addresses, responses):
-            addr = DeviceShort(addr_int)
-            if check_bad_rsp(rsp):
-                continue
-            if isinstance(rsp, QueryDeviceStatusResponse):
-                # Make sure the status is OK
-                if rsp.short_address_is_mask or rsp.reset_state:
-                    continue
-            else:
-                # If the response isn't QueryDeviceStatusResponse then
-                # something is wrong
-                continue
-
-            # Find out how many instances the device has
-            queries.append(QueryNumberOfInstances(device=addr))
-
-        responses = await asyncio.gather(
-            *[send_with_retry(driver, q, logger, priority=priority) for q in queries]
-        )
-        enabled_queries = []
-        type_queries = []
-        for query, rsp in zip(queries, responses):
-            addr = query.destination
-
-            if check_bad_rsp(rsp):
-                continue
-            num_inst = rsp.value
-
-            # For each instance, check it is enabled and then query the type
-            for inst_int in range(num_inst):
-                inst = InstanceNumber(inst_int)
-
-                enabled_queries.append(QueryInstanceEnabled(device=addr, instance=inst))
-                type_queries.append(QueryInstanceType(device=addr, instance=inst))
-
-        responses = await asyncio.gather(
-            *[send_with_retry(driver, q, logger, priority=priority) for q in enabled_queries],
-            *[send_with_retry(driver, q, logger, priority=priority) for q in type_queries],
-        )
-
-        enabled_responses = responses[: len(enabled_queries)]
-        type_responses = responses[len(enabled_queries) :]
-
-        for query, enabled_rsp, type_rsp in zip(enabled_queries, enabled_responses, type_responses):
-            addr = query.destination
-            inst = query.instance
-            if check_bad_rsp(enabled_rsp):
-                continue
-            if not enabled_rsp.value:
-                # Skip if not enabled
-                continue
-
-            if check_bad_rsp(type_rsp):
-                continue
-
-            logging.debug("message=A²%d I%d type: %s", addr.address, inst.value, type_rsp.value)
-
-            # Add the type to the device/instance map
-            self.add_type(
-                short_address=addr,
-                instance_number=inst,
-                instance_type=type_rsp.value,
+    # Use quiescent mode to reduce bus contention from input devices
+    await send_with_retry(driver, StartQuiescentMode(DeviceBroadcast()), logger, priority=priority)
+    responses = await asyncio.gather(
+        *[
+            send_with_retry(
+                driver,
+                QueryDeviceStatus(device=DeviceShort(addr_int)),
+                logger,
+                priority=priority,
             )
-        await send_with_retry(driver, StopQuiescentMode(DeviceBroadcast()), logger, priority=priority)
+            for addr_int in addresses
+        ],
+    )
 
-    def update_mapping(self, short_address: int, new_short_address: int) -> None:
-        """Update the mapping for a device that has changed short address."""
-        if short_address in self._mapping:
-            self._mapping[new_short_address] = self._mapping.pop(short_address)
+    queries = []
+    logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
+    for addr_int, rsp in zip(addresses, responses):
+        addr = DeviceShort(addr_int)
+        if check_bad_rsp(rsp):
+            continue
+        if isinstance(rsp, QueryDeviceStatusResponse):
+            # Make sure the status is OK
+            if rsp.short_address_is_mask or rsp.reset_state:
+                continue
+        else:
+            # If the response isn't QueryDeviceStatusResponse then
+            # something is wrong
+            continue
 
-    def remove_short_address(self, short_address: int) -> None:
-        for key in [k for k in self._mapping if k[0] == short_address]:
-            self._mapping.pop(key, None)
+        # Find out how many instances the device has
+        queries.append(QueryNumberOfInstances(device=addr))
+
+    responses = await asyncio.gather(
+        *[send_with_retry(driver, q, logger, priority=priority) for q in queries]
+    )
+    enabled_queries = []
+    type_queries = []
+    for query, rsp in zip(queries, responses):
+        addr = query.destination
+
+        if check_bad_rsp(rsp):
+            continue
+        num_inst = rsp.value
+
+        # For each instance, check it is enabled and then query the type
+        for inst_int in range(num_inst):
+            inst = InstanceNumber(inst_int)
+
+            enabled_queries.append(QueryInstanceEnabled(device=addr, instance=inst))
+            type_queries.append(QueryInstanceType(device=addr, instance=inst))
+
+    responses = await asyncio.gather(
+        *[send_with_retry(driver, q, logger, priority=priority) for q in enabled_queries],
+        *[send_with_retry(driver, q, logger, priority=priority) for q in type_queries],
+    )
+
+    enabled_responses = responses[: len(enabled_queries)]
+    type_responses = responses[len(enabled_queries) :]
+
+    for query, enabled_rsp, type_rsp in zip(enabled_queries, enabled_responses, type_responses):
+        addr = query.destination
+        inst = query.instance
+        if check_bad_rsp(enabled_rsp):
+            continue
+        if not enabled_rsp.value:
+            # Skip if not enabled
+            continue
+
+        if check_bad_rsp(type_rsp):
+            continue
+
+        logging.debug("message=A²%d I%d type: %s", addr.address, inst.value, type_rsp.value)
+
+        # Add the type to the device/instance map
+        mapper.add_type(
+            short_address=addr,
+            instance_number=inst,
+            instance_type=type_rsp.value,
+        )
+    await send_with_retry(driver, StopQuiescentMode(DeviceBroadcast()), logger, priority=priority)
 
 
 async def query_int(

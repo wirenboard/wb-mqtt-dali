@@ -18,8 +18,8 @@ from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
-from wb.mqtt_dali.wbdali import FramePriority
-from wb.mqtt_dali.wbdali_utils import MASK, AsyncDeviceInstanceTypeMapper
+from wb.mqtt_dali.wbdali import BusDeviceInstanceTypeMapper, FramePriority
+from wb.mqtt_dali.wbdali_utils import MASK
 
 from ._app_controller_helpers import make_bare_gateway, wait_until
 
@@ -282,7 +282,7 @@ async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
     # populate _dev_inst_map for this short address using a real mapper so that
     # remove_short_address() actually mutates the underlying dict
     other_short = (device.address.short + 1) % 64
-    controller._dev_inst_map = AsyncDeviceInstanceTypeMapper(
+    controller._dev_inst_map = BusDeviceInstanceTypeMapper(
         initial={
             (device.address.short, 0): 1,
             (device.address.short, 1): 2,

@@ -516,6 +516,12 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FrameP
     return result
 
 
+class BusDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
+    def remove_short_address(self, short_address: int) -> None:
+        for key in [k for k in self._mapping if k[0] == short_address]:
+            self._mapping.pop(key, None)
+
+
 class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     def __init__(
         self,

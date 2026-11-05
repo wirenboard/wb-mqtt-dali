@@ -665,8 +665,7 @@ class TestCommissioningTaskTerminalBranches:
             "wb.mqtt_dali.application_controller.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ):
-            with pytest.raises(RuntimeError):
-                await controller._commissioning_task()
+            await controller._commissioning_task()
 
         assert controller._commissioning_state.status == CommissioningStatus.FAILED
         assert controller._commissioning_state.error == "bus offline"
@@ -713,8 +712,7 @@ class TestCommissioningTaskTerminalBranches:
             new=AsyncMock(return_value=None),
         ):
             mock_cls.side_effect = _make_commissioning
-            with pytest.raises(RuntimeError):
-                await controller._commissioning_task()
+            await controller._commissioning_task()
 
         assert controller._commissioning_state.status == CommissioningStatus.FAILED
         assert controller._commissioning_state.error == "DALI-2 phase failed"

@@ -33,6 +33,7 @@ from wb.mqtt_dali.commissioning import (
     CommissioningStage,
 )
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
@@ -1567,6 +1568,45 @@ def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
     device.is_initialized = False
     device.initialize = initialize
     return device
+
+
+@pytest.mark.asyncio
+async def test_dali2_short_address_change_moves_instance_types_to_new_address():
+    """A DALI-2 device's short address changes 5 -> 9 through apply_parameters: the driver's
+    instance map holds its instance types under 9 and nothing under 5."""
+    device = MagicMock(spec=Dali2Device)
+    device.address = DaliDeviceAddress(5, 123)
+    device.mqtt_id = "gw_bus_1_dev"
+    device.name = "dev"
+    device.is_initialized = False
+    device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
+    device.instances = {0: SimpleNamespace(instance_type=1), 1: SimpleNamespace(instance_type=3)}
+
+    async def change_short_address(_driver, _params):
+        device.address = DaliDeviceAddress(9, 123)
+
+    device.apply_parameters = AsyncMock(side_effect=change_short_address)
+    config = ApplicationControllerConfig(
+        gateway_mqtt_device_id="gw",
+        bus=1,
+        dali_devices=[],
+        dali2_devices=[device],
+    )
+    bus = ApplicationController(config, MQTTDispatcher(RecordingClient()), MagicMock(), MagicMock())
+    bus.driver.dev_inst_map.add_type(short_address=5, instance_number=0, instance_type=1)
+    bus.driver.dev_inst_map.add_type(short_address=5, instance_number=1, instance_type=3)
+
+    await bus.start()
+    try:
+        await asyncio.wait_for(bus.apply_parameters(device, {"short_address": 9}), timeout=1.0)
+    finally:
+        await bus.stop()
+
+    mapper = bus.driver.dev_inst_map
+    assert mapper.get_type(short_address=9, instance_number=0) == 1
+    assert mapper.get_type(short_address=9, instance_number=1) == 3
+    assert mapper.get_type(short_address=5, instance_number=0) is None
+    assert mapper.get_type(short_address=5, instance_number=1) is None
 
 
 @pytest.mark.asyncio

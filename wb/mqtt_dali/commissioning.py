@@ -8,6 +8,7 @@ from typing import Callable, Optional, Protocol, Union
 from dali.address import DeviceBroadcast, DeviceShort, GearShort
 from dali.command import Command, Response
 from dali.device import general as control_device
+from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.gear import general as control_gear
 
 from .bus_traffic import BusTrafficSource
@@ -18,8 +19,8 @@ from .wbdali import FramePriority
 from .wbdali_utils import (
     FLASH_WRITE_TIME_S,
     MASK,
-    AsyncDeviceInstanceTypeMapper,
     WBDALIDriver,
+    async_autodiscover,
     check_query_response,
     query_response,
     query_responses_retry_only_failed,
@@ -888,8 +889,8 @@ async def search_short(  # pylint: disable=too-many-branches
     res = []
     try:
         if dali2:
-            mapper = AsyncDeviceInstanceTypeMapper()
-            await mapper.async_autodiscover(driver, (0, 63), log)
+            mapper = DeviceInstanceTypeMapper()
+            await async_autodiscover(mapper, driver, (0, 63), log)
             sorted_items = sorted(mapper.mapping.items(), key=lambda x: x[0][0] * 100 + x[0][1])
             last_short_addr = None
             for (addr, inst_num), inst_type in sorted_items:

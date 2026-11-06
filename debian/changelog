@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.39.2) stable; urgency=medium
+
+  * Fix lost input events from a DALI-2 device after changing its short address
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 05 Nov 2026 21:07:12 +0500
+
 wb-mqtt-dali (1.39.1) stable; urgency=medium
 
   * Stop logging a second error with a traceback ("Future exception was never

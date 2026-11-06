@@ -42,6 +42,7 @@ from .virtual_devices import (
 )
 from .wbdali import (
     DECODABLE_FRAME_BIT_LENGTHS,
+    BusDeviceInstanceTypeMapper,
     FramePriority,
     WBDALIConfig,
     WBDALIDriver,
@@ -49,7 +50,6 @@ from .wbdali import (
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
     MASK,
-    AsyncDeviceInstanceTypeMapper,
     check_query_response,
     is_transmission_error_response,
     send_with_retry,
@@ -422,7 +422,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._mqtt_dispatcher = mqtt_dispatcher
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
 
-        self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
+        self._dev_inst_map = BusDeviceInstanceTypeMapper()
 
         self._polling_task: Optional[asyncio.Task] = None
         self._on_polling_failure = on_polling_failure
@@ -705,7 +705,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         if old_short_address != device.address.short:
             if isinstance(device, Dali2Device):
-                self._dev_inst_map.update_mapping(old_short_address, device.address.short)
+                self._dev_inst_map.remove_short_address(old_short_address)
+                self._update_dali2_device_instance_map(device)
             self._device_registry.update_short_address(device, old_short_address)
 
         if isinstance(device, DaliDevice):

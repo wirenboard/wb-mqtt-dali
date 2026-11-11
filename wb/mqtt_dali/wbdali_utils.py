@@ -49,6 +49,10 @@ class NoAnswerError(RuntimeError):
     """
 
 
+class FramingError(RuntimeError):
+    """The gear answered, but the gateway could not decode the backward frame."""
+
+
 async def async_autodiscover(  # pylint: disable=too-many-locals, too-many-branches
     mapper: DeviceInstanceTypeMapper,
     driver,
@@ -238,7 +242,7 @@ def check_query_response(resp: Optional[Response]) -> None:
         if raw_value is None:
             raise NoAnswerError("no response")
         if raw_value.error is True:
-            raise RuntimeError("framing error")
+            raise FramingError("framing error")
 
 
 def is_broadcast_or_group_address(addr: Address) -> bool:

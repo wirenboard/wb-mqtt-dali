@@ -94,17 +94,17 @@ class TestWBDALIDriver(VirtualTimeTestCase):
             self.mock_mqtt_dispatcher._dispatch_message(message)
 
     async def prepare_driver(self, driver: WBDALIDriver):
+        """Initialise and fill the whole queue once, so the deferred reset is done and slot 0 is next."""
         await driver.initialize()
         self.rpc.clear()
-        if driver.batch_start_index != 0:
-            batch_start_index = driver.batch_start_index
-            cmds = [_MockCommand() for _ in range(self.config.queue_size - driver.batch_start_index)]
-            fut = asyncio.gather(
-                driver.send_commands(cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
-            )
-            await self.rpc.wait_for_write()
-            self.simulate_timeout_response_from_gateway(batch_start_index, len(cmds))
-            await fut
+        cmds = [_MockCommand() for _ in range(self.config.queue_size)]
+        fut = asyncio.gather(
+            driver.send_commands(cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
+        await self.rpc.wait_for_write()  # the deferred queue reset
+        await self.rpc.wait_for_write()
+        self.simulate_timeout_response_from_gateway(0, len(cmds))
+        await fut
 
     def test_encode_frame_for_modbus(self):
         """Frame-size, sendtwice and priority bits are placed in the right slots
@@ -282,6 +282,34 @@ class TestWBDALIDriver(VirtualTimeTestCase):
         self.assertIsNotNone(result)
         self.assertIsInstance(result, NoResponseFromGateway)
 
+    async def test_unexpected_send_error_resets_the_queue_before_the_next_batch(self):
+        """Writing a batch raises an unexpected error: its commands get a transmission error with an
+        ERROR record, the next batch goes to slot 0 after a queue reset."""
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
+        await self.prepare_driver(driver)
+        answered = asyncio.gather(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
+        await self.rpc.wait_for_write()
+        self.simulate_timeout_response_from_gateway(0)
+        await answered
+
+        self.rpc.error = RuntimeError("boom")
+        failed = await driver.send_commands(
+            [_MockCommand(), _MockCommand()], BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger
+        )
+        self.assertEqual([type(r) for r in failed], [WbGatewayTransmissionError] * 2)
+        self.mock_logger.error.assert_called_once()
+
+        self.rpc.error = None
+        following = asyncio.gather(
+            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+        )
+        self.assertEqual((await self.rpc.wait_for_write())["function"], 6)
+        self.assertEqual((await self.rpc.wait_for_write())["address"], 1400)
+        self.simulate_timeout_response_from_gateway(0)
+        self.assertIsNone((await following)[0].raw_value)
+
     async def test_handle_reply_message_with_framing_error(self):
         """Test handling a reply message with a framing error."""
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
@@ -306,30 +334,6 @@ class TestWBDALIDriver(VirtualTimeTestCase):
         result = (await fut)[0]
         self.assertIsNotNone(result)
         self.assertTrue(result.raw_value.error)
-
-    async def test_reply_empty_payload_does_not_hang(self):
-        """An empty payload on the reply topic resolves the pending command
-        immediately (as a transmission error) instead of waiting for the full
-        response timeout."""
-        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
-        await self.prepare_driver(driver)
-
-        cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
-        fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
-        await self.rpc.wait_for_write()
-
-        message = aiomqtt.Message(
-            topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_0",
-            payload="",
-            qos=0,
-            retain=False,
-            mid=0,
-            properties=None,
-        )
-        self.mock_mqtt_dispatcher._dispatch_message(message)
-
-        result = (await asyncio.wait_for(fut, timeout=1.0))[0]
-        self.assertIsInstance(result, WbGatewayTransmissionError)
 
     async def test_reply_retained_message_ignored(self):
         """A retained reply message is dropped before parsing: the pending

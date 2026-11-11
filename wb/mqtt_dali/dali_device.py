@@ -66,10 +66,11 @@ from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
 from .settle_clock import SettleBasis, SettleClock
 from .wbdali import FramePriority, WBDALIDriver
+from .wbdali_error_response import GatewayWriteSkipped, NoPowerOnBus, Overheat
 from .wbdali_utils import (
+    FramingError,
     NoAnswerError,
     check_query_response,
-    is_transmission_error_response,
     query_response,
     send_commands_with_retry,
     send_with_retry,
@@ -99,7 +100,11 @@ class DaliDeviceType(IntEnum):
     DIAGNOSTICS_AND_MAINTENANCE = 52
 
 
-def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
+# The gateway reports these before the frame goes to the bus.
+UNSENT_ERRORS = (GatewayWriteSkipped, NoPowerOnBus, Overheat)
+
+
+def request_with_retry_sequence(cmd, retry_unsent_only: bool = False):
     """Helper function to perform a sequence with retries on failure"""
     last_error = "unknown error"
     all_silent = True
@@ -110,9 +115,14 @@ def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
             return result
         except NoAnswerError as e:
             last_error = str(e)
-        except RuntimeError as e:
-            if not retry_framing_error and not is_transmission_error_response(result):
+        except FramingError as e:
+            if retry_unsent_only:
                 raise RuntimeError(f"Framing error in answer to {cmd}") from e
+            last_error = str(e)
+            all_silent = False
+        except RuntimeError as e:
+            if retry_unsent_only and not isinstance(result, UNSENT_ERRORS):
+                raise RuntimeError(f"Transmission error in answer to {cmd}: {e}") from e
             last_error = str(e)
             all_silent = False
     message = f"No response to {cmd} after 3 attempts; last error: {last_error}"
@@ -136,8 +146,7 @@ def query_device_types_sequence(addr: Address, logger: logging.Logger):
     result = []
     while True:
         try:
-            # A garbled answer still advances the gear to the next type: a retry would skip one.
-            r = yield from request_with_retry_sequence(QueryNextDeviceType(addr), retry_framing_error=False)
+            r = yield from request_with_retry_sequence(QueryNextDeviceType(addr), retry_unsent_only=True)
         except NoAnswerError:
             if len(result) == 0:
                 raise

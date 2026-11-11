@@ -16,6 +16,8 @@ both the author side (code being written) and the review side stay in sync.
 - **No silencing tests or linters** — do not disable/skip tests; do not add `# pylint: disable` / `# noqa` / `# type: ignore` without a concrete reason. Fix the underlying issue.
 - **Never force-push a PR** — no `--force` / `--force-with-lease` to update a PR. Add new commits — reviewers need incremental changes.
 - **No new private access from tests** — tests must not **add new** access to private attributes (`_underscore`) of production classes. If a test can't be written against the public API, **stop and ask the user** — the fix usually requires widening the API or rethinking the test. Pre-existing private access in untouched test code is tolerated debt.
+- **No `mock.patch` without approval** — tests drive the code through its public interface: constructor arguments, injected test doubles, config, explicit test knobs. `patch` / `patch.object` / `patch.multiple` of module constants, functions or methods only with the user's approval in the current conversation.
+- **No mutation checks** — never edit production code, even temporarily, to see whether tests catch the change, and never ask a reviewer or subagent to. Test coverage is judged by reading the tests, which drive the code through mocks and the public API.
 - **Scope `protected-access` disables** — `# pylint: disable=protected-access` must scope to a single function or line, never a whole module.
 - **Changelog is written from the user's side** — a `debian/changelog` entry says what changed for someone running the service: what used to go wrong, what happens now, what to expect in MQTT or on the bus. Module, class and function names, RPC internals and refactoring details belong in the commit message, not there.
 

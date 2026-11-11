@@ -100,6 +100,25 @@ class _FakeGateway:
         self._events.append("stop")
 
 
+class _TrackingDispatcher(_FakeDispatcher):
+    running = False
+
+    async def run(self):
+        self.running = True
+        try:
+            await super().run()
+        finally:
+            self.running = False
+
+
+class _RecordingGateway(_FakeGateway):
+    dispatching_at_stop = None
+
+    async def stop(self):
+        self.dispatching_at_stop = self._dispatcher.running
+        await super().stop()
+
+
 class _FakeSignals:
     """Stand-in for the loop's `add_signal_handler`: the handlers land in `handlers`, keyed by signal
     number, and never in the pytest process."""
@@ -192,6 +211,20 @@ class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(gateway.connected_at_stop)
         self.assertNotIn("lost", self.events)
 
+    async def test_stop_with_the_link_up_keeps_dispatching_while_the_gateway_stops(self):
+        """SIGTERM with the session up: the message stream still runs when the gateway is stopped."""
+        client = _FakeClient()
+        dispatcher = _TrackingDispatcher([_SessionStream.HOLD], self.events)
+        gateway = _RecordingGateway(dispatcher, self.events)
+
+        result = await self._run_service(
+            client, dispatcher, gateway, lambda: wait_until(lambda: dispatcher.running)
+        )
+
+        self.assertEqual(result, 0)
+        self.assertTrue(gateway.dispatching_at_stop)
+        self.assertFalse(dispatcher.running)
+
     async def test_stop_during_outage_ends_the_service_without_a_session(self):
         """The link drops and every reconnect attempt is refused; SIGTERM ends the reconnect
         loop, the gateway is stopped with the link down and nothing is republished."""
@@ -226,6 +259,23 @@ class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gateway.stop_calls, 1)
         self.assertTrue(gateway.connected_at_stop)
         self.assertNotIn("lost", self.events)
+
+    async def test_failed_bus_keeps_dispatching_while_the_gateway_stops(self):
+        """A bus polling loop dies: the message stream still runs when the gateway is stopped."""
+        client = _FakeClient()
+        dispatcher = _TrackingDispatcher([_SessionStream.HOLD], self.events)
+        gateway = _RecordingGateway(dispatcher, self.events)
+
+        async def fail_bus_and_hold():
+            await wait_until(lambda: dispatcher.running)
+            gateway.bus_failed.set()
+            await asyncio.Event().wait()
+
+        result = await self._run_service(client, dispatcher, gateway, fail_bus_and_hold)
+
+        self.assertEqual(result, EXIT_FAILURE)
+        self.assertTrue(gateway.dispatching_at_stop)
+        self.assertFalse(dispatcher.running)
 
 
 class TestMqttClientFactory(unittest.TestCase):

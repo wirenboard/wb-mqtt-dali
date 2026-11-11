@@ -208,11 +208,11 @@ class BrokerSessions:
                 self._mqtt_dispatcher.connection_lost()
                 raise
             except BusPollingError:
-                await _cancel_tasks(session_tasks)
                 await self._stop_gateway()
+                await _cancel_tasks(session_tasks)
                 raise
-            await _cancel_tasks(session_tasks)
             await self._stop_gateway()
+            await _cancel_tasks(session_tasks)
 
     async def _wait_for_session_end(
         self,

@@ -20,6 +20,7 @@ from wb.mqtt_dali.wbdali_error_response import (
 
 from ._broker_link_helpers import Inbox, RecordingClient
 from ._fake_rpc_client import FakePortLoadClient
+from ._port_load_helpers import wait_for_batch_write
 from ._virtual_time import VirtualTimeTestCase
 
 
@@ -108,7 +109,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
 
         await self._fail_message_stream()
 
@@ -133,7 +134,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         await self._fail_message_stream()
         await self._restore_link()
         self.assertFalse(in_flight.done())
@@ -160,7 +161,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         self.rpc.error = aiomqtt.MqttError("The client is not currently connected")
 
         results = await asyncio.wait_for(
@@ -199,7 +200,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         for slot in range(5):
             self._deliver_reply(driver, slot, 0x0200)
         await pre
@@ -314,7 +315,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
         pre = asyncio.create_task(
             driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         self._deliver_reply(driver, 0, 0x0200)
         await pre
         with patch("wb.mqtt_dali.wbdali.WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S", 10.0):
@@ -355,7 +356,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         for slot in range(size // 2):
             self._deliver_reply(driver, slot, 0x0200)
         await pre

@@ -440,5 +440,6 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         timeout=MQTT_PUBLISH_TIMEOUT_S,
         max_inflight_messages=MAX_PUBLISHES_IN_FLIGHT,
     )
-    client.pending_calls_threshold = MAX_PUBLISHES_IN_FLIGHT
+    # aiomqtt counts subscribes too; the dispatcher keeps one in flight at a time
+    client.pending_calls_threshold = MAX_PUBLISHES_IN_FLIGHT + 1
     return client

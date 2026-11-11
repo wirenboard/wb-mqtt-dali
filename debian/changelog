@@ -1,8 +1,6 @@
 wb-mqtt-dali (1.39.4) stable; urgency=medium
 
-  * Device control values and their removal go to the MQTT broker with QoS 1, as in other
-    Wiren Board services: half the packets per update, so on a large installation
-    wb-mqtt-dali stops faster
+  * Device control values are published with MQTT QoS 1, as in other Wiren Board services
 
  -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 11 Nov 2026 18:08:14 +0500
 

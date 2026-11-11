@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.39.3) stable; urgency=medium
+
+  * On a large installation wb-mqtt-dali stops about twice as fast and no longer fills
+    the journal with thousands of "There are N pending publish calls" warnings
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 11 Nov 2026 13:24:55 +0500
+
 wb-mqtt-dali (1.39.2) stable; urgency=medium
 
   * Fix lost input events from a DALI-2 device after changing its short address

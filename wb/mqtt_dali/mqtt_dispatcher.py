@@ -8,6 +8,9 @@ from paho.mqtt.matcher import MQTTMatcher
 
 MessageCallback = Callable[[aiomqtt.Message], None]
 
+# QoS 2 to mosquitto on a WB8 saturates at ~1300 msg/s from 20 in flight; more only adds ack latency.
+MAX_PUBLISHES_IN_FLIGHT = 25
+
 
 class BrokerDisconnectedError(aiomqtt.MqttError):
     """A non-retained publish while the broker link is down."""
@@ -36,6 +39,7 @@ class MQTTDispatcher:  # pylint: disable=too-many-instance-attributes
         self._session = 0
         self._retained_mirror: Dict[str, _MirroredMessage] = {}
         self._lock = asyncio.Lock()
+        self._publish_slots = asyncio.Semaphore(MAX_PUBLISHES_IN_FLIGHT)
 
     @property
     def connected(self) -> bool:
@@ -64,7 +68,7 @@ class MQTTDispatcher:  # pylint: disable=too-many-instance-attributes
             if not self._connected:
                 return
             message = self._retained_mirror[topic]
-            await self.client.publish(topic, message.payload, qos=message.qos, retain=True)
+            await self._client_publish(topic, message.payload, message.qos, True)
 
     async def publish(
         self, topic: str, payload: Optional[str] = None, qos: int = 0, retain: bool = False
@@ -74,13 +78,13 @@ class MQTTDispatcher:  # pylint: disable=too-many-instance-attributes
             if not self._connected:
                 return
             try:
-                await self.client.publish(topic, payload, qos=qos, retain=True)
+                await self._client_publish(topic, payload, qos, True)
             except aiomqtt.MqttError as exc:
                 logging.debug("Retained publish to %s left to the replay: %s", topic, exc)
             return
         if not self._connected:
             raise BrokerDisconnectedError(f"Broker disconnected, not publishing to {topic}")
-        await self.client.publish(topic, payload, qos=qos, retain=False)
+        await self._client_publish(topic, payload, qos, False)
 
     async def subscribe(self, topic: str, callback: MessageCallback) -> None:
         replay: Optional[aiomqtt.Message] = None
@@ -187,6 +191,10 @@ class MQTTDispatcher:  # pylint: disable=too-many-instance-attributes
             await self.client.unsubscribe(topic)
         except aiomqtt.MqttError as exc:
             logging.debug("Unsubscribe from %s skipped: %s", topic, exc)
+
+    async def _client_publish(self, topic: str, payload: Optional[str], qos: int, retain: bool) -> None:
+        async with self._publish_slots:
+            await self.client.publish(topic, payload, qos=qos, retain=retain)
 
     @property
     def is_running(self) -> bool:

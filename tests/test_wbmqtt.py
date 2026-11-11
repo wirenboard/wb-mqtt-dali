@@ -233,7 +233,7 @@ class TestDevice:
 
         assert device._controls["ctrl1"].value == "updated"
         mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/ctrl1", "updated", qos=2, retain=True
+            "/devices/test_device/controls/ctrl1", "updated", qos=1, retain=True
         )
 
     @pytest.mark.asyncio
@@ -270,7 +270,7 @@ class TestDevice:
 
         await device.set_control_state("ctrl1", "1", ControlError.NONE)
         mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/ctrl1", "1", qos=2, retain=True
+            "/devices/test_device/controls/ctrl1", "1", qos=1, retain=True
         )
         mock_client.publish.reset_mock()
 
@@ -294,7 +294,7 @@ class TestDevice:
         await device.set_control_state("long_press1", "1", ControlError.NONE)
 
         mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/long_press1", "1", qos=2, retain=True
+            "/devices/test_device/controls/long_press1", "1", qos=1, retain=True
         )
 
     @pytest.mark.asyncio
@@ -310,7 +310,7 @@ class TestDevice:
         await device.set_control_value("ctrl1", "value")
 
         mock_client.publish.assert_called_once_with(
-            "/devices/test_device/controls/ctrl1", "value", qos=2, retain=True
+            "/devices/test_device/controls/ctrl1", "value", qos=1, retain=True
         )
 
     @pytest.mark.asyncio
@@ -342,7 +342,7 @@ class TestDevice:
 
         assert (
             mock_client.publish.call_args_list
-            == [(("/devices/test_device/controls/short_press1", "1"), {"qos": 2, "retain": False})] * 2
+            == [(("/devices/test_device/controls/short_press1", "1"), {"qos": 1, "retain": False})] * 2
         )
 
     @pytest.mark.asyncio
@@ -360,8 +360,8 @@ class TestDevice:
         await device.set_control_state("ctrl1", "42", ControlError.READ)
 
         assert mock_client.publish.call_args_list == [
-            (("/devices/test_device/controls/ctrl1", "42"), {"qos": 2, "retain": True}),
-            (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 2, "retain": True}),
+            (("/devices/test_device/controls/ctrl1", "42"), {"qos": 1, "retain": True}),
+            (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 1, "retain": True}),
         ]
 
     @pytest.mark.asyncio
@@ -379,8 +379,8 @@ class TestDevice:
         await device.set_control_state("ctrl1", "43", ControlError.NONE)
 
         assert mock_client.publish.call_args_list == [
-            (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 2, "retain": True}),
-            (("/devices/test_device/controls/ctrl1", "43"), {"qos": 2, "retain": True}),
+            (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 1, "retain": True}),
+            (("/devices/test_device/controls/ctrl1", "43"), {"qos": 1, "retain": True}),
         ]
 
     @pytest.mark.asyncio
@@ -396,7 +396,7 @@ class TestDevice:
         await device.set_control_state("ctrl1", "43", ControlError.READ)
 
         assert mock_client.publish.call_args_list == [
-            (("/devices/test_device/controls/ctrl1", "43"), {"qos": 2, "retain": True})
+            (("/devices/test_device/controls/ctrl1", "43"), {"qos": 1, "retain": True})
         ]
 
     @pytest.mark.asyncio
@@ -413,14 +413,14 @@ class TestDevice:
         await device.set_control_state("ctrl1", None, ControlError.READ)
 
         assert mock_client.publish.call_args_list == [
-            (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 2, "retain": True})
+            (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 1, "retain": True})
         ]
         mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "42", ControlError.NONE)
 
         assert mock_client.publish.call_args_list == [
-            (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 2, "retain": True})
+            (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 1, "retain": True})
         ]
 
     @pytest.mark.asyncio
@@ -448,7 +448,7 @@ class TestDevice:
 
         assert (
             mock_client.publish.call_args_list
-            == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 2, "retain": True})] * 2
+            == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 1, "retain": True})] * 2
         )
 
     @pytest.mark.asyncio
@@ -466,7 +466,7 @@ class TestDevice:
 
         assert (
             mock_client.publish.call_args_list
-            == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 2, "retain": True})] * 2
+            == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 1, "retain": True})] * 2
         )
 
         mock_client.publish.reset_mock()
@@ -477,7 +477,7 @@ class TestDevice:
 
         assert (
             mock_client.publish.call_args_list
-            == [(("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 2, "retain": True})] * 2
+            == [(("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 1, "retain": True})] * 2
         )
 
     @pytest.mark.asyncio
@@ -624,12 +624,12 @@ class TestDevice:
 
         assert "ctrl1" not in device._controls
         assert mock_client.publish.call_count == 3
-        mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, qos=2, retain=True)
+        mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, qos=1, retain=True)
         mock_client.publish.assert_any_call(
-            "/devices/test_device/controls/ctrl1/meta/error", None, qos=2, retain=True
+            "/devices/test_device/controls/ctrl1/meta/error", None, qos=1, retain=True
         )
         mock_client.publish.assert_any_call(
-            "/devices/test_device/controls/ctrl1/meta", None, qos=2, retain=True
+            "/devices/test_device/controls/ctrl1/meta", None, qos=1, retain=True
         )
 
     @pytest.mark.asyncio

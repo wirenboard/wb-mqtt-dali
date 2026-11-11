@@ -318,7 +318,7 @@ class Device:
         else:
             logging.debug('Publish "%s" "%s"', topic, value)
         try:
-            await self._mqtt_dispatcher.publish(topic, value, qos=2, retain=retain)
+            await self._mqtt_dispatcher.publish(topic, value, qos=1, retain=retain)
         except aiomqtt.MqttError as exc:
             logging.debug('Not published "%s": %s', topic, exc)
             return False

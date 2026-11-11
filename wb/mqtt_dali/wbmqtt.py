@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import aiomqtt
 
-from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_dispatcher import MAX_PUBLISHES_IN_FLIGHT, MQTTDispatcher
 
 # A dead link goes unnoticed for one or two keepalives; 15 s keeps that under half a minute.
 MQTT_KEEPALIVE_S = 15
@@ -20,8 +20,6 @@ MQTT_KEEPALIVE_S = 15
 # PUBCOMP holds DevicePublisher's lock and with it every publish of the bus; aiomqtt's own
 # default would hold it for 10 s.
 MQTT_PUBLISH_TIMEOUT_S = 5.0
-
-MQTT_PENDING_PUBLISH_WARNING_THRESHOLD = 100
 
 
 @dataclass
@@ -440,6 +438,7 @@ def make_mqtt_client(broker_url: str) -> aiomqtt.Client:
         keepalive=MQTT_KEEPALIVE_S,
         logger=logging.getLogger("mqtt_client"),
         timeout=MQTT_PUBLISH_TIMEOUT_S,
+        max_inflight_messages=MAX_PUBLISHES_IN_FLIGHT,
     )
-    client.pending_calls_threshold = MQTT_PENDING_PUBLISH_WARNING_THRESHOLD
+    client.pending_calls_threshold = MAX_PUBLISHES_IN_FLIGHT
     return client

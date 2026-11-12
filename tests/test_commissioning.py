@@ -41,6 +41,8 @@ from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
 from wb.mqtt_dali.wbdali import WBDALIDriver
 
+from ._virtual_time import VirtualTimeTestCase
+
 # pylint: disable=unsupported-binary-operation
 
 
@@ -64,7 +66,7 @@ class MockResponse:  # pylint: disable=R0903
             self.raw_value.error = error
 
 
-class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
+class TestBinarySearchAddressFinder(VirtualTimeTestCase):
     async def test_find_device_at_exact_midpoint(self):
         """Test finding a device when it's exactly at the midpoint of the search range."""
         device_address = 0x800000
@@ -379,7 +381,7 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(bus_address_at_return, device_address)
 
 
-class TestSearchTraffic(unittest.IsolatedAsyncioTestCase):
+class TestSearchTraffic(VirtualTimeTestCase):
     # Modelled over random addresses the walk costs 1.14-1.16 SETSEARCHADDR frames per
     # COMPARE for eight devices (midpoint probes ran at about 2); the headroom absorbs
     # address-layout luck without letting dirty probes back in.
@@ -1552,7 +1554,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
         asyncio.run(run_test())
 
 
-class TestCommissioningAddDeviceEmission(unittest.IsolatedAsyncioTestCase):
+class TestCommissioningAddDeviceEmission(VirtualTimeTestCase):
     """``Commissioning._add_device`` is the single emission point for found
     devices. It must route through ``ProgressReporter.notify_device`` so that
     every successful discovery appears on the progress callback exactly once.

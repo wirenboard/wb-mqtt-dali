@@ -169,6 +169,8 @@ class WBDALIConfig:
     queue_start_modbus_address: int = 1400
     queue_bulk_send_pointer_modbus_address: int = 1432
     queue_modbus_bus_offset: int = 1000
+    # Per-command wait for a DALI reply, counted from the dispatch of its batch
+    response_timeout_s: float = WAIT_DALI_RESPONSE_TIMEOUT_S
 
 
 @dataclass(frozen=True)
@@ -573,21 +575,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         # Broker session the gateway queue was last synced with; a newer one means a reconnect to catch up.
         self._synced_session = mqtt_dispatcher.session
         self._pending_resync = False
-
-        self._response_timeout = WAIT_DALI_RESPONSE_TIMEOUT_S
-
-    @property
-    def response_timeout(self) -> float:
-        """Per-command timeout for waiting on a DALI response from the gateway, in seconds.
-
-        Applied when the command is dispatched in `_send_to_gateway`: items
-        already in-flight keep the timeout they were scheduled with.
-        """
-        return self._response_timeout
-
-    @response_timeout.setter
-    def response_timeout(self, timeout: float) -> None:
-        self._response_timeout = timeout
 
     @property
     def batch_start_index(self) -> int:
@@ -1199,7 +1186,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                         )
 
                 timeout_handler = asyncio.get_running_loop().call_later(
-                    self._response_timeout,
+                    self.config.response_timeout_s,
                     timeout_callback,
                 )
                 self._waiting_for_responses[current_index] = WaitResponseItem(

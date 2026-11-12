@@ -4,7 +4,6 @@ Silence is the negative answer to COMPARE, so a lost answer reads as "no device 
 `CompareFaults` injects the losses.
 """
 
-import unittest
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -21,6 +20,8 @@ from wb.mqtt_dali.commissioning import (
     BinarySearchAddressFinder,
     Commissioning,
 )
+
+from ._virtual_time import VirtualTimeTestCase
 
 TOP = 0xFFFFFF
 DEVICE_ADDR = 0x400000
@@ -96,7 +97,7 @@ class LossyPerDeviceBus(PerDeviceFakeDALIBus):
         return response
 
 
-class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
+class TestSearchSurvivesLostCompareAnswers(VirtualTimeTestCase):
     async def test_lost_terminating_compare_does_not_end_the_search(self):
         """The answer to the first COMPARE is lost — the one whose silence means "no devices
         left". The repeat gets through, so the pass goes on and finds the device."""
@@ -153,7 +154,7 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(-1, probe.calls)
 
 
-class TestCommissioningSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
+class TestCommissioningSurvivesLostCompareAnswers(VirtualTimeTestCase):
     async def test_no_program_short_address_when_the_check_fails(self):
         """A search that converged on an address nobody holds programs nothing there; the
         gear gets its short address from the next run."""

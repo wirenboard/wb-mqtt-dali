@@ -11,7 +11,7 @@
 # Scenario:
 #   1. Set the device's arc-power level via the hammer driver so
 #      QueryActualLevel returns a deterministic byte.
-#   2. On the long driver: extend `response_timeout` to a large value and
+#   2. On the long driver, created with a large `response_timeout_s`,
 #      submit LONG_BURST QueryActualLevel commands at the long driver's
 #      priority via a single `send_commands` call. Do not await — the
 #      driver pipelines internally.
@@ -171,7 +171,7 @@ async def run_test(  # pylint: disable=too-many-locals
 ) -> None:
     logger = logging.getLogger()
     driver_long = WBDALIDriver(
-        WBDALIConfig(device_name=long_gateway, bus=DALI_BUS),
+        WBDALIConfig(device_name=long_gateway, bus=DALI_BUS, response_timeout_s=LONG_RESPONSE_TIMEOUT),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logger,
         rpc_client=MQTTRPCClient(),
@@ -186,11 +186,10 @@ async def run_test(  # pylint: disable=too-many-locals
     try:
         await driver_hammer.initialize()
         try:
-            driver_long.response_timeout = LONG_RESPONSE_TIMEOUT
             logging.info(
                 "long driver=%s response_timeout=%.1f s; hammer driver=%s",
                 long_gateway,
-                driver_long.response_timeout,
+                driver_long.config.response_timeout_s,
                 hammer_gateway,
             )
 

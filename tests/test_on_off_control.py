@@ -44,6 +44,7 @@ from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
 from wb.mqtt_dali.wbmqtt import ControlError
 
 from ._on_off_helpers import BusScript, ScriptedBus, frames, group_settings
+from ._virtual_time import VirtualTimeTestCase
 
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
@@ -139,7 +140,7 @@ def _group_entry(on_off: OnOffConfig, number=3) -> dict:
     return {"number": number, "on_off": on_off_config_to_json(on_off)}
 
 
-class OnOffControlPublicationTest(unittest.IsolatedAsyncioTestCase):
+class OnOffControlPublicationTest(VirtualTimeTestCase):
 
     def test_on_off_control_absent_without_config(self):
         device = _make_dali_device(on_off=None)
@@ -161,7 +162,7 @@ class OnOffControlPublicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(_group_device(member).get_mqtt_control(ON_OFF))
 
 
-class OnOffActionCommandsTest(unittest.IsolatedAsyncioTestCase):
+class OnOffActionCommandsTest(VirtualTimeTestCase):
 
     def test_on_action_scene_sends_go_to_scene_only(self):
         """``scene`` mode turns on with a single GoToScene and no fade-time write, even
@@ -226,7 +227,7 @@ class OnOffActionCommandsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frames(commands), frames([Off(ADDR)]))
 
 
-class OnOffFadeTimeTest(unittest.IsolatedAsyncioTestCase):
+class OnOffFadeTimeTest(VirtualTimeTestCase):
 
     def test_fade_time_restored_after_action(self):
         """An action with a configured fade_time ends with the prior fade time written
@@ -253,7 +254,7 @@ class OnOffFadeTimeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(frames(commands), frames([DAPC(ADDR, 200)]))
 
 
-class OnOffGroupTest(unittest.IsolatedAsyncioTestCase):
+class OnOffGroupTest(VirtualTimeTestCase):
 
     async def test_group_on_off_addresses_group(self):
         """Writing the group's on_off sends every command to the group DALI address —
@@ -368,7 +369,7 @@ class OnOffGroupTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class OnOffStateTest(unittest.IsolatedAsyncioTestCase):
+class OnOffStateTest(VirtualTimeTestCase):
 
     async def test_state_reflects_zero_level(self):
         """The level the device reports drives the switch: the initial read of 0 publishes "0",
@@ -486,7 +487,7 @@ class OnOffStateTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(harness.value_publishes(device.mqtt_id, ON_OFF), [])
 
 
-class OnOffDeviceEditStateTest(unittest.IsolatedAsyncioTestCase):
+class OnOffDeviceEditStateTest(VirtualTimeTestCase):
 
     async def test_device_on_off_strategy_edit_stays_off_the_bus(self):
         """A strategy-only edit of a published switch: no frames, no republished device and the
@@ -518,7 +519,7 @@ class OnOffDeviceEditStateTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(frames(harness.sent), frames([DAPC(ADDR, 200)]))
 
 
-class OnOffGroupEditStateTest(unittest.IsolatedAsyncioTestCase):
+class OnOffGroupEditStateTest(VirtualTimeTestCase):
 
     async def test_group_on_off_edit_keeps_known_state(self):
         """A strategy-only edit keeps the group device: the mirrored level and the switch value
@@ -609,7 +610,7 @@ class OnOffGroupEditStateTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(group_settings(bus), {})
 
 
-class OnOffResetDeviceSettingsTest(unittest.IsolatedAsyncioTestCase):
+class OnOffResetDeviceSettingsTest(VirtualTimeTestCase):
 
     async def test_device_on_off_survives_reset_device_settings(self):
         """ResetDeviceSettings recreates the device object; the service-side on_off

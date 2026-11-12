@@ -26,11 +26,17 @@ from wb.mqtt_dali.send_command import build_command_registry, parse_expression
 from wb.mqtt_dali.wbdali_error_response import GatewayUnavailable
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
+from ._virtual_time import VirtualTimeEventLoopPolicy
 
 
 @pytest.fixture(scope="module")
 def registry():
     return build_command_registry()
+
+
+@pytest.fixture(scope="module")
+def event_loop_policy():
+    return VirtualTimeEventLoopPolicy()
 
 
 @pytest.mark.asyncio

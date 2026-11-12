@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import unittest
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +20,7 @@ from wb.mqtt_dali.wbdali_error_response import (
 
 from ._broker_link_helpers import Inbox, RecordingClient
 from ._fake_rpc_client import FakePortLoadClient
+from ._virtual_time import VirtualTimeTestCase
 
 
 class _MockCommand(Command):
@@ -38,7 +38,7 @@ async def _end_session(run_task: asyncio.Task) -> None:
         pass
 
 
-class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
+class BrokerLinkTests(VirtualTimeTestCase):
     def setUp(self):
         self.mock_client = RecordingClient()
         self.dispatcher = MQTTDispatcher(self.mock_client)
@@ -54,10 +54,8 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
         self._session_task = asyncio.create_task(self.dispatcher.run())
         self.addAsyncCleanup(_end_session, self._session_task)
 
-    async def _make_driver(self, response_timeout: float = 30.0) -> WBDALIDriver:
+    async def _make_driver(self) -> WBDALIDriver:
         driver = WBDALIDriver(WBDALIConfig(), self.dispatcher, self.logger, self.rpc)
-        # Long enough that nothing times out inside a test unless the test asks for it.
-        driver.response_timeout = response_timeout
         await driver.initialize()
         self.rpc.clear()
         return driver
@@ -101,7 +99,7 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
     async def test_new_commands_fail_at_once_and_in_flight_by_timeout_on_link_loss(self):
         """Link drops with three commands in flight: a new one is refused at once, the in-flight
         ones end by the response timeout."""
-        driver = await self._make_driver(response_timeout=0.3)
+        driver = await self._make_driver()
         in_flight = asyncio.create_task(
             driver.send_commands(
                 [_MockCommand() for _ in range(3)],
@@ -119,7 +117,7 @@ class BrokerLinkTests(unittest.IsolatedAsyncioTestCase):
             timeout=0.1,
         )
         self.assertIsInstance(fresh, GatewayUnavailable)
-        results = await asyncio.wait_for(in_flight, timeout=1.0)
+        results = await asyncio.wait_for(in_flight, timeout=10.0)
         self.assertEqual([type(r) for r in results], [NoResponseFromGateway] * 3)
         self.assertEqual(0, self.rpc.pending_writes())
 

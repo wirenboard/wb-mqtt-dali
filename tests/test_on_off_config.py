@@ -45,6 +45,7 @@ from ._on_off_helpers import (
     frames,
     group_settings,
 )
+from ._virtual_time import VirtualTimeTestCase
 
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
@@ -232,7 +233,7 @@ class OnOffConfigValidatorTest(unittest.TestCase):
                     validate_config(_config(device_on_off=malformed, dali2=True))
 
 
-class OnOffPersistenceTest(unittest.IsolatedAsyncioTestCase):
+class OnOffPersistenceTest(VirtualTimeTestCase):
 
     async def test_on_off_config_survives_save_configuration(self):
         """A bus loaded from JSON with a device on_off block and a groups list writes
@@ -348,7 +349,7 @@ class OnOffPersistenceTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(group_mqtt_id, harness.published_devices())
 
 
-class OnOffDeviceEditorTest(unittest.IsolatedAsyncioTestCase):
+class OnOffDeviceEditorTest(VirtualTimeTestCase):
 
     async def test_device_on_off_editor_add_change_remove(self):
         """SetDevice add / rewrite / change / remove flow for the device on_off block: the
@@ -465,7 +466,7 @@ class OnOffDeviceEditorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("on_off", device.schema["properties"])
 
 
-class OnOffGroupEditorTest(unittest.IsolatedAsyncioTestCase):
+class OnOffGroupEditorTest(VirtualTimeTestCase):
 
     async def test_bus_to_json_lists_group_ids(self):
         """The tree GetList serves lists every group of the bus - the one the gear reports and

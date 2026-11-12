@@ -63,6 +63,7 @@ from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
 from ._control_stubs import ReadableControl
 from ._fake_rpc_client import FakePortLoadClient
+from ._virtual_time import VirtualTimeEventLoopPolicy
 
 _TEST_LOGGER = logging.getLogger("test_frame_priority")
 _TEST_LOGGER.setLevel(logging.CRITICAL + 1)
@@ -194,6 +195,11 @@ async def _capture_one_batch(  # pylint: disable=too-many-arguments,too-many-pos
 
 
 # --- Low-level: encoded priority bits ---
+
+
+@pytest.fixture(scope="module")
+def event_loop_policy():
+    return VirtualTimeEventLoopPolicy()
 
 
 @pytest.mark.asyncio

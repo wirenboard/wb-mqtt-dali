@@ -22,6 +22,7 @@ from wb.mqtt_dali.wbdali import BusDeviceInstanceTypeMapper, FramePriority
 from wb.mqtt_dali.wbdali_utils import MASK
 
 from ._app_controller_helpers import make_bare_gateway, wait_until
+from ._virtual_time import VirtualTimeEventLoopPolicy
 
 # Prevent file system access inside DaliDeviceBase.__init__
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
@@ -73,6 +74,11 @@ def _make_initialized_dali2_device(short=3, random=0xABCDEF, mqtt_id=None, name=
 # ---------------------------------------------------------------------------
 # Scenario 1: ResetDeviceSettings
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def event_loop_policy():
+    return VirtualTimeEventLoopPolicy()
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from wb.mqtt_dali.mqtt_rpc_client import (
 )
 
 from ._broker_link_helpers import RecordingClient
+from ._virtual_time import VirtualTimeTestCase
 
 
 class MakeRpcErrorTests(unittest.TestCase):
@@ -42,7 +43,7 @@ class MakeRpcErrorTests(unittest.TestCase):
         self.assertEqual(exc.rpc_message, "boom")
 
 
-class MQTTRPCClientTests(unittest.IsolatedAsyncioTestCase):
+class MQTTRPCClientTests(VirtualTimeTestCase):
     def setUp(self):
         self.mqtt_client = RecordingClient()
         self.dispatcher = MQTTDispatcher(self.mqtt_client)
@@ -161,7 +162,7 @@ class MQTTRPCClientTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class RpcCallTests(unittest.IsolatedAsyncioTestCase):
+class RpcCallTests(VirtualTimeTestCase):
     def setUp(self):
         self.mqtt_client = RecordingClient()
         self.dispatcher = MQTTDispatcher(self.mqtt_client)

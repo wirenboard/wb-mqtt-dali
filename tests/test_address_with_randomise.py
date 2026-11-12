@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import tempfile
-import unittest
 from dataclasses import dataclass
 from typing import Callable, Optional
 from unittest.mock import Mock
@@ -35,6 +34,8 @@ from wb.mqtt_dali.address_with_randomise import (
     address_with_randomise,
 )
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
+
+from ._virtual_time import VirtualTimeTestCase
 
 GATEWAY = "wb-dali_68"
 BUS = 1
@@ -212,7 +213,7 @@ def read_devices(config_path: str) -> list[dict]:
         return json.load(config_file)["gateways"][0]["buses"][0]["devices"]
 
 
-class ToolTestCase(unittest.IsolatedAsyncioTestCase):
+class ToolTestCase(VirtualTimeTestCase):
     """Every pass writes the configuration, so each test gets one of its own."""
 
     def setUp(self) -> None:

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import unittest
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,13 +13,14 @@ from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
 from ._app_controller_helpers import LoopKiller, wait_until
 from ._broker_link_helpers import RecordingClient
 from ._on_off_helpers import BusScript, ScriptedGatewayClient
+from ._virtual_time import VirtualTimeTestCase
 
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 _LAST_ENDPOINT_MARKER = "/rpc/v1/wb-mqtt-dali/Bus/ListCommands"
 
 
-class GatewayRunTests(unittest.IsolatedAsyncioTestCase):
+class GatewayRunTests(VirtualTimeTestCase):
     def setUp(self):
         # A configured device is absent from the bus, and publishing its error state raises
         # past every handler of the polling loop.
@@ -65,7 +65,7 @@ class GatewayRunTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.gateway.run(), timeout=5.0)
 
 
-class GatewayWaitForWbMqttSerialTests(unittest.IsolatedAsyncioTestCase):
+class GatewayWaitForWbMqttSerialTests(VirtualTimeTestCase):
     async def test_waits_for_wb_mqtt_serial_then_starts_the_buses(self):
         """No config/Load RPC: one CRITICAL without traceback, run() keeps waiting and publishes nothing;
         wb-mqtt-serial publishes the RPC: the buses and the RPC endpoints come up."""

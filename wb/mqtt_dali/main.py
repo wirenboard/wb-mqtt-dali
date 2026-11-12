@@ -16,6 +16,7 @@ from .config_validator import validate_config
 from .gateway import BusPollingError, Gateway
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_rpc_client import MQTTRPCClient
 from .send_command import (
     build_command_registry,
     format_response,
@@ -284,6 +285,7 @@ async def check_presence_service(gateway: str, args, dali2: bool, bus: int = 1):
             WBDALIDriverNewConfig(gateway, bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         if dali2:
@@ -312,6 +314,7 @@ async def binary_search_service(gateway: str, args, dali2: bool, bus: int = 1):
             WBDALIDriverNewConfig(gateway, bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         commissioning = Commissioning(driver, [], dali2)
@@ -332,6 +335,7 @@ async def short_search_service(gateway: str, args, dali2: bool, bus: int = 1):
             WBDALIDriverNewConfig(gateway, bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         await search_short(driver, dali2)
@@ -372,6 +376,7 @@ async def send_command_service(  # pylint: disable=too-many-locals, too-many-bra
             WBDALIDriverNewConfig(gateway, args.bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logger,
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         try:

@@ -38,7 +38,7 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 from wb.mqtt_dali.application_controller import format_command
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MessageCallback, MQTTDispatcher
-from wb.mqtt_dali.mqtt_rpc_client import rpc_call
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient, rpc_call
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
@@ -370,6 +370,7 @@ async def injector_driver_running(
         WBDALIConfig(device_name=injector_gateway, bus=DALI_BUS),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logging.getLogger(),
+        rpc_client=MQTTRPCClient(),
     )
     try:
         await driver.initialize()
@@ -451,6 +452,7 @@ async def bus_monitor_listener(
         WBDALIConfig(device_name=monitor_gateway, bus=MONITOR_BUS),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logging.getLogger("monitor_bus"),
+        rpc_client=MQTTRPCClient(),
         dev_inst_map=dev_inst_map,
     )
     unregister_listener = None

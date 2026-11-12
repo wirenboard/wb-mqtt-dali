@@ -6,6 +6,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytest_asyncio
 from dali.address import DeviceBroadcast, DeviceShort, GearShort, InstanceNumber
 from dali.command import Response, from_frame
 from dali.device.general import EnableInstance, StartQuiescentMode
@@ -1550,14 +1551,23 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         await controller.stop()
 
 
-def _bus_with_device(device, on_polling_failure) -> ApplicationController:
+@pytest_asyncio.fixture(name="acking_dispatcher")
+async def _acking_dispatcher():
+    """A running dispatcher whose client acknowledges the driver's port/Load writes."""
+    dispatcher = MQTTDispatcher(RecordingClient())
+    dispatch_task = asyncio.create_task(dispatcher.run())
+    yield dispatcher
+    dispatch_task.cancel()
+
+
+def _bus_with_device(device, on_polling_failure, dispatcher: MQTTDispatcher) -> ApplicationController:
     config = ApplicationControllerConfig(
         gateway_mqtt_device_id="gw",
         bus=1,
         dali_devices=[device],
         dali2_devices=[],
     )
-    return ApplicationController(config, MQTTDispatcher(RecordingClient()), MagicMock(), on_polling_failure)
+    return ApplicationController(config, dispatcher, MagicMock(), on_polling_failure)
 
 
 def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
@@ -1571,7 +1581,7 @@ def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_dali2_short_address_change_moves_instance_types_to_new_address():
+async def test_dali2_short_address_change_moves_instance_types_to_new_address(acking_dispatcher):
     """A DALI-2 device's short address changes 5 -> 9 through apply_parameters: the driver's
     instance map holds its instance types under 9 and nothing under 5."""
     device = MagicMock(spec=Dali2Device)
@@ -1592,7 +1602,7 @@ async def test_dali2_short_address_change_moves_instance_types_to_new_address():
         dali_devices=[],
         dali2_devices=[device],
     )
-    bus = ApplicationController(config, MQTTDispatcher(RecordingClient()), MagicMock(), MagicMock())
+    bus = ApplicationController(config, acking_dispatcher, MagicMock(), MagicMock())
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=0, instance_type=1)
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=1, instance_type=3)
 
@@ -1610,11 +1620,11 @@ async def test_dali2_short_address_change_moves_instance_types_to_new_address():
 
 
 @pytest.mark.asyncio
-async def test_polling_loop_ended_by_stop_does_not_call_failure_handler():
+async def test_polling_loop_ended_by_stop_does_not_call_failure_handler(acking_dispatcher):
     """start() then stop() on a bus whose device keeps failing init: the failure handler is never called."""
     on_failure = MagicMock()
     initialize = AsyncMock(side_effect=RuntimeError("no response"))
-    bus = _bus_with_device(_uninitialized_device(initialize), on_failure)
+    bus = _bus_with_device(_uninitialized_device(initialize), on_failure, acking_dispatcher)
 
     await bus.start()
     await asyncio.wait_for(wait_until(lambda: initialize.await_count > 0), timeout=1.0)
@@ -1625,12 +1635,12 @@ async def test_polling_loop_ended_by_stop_does_not_call_failure_handler():
 
 
 @pytest.mark.asyncio
-async def test_polling_loop_survives_a_task_its_caller_gave_up_on_in_quiescent_mode():
+async def test_polling_loop_survives_a_task_its_caller_gave_up_on_in_quiescent_mode(acking_dispatcher):
     """In quiescent mode a task whose caller was cancelled is dropped: the loop goes on
     and rejects the next task, the failure handler is never called."""
     on_failure = MagicMock()
     device = _uninitialized_device(AsyncMock(side_effect=RuntimeError("no response")))
-    bus = _bus_with_device(device, on_failure)
+    bus = _bus_with_device(device, on_failure, acking_dispatcher)
     await bus.start()
     bus.driver.bus_traffic.notify_bus_frame(StartQuiescentMode(DeviceBroadcast()).frame, 1)
     await asyncio.sleep(0.01)
@@ -1646,7 +1656,7 @@ async def test_polling_loop_survives_a_task_its_caller_gave_up_on_in_quiescent_m
 
 
 @pytest.mark.asyncio
-async def test_polling_loop_ends_when_polling_a_device_raises():
+async def test_polling_loop_ends_when_polling_a_device_raises(acking_dispatcher):
     """Building the poll of an initialized device raises: the polling loop ends,
     the failure handler is called once and stop() still completes."""
     failed = asyncio.Event()
@@ -1654,7 +1664,7 @@ async def test_polling_loop_ends_when_polling_a_device_raises():
     device = _uninitialized_device(AsyncMock())
     device.is_initialized = True
     device.poll_controls.side_effect = LoopKiller()
-    bus = _bus_with_device(device, on_failure)
+    bus = _bus_with_device(device, on_failure, acking_dispatcher)
 
     await bus.start()
     await asyncio.wait_for(failed.wait(), timeout=3.0)

@@ -1,10 +1,13 @@
 """Doubles for the aiomqtt client under a real MQTTDispatcher: a recording client and a feedable inbox."""
 
 import asyncio
+import json
 from typing import Dict, List, NamedTuple, Optional, Tuple
 from unittest.mock import MagicMock
 
 import aiomqtt
+
+PORT_LOAD_TOPIC_PREFIX = "/rpc/v1/wb-mqtt-serial/port/Load/"
 
 
 class Publish(NamedTuple):
@@ -69,6 +72,10 @@ class RecordingClient:
         self.publishes.append(Publish(topic, payload, qos, retain))
         if self.ack is not None:
             await self.ack.wait()
+        if topic.startswith(PORT_LOAD_TOPIC_PREFIX) and payload is not None:
+            # wb-mqtt-serial acknowledges every port/Load request.
+            ack = json.dumps({"id": json.loads(payload)["id"], "result": {"response": ""}})
+            self.messages.deliver(aiomqtt.Message(f"{topic}/reply", ack, 0, False, 0, None))
 
     def clear(self) -> None:
         self.calls.clear()

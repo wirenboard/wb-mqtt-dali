@@ -13,7 +13,8 @@ from mqttrpc.protocol import MQTTRPC10Request, MQTTRPC10Response
 from .asyncio_utils import OneShotTasks
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
 
-RpcHandlerFunction = Callable[[dict], Awaitable[Union[dict, list, str, int, float, bool, None]]]
+RpcResult = Union[dict, list, str, int, float, bool, None]
+RpcHandlerFunction = Callable[[dict], Awaitable[RpcResult]]
 
 
 def get_topic_path(driver: str, service: str, method: str) -> str:

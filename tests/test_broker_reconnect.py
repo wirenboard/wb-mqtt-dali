@@ -13,6 +13,7 @@ from dali.frame import ForwardFrame
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.gateway import Gateway, bus_from_json
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
 from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbdali_error_response import GatewayUnavailable
 
@@ -65,9 +66,11 @@ class GatewayRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.run_task: Optional[asyncio.Task] = None
 
     async def asyncSetUp(self):
+        dispatch_task = asyncio.create_task(self.dispatcher.run())
+        self.addCleanup(dispatch_task.cancel)
         with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()), patch(
             "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", AsyncMock()
-        ), patch("wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=asyncio.TimeoutError)):
+        ), patch("wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=MQTTRPCCallTimeoutError("no reply"))):
             self.run_task = asyncio.create_task(self.gateway.run())
             # the last endpoint run() registers before it starts serving
             await asyncio.wait_for(

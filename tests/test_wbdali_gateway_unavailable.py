@@ -24,37 +24,19 @@ from wb.mqtt_dali.wbdali_error_response import (
     WbGatewayTransmissionError,
 )
 
+from ._fake_rpc_client import FakePortLoadClient
+
 
 class _MockMqttClient:
     def __init__(self):
         self._client = MagicMock()
         self._client._client_id = "test-gw-unavail-client"
-        self._messages_to_broker: asyncio.Queue = asyncio.Queue()
 
     async def subscribe(self, _topic: str) -> None:
         return None
 
     async def unsubscribe(self, _topic: str) -> None:
         return None
-
-    async def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False) -> None:
-        del qos, retain
-        await self._messages_to_broker.put((topic, payload))
-
-    async def drain_publishes(self) -> List[tuple]:
-        items: List[tuple] = []
-        while not self._messages_to_broker.empty():
-            items.append(self._messages_to_broker.get_nowait())
-        return items
-
-    async def wait_for_publish(self, topic: str, timeout: float = 1.0) -> str:
-        while True:
-            try:
-                pub_topic, payload = await asyncio.wait_for(self._messages_to_broker.get(), timeout=timeout)
-            except asyncio.TimeoutError as exc:
-                raise TimeoutError(f"Timeout waiting for publish to {topic}") from exc
-            if pub_topic == topic:
-                return payload
 
 
 class _MockCommand(Command):
@@ -83,11 +65,12 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         self.mock_client = _MockMqttClient()
         self.dispatcher = MQTTDispatcher(self.mock_client)
         self.logger = MagicMock(spec=logging.Logger)
+        self.rpc = FakePortLoadClient()
 
     async def _make_driver(self) -> WBDALIDriver:
-        driver = WBDALIDriver(self.config, self.dispatcher, self.logger)
+        driver = WBDALIDriver(self.config, self.dispatcher, self.logger, self.rpc)
         await driver.initialize()
-        await self.mock_client.drain_publishes()
+        self.rpc.clear()
         return driver
 
     def _deliver_meta_error(self, driver: WBDALIDriver, payload: bytes) -> None:
@@ -129,7 +112,7 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         )
         # Let the queue_sender pick up the item and publish to the gateway,
         # so it ends up in _waiting_for_responses (pending response).
-        await self.mock_client.wait_for_publish(f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}")
+        await self.rpc.wait_for_write()
 
         self._deliver_meta_error(driver, b"r")
         await self._wait_gateway_state(driver, True)
@@ -162,11 +145,7 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
             _ = result.value
 
         # No Modbus RPC publish should have been emitted while unavailable.
-        published = await self.mock_client.drain_publishes()
-        self.assertFalse(
-            any(t.startswith("/rpc/v1/wb-mqtt-serial/port/Load/") for t, _ in published),
-            f"unexpected gateway traffic while unavailable: {published}",
-        )
+        self.assertEqual(0, self.rpc.pending_writes())
 
     async def test_send_works_after_null(self):
         """After r → empty, send() returns a normal Response from the gateway."""
@@ -184,9 +163,8 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         send_task = asyncio.create_task(
             driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        topic = f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
-        await self.mock_client.wait_for_publish(topic)  # lazy queue reset
-        await self.mock_client.wait_for_publish(topic)  # batch publish
+        await self.rpc.wait_for_write()  # lazy queue reset
+        await self.rpc.wait_for_write()  # batch publish
 
         # status 2: transmission without response
         self._deliver_reply(driver, slot=0, status_word=0x0200)
@@ -210,7 +188,7 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         pre_task = asyncio.create_task(
             driver.send_commands(pre_cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        await self.mock_client.wait_for_publish(f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}")
+        await self.rpc.wait_for_write()
         for i in range(pre_count):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
         await pre_task
@@ -224,9 +202,8 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         send_task = asyncio.create_task(
             driver.send_commands(cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        topic = f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
-        await self.mock_client.wait_for_publish(topic)  # lazy queue reset
-        await self.mock_client.wait_for_publish(topic)  # batch publish
+        await self.rpc.wait_for_write()  # lazy queue reset
+        await self.rpc.wait_for_write()  # batch publish
         for i in range(size):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
 
@@ -256,7 +233,7 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
                 driver.logger,
             )
         )
-        await self.mock_client.wait_for_publish(f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}")
+        await self.rpc.wait_for_write()
         for i in range(pre_count):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
         await pre_task
@@ -276,9 +253,8 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         send_task = asyncio.create_task(
             driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        topic = f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
-        await self.mock_client.wait_for_publish(topic)  # lazy queue reset
-        await self.mock_client.wait_for_publish(topic)  # batch publish
+        await self.rpc.wait_for_write()  # lazy queue reset
+        await self.rpc.wait_for_write()  # batch publish
         self._deliver_reply(driver, slot=0, status_word=0x0200)
         await asyncio.wait_for(send_task, timeout=1.0)
 
@@ -315,8 +291,7 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(driver.gateway_unavailable)
         # Recovery is lazy — no publishes should have been emitted at all
         # while the driver sat idle between transitions.
-        leftover = await self.mock_client.drain_publishes()
-        self.assertEqual(leftover, [])
+        self.assertEqual(0, self.rpc.pending_writes())
 
     async def test_retained_r_replayed_to_late_driver(self):
         """Retained `r` marks driver unavailable; late-subscribing sibling sees it via the dispatcher cache.
@@ -326,9 +301,9 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         subscribing afterwards must also observe the unavailable state (the
         dispatcher caches the retained payload and replays it).
         """
-        driver_first = WBDALIDriver(WBDALIConfig(bus=1), self.dispatcher, self.logger)
+        driver_first = WBDALIDriver(WBDALIConfig(bus=1), self.dispatcher, self.logger, self.rpc)
         await driver_first.initialize()
-        await self.mock_client.drain_publishes()
+        self.rpc.clear()
 
         # Broker delivers retained `r` to the only subscriber so far.
         self._deliver_meta_error(driver_first, b"r")
@@ -344,9 +319,9 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
 
         # A second bus on the same gateway initialises and subscribes later — the
         # dispatcher must replay the cached retained payload to its callback.
-        driver_late = WBDALIDriver(WBDALIConfig(bus=2), self.dispatcher, self.logger)
+        driver_late = WBDALIDriver(WBDALIConfig(bus=2), self.dispatcher, self.logger, self.rpc)
         await driver_late.initialize()
-        await self.mock_client.drain_publishes()
+        self.rpc.clear()
         await self._wait_gateway_state(driver_late, True)
 
         result_late = await asyncio.wait_for(
@@ -367,11 +342,11 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         cfg_a = WBDALIConfig(device_name="wb-dali_A", bus=1)
         cfg_b = WBDALIConfig(device_name="wb-dali_B", bus=1)
 
-        driver_a = WBDALIDriver(cfg_a, self.dispatcher, self.logger)
-        driver_b = WBDALIDriver(cfg_b, self.dispatcher, self.logger)
+        driver_a = WBDALIDriver(cfg_a, self.dispatcher, self.logger, self.rpc)
+        driver_b = WBDALIDriver(cfg_b, self.dispatcher, self.logger, self.rpc)
         await driver_a.initialize()
         await driver_b.initialize()
-        await self.mock_client.drain_publishes()
+        self.rpc.clear()
 
         self._deliver_meta_error(driver_a, b"r")
         await self._wait_gateway_state(driver_a, True)
@@ -381,7 +356,7 @@ class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
         send_b = asyncio.create_task(
             driver_b.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver_b.logger)
         )
-        await self.mock_client.wait_for_publish(f"/rpc/v1/wb-mqtt-serial/port/Load/{driver_b.rpc_client_id}")
+        await self.rpc.wait_for_write()
         send_b.cancel()
         try:
             await send_b

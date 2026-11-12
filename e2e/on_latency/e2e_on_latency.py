@@ -22,7 +22,7 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
-from wb.mqtt_dali.mqtt_rpc_client import rpc_call
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient, rpc_call
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
@@ -271,6 +271,7 @@ async def main(argv) -> int:  # pylint: disable=too-many-locals, too-many-statem
                 WBDALIConfig(device_name=args.monitor_gateway, bus=DAPC_BUS),
                 mqtt_dispatcher=mqtt_dispatcher,
                 logger=logging.getLogger(),
+                rpc_client=MQTTRPCClient(),
             )
             await driver.initialize()
 

@@ -18,6 +18,7 @@ from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import TransmissionFailed
 
 from ._broker_link_helpers import RecordingClient
+from ._fake_rpc_client import FakePortLoadClient
 
 BUS_LOGGER_NAME = "wb-dali_1_bus_1"
 DEVICE_LOGGER_NAME = f"{BUS_LOGGER_NAME}.dali_5"
@@ -59,7 +60,8 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
         no_cooldown = patch("wb.mqtt_dali.wbdali.OverheatRateLimiter", lambda: OverheatRateLimiter(0.0, 0.0))
         no_cooldown.start()
         self.addCleanup(no_cooldown.stop)
-        self.driver = WBDALIDriver(WBDALIConfig(), self.dispatcher, self.bus_logger)
+        self.rpc = FakePortLoadClient()
+        self.driver = WBDALIDriver(WBDALIConfig(), self.dispatcher, self.bus_logger, self.rpc)
         self.driver.response_timeout = 30.0
         self._next_slot = 0
 
@@ -68,7 +70,7 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(_cancel, dispatch_task)
         await self.driver.initialize()
         self.addAsyncCleanup(self.driver.deinitialize)
-        self.client.drain_publishes()
+        self.rpc.clear()
 
     async def test_no_power_is_logged_once_when_it_starts_and_once_when_it_ends(self):
         """Status 4 thrice, a normal reply, status 4 again: WARNING, INFO, WARNING in the bus logger."""
@@ -172,7 +174,7 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(
             self.driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, logger)
         )
-        await self.client.wait_for_publish(f"/rpc/v1/wb-mqtt-serial/port/Load/{self.driver.rpc_client_id}")
+        await self.rpc.wait_for_write()
         if status_word is not None:
             topic = (
                 f"/devices/{self.driver.config.device_name}/controls/bus_1_bulk_send_reply_{self._next_slot}"

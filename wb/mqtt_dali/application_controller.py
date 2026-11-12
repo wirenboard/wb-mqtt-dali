@@ -30,6 +30,7 @@ from .events import BusEvent, Dali2InputEvent
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
+from .mqtt_rpc_client import MQTTRPCClient
 from .on_off_control import OnOffConfig, gear_params_only
 from .send_command import format_command_expression
 from .short_address import set_short_address_sequence
@@ -435,7 +436,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             device_name=config.gateway_mqtt_device_id,
             bus=config.bus,
         )
-        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, MQTTRPCClient(), self._dev_inst_map)
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor

@@ -43,6 +43,7 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
@@ -173,11 +174,13 @@ async def run_test(  # pylint: disable=too-many-locals
         WBDALIConfig(device_name=long_gateway, bus=DALI_BUS),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logger,
+        rpc_client=MQTTRPCClient(),
     )
     driver_hammer = WBDALIDriver(
         WBDALIConfig(device_name=hammer_gateway, bus=DALI_BUS),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logger,
+        rpc_client=MQTTRPCClient(),
     )
     await driver_long.initialize()
     try:

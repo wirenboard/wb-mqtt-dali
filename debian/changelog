@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.40.3) stable; urgency=medium
+
+  * Update LICENSE: Automation Technologies, LLC (Wiren Board) as the copyright holder,
+    2025 as the first publication year, use restricted to Wiren Board equipment
+  * Fill debian/copyright in the DEP-5 format
+
+ -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Thu, 12 Nov 2026 14:40:07 +0300
+
 wb-mqtt-dali (1.40.2) stable; urgency=medium
 
   * Test suite rework, no changes in behaviour

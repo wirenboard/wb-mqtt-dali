@@ -23,7 +23,6 @@ from wb.mqtt_dali.wbdali import (
 )
 from wb.mqtt_dali.wbdali_error_response import (
     NoResponseFromGateway,
-    NoTransmission,
     WbGatewayTransmissionError,
 )
 
@@ -86,7 +85,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
             index %= self.config.queue_size
             message = aiomqtt.Message(
                 topic=f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{index}",
-                payload=str(0),
+                payload=str(0x0200),
                 qos=0,
                 retain=False,
                 mid=0,
@@ -155,7 +154,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         await self.rpc.wait_for_write()
         self.simulate_timeout_response_from_gateway(0)
         result = (await fut)[0]
-        self.assertIsInstance(result, NoTransmission)
+        self.assertIsNone(result.raw_value)
 
     async def test_send_command_with_response(self):
         """Test sending a command that expects a response."""
@@ -194,7 +193,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         self.simulate_timeout_response_from_gateway(0, 2)
 
         result = (await fut)[0]
-        self.assertIsInstance(result, NoTransmission)
+        self.assertIsNone(result.raw_value)
 
     async def test_send_single_command_rpc_request(self):
         """Test adding a single command to the send buffer."""

@@ -30,7 +30,6 @@ from .wbdali_error_response import (
     GatewayUnavailable,
     NoPowerOnBus,
     NoResponseFromGateway,
-    NoTransmission,
     Overheat,
     TransmissionCancelled,
     TransmissionFailed,
@@ -58,7 +57,7 @@ class GatewayReplyStatus(Enum):
     """Status byte [15..8] of the gateway's reply to a sent frame."""
 
     UNKNOWN = -1
-    NO_TRANSMISSION = 0
+    NO_TRANSMISSION = 0  # slot written, frame not sent yet: the gateway zeroes the reply on a slot write
     BACKWARD_FRAME = 1
     NO_BACKWARD_FRAME = 2
     BROKEN_BACKWARD_FRAME = 3
@@ -812,6 +811,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             .replace(f"bus_{self.config.bus}_bulk_send_reply_", "")
         )
 
+        if resp == 0:
+            # A direct read between the slot write and its execution, not a reply.
+            self.logger.debug("Slot %d is not executed yet, waiting for its reply", resp_pointer)
+            return
+
         resp_waiter = self._waiting_for_responses.get(resp_pointer)
         if resp_waiter is None:
             self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
@@ -844,22 +848,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             self._overheat_rate_limiter.on_non_overheat_response()
         self._update_gateway_condition(status)
 
-        if status == GatewayReplyStatus.NO_TRANSMISSION:
-            # No transmission
-            logger.debug(
-                "%s (%d) status 0: No transmission",
-                LazyCommandExpression(resp_waiter.send_item.command),
-                resp_pointer,
-            )
-            response = NoTransmission()
-            resp_future.set_result(response)
-            self.bus_traffic.notify_command(
-                resp_waiter.send_item.command.frame,
-                response,
-                resp_waiter.send_item.source,
-                resp_waiter.sequence_id,
-            )
-            return
         if status == GatewayReplyStatus.BACKWARD_FRAME:
             # Transmission with backward response
             logger.debug(

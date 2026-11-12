@@ -23,7 +23,6 @@ from ._fake_rpc_client import FakePortLoadClient
 BUS_LOGGER_NAME = "wb-dali_1_bus_1"
 DEVICE_LOGGER_NAME = f"{BUS_LOGGER_NAME}.dali_5"
 
-STATUS_NO_TRANSMISSION = 0x0000
 STATUS_WITHOUT_RESPONSE = 0x0200
 STATUS_BROKEN_RESPONSE = 0x0312
 STATUS_NO_POWER = 0x0400
@@ -84,9 +83,26 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
             STATUS_OVERHEAT, "DALI gateway overheat", "DALI gateway overheat is over", "status 5"
         )
 
-    async def test_no_transmission_status_keeps_the_no_power_state(self):
-        """Status 4, status 0, status 4: one WARNING, no INFO about power coming back."""
-        await self._check_no_power_kept(STATUS_NO_TRANSMISSION)
+    async def test_zero_in_the_slot_is_not_a_reply(self):
+        """The slot reads 0, then the reply comes: the command gets the reply, nothing above DEBUG."""
+        topic = f"/devices/{self.driver.config.device_name}/controls/bus_1_bulk_send_reply_0"
+        with self.assertLogs(BUS_LOGGER_NAME, logging.DEBUG) as logs:
+            task = asyncio.create_task(
+                self.driver.send(
+                    _MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, self.device_logger
+                )
+            )
+            await self.rpc.wait_for_write()
+            self.client.messages.deliver(aiomqtt.Message(topic, "0", 0, False, 0, None))
+            await asyncio.sleep(0.05)
+            self.assertFalse(task.done())
+            self.client.messages.deliver(
+                aiomqtt.Message(topic, str(STATUS_WITHOUT_RESPONSE), 0, False, 0, None)
+            )
+            result = await asyncio.wait_for(task, 1.0)
+
+        self.assertIsNone(result.raw_value)
+        self.assertEqual(_above_debug(logs.records), [])
 
     async def test_unknown_status_keeps_the_no_power_state(self):
         """Status 4, an unknown status, status 4: one WARNING, no INFO about power coming back."""

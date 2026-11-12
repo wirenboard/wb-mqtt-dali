@@ -33,19 +33,6 @@ class NoResponseFromGateway(WbGatewayTransmissionError):
         return "no response from gateway"
 
 
-class NoTransmission(WbGatewayTransmissionError):
-    @property
-    def raw_value(self):
-        raise RuntimeError("No transmission, internal gateway error")
-
-    @property
-    def value(self):
-        raise RuntimeError("No transmission, internal gateway error")
-
-    def __str__(self) -> str:
-        return "no transmission, internal gateway error"
-
-
 class NoPowerOnBus(WbGatewayTransmissionError):
     @property
     def raw_value(self):

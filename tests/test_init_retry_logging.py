@@ -16,6 +16,7 @@ from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_init_scheduler import DeviceInitScheduler
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 
 from ._broker_link_helpers import RecordingClient
@@ -84,7 +85,9 @@ class _GatewayTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.client = _PowerSwitchedGatewayClient(self.script)
         self.dispatcher = MQTTDispatcher(self.client)
-        self.driver = WBDALIDriver(WBDALIConfig(GATEWAY_ID, BUS_INDEX), self.dispatcher, BUS_LOGGER)
+        self.driver = WBDALIDriver(
+            WBDALIConfig(GATEWAY_ID, BUS_INDEX), self.dispatcher, BUS_LOGGER, MQTTRPCClient()
+        )
         self.scheduler = DeviceInitScheduler()
 
     async def asyncSetUp(self) -> None:

@@ -33,6 +33,7 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDeviceAddress
 from .main import CONFIG_FILEPATH
 from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_rpc_client import MQTTRPCClient
 from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbdali_utils import (
     FLASH_WRITE_TIME_S,
@@ -302,7 +303,10 @@ async def connected_driver(gateway: str, bus: int) -> AsyncIterator[WBDALIDriver
     async with client:
         dispatcher_task = asyncio.create_task(mqtt_dispatcher.run())
         driver = WBDALIDriver(
-            WBDALIConfig(gateway, bus), mqtt_dispatcher=mqtt_dispatcher, logger=logging.getLogger()
+            WBDALIConfig(gateway, bus),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         try:

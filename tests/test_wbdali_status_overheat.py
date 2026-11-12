@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import unittest
 
@@ -17,6 +16,8 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import Overheat
 
+from ._fake_rpc_client import FakePortLoadClient
+
 # pylint: disable=duplicate-code
 
 
@@ -24,7 +25,6 @@ class MockMqttClient:
     def __init__(self):
         self._client = MagicMock()
         self._client._client_id = "test-wbdali-status-overheat-client"
-        self._messages_to_broker = asyncio.Queue()
 
     async def __aenter__(self):
         return self
@@ -37,25 +37,6 @@ class MockMqttClient:
 
     async def unsubscribe(self, topic: str) -> None:
         del topic
-
-    async def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False) -> None:
-        del qos, retain
-        await self._messages_to_broker.put((topic, payload))
-
-    async def clear_publishes(self):
-        while not self._messages_to_broker.empty():
-            await self._messages_to_broker.get()
-
-    async def wait_for_publish(self, topic: str, timeout: float = 1.0) -> str:
-        while True:
-            try:
-                published_topic, message = await asyncio.wait_for(
-                    self._messages_to_broker.get(), timeout=timeout
-                )
-                if published_topic == topic:
-                    return message
-            except asyncio.TimeoutError:
-                raise TimeoutError(f"Timeout waiting for publish to topic: {topic}") from None
 
 
 class _MockCommand(Command):
@@ -73,18 +54,16 @@ class TestWBDALIStatusOverheat(unittest.IsolatedAsyncioTestCase):
         self.mock_logger = MagicMock(spec=logging.Logger)
 
     async def test_status_5_returns_overheat(self):
-        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger)
+        rpc = FakePortLoadClient()
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, rpc)
         await driver.initialize()
-        await self.mock_mqtt_client.clear_publishes()
+        rpc.clear()
 
         fut = asyncio.create_task(
             driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        payload = await self.mock_mqtt_client.wait_for_publish(
-            topic=f"/rpc/v1/wb-mqtt-serial/port/Load/{driver.rpc_client_id}"
-        )
-        payload_data = json.loads(payload)
-        self.assertEqual(payload_data["params"]["count"], 2)
+        params = await rpc.wait_for_write()
+        self.assertEqual(params["count"], 2)
 
         message = aiomqtt.Message(
             topic=(

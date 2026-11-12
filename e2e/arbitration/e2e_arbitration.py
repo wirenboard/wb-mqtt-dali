@@ -16,6 +16,7 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from wb.mqtt_dali.wbdali import WBDALIDriver as WBDALIDriverNew
@@ -83,12 +84,14 @@ async def main(argv):  # pylint: disable=too-many-locals,too-many-statements
             WBDALIDriverNewConfig(device_name=args.gateway1, bus=1),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver_bus1.initialize()
         driver_bus2 = WBDALIDriverNew(
             WBDALIDriverNewConfig(device_name=args.gateway2, bus=1),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver_bus2.initialize()
 

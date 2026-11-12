@@ -23,6 +23,7 @@ from wb.mqtt_dali.commissioning import (
 from wb.mqtt_dali.dali2_compat import Dali2CommandsCompatibilityLayer
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.short_address import set_short_address_sequence
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_utils import MASK
@@ -412,6 +413,7 @@ async def main(argv) -> int:
                         WBDALIConfig(device_name=args.gateway, bus=bus),
                         mqtt_dispatcher=mqtt_dispatcher,
                         logger=logger,
+                        rpc_client=MQTTRPCClient(),
                     )
                     await driver.initialize()
                     drivers[bus] = driver

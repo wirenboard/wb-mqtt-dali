@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.40.0) stable; urgency=medium
+
+  * Code restructuring, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 12:18:51 +0500
+
 wb-mqtt-dali (1.39.4) stable; urgency=medium
 
   * Device control values are published with MQTT QoS 1, as in other Wiren Board services

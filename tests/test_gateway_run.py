@@ -9,6 +9,7 @@ import aiomqtt
 from wb.mqtt_dali.common_dali_device import DaliDeviceBase
 from wb.mqtt_dali.gateway import BusPollingError, Gateway
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
 
 from ._app_controller_helpers import LoopKiller, wait_until
 from ._broker_link_helpers import RecordingClient
@@ -60,7 +61,7 @@ class GatewayRunTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self) -> None:
         with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()), patch(
             "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", AsyncMock()
-        ), patch("wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=asyncio.TimeoutError)):
+        ), patch("wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=MQTTRPCCallTimeoutError("no reply"))):
             await asyncio.wait_for(self.gateway.run(), timeout=5.0)
 
 
@@ -78,7 +79,7 @@ class GatewayWaitForWbMqttSerialTests(unittest.IsolatedAsyncioTestCase):
         with patch("wb.mqtt_dali.gateway.WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S", 0.01), patch(
             "wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()
         ), patch(
-            "wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=asyncio.TimeoutError)
+            "wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=MQTTRPCCallTimeoutError("no reply"))
         ), self.assertLogs(
             level=logging.INFO
         ) as logs:

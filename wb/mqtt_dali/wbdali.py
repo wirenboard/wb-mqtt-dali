@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import random
-import string
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Sequence, Union
@@ -26,6 +23,7 @@ from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
 from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
+from .mqtt_rpc_client import MQTTRPCClient, MQTTRPCError
 from .overheat_rate_limiter import OverheatRateLimiter
 from .send_command import LazyCommandExpression, format_command_expression
 from .wbdali_error_response import (
@@ -111,6 +109,8 @@ class FramePriority(Enum):
 
 WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
+# total_timeout 1 s + 0.5 s response timeout of a request holding the port + 0.3 s broker delivery.
+PORT_LOAD_ACK_TIMEOUT_S = 1.8
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
 FRAME_COUNTER_MODULO = 1 << 16
@@ -523,11 +523,12 @@ class BusDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
 
 
 class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
         self,
         config: WBDALIConfig,
         mqtt_dispatcher: MQTTDispatcher,
         logger: logging.Logger,
+        rpc_client: MQTTRPCClient,
         dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ) -> None:
         self.logger = logger
@@ -554,9 +555,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._overheat_rate_limiter = OverheatRateLimiter()
         self._gateway_condition = GatewayCondition.NORMAL
 
-        client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-        self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
-        self._rpc_id_counter = 0
+        self._rpc_client = rpc_client
 
         # The start index in the gateway queue of the current batch being sent
         self._batch_start_index = 0
@@ -592,14 +591,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._response_timeout = timeout
 
     @property
-    def rpc_client_id(self) -> str:
-        return self._rpc_client_id
-
-    @property
-    def rpc_id_counter(self) -> int:
-        return self._rpc_id_counter
-
-    @property
     def batch_start_index(self) -> int:
         """Get the start index in the gateway queue of the current batch being sent."""
         return self._batch_start_index
@@ -613,6 +604,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         self._queue_sender_task = asyncio.create_task(self._queue_sender())
 
+        await self._rpc_client.start(self._mqtt_dispatcher)
         self._synced_session = self._mqtt_dispatcher.session
         try:
             await self._reset_queue_in_gateway()
@@ -668,10 +660,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 f"bus_{self.config.bus}_monitor_sporadic_frame_{i}",
             )
         await self._mqtt_dispatcher.unsubscribe(self._meta_error_topic)
+        await self._rpc_client.stop()
         self.logger.debug("Deinitialized successfully")
 
     async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
-        """Send a Modbus RPC command without expecting a response."""
+        """Send a Modbus RPC command and wait for its reply without acting on it."""
         self.logger.debug(
             "Sending Modbus RPC command: function=%d, address=%d, count=%d, msg=%s",
             function,
@@ -680,26 +673,22 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             msg,
         )
 
-        self._rpc_id_counter += 1
-        await self._mqtt_dispatcher.publish(
-            f"/rpc/v1/wb-mqtt-serial/port/Load/{self._rpc_client_id}",
-            json.dumps(
-                {
-                    "params": {
-                        "device_id": self.config.device_name,
-                        "function": function,
-                        "address": address,
-                        "count": count,
-                        # "response_timeout": 8,
-                        "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
-                        "frame_timeout": 0,
-                        "format": "HEX",
-                        "msg": msg,
-                    },
-                    "id": self.rpc_id_counter,
-                }
-            ),
-        )
+        params = {
+            "device_id": self.config.device_name,
+            "function": function,
+            "address": address,
+            "count": count,
+            # "response_timeout": 8,
+            "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
+            "frame_timeout": 0,
+            "format": "HEX",
+            "msg": msg,
+        }
+        try:
+            await self._rpc_client.call("wb-mqtt-serial", "port", "Load", params, PORT_LOAD_ACK_TIMEOUT_S)
+        except MQTTRPCError:
+            # Reply errors are not acted on yet.
+            pass
 
     async def _reset_queue_in_gateway(self) -> None:
         self.logger.debug("Resetting message queue in gateway")

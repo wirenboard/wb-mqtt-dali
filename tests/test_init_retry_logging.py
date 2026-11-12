@@ -21,6 +21,7 @@ from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 
 from ._broker_link_helpers import RecordingClient
 from ._on_off_helpers import BusScript, ReplyStatus, ScriptedGatewayClient
+from ._virtual_time import VirtualTimeTestCase
 from .test_device_init_retry import _make_publisher
 
 GATEWAY_ID = "gw1"
@@ -79,7 +80,7 @@ def _debug_names(records: List[logging.LogRecord], text: str) -> set:
     return {r.name for r in records if r.levelno == logging.DEBUG and text in r.getMessage()}
 
 
-class _GatewayTestCase(unittest.IsolatedAsyncioTestCase):
+class _GatewayTestCase(VirtualTimeTestCase):
     script: Optional[BusScript] = None
 
     def setUp(self) -> None:

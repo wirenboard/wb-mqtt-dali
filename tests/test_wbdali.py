@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import unittest
 
 try:
     from unittest.mock import MagicMock
@@ -27,6 +26,7 @@ from wb.mqtt_dali.wbdali_error_response import (
 )
 
 from ._fake_rpc_client import FakePortLoadClient
+from ._virtual_time import VirtualTimeTestCase
 
 # pylint: disable=line-too-long, protected-access
 
@@ -70,7 +70,7 @@ class MockResponse(Response):
         self.data = frame.as_integer if frame else None
 
 
-class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
+class TestWBDALIDriver(VirtualTimeTestCase):
     def setUp(self):
         self.config = WBDALIConfig()
         self.mock_mqtt_client = MockMqttClient()
@@ -336,9 +336,6 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
         command stays unresolved and is not failed by the retained payload."""
         driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
         await self.prepare_driver(driver)
-        # The waiter is expected to fall through to its own timeout, so keep it
-        # short instead of waiting out the full default response_timeout.
-        driver.response_timeout = 0.2
 
         cmd = _MockCommand(sendtwice=False, response_class=MockResponse)
         fut = asyncio.gather(driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger))
@@ -356,7 +353,7 @@ class TestWBDALIDriver(unittest.IsolatedAsyncioTestCase):
 
         # Retained drop must not resolve the waiter; a real timeout eventually
         # does. The outer wait_for guards against a hang if that regresses.
-        result = (await asyncio.wait_for(fut, timeout=1.0))[0]
+        result = (await asyncio.wait_for(fut, timeout=10.0))[0]
         self.assertIsInstance(result, NoResponseFromGateway)
 
     async def test_reply_malformed_payload_logged_with_context(self):

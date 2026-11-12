@@ -19,6 +19,8 @@ from wb.mqtt_dali.wbmqtt import (
     retain_hack,
 )
 
+from ._virtual_time import VirtualTimeEventLoopPolicy
+
 # pylint: disable=redefined-outer-name,too-many-public-methods
 
 
@@ -176,6 +178,11 @@ class TestControlError:
     def test_empty_flag_is_falsy(self):
         assert not ControlError(0)
         assert ControlError.READ
+
+
+@pytest.fixture(scope="module")
+def event_loop_policy():
+    return VirtualTimeEventLoopPolicy()
 
 
 class TestDevice:

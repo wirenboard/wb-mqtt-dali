@@ -6,6 +6,8 @@ import pytest
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 
+from ._virtual_time import VirtualTimeEventLoopPolicy
+
 # pylint: disable=redefined-outer-name
 
 
@@ -43,6 +45,11 @@ def mock_client():
 @pytest.fixture
 def dispatcher(mock_client):
     return MQTTDispatcher(mock_client)
+
+
+@pytest.fixture(scope="module")
+def event_loop_policy():
+    return VirtualTimeEventLoopPolicy()
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,6 @@
 import asyncio
 import contextlib
 import logging
-import unittest
 from typing import List, Optional
 from unittest.mock import patch
 
@@ -19,6 +18,7 @@ from wb.mqtt_dali.wbdali_error_response import TransmissionFailed
 
 from ._broker_link_helpers import RecordingClient
 from ._fake_rpc_client import FakePortLoadClient
+from ._virtual_time import VirtualTimeTestCase
 
 BUS_LOGGER_NAME = "wb-dali_1_bus_1"
 DEVICE_LOGGER_NAME = f"{BUS_LOGGER_NAME}.dali_5"
@@ -49,7 +49,7 @@ def _above_debug(records: List[logging.LogRecord]) -> List[tuple]:
     return [(r.name, r.levelno, r.getMessage()) for r in records if r.levelno > logging.DEBUG]
 
 
-class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
+class TestBusStateLogging(VirtualTimeTestCase):
     def setUp(self):
         self.client = RecordingClient()
         self.dispatcher = MQTTDispatcher(self.client)
@@ -61,7 +61,6 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(no_cooldown.stop)
         self.rpc = FakePortLoadClient()
         self.driver = WBDALIDriver(WBDALIConfig(), self.dispatcher, self.bus_logger, self.rpc)
-        self.driver.response_timeout = 30.0
         self._next_slot = 0
 
     async def asyncSetUp(self):
@@ -141,7 +140,6 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs(BUS_LOGGER_NAME, logging.DEBUG) as logs:
             await self._exchange(STATUS_BROKEN_RESPONSE, self.device_logger)
             await self._exchange(STATUS_UNKNOWN, self.device_logger)
-            self.driver.response_timeout = 0.05
             await self._exchange(None, self.device_logger)
 
         self.assertEqual(_above_debug(logs.records), [])
@@ -197,7 +195,7 @@ class TestBusStateLogging(unittest.IsolatedAsyncioTestCase):
             )
             self.client.messages.deliver(aiomqtt.Message(topic, str(status_word), 0, False, 0, None))
         self._next_slot += 1
-        return await asyncio.wait_for(task, 1.0)
+        return await asyncio.wait_for(task, 10.0)
 
     @staticmethod
     def _device_debug(records: List[logging.LogRecord], text: str) -> int:

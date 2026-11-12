@@ -7,7 +7,6 @@ differing ones as a framing error. It also carries gear that does not implement
 WITHDRAW and so stays in the search after one.
 """
 
-import unittest
 from dataclasses import dataclass
 from typing import Optional
 from unittest.mock import Mock
@@ -33,6 +32,8 @@ from dali.gear.general import (
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import Commissioning
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
+
+from ._virtual_time import VirtualTimeTestCase
 
 NEW_RANDOM_START = 0x200000
 BLOCKER_RANDOM = 0x111111
@@ -193,7 +194,7 @@ def programmed_addresses(bus: PerDeviceFakeDALIBus) -> list:
     return [cmd.address for cmd in bus.sent_commands if isinstance(cmd, ProgramShortAddress)]
 
 
-class TestCommissioningAddressConflicts(unittest.IsolatedAsyncioTestCase):
+class TestCommissioningAddressConflicts(VirtualTimeTestCase):
     async def test_duplicate_random_invisible_at_poll_keeps_config_entry(self):
         """Duplicate invisible at poll: B shares X but has no short address,
         so the poll reads X cleanly at short 5.
@@ -344,7 +345,7 @@ class TestCommissioningAddressConflicts(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(isinstance(cmd, Randomise) for cmd in bus.sent_commands))
 
 
-class TestWithdrawIgnoringGear(unittest.IsolatedAsyncioTestCase):
+class TestWithdrawIgnoringGear(VirtualTimeTestCase):
     """Control gear that does not implement WITHDRAW keeps answering COMPARE after it, so the
     search finds it over and over.
     A find reporting a short address this run already recorded for that random address is the

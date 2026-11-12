@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.40.2) stable; urgency=medium
+
+  * Test suite rework, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 15:18:07 +0500
+
 wb-mqtt-dali (1.40.1) stable; urgency=medium
 
   * A DALI command is no longer failed with a "no transmission" gateway error before the gateway

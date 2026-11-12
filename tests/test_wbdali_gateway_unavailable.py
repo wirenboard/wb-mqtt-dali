@@ -25,6 +25,7 @@ from wb.mqtt_dali.wbdali_error_response import (
 )
 
 from ._fake_rpc_client import FakePortLoadClient
+from ._virtual_time import VirtualTimeTestCase
 
 
 class _MockMqttClient:
@@ -57,7 +58,7 @@ def _build_retained_msg(topic: str, payload: bytes) -> aiomqtt.Message:
     return aiomqtt.Message(topic, payload, 0, True, 0, None)
 
 
-class TestGatewayUnavailable(unittest.IsolatedAsyncioTestCase):
+class TestGatewayUnavailable(VirtualTimeTestCase):
     """Tests for the gateway-availability feature in WBDALIDriver."""
 
     def setUp(self):

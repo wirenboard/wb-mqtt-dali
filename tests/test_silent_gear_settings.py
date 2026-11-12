@@ -39,7 +39,7 @@ from wb.mqtt_dali.dali_device import DaliDevice, DaliDeviceType
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.gear.dimming_curve import QueryDimmingCurve as QueryType17DimmingCurve
 from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
-from wb.mqtt_dali.wbdali_error_response import NoTransmission
+from wb.mqtt_dali.wbdali_error_response import TransmissionFailed
 from wb.mqtt_dali.wbdali_utils import NoAnswerError
 
 _LOGGER_NAME = "test.silent_gear"
@@ -120,7 +120,7 @@ class _FakeGear:
         del source, priority, logger
         self.sent.append(cmd)
         if isinstance(cmd, self.gateway_error):
-            return NoTransmission()
+            return TransmissionFailed()
         if cmd.response is None:
             return Response(None)
         if isinstance(cmd, self.framing_error):

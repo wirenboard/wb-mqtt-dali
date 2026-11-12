@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.41.1) stable; urgency=medium
+
+  * Large installation e2e test added, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 13 Nov 2026 15:24:30 +0500
+
 wb-mqtt-dali (1.41.0) stable; urgency=medium
 
   * Device parameters show correct values after a controller reboot or a wb-mqtt-serial restart

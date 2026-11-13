@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Sequence, Union
 
@@ -502,23 +502,26 @@ class WaitResponseItem:
 
 
 @dataclass
-class PendingBatch:
-    """Commands collected for one write to the gateway queue, from `start_slot` on."""
-
-    start_slot: int
-    items: list[SendQueueItem] = field(default_factory=list)
-
-    @property
-    def next_slot(self) -> int:
-        return self.start_slot + len(self.items)
+class GatewaySlot:
+    waiter: Optional[WaitResponseItem] = None
+    # The next reply in this slot is the late one of a timed-out command
+    reply_timed_out: bool = False
 
 
 class GatewayQueueMirror:
-    def __init__(self) -> None:
-        self._commands_by_slot: dict[int, WaitResponseItem] = {}
-        self._timed_out_slots: set[int] = set()
+    def __init__(self, size: int) -> None:
+        self._slots = [GatewaySlot() for _ in range(size)]
+        self._write_slot = 0
         self._pointer_reset_needed = False
         self._any_reply_timed_out = False
+
+    @property
+    def write_slot(self) -> int:
+        return self._write_slot
+
+    @property
+    def slots_to_ring_end(self) -> int:
+        return len(self._slots) - self._write_slot
 
     @property
     def pointer_reset_needed(self) -> bool:
@@ -529,42 +532,42 @@ class GatewayQueueMirror:
         return self._any_reply_timed_out
 
     def commands_in_slots(self) -> list[WaitResponseItem]:
-        return list(self._commands_by_slot.values())
+        return [slot.waiter for slot in self._slots if slot.waiter is not None]
 
     def on_pointer_reset(self) -> None:
+        self.clear_slots()
+        self._write_slot = 0
         self._pointer_reset_needed = False
         self._any_reply_timed_out = False
 
-    def on_write_acked(self, slot: int, waiter: WaitResponseItem) -> None:
-        self._commands_by_slot[slot] = waiter
-        self._timed_out_slots.discard(slot)
+    def on_write_acked(self, waiter: WaitResponseItem) -> None:
+        """Put the command at the write pointer and advance it."""
+        self._slots[self._write_slot] = GatewaySlot(waiter)
+        self._write_slot = (self._write_slot + 1) % len(self._slots)
 
     def is_late_reply(self, slot: int) -> bool:
         """True for the first reply in a slot whose command timed out."""
-        if slot not in self._timed_out_slots:
+        if not self._slots[slot].reply_timed_out:
             return False
-        self._timed_out_slots.discard(slot)
+        self._slots[slot].reply_timed_out = False
         return True
 
     def command_awaiting_reply(self, slot: int) -> Optional[WaitResponseItem]:
-        waiter = self._commands_by_slot.get(slot)
+        waiter = self._slots[slot].waiter
         if waiter is None or waiter.send_item.future.done():
             return None
         return waiter
 
     def on_reply_timeout(self, slot: int) -> None:
-        self._timed_out_slots.add(slot)
+        self._slots[slot].reply_timed_out = True
         self._pointer_reset_needed = True
         self._any_reply_timed_out = True
 
     def request_pointer_reset(self) -> None:
         self._pointer_reset_needed = True
 
-    def pop_all_commands(self) -> list[WaitResponseItem]:
-        waiters = self.commands_in_slots()
-        self._commands_by_slot.clear()
-        self._timed_out_slots.clear()
-        return waiters
+    def clear_slots(self) -> None:
+        self._slots = [GatewaySlot() for _ in self._slots]
 
 
 def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FramePriority) -> int:
@@ -641,8 +644,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         self._send_queue: asyncio.Queue[SendQueueItem] = asyncio.Queue(maxsize=self.config.queue_size)
 
-        self._queue_mirror = GatewayQueueMirror()
-        self._batch = PendingBatch(0)
+        self._queue_mirror = GatewayQueueMirror(self.config.queue_size)
+        self._batch: list[SendQueueItem] = []
 
         # Lock to ensure only one sender at a time
         self._send_queue_lock = asyncio.Lock()
@@ -666,11 +669,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         self._unreachable_reported_in_session: Optional[int] = None
         # Broker session the gateway queue was last synced with; a newer one means a reconnect to catch up.
         self._synced_session = mqtt_dispatcher.session
-
-    @property
-    def batch_start_index(self) -> int:
-        """Get the start index in the gateway queue of the current batch being sent."""
-        return self._batch.start_slot
 
     @property
     def gateway_unavailable(self) -> bool:
@@ -715,7 +713,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 pass
             self._queue_sender_task = None
 
-        self._fail_waiters(self._queue_mirror.pop_all_commands(), TransmissionCancelled)
+        self._fail_waiters(self._queue_mirror.commands_in_slots(), TransmissionCancelled)
+        self._queue_mirror.clear_slots()
 
         # Unsubscribe from all reply topics
         for i in range(self.config.queue_size):
@@ -775,6 +774,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
     async def _reset_queue_in_gateway(self) -> GatewayWriteResult:
         self.logger.debug("Resetting message queue in gateway")
+        self._fail_waiters(self._queue_mirror.commands_in_slots(), NoResponseFromGateway)
 
         pointer_address = (
             self.config.queue_bulk_send_pointer_modbus_address
@@ -789,8 +789,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             ensure_configured_device=True,
         )
         if result == GatewayWriteResult.DONE:
-            for waiter in self._queue_mirror.pop_all_commands():
-                waiter.cancel_timeout()
+            if self._queue_mirror.any_reply_timed_out:
+                self.logger.warning("Gateway did not reply, queue reset")
+            self._queue_mirror.on_pointer_reset()
         return result
 
     @property
@@ -820,7 +821,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         if should_unavailable:
             self.logger.warning("Gateway reported unreachable; failing pending DALI traffic")
             self._unreachable_reported_in_session = self._mqtt_dispatcher.session
-            self._fail_waiters(self._queue_mirror.pop_all_commands(), GatewayUnavailable)
+            self._fail_waiters(self._queue_mirror.commands_in_slots(), GatewayUnavailable)
+            self._queue_mirror.clear_slots()
         else:
             self.logger.info("Gateway reported reachable; queue resync deferred to next batch")
             self._queue_mirror.request_pointer_reset()
@@ -837,7 +839,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             session,
         )
         self._synced_session = session
-        self._fail_waiters(self._queue_mirror.pop_all_commands(), GatewayUnavailable)
+        self._fail_waiters(self._queue_mirror.commands_in_slots(), GatewayUnavailable)
+        self._queue_mirror.clear_slots()
         self._queue_mirror.request_pointer_reset()
 
     def _handle_reply_message(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
@@ -1162,29 +1165,22 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         return await self._send_commands_internal(commands, source, priority, True, logger)
 
-    # pylint: disable-next=too-many-return-statements, too-many-branches, too-many-statements
     async def _queue_sender(self) -> None:
         timeout = None
         while True:
             item = None
             try:
-                resp_waiter = self._queue_mirror.command_awaiting_reply(self._batch.next_slot)
+                resp_waiter = self._queue_mirror.command_awaiting_reply(
+                    self._queue_mirror.write_slot + len(self._batch)
+                )
                 if resp_waiter is not None:
-                    next_slot = self._batch.next_slot
-                    try:
-                        next_slot = await self._send_to_gateway(self._batch.items, self._batch.start_slot)
-                    finally:
-                        self._batch = PendingBatch(next_slot % self.config.queue_size)
+                    await self._send_to_gateway()
                     await resp_waiter.send_item.future
 
                 try:
                     item = await asyncio.wait_for(self._send_queue.get(), timeout)
                 except asyncio.TimeoutError:
-                    next_slot = self._batch.next_slot
-                    try:
-                        next_slot = await self._send_to_gateway(self._batch.items, self._batch.start_slot)
-                    finally:
-                        self._batch = PendingBatch(next_slot % self.config.queue_size)
+                    await self._send_to_gateway()
                     timeout = None
                     continue
 
@@ -1197,14 +1193,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     )
                     continue
 
-                self._batch.items.append(item)
+                self._batch.append(item)
 
-                if self._batch.next_slot == self.config.queue_size:
-                    next_slot = self._batch.next_slot
-                    try:
-                        next_slot = await self._send_to_gateway(self._batch.items, self._batch.start_slot)
-                    finally:
-                        self._batch = PendingBatch(next_slot % self.config.queue_size)
+                # A write is contiguous: the batch ends at the end of the ring.
+                if len(self._batch) == self._queue_mirror.slots_to_ring_end:
+                    await self._send_to_gateway()
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 try:
@@ -1218,10 +1211,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 if item is not None and not item.future.done():
                     item.future.set_result(WbGatewayTransmissionError())
 
-    async def _send_to_gateway(self, items: list[SendQueueItem], start_index: int) -> int:
-        """Send a batch from `start_index`; returns the slot the next batch starts at."""
+    async def _send_to_gateway(self) -> None:
+        """Write the batch at the gateway write pointer."""
+        items, self._batch = self._batch, []
         if not items:
-            return start_index
+            return
         await self._overheat_rate_limiter.wait_before_send()
         self._sync_with_broker_session()
         waiters = []
@@ -1230,26 +1224,20 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             self._send_queue_item_index += 1
         if self.gateway_unavailable:
             self._fail_waiters(waiters, GatewayUnavailable)
-            return start_index + len(items)
+            return
         try:
             if self._queue_mirror.pointer_reset_needed:
-                self._fail_waiters(self._queue_mirror.commands_in_slots(), NoResponseFromGateway)
                 reset_result = await self._reset_queue_in_gateway()
                 if reset_result != GatewayWriteResult.DONE:
                     self._fail_waiters(waiters, _WRITE_ERROR_BY_RESULT[reset_result])
-                    return start_index
-                if self._queue_mirror.any_reply_timed_out:
-                    self.logger.warning("Gateway did not reply, queue reset")
-                self._queue_mirror.on_pointer_reset()
-                # Both sides restart: this batch goes to slot 0 whatever slot it was batched for.
-                start_index = 0
+                    return
 
             self._fail_waiters(
                 [waiter for waiter in waiters if waiter.send_item.future.cancelled()], TransmissionCancelled
             )
             waiters = [waiter for waiter in waiters if not waiter.send_item.future.cancelled()]
             if not waiters:
-                return start_index
+                return
             for waiter in waiters:
                 waiter.send_item.sent = True
             regs_32bit = [
@@ -1264,7 +1252,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             buffer_address = (
                 self.config.queue_start_modbus_address
                 + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
-                + start_index * 2
+                + self._queue_mirror.write_slot * 2
             )
             result = await self.send_modbus_rpc(
                 function=16,
@@ -1278,25 +1266,22 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     # The write may have run, and the gateway may still be executing these slots.
                     self._queue_mirror.request_pointer_reset()
                 # A skipped write left the gateway pointer here: the next batch takes these slots.
-                return start_index
-            for position, waiter in enumerate(waiters):
-                slot = start_index + position
+                return
+            for waiter in waiters:
                 waiter.timeout_handler = asyncio.get_running_loop().call_later(
-                    self.config.response_timeout_s, self._handle_reply_timeout, waiter, slot
+                    self.config.response_timeout_s,
+                    self._handle_reply_timeout,
+                    waiter,
+                    self._queue_mirror.write_slot,
                 )
-                self._queue_mirror.on_write_acked(slot, waiter)
+                self._queue_mirror.on_write_acked(waiter)
         except asyncio.CancelledError:
             self._fail_waiters(waiters, TransmissionCancelled)
             raise
-        except aiomqtt.MqttError as exc:
-            self.logger.warning("Modbus RPC not delivered (%s); failing the batch", exc)
-            self._fail_waiters(self._queue_mirror.pop_all_commands(), GatewayUnavailable)
-            self._fail_waiters(waiters, GatewayUnavailable)
         except Exception:
             self._fail_waiters(waiters, WbGatewayTransmissionError)
             self._queue_mirror.request_pointer_reset()
             raise
-        return start_index + len(waiters)
 
     def _handle_reply_timeout(self, waiter: WaitResponseItem, slot: int) -> None:
         if waiter.send_item.future.done():

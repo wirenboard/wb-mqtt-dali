@@ -472,7 +472,6 @@ class TestWBDALIDriver(VirtualTimeTestCase):
         params = await self.rpc.wait_for_write()
         self.assertEqual(params["count"], 4)
         self.assertEqual(params["msg"], "1234800056788000")
-        self.assertEqual(driver.batch_start_index, 0)
 
         self.simulate_timeout_response_from_gateway(0, 2)
 

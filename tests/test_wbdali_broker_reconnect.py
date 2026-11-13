@@ -149,45 +149,6 @@ class BrokerLinkTests(VirtualTimeTestCase):
         self._deliver_reply(driver, 0, 0x0200)
         self.assertNotIsInstance(await asyncio.wait_for(send_task, timeout=1.0), WbGatewayTransmissionError)
 
-    async def test_batch_refused_by_the_client_fails_whole_and_the_next_one_resyncs(self):
-        """The client refuses the batch's Modbus RPC while the link still counts as up: the batch
-        and the commands in flight fail at once; the next batch takes the slots after them."""
-        driver = await self._make_driver()
-        in_flight = asyncio.create_task(
-            driver.send_commands(
-                [_MockCommand() for _ in range(2)],
-                BusTrafficSource.WB,
-                FramePriority.USER_ACTION,
-                driver.logger,
-            )
-        )
-        await wait_for_batch_write(self.rpc)
-        self.rpc.error = aiomqtt.MqttError("The client is not currently connected")
-
-        results = await asyncio.wait_for(
-            driver.send_commands(
-                [_MockCommand() for _ in range(3)],
-                BusTrafficSource.WB,
-                FramePriority.USER_ACTION,
-                driver.logger,
-            ),
-            timeout=0.5,
-        )
-
-        self.assertEqual([type(r) for r in results], [GatewayUnavailable] * 3)
-        self.assertEqual(
-            [type(r) for r in await asyncio.wait_for(in_flight, timeout=0.5)], [GatewayUnavailable] * 2
-        )
-        self.assertEqual(0, self.rpc.pending_writes())
-        self.rpc.error = None
-        send_task = asyncio.create_task(
-            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
-        )
-        batch = await self.rpc.wait_for_write()
-        self.assertEqual((batch["function"], batch["address"]), (16, 1410))
-        self._deliver_reply(driver, 5, 0x0200)
-        self.assertNotIsInstance(await asyncio.wait_for(send_task, timeout=1.0), WbGatewayTransmissionError)
-
     async def test_first_batch_after_reconnect_follows_a_queue_reset_from_slot_zero(self):
         """The queue indices advance before the outage. After the reconnect the next command
         is preceded by the pointer reset and written to slot 0."""

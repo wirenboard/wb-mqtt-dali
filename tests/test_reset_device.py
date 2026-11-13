@@ -22,7 +22,7 @@ from wb.mqtt_dali.wbdali import BusDeviceInstanceTypeMapper, FramePriority
 from wb.mqtt_dali.wbdali_utils import MASK
 
 from ._app_controller_helpers import make_bare_gateway, wait_until
-from ._virtual_time import VirtualTimeEventLoopPolicy
+from ._virtual_time import VirtualTimeTestCase
 
 # Prevent file system access inside DaliDeviceBase.__init__
 DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
@@ -76,162 +76,155 @@ def _make_initialized_dali2_device(short=3, random=0xABCDEF, mqtt_id=None, name=
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def event_loop_policy():
-    return VirtualTimeEventLoopPolicy()
+class ResetDeviceSettingsTest(VirtualTimeTestCase):
+    """ResetDeviceSettings re-creates the device after a bus reset."""
 
+    async def test_reset_device_settings_dali_sends_reset_and_reinitializes(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
 
-@pytest.mark.asyncio
-async def test_reset_device_settings_dali_sends_reset_and_reinitializes():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
+        sent_commands = []
 
-    sent_commands = []
+        async def fake_send(_driver, cmd, *_args, **_kwargs):
+            sent_commands.append(cmd)
+            return MagicMock(raw_value=MagicMock(error=False))
 
-    async def fake_send(_driver, cmd, *_args, **_kwargs):
-        sent_commands.append(cmd)
-        return MagicMock(raw_value=MagicMock(error=False))
-
-    initialize_mock = AsyncMock()
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch.object(
-        DaliDevice, "initialize", initialize_mock
-    ), patch("wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()) as publish_mock:
-        await controller._reset_device_settings_task(device)
-
-    # Reset is sent on the bus
-    assert any(isinstance(c, GearReset) for c in sent_commands)
-    # initialize() was called on the new (recreated) device
-    initialize_mock.assert_awaited_once()
-    # MQTT controls were republished
-    controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
-    publish_mock.assert_awaited_once()
-    # The new device replaced the old one in dali_devices (same short address)
-    assert len(controller.dali_devices) == 1
-    new_device = controller.dali_devices[0]
-    assert new_device is not device
-    assert new_device.address.short == device.address.short
-    assert new_device.address.random == device.address.random
-    assert new_device.mqtt_id == device.mqtt_id
-    assert new_device.name == device.name
-    # Virtual devices refresh on both remove and re-init.
-    controller._refresh_group_virtual_devices.assert_awaited()
-    controller._refresh_broadcast_device.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reset_device_settings_dali2_sends_reset_and_reinitializes():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali2_device()
-    controller.dali2_devices = [device]
-    controller._device_registry.add(device)
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
-
-    sent_commands = []
-
-    async def fake_send(_driver, cmd, *_args, **_kwargs):
-        sent_commands.append(cmd)
-        return MagicMock(raw_value=MagicMock(error=False))
-
-    initialize_mock = AsyncMock()
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch.object(
-        Dali2Device, "initialize", initialize_mock
-    ), patch("wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()):
-        await controller._reset_device_settings_task(device)
-
-    assert any(isinstance(c, DeviceReset) for c in sent_commands)
-    initialize_mock.assert_awaited_once()
-    # DALI 2 update path re-indexes the device registry and instance map
-    assert len(controller.dali2_devices) == 1
-    new_device = controller.dali2_devices[0]
-    assert new_device is not device
-    assert controller._device_registry.dali2_device_by_short(device.address.short) is new_device
-    controller._update_dali2_device_instance_map.assert_called_once_with(new_device)
-    # No DALI 1 aggregate refresh for DALI 2 devices
-    controller._refresh_group_virtual_devices.assert_not_called()
-    controller._refresh_broadcast_device.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_reset_device_settings_does_not_force_reload_params():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    # Stub out previous params/schema as if loaded once before
-    device.params = {"name": "old"}
-    device.schema = {"title": "old"}
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
-
-    load_info_mock = AsyncMock()
-    initialize_mock = AsyncMock()
-    with patch(
-        "wb.mqtt_dali.application_controller.send_with_retry",
-        new=AsyncMock(return_value=MagicMock(raw_value=MagicMock(error=False))),
-    ), patch.object(DaliDevice, "initialize", initialize_mock), patch.object(
-        DaliDevice, "load_info", load_info_mock
-    ), patch(
-        "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
-    ):
-        await controller._reset_device_settings_task(device)
-
-    # ResetDeviceSettings runs initialize() but never load_info()
-    initialize_mock.assert_awaited_once()
-    load_info_mock.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reset_device_settings_propagates_reset_failure_without_reinit():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
-
-    initialize_mock = AsyncMock()
-    with patch(
-        "wb.mqtt_dali.application_controller.send_with_retry",
-        new=AsyncMock(side_effect=RuntimeError("bus down")),
-    ), patch.object(DaliDevice, "initialize", initialize_mock), patch(
-        "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
-    ) as publish_mock:
-        with pytest.raises(RuntimeError, match="bus down"):
+        initialize_mock = AsyncMock()
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send
+        ), patch.object(DaliDevice, "initialize", initialize_mock), patch(
+            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
+        ) as publish_mock:
             await controller._reset_device_settings_task(device)
 
-    initialize_mock.assert_not_awaited()
-    publish_mock.assert_not_awaited()
-    controller._device_publisher.remove_device.assert_not_awaited()
-    # Original device still in place
-    assert controller.dali_devices == [device]
+        # Reset is sent on the bus
+        assert any(isinstance(c, GearReset) for c in sent_commands)
+        # initialize() was called on the new (recreated) device
+        initialize_mock.assert_awaited_once()
+        # MQTT controls were republished
+        controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
+        publish_mock.assert_awaited_once()
+        # The new device replaced the old one in dali_devices (same short address)
+        assert len(controller.dali_devices) == 1
+        new_device = controller.dali_devices[0]
+        assert new_device is not device
+        assert new_device.address.short == device.address.short
+        assert new_device.address.random == device.address.random
+        assert new_device.mqtt_id == device.mqtt_id
+        assert new_device.name == device.name
+        # Virtual devices refresh on both remove and re-init.
+        controller._refresh_group_virtual_devices.assert_awaited()
+        controller._refresh_broadcast_device.assert_awaited()
 
+    async def test_reset_device_settings_dali2_sends_reset_and_reinitializes(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali2_device()
+        controller.dali2_devices = [device]
+        controller._device_registry.add(device)
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
 
-@pytest.mark.asyncio
-async def test_reset_device_settings_handles_init_failure_via_retry_scheduler():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
+        sent_commands = []
 
-    with patch(
-        "wb.mqtt_dali.application_controller.send_with_retry",
-        new=AsyncMock(return_value=MagicMock(raw_value=MagicMock(error=False))),
-    ), patch.object(DaliDevice, "initialize", AsyncMock(side_effect=RuntimeError("init failed"))), patch(
-        "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
-    ) as publish_mock:
-        # Init failure is funnelled through the init scheduler retry; the task does not raise.
-        await controller._reset_device_settings_task(device)
+        async def fake_send(_driver, cmd, *_args, **_kwargs):
+            sent_commands.append(cmd)
+            return MagicMock(raw_value=MagicMock(error=False))
 
-    # try_initialize_device publishes in error-mode even when init fails.
-    publish_mock.assert_awaited()
-    controller._device_publisher.remove_device.assert_awaited()
-    assert len(controller.dali_devices) == 1
-    new_device = controller.dali_devices[0]
-    assert new_device is not device
-    assert new_device.address.short == device.address.short
+        initialize_mock = AsyncMock()
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send
+        ), patch.object(Dali2Device, "initialize", initialize_mock), patch(
+            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
+        ):
+            await controller._reset_device_settings_task(device)
+
+        assert any(isinstance(c, DeviceReset) for c in sent_commands)
+        initialize_mock.assert_awaited_once()
+        # DALI 2 update path re-indexes the device registry and instance map
+        assert len(controller.dali2_devices) == 1
+        new_device = controller.dali2_devices[0]
+        assert new_device is not device
+        assert controller._device_registry.dali2_device_by_short(device.address.short) is new_device
+        controller._update_dali2_device_instance_map.assert_called_once_with(new_device)
+        # No DALI 1 aggregate refresh for DALI 2 devices
+        controller._refresh_group_virtual_devices.assert_not_called()
+        controller._refresh_broadcast_device.assert_not_called()
+
+    async def test_reset_device_settings_does_not_force_reload_params(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        # Stub out previous params/schema as if loaded once before
+        device.params = {"name": "old"}
+        device.schema = {"title": "old"}
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
+
+        load_info_mock = AsyncMock()
+        initialize_mock = AsyncMock()
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=MagicMock(raw_value=MagicMock(error=False))),
+        ), patch.object(DaliDevice, "initialize", initialize_mock), patch.object(
+            DaliDevice, "load_info", load_info_mock
+        ), patch(
+            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
+        ):
+            await controller._reset_device_settings_task(device)
+
+        # ResetDeviceSettings runs initialize() but never load_info()
+        initialize_mock.assert_awaited_once()
+        load_info_mock.assert_not_awaited()
+
+    async def test_reset_device_settings_propagates_reset_failure_without_reinit(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
+
+        initialize_mock = AsyncMock()
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(side_effect=RuntimeError("bus down")),
+        ), patch.object(DaliDevice, "initialize", initialize_mock), patch(
+            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
+        ) as publish_mock:
+            with pytest.raises(RuntimeError, match="bus down"):
+                await controller._reset_device_settings_task(device)
+
+        initialize_mock.assert_not_awaited()
+        publish_mock.assert_not_awaited()
+        controller._device_publisher.remove_device.assert_not_awaited()
+        # Original device still in place
+        assert controller.dali_devices == [device]
+
+    async def test_reset_device_settings_handles_init_failure_via_retry_scheduler(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
+
+        with patch(
+            "wb.mqtt_dali.application_controller.send_with_retry",
+            new=AsyncMock(return_value=MagicMock(raw_value=MagicMock(error=False))),
+        ), patch.object(DaliDevice, "initialize", AsyncMock(side_effect=RuntimeError("init failed"))), patch(
+            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
+        ) as publish_mock:
+            # Init failure is funnelled through the init scheduler retry; the task does not raise.
+            await controller._reset_device_settings_task(device)
+
+        # try_initialize_device publishes in error-mode even when init fails.
+        publish_mock.assert_awaited()
+        controller._device_publisher.remove_device.assert_awaited()
+        assert len(controller.dali_devices) == 1
+        new_device = controller.dali_devices[0]
+        assert new_device is not device
+        assert new_device.address.short == device.address.short
 
 
 # ---------------------------------------------------------------------------
@@ -239,133 +232,129 @@ async def test_reset_device_settings_handles_init_failure_via_retry_scheduler():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_reset_device_dali_sends_reset_and_clears_short_address_and_removes():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
+class ResetDeviceTest(VirtualTimeTestCase):
+    """ResetDevice resets the device, clears its short address and drops it."""
 
-    sent: list = []
+    async def test_reset_device_dali_sends_reset_and_clears_short_address_and_removes(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
 
-    async def fake_send(_driver, command, *_args, **_kwargs):
-        sent.append(command)
-        return MagicMock(raw_value=MagicMock(error=False))
+        sent: list = []
 
-    controller._dev.run_sequence.return_value = MASK
+        async def fake_send(_driver, command, *_args, **_kwargs):
+            sent.append(command)
+            return MagicMock(raw_value=MagicMock(error=False))
 
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
-        "wb.mqtt_dali.application_controller.set_short_address_sequence"
-    ) as make_sequence:
-        await controller._reset_device_task(device)
+        controller._dev.run_sequence.return_value = MASK
 
-    assert any(isinstance(c, GearReset) for c in sent)
-    # cleared by the verified addressing sequence, not by a bare SET SHORT ADDRESS
-    make_sequence.assert_called_once()
-    assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
-    controller._dev.run_sequence.assert_awaited_once_with(
-        make_sequence.return_value, FramePriority.USER_ACTION, ANY
-    )
-    # device removed from active configuration
-    assert controller.dali_devices == []
-    assert device.mqtt_id not in controller._devices_by_mqtt_id
-    controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
-    controller._init_scheduler.remove.assert_called_once_with(device.mqtt_id)
-    # virtual aggregated devices refreshed for DALI 1
-    controller._refresh_group_virtual_devices.assert_awaited_once()
-    controller._refresh_broadcast_device.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_reset_device_dali2_sends_reset_and_clears_addr_maps():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali2_device()
-    controller.dali2_devices = [device]
-    controller._device_registry.add(device)
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
-    # populate _dev_inst_map for this short address using a real mapper so that
-    # remove_short_address() actually mutates the underlying dict
-    other_short = (device.address.short + 1) % 64
-    controller._dev_inst_map = BusDeviceInstanceTypeMapper(
-        initial={
-            (device.address.short, 0): 1,
-            (device.address.short, 1): 2,
-            (other_short, 0): 3,
-        }
-    )
-
-    sent: list = []
-
-    async def fake_send(_driver, command, *_args, **_kwargs):
-        sent.append(command)
-        return MagicMock(raw_value=MagicMock(error=False))
-
-    controller._dev.run_sequence.return_value = MASK
-
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
-        "wb.mqtt_dali.application_controller.set_short_address_sequence"
-    ) as make_sequence:
-        await controller._reset_device_task(device)
-
-    assert any(isinstance(c, DeviceReset) for c in sent)
-    make_sequence.assert_called_once()
-    assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
-    # internal maps no longer reference the removed device
-    assert controller.dali2_devices == []
-    assert controller._device_registry.dali2_device_by_short(device.address.short) is None
-    assert (device.address.short, 0) not in controller._dev_inst_map.mapping
-    assert (device.address.short, 1) not in controller._dev_inst_map.mapping
-    # entries for other short addresses are kept untouched
-    assert (other_short, 0) in controller._dev_inst_map.mapping
-    assert device.mqtt_id not in controller._devices_by_mqtt_id
-    controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
-    # No DALI 1 aggregate refresh for DALI 2 devices
-    controller._refresh_group_virtual_devices.assert_not_called()
-    controller._refresh_broadcast_device.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_reset_device_removes_the_device_even_when_the_address_was_not_cleared(caplog):
-    """The device still reports its old short address. Reset already wiped its settings, so the
-    entry would only be a stale copy: it is dropped anyway, with a warning to run a search."""
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
-    controller._dev.run_sequence.return_value = device.address.short
-
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
-        with caplog.at_level(logging.WARNING, logger="test"):
+        with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
+            "wb.mqtt_dali.application_controller.set_short_address_sequence"
+        ) as make_sequence:
             await controller._reset_device_task(device)
 
-    assert controller.dali_devices == []
-    assert device.mqtt_id not in controller._devices_by_mqtt_id
-    controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
-    assert "not cleared" in caplog.text
+        assert any(isinstance(c, GearReset) for c in sent)
+        # cleared by the verified addressing sequence, not by a bare SET SHORT ADDRESS
+        make_sequence.assert_called_once()
+        assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
+        controller._dev.run_sequence.assert_awaited_once_with(
+            make_sequence.return_value, FramePriority.USER_ACTION, ANY
+        )
+        # device removed from active configuration
+        assert controller.dali_devices == []
+        assert device.mqtt_id not in controller._devices_by_mqtt_id
+        controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
+        controller._init_scheduler.remove.assert_called_once_with(device.mqtt_id)
+        # virtual aggregated devices refreshed for DALI 1
+        controller._refresh_group_virtual_devices.assert_awaited_once()
+        controller._refresh_broadcast_device.assert_awaited_once()
 
+    async def test_reset_device_dali2_sends_reset_and_clears_addr_maps(self):
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali2_device()
+        controller.dali2_devices = [device]
+        controller._device_registry.add(device)
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
+        # populate _dev_inst_map for this short address using a real mapper so that
+        # remove_short_address() actually mutates the underlying dict
+        other_short = (device.address.short + 1) % 64
+        controller._dev_inst_map = BusDeviceInstanceTypeMapper(
+            initial={
+                (device.address.short, 0): 1,
+                (device.address.short, 1): 2,
+                (other_short, 0): 3,
+            }
+        )
 
-@pytest.mark.asyncio
-async def test_reset_device_keeps_the_device_when_the_bus_cannot_be_reached():
-    """The gateway stopped taking frames, so nothing reached the device — not even the reset.
-    There is nothing stale to drop, and the entry stays."""
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    device = _make_initialized_dali_device()
-    controller.dali_devices = [device]
-    controller._devices_by_mqtt_id[device.mqtt_id] = device
-    controller._dev.run_sequence.side_effect = RuntimeError("Gateway did not accept")
+        sent: list = []
 
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
-        with pytest.raises(RuntimeError, match="Gateway did not accept"):
+        async def fake_send(_driver, command, *_args, **_kwargs):
+            sent.append(command)
+            return MagicMock(raw_value=MagicMock(error=False))
+
+        controller._dev.run_sequence.return_value = MASK
+
+        with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
+            "wb.mqtt_dali.application_controller.set_short_address_sequence"
+        ) as make_sequence:
             await controller._reset_device_task(device)
 
-    assert controller.dali_devices == [device]
-    assert controller._devices_by_mqtt_id[device.mqtt_id] is device
-    controller._device_publisher.remove_device.assert_not_awaited()
-    controller._init_scheduler.remove.assert_not_called()
+        assert any(isinstance(c, DeviceReset) for c in sent)
+        make_sequence.assert_called_once()
+        assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
+        # internal maps no longer reference the removed device
+        assert controller.dali2_devices == []
+        assert controller._device_registry.dali2_device_by_short(device.address.short) is None
+        assert (device.address.short, 0) not in controller._dev_inst_map.mapping
+        assert (device.address.short, 1) not in controller._dev_inst_map.mapping
+        # entries for other short addresses are kept untouched
+        assert (other_short, 0) in controller._dev_inst_map.mapping
+        assert device.mqtt_id not in controller._devices_by_mqtt_id
+        controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
+        # No DALI 1 aggregate refresh for DALI 2 devices
+        controller._refresh_group_virtual_devices.assert_not_called()
+        controller._refresh_broadcast_device.assert_not_called()
+
+    async def test_reset_device_removes_the_device_even_when_the_address_was_not_cleared(self):
+        """The device still reports its old short address. Reset already wiped its settings, so the
+        entry would only be a stale copy: it is dropped anyway, with a warning to run a search."""
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
+        controller._dev.run_sequence.return_value = device.address.short
+
+        with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
+            with self.assertLogs("test", logging.WARNING) as logs:
+                await controller._reset_device_task(device)
+
+        assert controller.dali_devices == []
+        assert device.mqtt_id not in controller._devices_by_mqtt_id
+        controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
+        assert "not cleared" in "\n".join(logs.output)
+
+    async def test_reset_device_keeps_the_device_when_the_bus_cannot_be_reached(self):
+        """The gateway stopped taking frames, so nothing reached the device — not even the reset.
+        There is nothing stale to drop, and the entry stays."""
+        # pylint: disable=protected-access
+        controller = _make_bare_controller()
+        device = _make_initialized_dali_device()
+        controller.dali_devices = [device]
+        controller._devices_by_mqtt_id[device.mqtt_id] = device
+        controller._dev.run_sequence.side_effect = RuntimeError("Gateway did not accept")
+
+        with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
+            with pytest.raises(RuntimeError, match="Gateway did not accept"):
+                await controller._reset_device_task(device)
+
+        assert controller.dali_devices == [device]
+        assert controller._devices_by_mqtt_id[device.mqtt_id] is device
+        controller._device_publisher.remove_device.assert_not_awaited()
+        controller._init_scheduler.remove.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -382,27 +371,27 @@ def _make_controller_with_state(state):
     return controller
 
 
-@pytest.mark.asyncio
-async def test_reset_device_settings_raises_when_not_ready():
-    # pylint: disable=protected-access
-    controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
-    device = _make_initialized_dali_device()
+class ResetStateCheckTest(VirtualTimeTestCase):
+    """The public reset calls refuse to run before the controller is ready."""
 
-    with pytest.raises(RuntimeError):
-        await controller.reset_device_settings(device)
-    # No bus traffic was attempted
-    controller._dev.send.assert_not_called()
+    async def test_reset_device_settings_raises_when_not_ready(self):
+        # pylint: disable=protected-access
+        controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
+        device = _make_initialized_dali_device()
 
+        with pytest.raises(RuntimeError):
+            await controller.reset_device_settings(device)
+        # No bus traffic was attempted
+        controller._dev.send.assert_not_called()
 
-@pytest.mark.asyncio
-async def test_reset_device_raises_when_not_ready():
-    # pylint: disable=protected-access
-    controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
-    device = _make_initialized_dali_device()
+    async def test_reset_device_raises_when_not_ready(self):
+        # pylint: disable=protected-access
+        controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
+        device = _make_initialized_dali_device()
 
-    with pytest.raises(RuntimeError):
-        await controller.reset_device(device)
-    controller._dev.send.assert_not_called()
+        with pytest.raises(RuntimeError):
+            await controller.reset_device(device)
+        controller._dev.send.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -418,81 +407,71 @@ def _make_bare_gateway_with_device(device, bus):
     return gateway
 
 
-@pytest.mark.asyncio
-async def test_reset_device_settings_rpc_calls_bus_and_returns_empty():
-    # pylint: disable=protected-access
-    bus = SimpleNamespace(reset_device_settings=AsyncMock())
-    device = _make_initialized_dali_device()
-    gateway = _make_bare_gateway_with_device(device, bus)
+class ResetRpcHandlerTest(VirtualTimeTestCase):
+    """Gateway RPC handlers for both reset endpoints."""
 
-    result = await gateway.reset_device_settings_rpc_handler({"deviceId": device.uid})
+    async def test_reset_device_settings_rpc_calls_bus_and_returns_empty(self):
+        # pylint: disable=protected-access
+        bus = SimpleNamespace(reset_device_settings=AsyncMock())
+        device = _make_initialized_dali_device()
+        gateway = _make_bare_gateway_with_device(device, bus)
 
-    bus.reset_device_settings.assert_awaited_once_with(device)
-    gateway._save_configuration.assert_not_called()
-    assert result == {}
+        result = await gateway.reset_device_settings_rpc_handler({"deviceId": device.uid})
 
+        bus.reset_device_settings.assert_awaited_once_with(device)
+        gateway._save_configuration.assert_not_called()
+        assert result == {}
 
-@pytest.mark.asyncio
-async def test_reset_device_rpc_calls_bus_and_saves_configuration():
-    # pylint: disable=protected-access
-    bus = SimpleNamespace(reset_device=AsyncMock())
-    device = _make_initialized_dali_device()
-    gateway = _make_bare_gateway_with_device(device, bus)
+    async def test_reset_device_rpc_calls_bus_and_saves_configuration(self):
+        # pylint: disable=protected-access
+        bus = SimpleNamespace(reset_device=AsyncMock())
+        device = _make_initialized_dali_device()
+        gateway = _make_bare_gateway_with_device(device, bus)
 
-    result = await gateway.reset_device_rpc_handler({"deviceId": device.uid})
+        result = await gateway.reset_device_rpc_handler({"deviceId": device.uid})
 
-    bus.reset_device.assert_awaited_once_with(device)
-    gateway._save_configuration.assert_awaited_once()
-    assert result == {}
+        bus.reset_device.assert_awaited_once_with(device)
+        gateway._save_configuration.assert_awaited_once()
+        assert result == {}
 
+    async def test_reset_device_settings_rpc_missing_device_id_raises(self):
+        gateway = Gateway.__new__(Gateway)
+        with pytest.raises(ValueError, match="deviceId"):
+            await gateway.reset_device_settings_rpc_handler({})
 
-@pytest.mark.asyncio
-async def test_reset_device_settings_rpc_missing_device_id_raises():
-    gateway = Gateway.__new__(Gateway)
-    with pytest.raises(ValueError, match="deviceId"):
-        await gateway.reset_device_settings_rpc_handler({})
+    async def test_reset_device_rpc_missing_device_id_raises(self):
+        gateway = Gateway.__new__(Gateway)
+        with pytest.raises(ValueError, match="deviceId"):
+            await gateway.reset_device_rpc_handler({})
 
+    async def test_reset_device_settings_rpc_unknown_device_raises_not_found(self):
+        # pylint: disable=protected-access
+        gateway = Gateway.__new__(Gateway)
+        gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
 
-@pytest.mark.asyncio
-async def test_reset_device_rpc_missing_device_id_raises():
-    gateway = Gateway.__new__(Gateway)
-    with pytest.raises(ValueError, match="deviceId"):
-        await gateway.reset_device_rpc_handler({})
+        with pytest.raises(ValueError, match="not found"):
+            await gateway.reset_device_settings_rpc_handler({"deviceId": "missing"})
 
+    async def test_reset_device_rpc_unknown_device_raises_not_found(self):
+        # pylint: disable=protected-access
+        gateway = Gateway.__new__(Gateway)
+        gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
+        gateway._save_configuration = AsyncMock()
 
-@pytest.mark.asyncio
-async def test_reset_device_settings_rpc_unknown_device_raises_not_found():
-    # pylint: disable=protected-access
-    gateway = Gateway.__new__(Gateway)
-    gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
+        with pytest.raises(ValueError, match="not found"):
+            await gateway.reset_device_rpc_handler({"deviceId": "missing"})
+        gateway._save_configuration.assert_not_called()
 
-    with pytest.raises(ValueError, match="not found"):
-        await gateway.reset_device_settings_rpc_handler({"deviceId": "missing"})
+    async def test_reset_device_rpc_does_not_save_when_bus_call_fails(self):
+        # pylint: disable=protected-access
+        bus = SimpleNamespace(reset_device=AsyncMock(side_effect=RuntimeError("bus down")))
+        device = _make_initialized_dali_device()
+        gateway = _make_bare_gateway_with_device(device, bus)
 
+        with pytest.raises(RuntimeError, match="bus down"):
+            await gateway.reset_device_rpc_handler({"deviceId": device.uid})
 
-@pytest.mark.asyncio
-async def test_reset_device_rpc_unknown_device_raises_not_found():
-    # pylint: disable=protected-access
-    gateway = Gateway.__new__(Gateway)
-    gateway._get_bus_and_device_by_id = MagicMock(side_effect=ValueError("not found"))
-    gateway._save_configuration = AsyncMock()
-
-    with pytest.raises(ValueError, match="not found"):
-        await gateway.reset_device_rpc_handler({"deviceId": "missing"})
-    gateway._save_configuration.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_reset_device_rpc_does_not_save_when_bus_call_fails():
-    # pylint: disable=protected-access
-    bus = SimpleNamespace(reset_device=AsyncMock(side_effect=RuntimeError("bus down")))
-    device = _make_initialized_dali_device()
-    gateway = _make_bare_gateway_with_device(device, bus)
-
-    with pytest.raises(RuntimeError, match="bus down"):
-        await gateway.reset_device_rpc_handler({"deviceId": device.uid})
-
-    gateway._save_configuration.assert_not_called()
+        gateway._save_configuration.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -500,28 +479,30 @@ async def test_reset_device_rpc_does_not_save_when_bus_call_fails():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_reset_endpoints_registered_on_start():
-    # pylint: disable=protected-access
-    """Verify both reset endpoints are registered with the RPC server while run() starts up."""
-    gateway = make_bare_gateway(command_registry={})
-    gateway.rpc_server = MagicMock()
-    gateway.rpc_server.start = AsyncMock()
-    gateway.rpc_server.stop = AsyncMock()
-    gateway.rpc_server.add_endpoint = AsyncMock()
-    gateway._update_gateways = AsyncMock()
-    expected = {("Editor", "ResetDeviceSettings"), ("Editor", "ResetDevice")}
+class ResetEndpointRegistrationTest(VirtualTimeTestCase):
+    """Both reset endpoints are registered with the RPC server."""
 
-    def registered():
-        return {
-            (call_args.args[0], call_args.args[1])
-            for call_args in gateway.rpc_server.add_endpoint.await_args_list
-        }
+    async def test_reset_endpoints_registered_on_start(self):
+        # pylint: disable=protected-access
+        """Verify both reset endpoints are registered with the RPC server while run() starts up."""
+        gateway = make_bare_gateway(command_registry={})
+        gateway.rpc_server = MagicMock()
+        gateway.rpc_server.start = AsyncMock()
+        gateway.rpc_server.stop = AsyncMock()
+        gateway.rpc_server.add_endpoint = AsyncMock()
+        gateway._update_gateways = AsyncMock()
+        expected = {("Editor", "ResetDeviceSettings"), ("Editor", "ResetDevice")}
 
-    with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", new=AsyncMock()), patch(
-        "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", new=AsyncMock()
-    ):
-        run_task = asyncio.create_task(gateway.run())
-        await asyncio.wait_for(wait_until(lambda: expected <= registered()), timeout=1.0)
-        await gateway.stop()
-        await run_task
+        def registered():
+            return {
+                (call_args.args[0], call_args.args[1])
+                for call_args in gateway.rpc_server.add_endpoint.await_args_list
+            }
+
+        with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", new=AsyncMock()), patch(
+            "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", new=AsyncMock()
+        ):
+            run_task = asyncio.create_task(gateway.run())
+            await asyncio.wait_for(wait_until(lambda: expected <= registered()), timeout=1.0)
+            await gateway.stop()
+            await run_task

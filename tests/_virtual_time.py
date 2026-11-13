@@ -47,17 +47,6 @@ class VirtualTimeEventLoop(asyncio.SelectorEventLoop):
         self._now += seconds
 
 
-class VirtualTimeEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
-    """For pytest-asyncio tests: return it from a module's `event_loop_policy` fixture."""
-
-    def __init__(self, start_s: float = 0.0) -> None:
-        super().__init__()
-        self._start_s = start_s
-
-    def new_event_loop(self) -> asyncio.AbstractEventLoop:
-        return VirtualTimeEventLoop(self._start_s)
-
-
 class VirtualTimeTestCase(unittest.IsolatedAsyncioTestCase):
     """Timeouts and sleeps take no real time; the loop clock starts at 0.
 

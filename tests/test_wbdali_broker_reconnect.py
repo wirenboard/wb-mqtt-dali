@@ -20,6 +20,7 @@ from wb.mqtt_dali.wbdali_error_response import (
 
 from ._broker_link_helpers import Inbox, RecordingClient
 from ._fake_rpc_client import FakePortLoadClient
+from ._port_load_helpers import wait_for_batch_write
 from ._virtual_time import VirtualTimeTestCase
 
 
@@ -108,7 +109,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
 
         await self._fail_message_stream()
 
@@ -133,7 +134,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         await self._fail_message_stream()
         await self._restore_link()
         self.assertFalse(in_flight.done())
@@ -148,45 +149,6 @@ class BrokerLinkTests(VirtualTimeTestCase):
         self._deliver_reply(driver, 0, 0x0200)
         self.assertNotIsInstance(await asyncio.wait_for(send_task, timeout=1.0), WbGatewayTransmissionError)
 
-    async def test_batch_refused_by_the_client_fails_whole_and_the_next_one_resyncs(self):
-        """The client refuses the batch's Modbus RPC while the link still counts as up: the batch
-        and the commands in flight fail at once; the next batch takes the slots after them."""
-        driver = await self._make_driver()
-        in_flight = asyncio.create_task(
-            driver.send_commands(
-                [_MockCommand() for _ in range(2)],
-                BusTrafficSource.WB,
-                FramePriority.USER_ACTION,
-                driver.logger,
-            )
-        )
-        await self.rpc.wait_for_write()
-        self.rpc.error = aiomqtt.MqttError("The client is not currently connected")
-
-        results = await asyncio.wait_for(
-            driver.send_commands(
-                [_MockCommand() for _ in range(3)],
-                BusTrafficSource.WB,
-                FramePriority.USER_ACTION,
-                driver.logger,
-            ),
-            timeout=0.5,
-        )
-
-        self.assertEqual([type(r) for r in results], [GatewayUnavailable] * 3)
-        self.assertEqual(
-            [type(r) for r in await asyncio.wait_for(in_flight, timeout=0.5)], [GatewayUnavailable] * 2
-        )
-        self.assertEqual(0, self.rpc.pending_writes())
-        self.rpc.error = None
-        send_task = asyncio.create_task(
-            driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
-        )
-        batch = await self.rpc.wait_for_write()
-        self.assertEqual((batch["function"], batch["address"]), (16, 1410))
-        self._deliver_reply(driver, 5, 0x0200)
-        self.assertNotIsInstance(await asyncio.wait_for(send_task, timeout=1.0), WbGatewayTransmissionError)
-
     async def test_first_batch_after_reconnect_follows_a_queue_reset_from_slot_zero(self):
         """The queue indices advance before the outage. After the reconnect the next command
         is preceded by the pointer reset and written to slot 0."""
@@ -199,7 +161,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         for slot in range(5):
             self._deliver_reply(driver, slot, 0x0200)
         await pre
@@ -314,7 +276,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
         pre = asyncio.create_task(
             driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         self._deliver_reply(driver, 0, 0x0200)
         await pre
         with patch("wb.mqtt_dali.wbdali.WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S", 10.0):
@@ -355,7 +317,7 @@ class BrokerLinkTests(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         for slot in range(size // 2):
             self._deliver_reply(driver, slot, 0x0200)
         await pre

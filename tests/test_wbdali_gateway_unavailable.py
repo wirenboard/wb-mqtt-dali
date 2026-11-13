@@ -25,6 +25,7 @@ from wb.mqtt_dali.wbdali_error_response import (
 )
 
 from ._fake_rpc_client import FakePortLoadClient
+from ._port_load_helpers import wait_for_batch_write
 from ._virtual_time import VirtualTimeTestCase
 
 
@@ -112,8 +113,8 @@ class TestGatewayUnavailable(VirtualTimeTestCase):
             driver.send(cmd, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
         # Let the queue_sender pick up the item and publish to the gateway,
-        # so it ends up in _waiting_for_responses (pending response).
-        await self.rpc.wait_for_write()
+        # so its write is acknowledged and it waits for a reply.
+        await wait_for_batch_write(self.rpc)
 
         self._deliver_meta_error(driver, b"r")
         await self._wait_gateway_state(driver, True)
@@ -189,7 +190,7 @@ class TestGatewayUnavailable(VirtualTimeTestCase):
         pre_task = asyncio.create_task(
             driver.send_commands(pre_cmds, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         for i in range(pre_count):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
         await pre_task
@@ -205,6 +206,7 @@ class TestGatewayUnavailable(VirtualTimeTestCase):
         )
         await self.rpc.wait_for_write()  # lazy queue reset
         await self.rpc.wait_for_write()  # batch publish
+        await self.rpc.wait_for_write()  # the rest, sent once the first part is acknowledged
         for i in range(size):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
 
@@ -234,7 +236,7 @@ class TestGatewayUnavailable(VirtualTimeTestCase):
                 driver.logger,
             )
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         for i in range(pre_count):
             self._deliver_reply(driver, slot=i, status_word=0x0200)
         await pre_task

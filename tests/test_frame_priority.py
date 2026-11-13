@@ -157,10 +157,27 @@ async def initialized_driver():
     driver = WBDALIDriver(WBDALIConfig(), dispatcher, _TEST_LOGGER, rpc)
     await driver.initialize()
     rpc.clear()
+    await _pass_initial_queue_reset(driver, rpc, dispatcher)
     try:
         yield driver, rpc, dispatcher
     finally:
         await driver.deinitialize()
+
+
+async def _pass_initial_queue_reset(
+    driver: WBDALIDriver, rpc: FakePortLoadClient, dispatcher: MQTTDispatcher
+) -> None:
+    """Fill the whole queue once: the deferred pointer reset goes out and slot 0 is next."""
+    size = driver.config.queue_size
+    commands = [_MockCommand() for _ in range(size)]
+    fut = asyncio.create_task(
+        driver.send_commands(commands, BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger)
+    )
+    await rpc.wait_for_write()
+    await rpc.wait_for_write()
+    for index in range(size):
+        _simulate_reply(dispatcher, driver.config, index)
+    await fut
 
 
 async def _cancel_background_tasks(*tasks: asyncio.Task) -> None:

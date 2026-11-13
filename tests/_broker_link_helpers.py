@@ -38,6 +38,8 @@ class Inbox:
         return self
 
     async def __anext__(self):
+        # aiomqtt yields to the loop before every message.
+        await asyncio.sleep(0)
         item = await self._queue.get()
         if isinstance(item, Exception):
             raise item
@@ -45,7 +47,8 @@ class Inbox:
 
 
 class RecordingClient:
-    """Records every call in order; a publish waits for `ack` when set; `fail()` makes a call raise."""
+    """Records every call in order; a publish waits for `ack` when set; `fail()` makes a call raise.
+    Every port/Load request is acknowledged while `auto_ack_port_load` is set."""
 
     def __init__(self):
         self._client = MagicMock()
@@ -55,6 +58,7 @@ class RecordingClient:
         self.messages = Inbox()
         self.ack: Optional[asyncio.Event] = None
         self.failures: Dict[Tuple[str, str], Exception] = {}
+        self.auto_ack_port_load = True
 
     def fail(self, call: str, topic: str, error: Optional[Exception] = None) -> None:
         self.failures[(call, topic)] = error or aiomqtt.MqttError("The client is not currently connected")
@@ -72,7 +76,7 @@ class RecordingClient:
         self.publishes.append(Publish(topic, payload, qos, retain))
         if self.ack is not None:
             await self.ack.wait()
-        if topic.startswith(PORT_LOAD_TOPIC_PREFIX) and payload is not None:
+        if self.auto_ack_port_load and topic.startswith(PORT_LOAD_TOPIC_PREFIX) and payload is not None:
             # wb-mqtt-serial acknowledges every port/Load request.
             ack = json.dumps({"id": json.loads(payload)["id"], "result": {"response": ""}})
             self.messages.deliver(aiomqtt.Message(f"{topic}/reply", ack, 0, False, 0, None))

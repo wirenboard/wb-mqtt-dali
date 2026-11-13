@@ -231,6 +231,8 @@ Device types (DT), определённые частными стандарта�
 | --- | --- |
 | `no response` | устройство не ответило на запрос |
 | `no response from gateway` | шлюз не прислал ответ на команду (таймаут) |
+| `gateway write failed` | wb-mqtt-serial не смог записать команду в шлюз |
+| `gateway write skipped: serial port busy` | порт занят, команда не записана в шлюз |
 | `gateway failed to send the frame` | шлюз не смог отправить пакет на шину |
 | `no power on bus` | на шине нет питания |
 | `gateway overheated` | перегрев шлюза — передача временно заблокирована |

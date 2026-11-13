@@ -1,3 +1,15 @@
+wb-mqtt-dali (1.41.0) stable; urgency=medium
+
+  * Device parameters show correct values after a controller reboot or a wb-mqtt-serial restart
+  * Commands on a busy bus get their answer instead of "no response from gateway"
+  * Device search finds every device type (and its controls) on a noisy bus
+  * A cancelled operation stops sending its commands to the bus
+  * The journal stays free of "There are N pending publish calls" warnings at startup
+  * When the serial port is busy or wb-mqtt-serial fails, SendCommand and the bus monitor say
+    "gateway write skipped: serial port busy" / "gateway write failed"
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 15:23:08 +0500
+
 wb-mqtt-dali (1.40.2) stable; urgency=medium
 
   * Test suite rework, no changes in behaviour

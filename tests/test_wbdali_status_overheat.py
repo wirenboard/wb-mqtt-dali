@@ -17,6 +17,7 @@ from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_error_response import Overheat
 
 from ._fake_rpc_client import FakePortLoadClient
+from ._port_load_helpers import wait_for_batch_write
 
 # pylint: disable=duplicate-code
 
@@ -62,7 +63,7 @@ class TestWBDALIStatusOverheat(unittest.IsolatedAsyncioTestCase):
         fut = asyncio.create_task(
             driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
         )
-        params = await rpc.wait_for_write()
+        params = await wait_for_batch_write(rpc)
         self.assertEqual(params["count"], 2)
 
         message = aiomqtt.Message(

@@ -36,8 +36,8 @@ class _ClockAdvancingSelector(selectors.BaseSelector):
 
 
 class VirtualTimeEventLoop(asyncio.SelectorEventLoop):
-    def __init__(self) -> None:
-        self._now = 0.0
+    def __init__(self, start_s: float = 0.0) -> None:
+        self._now = start_s
         super().__init__(_ClockAdvancingSelector(self._advance))
 
     def time(self) -> float:
@@ -50,8 +50,12 @@ class VirtualTimeEventLoop(asyncio.SelectorEventLoop):
 class VirtualTimeEventLoopPolicy(asyncio.DefaultEventLoopPolicy):
     """For pytest-asyncio tests: return it from a module's `event_loop_policy` fixture."""
 
+    def __init__(self, start_s: float = 0.0) -> None:
+        super().__init__()
+        self._start_s = start_s
+
     def new_event_loop(self) -> asyncio.AbstractEventLoop:
-        return VirtualTimeEventLoop()
+        return VirtualTimeEventLoop(self._start_s)
 
 
 class VirtualTimeTestCase(unittest.IsolatedAsyncioTestCase):

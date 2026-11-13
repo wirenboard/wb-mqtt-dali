@@ -5,6 +5,7 @@ seed, what a rebuild carries over, how a group takes its state from a member —
 reconfirm the read schedules (``docs/startup_reconfirm_fade_plan.md``).
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from timeit import default_timer
@@ -538,7 +539,7 @@ async def test_initial_read_counts_as_the_first_poll_of_each_control():
         device, _make_driver(), publisher, DeviceInitScheduler(), MagicMock(), _LOGGER, 0.0
     )
 
-    assert device.get_mqtt_control("illuminance").time_until_next_poll(default_timer()) > 0
+    assert device.get_mqtt_control("illuminance").time_until_next_poll(asyncio.get_running_loop().time()) > 0
 
 
 @pytest.mark.asyncio
@@ -1126,7 +1127,7 @@ async def _initialize(device, driver):
     await try_initialize_device(
         device, driver, _make_publisher(), DeviceInitScheduler(), MagicMock(), _LOGGER, 0.0
     )
-    return default_timer()
+    return asyncio.get_running_loop().time()
 
 
 def _level_device():

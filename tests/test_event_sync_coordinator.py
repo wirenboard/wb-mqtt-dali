@@ -8,11 +8,13 @@ exercised; the DT8 colour handler is initialized through its public ``read_manda
 with a fake driver (no private attribute access). A fake clock drives settle timing.
 """
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 from dali.address import DeviceShort, GearBroadcast, GearGroup, GearShort
 from dali.device import occupancy
 from dali.frame import BackwardFrame
@@ -83,12 +85,26 @@ from wb.mqtt_dali.virtual_devices import (
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
+from ._virtual_time import VirtualTimeEventLoopPolicy
+
 NOW = 1000.0
 RESYNC_INTERVAL = 300.0
 
 # Avoid filesystem reads in DaliDeviceBase.__init__.
 # pylint: disable-next=protected-access
 DaliDeviceBase._common_schema = {"title": "test-schema"}
+
+
+@pytest.fixture(scope="module")
+def event_loop_policy():
+    return VirtualTimeEventLoopPolicy(start_s=NOW)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def time_stands_at_now():
+    """The expectations below are exact against NOW: no test may let the virtual clock move."""
+    yield
+    assert asyncio.get_running_loop().time() == NOW, "the virtual clock moved during the test"
 
 
 class _SceneStub:  # pylint: disable=too-few-public-methods
@@ -182,7 +198,6 @@ def _coordinator(devices, group_devices=None):
         group_devices_by_number=group_devices if group_devices is not None else {},
         logger=MagicMock(),
         settle_clock=SettleClock(),
-        now_fn=lambda: NOW,
     )
     return coordinator, publisher
 
@@ -1088,7 +1103,6 @@ async def test_dali2_event_reaches_the_topic_of_the_control_that_took_it():
         group_devices_by_number={1: SimpleNamespace(mqtt_id="group-1")},
         logger=MagicMock(),
         settle_clock=SettleClock(),
-        now_fn=lambda: NOW,
     )
     mqtt_dispatcher.publish.reset_mock()
 

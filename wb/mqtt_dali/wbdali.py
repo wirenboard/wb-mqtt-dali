@@ -1310,7 +1310,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 waiter.send_item.command.frame, response, waiter.send_item.source, waiter.sequence_id
             )
 
-    # pylint: disable-next=too-many-arguments, too-many-positional-arguments, too-many-locals
+    # pylint: disable-next=too-many-arguments, too-many-positional-arguments, too-many-locals, too-many-branches
     async def _send_commands_internal(
         self,
         commands: Sequence[Command],

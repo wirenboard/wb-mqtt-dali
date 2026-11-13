@@ -127,6 +127,15 @@ class Run:  # pylint: disable=too-many-instance-attributes
         self.dali_config = dali_config
         self.devices = expected_devices(dali_config, profile.gateway_device_id)
 
+    async def run_cold_starts(self) -> bool:
+        results = []
+        for index in range(self.args.iterations):
+            result = await self.cold_start(f"{self.args.scenario.value} {index + 1}/{self.args.iterations}")
+            results.append(result)
+            print_iteration(result)
+        print_summary(results)
+        return not any(r.failed for r in results)
+
     async def cold_start(self, label: str) -> IterationResult:
         try:
             t0, full_start_at, services = await self._start()
@@ -268,16 +277,6 @@ def print_summary(results: list[IterationResult]) -> None:
         )
 
 
-async def run_cold_starts(run: Run) -> bool:
-    results = []
-    for index in range(run.args.iterations):
-        result = await run.cold_start(f"{run.args.scenario.value} {index + 1}/{run.args.iterations}")
-        results.append(result)
-        print_iteration(result)
-    print_summary(results)
-    return not any(r.failed for r in results)
-
-
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Large-installation e2e test on an emulated RS-485 port")
     parser.add_argument(
@@ -319,7 +318,7 @@ async def main(argv: list[str]) -> int:
             await emulator.start()
             install_stand_files(dali_config, serial_config)
             flood = _rpc_flood(args, profile, dispatcher, serial_config["ports"][0])
-            ok = await run_cold_starts(Run(args, profile, dispatcher, emulator, dali_config, flood))
+            ok = await Run(args, profile, dispatcher, emulator, dali_config, flood).run_cold_starts()
         finally:
             await _teardown(args.keep_stand, backup, emulator, were_active)
             dispatcher_task.cancel()

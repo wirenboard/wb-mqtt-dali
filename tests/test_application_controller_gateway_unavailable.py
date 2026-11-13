@@ -15,8 +15,6 @@ import logging
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from wb.mqtt_dali.application_controller import (
     CommissioningState,
     CommissioningStatus,
@@ -26,87 +24,78 @@ from wb.mqtt_dali.send_command import build_command_registry, parse_expression
 from wb.mqtt_dali.wbdali_error_response import GatewayUnavailable
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
-from ._virtual_time import VirtualTimeEventLoopPolicy
+from ._virtual_time import VirtualTimeTestCase
 
 
-@pytest.fixture(scope="module")
-def registry():
-    return build_command_registry()
+class GatewayUnavailableTests(VirtualTimeTestCase):
+    def setUp(self):
+        self.registry = build_command_registry()
 
+    async def test_app_controller_task_fails_on_r(self):
+        """A SEND_COMMAND_BATCH dispatched while the driver is gateway-unavailable
+        surfaces SendCommandStatus.ERROR with error='gateway unavailable'."""
+        # pylint: disable=protected-access
+        controller = make_loop_controller()
 
-@pytest.fixture(scope="module")
-def event_loop_policy():
-    return VirtualTimeEventLoopPolicy()
+        async def fake_send(_driver, _cmd, *_a, **_kw):
+            return GatewayUnavailable()
 
+        commands = [parse_expression("Off(A0)", self.registry), parse_expression("Off(A1)", self.registry)]
 
-@pytest.mark.asyncio
-async def test_app_controller_task_fails_on_r(registry):  # pylint: disable=redefined-outer-name
-    """A SEND_COMMAND_BATCH dispatched while the driver is gateway-unavailable
-    surfaces SendCommandStatus.ERROR with error='gateway unavailable'."""
-    # pylint: disable=protected-access
-    controller = make_loop_controller()
+        with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send):
+            loop_task = asyncio.create_task(controller._polling_loop())
+            try:
+                result = await controller.send_command_batch(commands)
+            finally:
+                await stop_loop(controller, loop_task)
 
-    async def fake_send(_driver, _cmd, *_a, **_kw):
-        return GatewayUnavailable()
+        # The handler breaks on the first transmission error so the batch stops
+        # at the first command rather than producing multiple identical errors.
+        assert len(result) == 1
+        assert result[0].status is SendCommandStatus.ERROR
+        assert result[0].error == "gateway unavailable"
 
-    commands = [parse_expression("Off(A0)", registry), parse_expression("Off(A1)", registry)]
+    async def test_commissioning_fails_on_r(self):
+        """Commissioning that hits `gateway unavailable` reports FAILED through the
+        commissioning state callback."""
+        # pylint: disable=protected-access
+        # Build a minimal controller with just enough state for _commissioning_task to run.
+        controller = make_loop_controller()
+        controller.dali_devices = []
+        controller.dali2_devices = []
+        controller._gtin_db = MagicMock()
+        controller._one_shot_tasks = MagicMock()
+        controller._one_shot_tasks.add = MagicMock()
+        controller._commissioning_state = CommissioningState()
+        states: List[CommissioningState] = []
 
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send):
-        loop_task = asyncio.create_task(controller._polling_loop())
-        try:
-            result = await controller.send_command_batch(commands)
-        finally:
-            await stop_loop(controller, loop_task)
+        def _cb(state):
+            states.append(state)
 
-    # The handler breaks on the first transmission error so the batch stops
-    # at the first command rather than producing multiple identical errors.
-    assert len(result) == 1
-    assert result[0].status is SendCommandStatus.ERROR
-    assert result[0].error == "gateway unavailable"
+        controller._commissioning_state_cb = _cb
+        controller.logger = logging.getLogger("test.commissioning")
 
+        async def fake_send(_driver, _cmd, *_a, **_kw):
+            return GatewayUnavailable()
 
-@pytest.mark.asyncio
-async def test_commissioning_fails_on_r():
-    """Commissioning that hits `gateway unavailable` reports FAILED through the
-    commissioning state callback."""
-    # pylint: disable=protected-access
-    # Build a minimal controller with just enough state for _commissioning_task to run.
-    controller = make_loop_controller()
-    controller.dali_devices = []
-    controller.dali2_devices = []
-    controller._gtin_db = MagicMock()
-    controller._one_shot_tasks = MagicMock()
-    controller._one_shot_tasks.add = MagicMock()
-    controller._commissioning_state = CommissioningState()
-    states: List[CommissioningState] = []
+        # Commissioning calls a few helpers and the Commissioning class; the very
+        # first send (StartQuiescentMode) returning GatewayUnavailable is enough to
+        # propagate via the existing error path. We make smart_extend raise a clear
+        # error to match the production code path.
+        with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
+            "wb.mqtt_dali.application_controller.Commissioning"
+        ) as commissioning_cls:
+            commissioning_obj = MagicMock()
+            commissioning_obj.smart_extend = AsyncMock(side_effect=RuntimeError("gateway unavailable"))
+            commissioning_cls.return_value = commissioning_obj
 
-    def _cb(state):
-        states.append(state)
+            try:
+                await controller._commissioning_task()
+            except RuntimeError:
+                pass
 
-    controller._commissioning_state_cb = _cb
-    controller.logger = logging.getLogger("test.commissioning")
-
-    async def fake_send(_driver, _cmd, *_a, **_kw):
-        return GatewayUnavailable()
-
-    # Commissioning calls a few helpers and the Commissioning class; the very
-    # first send (StartQuiescentMode) returning GatewayUnavailable is enough to
-    # propagate via the existing error path. We make smart_extend raise a clear
-    # error to match the production code path.
-    with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
-        "wb.mqtt_dali.application_controller.Commissioning"
-    ) as commissioning_cls:
-        commissioning_obj = MagicMock()
-        commissioning_obj.smart_extend = AsyncMock(side_effect=RuntimeError("gateway unavailable"))
-        commissioning_cls.return_value = commissioning_obj
-
-        try:
-            await controller._commissioning_task()
-        except RuntimeError:
-            pass
-
-    # The final published state must be FAILED with the gateway unavailable error.
-    assert states, "commissioning state callback was not invoked"
-    final_state = states[-1]
-    assert final_state.status is CommissioningStatus.FAILED
-    assert "gateway unavailable" in (final_state.error or "")
+        # The final published state must be FAILED with the gateway unavailable error.
+        assert states, "commissioning state callback was not invoked"
+        final_state = states[-1]
+        assert final_state.status is CommissioningStatus.FAILED
+        assert "gateway unavailable" in (final_state.error or "")

@@ -1,7 +1,13 @@
 import asyncio
+import re
 import time
+from pathlib import Path
 
 from ._virtual_time import VirtualTimeTestCase
+
+PACKAGE_DIR = Path(__file__).resolve().parent.parent / "wb" / "mqtt_dali"
+# Clocks other than the event loop's, which VirtualTimeEventLoop cannot move.
+OTHER_CLOCK = re.compile(r"\b(default_timer|monotonic|perf_counter|time\.time)\b")
 
 
 class TestVirtualTime(VirtualTimeTestCase):
@@ -44,3 +50,13 @@ class TestVirtualTime(VirtualTimeTestCase):
         await asyncio.gather(ping_pong(), ping_pong())
 
         self.assertEqual(asyncio.get_running_loop().time(), 0)
+
+    def test_service_reads_time_only_from_the_event_loop(self):
+        """No module of the service reads a clock other than the event loop's."""
+        offenders = [
+            f"{path.relative_to(PACKAGE_DIR)}:{number}: {line.strip()}"
+            for path in sorted(PACKAGE_DIR.rglob("*.py"))
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+            if OTHER_CLOCK.search(line)
+        ]
+        self.assertEqual(offenders, [])

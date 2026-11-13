@@ -43,6 +43,13 @@ class VirtualTimeEventLoop(asyncio.SelectorEventLoop):
     def time(self) -> float:
         return self._now
 
+    def set_debug(self, enabled: bool) -> None:
+        """Debug mode stays off."""
+        del enabled
+        super().set_debug(False)
+
+    # --- Private ---
+
     def _advance(self, seconds: float) -> None:
         self._now += seconds
 

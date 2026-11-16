@@ -3,7 +3,6 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from timeit import default_timer
 from typing import Any, Callable, Coroutine, Mapping, Optional, Type, Union
 
 import aiomqtt
@@ -524,7 +523,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             for group_device in self._group_devices_by_number.values():
                 await self._publish_virtual_device(group_device)
 
-            current_time = default_timer()
+            current_time = asyncio.get_running_loop().time()
             for device in self.dali_devices + self.dali2_devices:
                 self._devices_by_mqtt_id[device.mqtt_id] = device
                 device.set_logger(self.logger)
@@ -792,7 +791,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self, device: Union[DaliDevice, Dali2Device], force_reload: bool
     ) -> None:
         if not device.is_initialized:
-            await self._do_init_device(device.mqtt_id, default_timer())
+            await self._do_init_device(device.mqtt_id, asyncio.get_running_loop().time())
         await device.load_info(self._dev, force_reload)
         if isinstance(device, DaliDevice):
             # Group membership turns up on a settings read: the gear may have been silent about
@@ -983,7 +982,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_broadcast_device()
 
     async def _commissioning_task(self):
-        start_time = default_timer()
+        start_time = asyncio.get_running_loop().time()
 
         try:
             await asyncio.sleep(1)
@@ -1001,7 +1000,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 self._commissioning_state.mark_dali2()
                 obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], True, _cb)
                 res_dali2 = await obj.smart_extend()
-                self.logger.debug("Commissioning completed in %.2f seconds", default_timer() - start_time)
+                self.logger.debug(
+                    "Commissioning completed in %.2f seconds", asyncio.get_running_loop().time() - start_time
+                )
 
                 await self._read_devices_info(res_dali, res_dali2)
             finally:
@@ -1275,7 +1276,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         device.set_logger(self.logger)
 
     async def _try_init_new_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        current_time = default_timer()
+        current_time = asyncio.get_running_loop().time()
         self._devices_by_mqtt_id[device.mqtt_id] = device
         self._init_scheduler.schedule(device.mqtt_id, current_time)
         await self._do_init_device(device.mqtt_id, current_time)
@@ -1421,21 +1422,22 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,
     ) -> None:
-        next_poll_time = default_timer()
+        loop = asyncio.get_running_loop()
+        next_poll_time = loop.time()
         item = None
         while not self._stop_requested:
             try:
                 if item is None:
-                    queue_timeout = max(0.001, next_poll_time - default_timer())
+                    queue_timeout = max(0.001, next_poll_time - loop.time())
                     item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
             except asyncio.TimeoutError:
                 pass
             # Polled outside the except block: an error from the poll step must not chain the timeout.
             if item is None:
                 if self._in_quiescent_mode:
-                    next_poll_time = default_timer() + 1.0
+                    next_poll_time = loop.time() + 1.0
                     continue
-                next_poll_time = default_timer() + await self._poll_step(default_timer())
+                next_poll_time = loop.time() + await self._poll_step(loop.time())
                 continue
 
             if self._in_quiescent_mode:
@@ -1524,12 +1526,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             # Slip a poll into the gap between bursts of tasks: if the queue
             # is now empty and the polling interval has elapsed, run a poll
             # step immediately instead of waiting for the queue_timeout to fire.
-            if (
-                not self._in_quiescent_mode
-                and self._tasks_queue.empty()
-                and next_poll_time <= default_timer()
-            ):
-                next_poll_time = default_timer() + await self._poll_step(default_timer())
+            if not self._in_quiescent_mode and self._tasks_queue.empty() and next_poll_time <= loop.time():
+                next_poll_time = loop.time() + await self._poll_step(loop.time())
 
     def _report_polling_failure(self, task: asyncio.Task) -> None:
         error = None if task.cancelled() else task.exception()

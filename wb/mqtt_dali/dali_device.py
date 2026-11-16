@@ -2,7 +2,6 @@ import asyncio
 import logging
 import sys
 from enum import IntEnum
-from timeit import default_timer
 from typing import Optional
 
 from dali.address import Address, GearShort
@@ -418,7 +417,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         self, driver: WBDALIDriver, mqtt_controls: list[MqttControlBase]
     ) -> None:
         """Read current state into the controls just built, before they are installed; never fatal."""
-        now = default_timer()
+        now = asyncio.get_running_loop().time()
         address = self._compat.getAddress(self.address.short)
         events: list[BusEvent] = []
 
@@ -459,7 +458,9 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         """
         if self._fade_parameter.fade_time == 0:
             return None
-        return default_timer() + SettleClock().settle_for(SettleBasis.FADE, self._fade_parameter.fade_time)
+        return asyncio.get_running_loop().time() + SettleClock().settle_for(
+            SettleBasis.FADE, self._fade_parameter.fade_time
+        )
 
     def _scene_level_source(self) -> Optional[SceneLevelSource]:
         # DT8 keeps scene levels on its colour scenes; other gear on ScenesParam.

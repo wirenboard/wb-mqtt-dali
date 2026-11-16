@@ -9,8 +9,7 @@ the devices -- their controls and their type handlers.
 
 import asyncio
 import logging
-from timeit import default_timer
-from typing import Callable, Optional, Union
+from typing import Optional, Union
 
 from dali.command import Command
 from dali.gear.colour import (
@@ -102,14 +101,12 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
         group_devices_by_number: dict[int, GroupVirtualDevice],
         logger: logging.Logger,
         settle_clock: Optional[SettleClock] = None,
-        now_fn: Optional[Callable[[], float]] = None,
     ) -> None:
         self._publisher = publisher
         self._registry = device_registry
         self._group_devices = group_devices_by_number
         self._logger = logger
         self._settle = settle_clock if settle_clock is not None else SettleClock()
-        self._now = now_fn if now_fn is not None else default_timer
         self._dtr = DtrSnapshot()
         self._colour = ColourSequenceTracker()
 
@@ -209,7 +206,7 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
 
     def _settle_at(self, basis: SettleBasis, device: DaliDevice) -> float:
         """When the bus should have reached the state the observed command commands."""
-        return self._now() + self._settle.settle_for(basis, device.fade_param.fade_time)
+        return asyncio.get_running_loop().time() + self._settle.settle_for(basis, device.fade_param.fade_time)
 
     def _resolve(self, command: Command) -> list[DaliDevice]:
         return self._registry.resolve(command.destination)

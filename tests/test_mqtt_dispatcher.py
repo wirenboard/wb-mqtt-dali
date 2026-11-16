@@ -2,13 +2,10 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import aiomqtt
-import pytest
 
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 
-from ._virtual_time import VirtualTimeEventLoopPolicy
-
-# pylint: disable=redefined-outer-name
+from ._virtual_time import VirtualTimeTestCase
 
 
 class EmptyAsyncIterator:
@@ -37,200 +34,168 @@ class MockClient:
         pass
 
 
-@pytest.fixture
-def mock_client():
-    return MockClient()
+class TestMQTTDispatcher(VirtualTimeTestCase):
+    """Each test gets a fresh dispatcher over a mock client."""
 
+    def setUp(self):
+        self.mock_client = MockClient()
+        self.dispatcher = MQTTDispatcher(self.mock_client)
 
-@pytest.fixture
-def dispatcher(mock_client):
-    return MQTTDispatcher(mock_client)
+    async def test_subscribe_adds_topic(self):
+        callback = AsyncMock()
 
+        await self.dispatcher.subscribe("test/topic", callback)
 
-@pytest.fixture(scope="module")
-def event_loop_policy():
-    return VirtualTimeEventLoopPolicy()
+        assert "test/topic" in self.dispatcher._subscriptions  # pylint: disable=W0212
+        assert callback in self.dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
+        self.mock_client.subscribe.assert_called_once_with("test/topic")
 
+    async def test_subscribe_multiple_callbacks(self):
+        callback1 = AsyncMock()
+        callback2 = AsyncMock()
 
-@pytest.mark.asyncio
-async def test_subscribe_adds_topic(dispatcher, mock_client):
-    callback = AsyncMock()
+        await self.dispatcher.subscribe("test/topic", callback1)
+        await self.dispatcher.subscribe("test/topic", callback2)
 
-    await dispatcher.subscribe("test/topic", callback)
+        self.mock_client.subscribe.assert_called_once_with("test/topic")
 
-    assert "test/topic" in dispatcher._subscriptions  # pylint: disable=W0212
-    assert callback in dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
-    mock_client.subscribe.assert_called_once_with("test/topic")
+        assert callback1 in self.dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
+        assert callback2 in self.dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
 
+    async def test_unsubscribe_specific_callback(self):
+        callback1 = AsyncMock()
+        callback2 = AsyncMock()
 
-@pytest.mark.asyncio
-async def test_subscribe_multiple_callbacks(dispatcher, mock_client):
-    callback1 = AsyncMock()
-    callback2 = AsyncMock()
+        await self.dispatcher.subscribe("test/topic", callback1)
+        await self.dispatcher.subscribe("test/topic", callback2)
 
-    await dispatcher.subscribe("test/topic", callback1)
-    await dispatcher.subscribe("test/topic", callback2)
+        await self.dispatcher.unsubscribe("test/topic", callback1)
 
-    mock_client.subscribe.assert_called_once_with("test/topic")
+        assert callback1 not in self.dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
+        assert callback2 in self.dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
 
-    assert callback1 in dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
-    assert callback2 in dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
+        self.mock_client.unsubscribe.assert_not_called()
 
+    async def test_unsubscribe_all_callbacks(self):
+        callback1 = AsyncMock()
+        callback2 = AsyncMock()
 
-@pytest.mark.asyncio
-async def test_unsubscribe_specific_callback(dispatcher, mock_client):
-    callback1 = AsyncMock()
-    callback2 = AsyncMock()
+        await self.dispatcher.subscribe("test/topic", callback1)
+        await self.dispatcher.subscribe("test/topic", callback2)
 
-    await dispatcher.subscribe("test/topic", callback1)
-    await dispatcher.subscribe("test/topic", callback2)
+        await self.dispatcher.unsubscribe("test/topic")
 
-    await dispatcher.unsubscribe("test/topic", callback1)
+        assert "test/topic" not in self.dispatcher._subscriptions  # pylint: disable=W0212
+        self.mock_client.unsubscribe.assert_called_once_with("test/topic")
 
-    assert callback1 not in dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
-    assert callback2 in dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
+    async def test_clear_subscriptions(self):
+        callback1 = AsyncMock()
+        callback2 = AsyncMock()
 
-    mock_client.unsubscribe.assert_not_called()
+        await self.dispatcher.subscribe("topic1", callback1)
+        await self.dispatcher.subscribe("topic2", callback2)
 
+        await self.dispatcher.clear_subscriptions()
 
-@pytest.mark.asyncio
-async def test_unsubscribe_all_callbacks(dispatcher, mock_client):
-    callback1 = AsyncMock()
-    callback2 = AsyncMock()
+        assert len(self.dispatcher._subscriptions) == 0  # pylint: disable=W0212
+        assert self.mock_client.unsubscribe.call_count == 2
 
-    await dispatcher.subscribe("test/topic", callback1)
-    await dispatcher.subscribe("test/topic", callback2)
+    async def test_dispatch_message(self):
+        callback = MagicMock()
+        message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
 
-    await dispatcher.unsubscribe("test/topic")
+        await self.dispatcher.subscribe("test/topic", callback)
+        self.dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
-    assert "test/topic" not in dispatcher._subscriptions  # pylint: disable=W0212
-    mock_client.unsubscribe.assert_called_once_with("test/topic")
+        callback.assert_called_once_with(message)
 
+    async def test_dispatch_message_multiple_callbacks(self):
+        callback1 = MagicMock()
+        callback2 = MagicMock()
+        message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
 
-@pytest.mark.asyncio
-async def test_clear_subscriptions(dispatcher, mock_client):
-    callback1 = AsyncMock()
-    callback2 = AsyncMock()
+        await self.dispatcher.subscribe("test/topic", callback1)
+        await self.dispatcher.subscribe("test/topic", callback2)
+        self.dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
-    await dispatcher.subscribe("topic1", callback1)
-    await dispatcher.subscribe("topic2", callback2)
+        callback1.assert_called_once_with(message)
+        callback2.assert_called_once_with(message)
 
-    await dispatcher.clear_subscriptions()
+    async def test_dispatch_message_no_handlers(self):
+        message = aiomqtt.Message("unknown/topic", b"test payload", 0, False, 0, None)
 
-    assert len(dispatcher._subscriptions) == 0  # pylint: disable=W0212
-    assert mock_client.unsubscribe.call_count == 2
+        self.dispatcher._dispatch_message(message)  # pylint: disable=W0212
 
+    async def test_run_dispatcher(self):
+        fut = asyncio.Future()
 
-@pytest.mark.asyncio
-async def test_dispatch_message(dispatcher):
-    callback = MagicMock()
-    message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
+        original_message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
+        incoming_message = None
 
-    await dispatcher.subscribe("test/topic", callback)
-    dispatcher._dispatch_message(message)  # pylint: disable=W0212
+        def callback(message):
+            nonlocal incoming_message
+            incoming_message = message
+            fut.set_result(None)
 
-    callback.assert_called_once_with(message)
+        await self.dispatcher.subscribe("test/topic", callback)
 
+        async def message_generator():
+            yield original_message
 
-@pytest.mark.asyncio
-async def test_dispatch_message_multiple_callbacks(dispatcher):
-    callback1 = MagicMock()
-    callback2 = MagicMock()
-    message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
+        self.mock_client.set_message_generator(message_generator())
 
-    await dispatcher.subscribe("test/topic", callback1)
-    await dispatcher.subscribe("test/topic", callback2)
-    dispatcher._dispatch_message(message)  # pylint: disable=W0212
+        asyncio.create_task(self.dispatcher.run())
 
-    callback1.assert_called_once_with(message)
-    callback2.assert_called_once_with(message)
+        await asyncio.sleep(0.1)
 
+        await asyncio.wait_for(fut, timeout=1.0)
+        assert incoming_message == original_message
 
-@pytest.mark.asyncio
-async def test_dispatch_message_no_handlers(dispatcher):
-    message = aiomqtt.Message("unknown/topic", b"test payload", 0, False, 0, None)
+    async def test_get_subscribed_topics(self):
+        callback1 = MagicMock()
+        callback2 = MagicMock()
 
-    dispatcher._dispatch_message(message)  # pylint: disable=W0212
+        await self.dispatcher.subscribe("topic1", callback1)
+        await self.dispatcher.subscribe("topic2", callback2)
 
+        topics = self.dispatcher.get_subscribed_topics()
 
-@pytest.mark.asyncio
-async def test_run_dispatcher(dispatcher, mock_client):
-    fut = asyncio.Future()
+        assert topics == {"topic1", "topic2"}
 
-    original_message = aiomqtt.Message("test/topic", b"test payload", 0, False, 0, None)
-    incoming_message = None
+    async def test_is_running(self):
+        assert not self.dispatcher.is_running
 
-    def callback(message):
-        nonlocal incoming_message
-        incoming_message = message
-        fut.set_result(None)
+        async def message_generator():
+            while True:
+                await asyncio.sleep(0.1)
+                yield aiomqtt.Message("test/topic", b"test", 0, False, 0, None)
 
-    await dispatcher.subscribe("test/topic", callback)
+        self.mock_client.set_message_generator(message_generator())
 
-    async def message_generator():
-        yield original_message
+        task = asyncio.create_task(self.dispatcher.run())
 
-    mock_client.set_message_generator(message_generator())
+        await asyncio.sleep(0.1)
 
-    asyncio.create_task(dispatcher.run())
+        assert self.dispatcher.is_running
 
-    await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
-    await asyncio.wait_for(fut, timeout=1.0)
-    assert incoming_message == original_message
+        assert not self.dispatcher.is_running
 
+    async def test_concurrent_subscribe_unsubscribe(self):
+        callbacks = [AsyncMock() for _ in range(10)]
 
-@pytest.mark.asyncio
-async def test_get_subscribed_topics(dispatcher):
-    callback1 = MagicMock()
-    callback2 = MagicMock()
+        await asyncio.gather(*[self.dispatcher.subscribe(f"topic{i}", callbacks[i]) for i in range(10)])
 
-    await dispatcher.subscribe("topic1", callback1)
-    await dispatcher.subscribe("topic2", callback2)
+        assert len(self.dispatcher._subscriptions) == 10  # pylint: disable=W0212
 
-    topics = dispatcher.get_subscribed_topics()
+        await asyncio.gather(*[self.dispatcher.unsubscribe(f"topic{i}") for i in range(10)])
 
-    assert topics == {"topic1", "topic2"}
+        assert len(self.dispatcher._subscriptions) == 0  # pylint: disable=W0212
 
-
-@pytest.mark.asyncio
-async def test_is_running(dispatcher, mock_client):
-    assert not dispatcher.is_running
-
-    async def message_generator():
-        while True:
-            await asyncio.sleep(0.1)
-            yield aiomqtt.Message("test/topic", b"test", 0, False, 0, None)
-
-    mock_client.set_message_generator(message_generator())
-
-    task = asyncio.create_task(dispatcher.run())
-
-    await asyncio.sleep(0.1)
-
-    assert dispatcher.is_running
-
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-    assert not dispatcher.is_running
-
-
-@pytest.mark.asyncio
-async def test_concurrent_subscribe_unsubscribe(dispatcher):
-    callbacks = [AsyncMock() for _ in range(10)]
-
-    await asyncio.gather(*[dispatcher.subscribe(f"topic{i}", callbacks[i]) for i in range(10)])
-
-    assert len(dispatcher._subscriptions) == 10  # pylint: disable=W0212
-
-    await asyncio.gather(*[dispatcher.unsubscribe(f"topic{i}") for i in range(10)])
-
-    assert len(dispatcher._subscriptions) == 0  # pylint: disable=W0212
-
-
-def test_client_id(dispatcher):
-    assert dispatcher.client_id == "test-client-id"
+    def test_client_id(self):
+        assert self.dispatcher.client_id == "test-client-id"

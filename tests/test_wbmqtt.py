@@ -4,7 +4,6 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import aiomqtt
-import pytest
 
 from wb.mqtt_dali.wbmqtt import (
     MQTT_PUBLISH_TIMEOUT_S,
@@ -19,9 +18,9 @@ from wb.mqtt_dali.wbmqtt import (
     retain_hack,
 )
 
-from ._virtual_time import VirtualTimeEventLoopPolicy
+from ._virtual_time import VirtualTimeTestCase
 
-# pylint: disable=redefined-outer-name,too-many-public-methods
+# pylint: disable=too-many-public-methods
 
 
 class MockMessageIterator:
@@ -64,11 +63,6 @@ class MockMQTTClient:
         return MockMessageIterator(self)
 
 
-@pytest.fixture
-def mock_client():
-    return MockMQTTClient()
-
-
 class MockMQTTDispatcher:
     def __init__(self, client):
         self.client = client
@@ -98,11 +92,6 @@ class MockMQTTDispatcher:
 
     async def publish(self, topic, payload=None, **kwargs):
         await self.client.publish(topic, payload, **kwargs)
-
-
-@pytest.fixture
-def mock_dispatcher(mock_client):
-    return MockMQTTDispatcher(mock_client)
 
 
 class TestControlMeta:
@@ -180,16 +169,16 @@ class TestControlError:
         assert ControlError.READ
 
 
-@pytest.fixture(scope="module")
-def event_loop_policy():
-    return VirtualTimeEventLoopPolicy()
+class MockMqttTestCase(VirtualTimeTestCase):
+    def setUp(self):
+        self.mock_client = MockMQTTClient()
+        self.mock_dispatcher = MockMQTTDispatcher(self.mock_client)
 
 
-class TestDevice:
-    @pytest.mark.asyncio
-    async def test_initialization(self, mock_client, mock_dispatcher):
+class TestDevice(MockMqttTestCase):
+    async def test_initialization(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         assert device._base_topic == "/devices/test_device"
@@ -197,10 +186,10 @@ class TestDevice:
         assert device._driver_name == "test_driver"
         assert len(device._controls) == 0
 
-        assert mock_client.publish.call_count >= 1
+        assert self.mock_client.publish.call_count >= 1
         meta_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if "/devices/test_device/meta" in str(c[0][0]) and "/controls" not in str(c[0][0])
         ]
         assert len(meta_calls) == 1
@@ -208,12 +197,11 @@ class TestDevice:
         assert meta_json["driver"] == "test_driver"
         assert meta_json["title"]["en"] == "Test Device"
 
-    @pytest.mark.asyncio
-    async def test_create_control(self, mock_client, mock_dispatcher):
+    async def test_create_control(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         meta = ControlMeta(title="Test Control", control_type="switch", order=1)
         await device.create_control("ctrl1", meta, "1")
@@ -223,468 +211,427 @@ class TestDevice:
         assert device._controls["ctrl1"].meta.title.en == "Test Control"
         assert device._controls["ctrl1"].meta.control_type == "switch"
 
-        assert mock_client.publish.call_count == 2
+        assert self.mock_client.publish.call_count == 2
 
-    @pytest.mark.asyncio
-    async def test_set_control_value(self, mock_client, mock_dispatcher):
+    async def test_set_control_value(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         meta = ControlMeta(title="Test")
         await device.create_control("ctrl1", meta, "initial")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "updated")
 
         assert device._controls["ctrl1"].value == "updated"
-        mock_client.publish.assert_called_once_with(
+        self.mock_client.publish.assert_called_once_with(
             "/devices/test_device/controls/ctrl1", "updated", qos=1, retain=True
         )
 
-    @pytest.mark.asyncio
-    async def test_set_control_value_no_change(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_set_control_value_no_change(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "value")
 
-        mock_client.publish.assert_not_called()
+        self.mock_client.publish.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_set_control_value_undeclared(self, mock_client, mock_dispatcher, caplog):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_set_control_value_undeclared(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
-        with caplog.at_level(logging.DEBUG):
+        with self.assertLogs(level=logging.DEBUG) as logs:
             await device.set_control_value("nonexistent", "value")
 
-        mock_client.publish.assert_not_called()
-        assert "Can't set value of undeclared control" in caplog.text
+        self.mock_client.publish.assert_not_called()
+        assert "Can't set value of undeclared control" in "\n".join(logs.output)
 
-    @pytest.mark.asyncio
-    async def test_set_control_state_drops_repeated_value(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_set_control_state_drops_repeated_value(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(control_type="switch"), "0")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "1", ControlError.NONE)
-        mock_client.publish.assert_called_once_with(
+        self.mock_client.publish.assert_called_once_with(
             "/devices/test_device/controls/ctrl1", "1", qos=1, retain=True
         )
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "1", ControlError.NONE)
 
-        mock_client.publish.assert_not_called()
+        self.mock_client.publish.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_set_control_state_republishes_repeated_value_when_policy_is_always(
-        self, mock_client, mock_dispatcher
-    ):
+    async def test_set_control_state_republishes_repeated_value_when_policy_is_always(self):
         """The repeat goes out and stays retained: the policy and retain are separate axes."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control(
             "long_press1", ControlMeta(control_type="switch"), "0", PublishPolicy.ALWAYS
         )
         await device.set_control_state("long_press1", "1", ControlError.NONE)
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("long_press1", "1", ControlError.NONE)
 
-        mock_client.publish.assert_called_once_with(
+        self.mock_client.publish.assert_called_once_with(
             "/devices/test_device/controls/long_press1", "1", qos=1, retain=True
         )
 
-    @pytest.mark.asyncio
-    async def test_set_control_value_republishes_repeated_value_when_policy_is_always(
-        self, mock_client, mock_dispatcher
-    ):
+    async def test_set_control_value_republishes_repeated_value_when_policy_is_always(self):
         """The policy governs the plain value path too, with no force from the caller."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "value", PublishPolicy.ALWAYS)
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "value")
 
-        mock_client.publish.assert_called_once_with(
+        self.mock_client.publish.assert_called_once_with(
             "/devices/test_device/controls/ctrl1", "value", qos=1, retain=True
         )
 
-    @pytest.mark.asyncio
-    async def test_creating_a_pushbutton_publishes_only_its_meta(self, mock_client, mock_dispatcher):
+    async def test_creating_a_pushbutton_publishes_only_its_meta(self):
         """A button has no state to declare: a payload on its value topic would read as a press,
         so creating one publishes the meta alone - even when a past press is passed as its value."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.create_control("off", ControlMeta(control_type="pushbutton"), "1")
 
-        assert [call.args[0] for call in mock_client.publish.await_args_list] == [
+        assert [call.args[0] for call in self.mock_client.publish.await_args_list] == [
             "/devices/test_device/controls/off/meta"
         ]
 
-    @pytest.mark.asyncio
-    async def test_pushbutton_publishes_every_update_unretained_without_a_policy(
-        self, mock_client, mock_dispatcher
-    ):
+    async def test_pushbutton_publishes_every_update_unretained_without_a_policy(self):
         """A pushbutton's type alone sends the repeat out, unretained and with no policy."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("short_press1", ControlMeta(control_type="pushbutton"), "0")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("short_press1", "1", ControlError.NONE)
         await device.set_control_state("short_press1", "1", ControlError.NONE)
 
         assert (
-            mock_client.publish.call_args_list
+            self.mock_client.publish.call_args_list
             == [(("/devices/test_device/controls/short_press1", "1"), {"qos": 1, "retain": False})] * 2
         )
 
-    @pytest.mark.asyncio
-    async def test_set_control_state_publishes_the_value_under_a_raised_error(
-        self, mock_client, mock_dispatcher
-    ):
+    async def test_set_control_state_publishes_the_value_under_a_raised_error(self):
         """A read that produced a value and still reports a failure: both reach the wire, the
         error last -- it carries the news, the value on its own would look freshly confirmed.
         """
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "0")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "42", ControlError.READ)
 
-        assert mock_client.publish.call_args_list == [
+        assert self.mock_client.publish.call_args_list == [
             (("/devices/test_device/controls/ctrl1", "42"), {"qos": 1, "retain": True}),
             (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 1, "retain": True}),
         ]
 
-    @pytest.mark.asyncio
-    async def test_set_control_state_clears_the_error_before_the_new_value(
-        self, mock_client, mock_dispatcher
-    ):
+    async def test_set_control_state_clears_the_error_before_the_new_value(self):
         """The successful read behind a failed one: /meta/error is cleared first, so no
         subscriber sees the fresh value while the stale error still stands next to it."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "0")
         await device.set_control_state("ctrl1", "42", ControlError.READ)
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "43", ControlError.NONE)
 
-        assert mock_client.publish.call_args_list == [
+        assert self.mock_client.publish.call_args_list == [
             (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 1, "retain": True}),
             (("/devices/test_device/controls/ctrl1", "43"), {"qos": 1, "retain": True}),
         ]
 
-    @pytest.mark.asyncio
-    async def test_set_control_state_leaves_a_standing_error_untouched(self, mock_client, mock_dispatcher):
+    async def test_set_control_state_leaves_a_standing_error_untouched(self):
         """A value that changed while the same error still stands touches the value topic
         alone: the error is compared, so it is neither republished nor cleared by a value."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "0")
         await device.set_control_state("ctrl1", "42", ControlError.READ)
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "43", ControlError.READ)
 
-        assert mock_client.publish.call_args_list == [
+        assert self.mock_client.publish.call_args_list == [
             (("/devices/test_device/controls/ctrl1", "43"), {"qos": 1, "retain": True})
         ]
 
-    @pytest.mark.asyncio
-    async def test_set_control_state_without_a_value_keeps_the_value_topic(
-        self, mock_client, mock_dispatcher
-    ):
+    async def test_set_control_state_without_a_value_keeps_the_value_topic(self):
         """A control with nothing to show reports its error alone: publishing the missing value
         would delete the retained message, and the cached value stands."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "42")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", None, ControlError.READ)
 
-        assert mock_client.publish.call_args_list == [
+        assert self.mock_client.publish.call_args_list == [
             (("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 1, "retain": True})
         ]
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_state("ctrl1", "42", ControlError.NONE)
 
-        assert mock_client.publish.call_args_list == [
+        assert self.mock_client.publish.call_args_list == [
             (("/devices/test_device/controls/ctrl1/meta/error", None), {"qos": 1, "retain": True})
         ]
 
-    @pytest.mark.asyncio
-    async def test_unconfirmed_publish_is_logged_once_and_republished(
-        self, mock_client, mock_dispatcher, caplog
-    ):
+    async def test_unconfirmed_publish_is_logged_once_and_republished(self):
         """The broker never confirms the first publish: it is logged in one line naming the
         topic, and the value stays uncommitted, so the next identical update publishes it."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "0")
-        mock_client.publish.reset_mock()
-        mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
+        self.mock_client.publish.reset_mock()
+        self.mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
 
-        with caplog.at_level(logging.DEBUG):
+        with self.assertLogs(level=logging.DEBUG) as logs:
             await device.set_control_state("ctrl1", "42", ControlError.NONE)
 
         assert [
-            record.getMessage()
-            for record in caplog.records
-            if record.getMessage().startswith("Not published")
+            record.getMessage() for record in logs.records if record.getMessage().startswith("Not published")
         ] == ['Not published "/devices/test_device/controls/ctrl1": Operation timed out']
 
         await device.set_control_state("ctrl1", "42", ControlError.NONE)
 
         assert (
-            mock_client.publish.call_args_list
+            self.mock_client.publish.call_args_list
             == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 1, "retain": True})] * 2
         )
 
-    @pytest.mark.asyncio
-    async def test_unconfirmed_value_and_error_are_republished(self, mock_client, mock_dispatcher):
+    async def test_unconfirmed_value_and_error_are_republished(self):
         """The broker never confirms the first publish of the value, then of the error: neither is
         committed, so the next identical update of each publishes it again."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(), "0")
-        mock_client.publish.reset_mock()
-        mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
+        self.mock_client.publish.reset_mock()
+        self.mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
 
         await device.set_control_value("ctrl1", "42")
         await device.set_control_value("ctrl1", "42")
 
         assert (
-            mock_client.publish.call_args_list
+            self.mock_client.publish.call_args_list
             == [(("/devices/test_device/controls/ctrl1", "42"), {"qos": 1, "retain": True})] * 2
         )
 
-        mock_client.publish.reset_mock()
-        mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
+        self.mock_client.publish.reset_mock()
+        self.mock_client.publish.side_effect = [aiomqtt.MqttError("Operation timed out"), None]
 
         await device.set_control_error("ctrl1", ControlError.READ)
         await device.set_control_error("ctrl1", ControlError.READ)
 
         assert (
-            mock_client.publish.call_args_list
+            self.mock_client.publish.call_args_list
             == [(("/devices/test_device/controls/ctrl1/meta/error", "r"), {"qos": 1, "retain": True})] * 2
         )
 
-    @pytest.mark.asyncio
-    async def test_set_control_read_only(self, mock_client, mock_dispatcher):
+    async def test_set_control_read_only(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test", read_only=False)
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_read_only("ctrl1", True)
 
         assert device._controls["ctrl1"].meta.read_only is True
-        assert mock_client.publish.call_count == 1
+        assert self.mock_client.publish.call_count == 1
 
-    @pytest.mark.asyncio
-    async def test_set_control_read_only_no_change(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_set_control_read_only_no_change(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test", read_only=True)
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_read_only("ctrl1", True)
 
-        mock_client.publish.assert_not_called()
+        self.mock_client.publish.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_set_control_title(self, mock_client, mock_dispatcher):
+    async def test_set_control_title(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Old Title")
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_title("ctrl1", "New Title")
 
         assert device._controls["ctrl1"].meta.title.en == "New Title"
-        assert mock_client.publish.call_count == 1
+        assert self.mock_client.publish.call_count == 1
 
-    @pytest.mark.asyncio
-    async def test_set_control_title_no_change(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_set_control_title_no_change(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Same Title")
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_title("ctrl1", "Same Title")
 
-        mock_client.publish.assert_not_called()
+        self.mock_client.publish.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_set_control_error(self, mock_client, mock_dispatcher):
+    async def test_set_control_error(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_error("ctrl1", ControlError.READ)
 
         error_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if len(c[0]) > 0 and c[0][0] == "/devices/test_device/controls/ctrl1/meta/error"
         ]
         assert len(error_calls) == 1
         assert error_calls[0][0][1] == "r"
         assert device._controls["ctrl1"].error == ControlError.READ
 
-    @pytest.mark.asyncio
-    async def test_set_control_error_clears(self, mock_client, mock_dispatcher):
+    async def test_set_control_error_clears(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
         await device.create_control("ctrl1", meta, "value")
         await device.set_control_error("ctrl1", ControlError.READ)
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_value("ctrl1", "new_value")
 
         error_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if len(c[0]) > 0 and c[0][0] == "/devices/test_device/controls/ctrl1/meta/error"
         ]
         assert len(error_calls) == 1
         assert error_calls[0][0][1] is None
         assert device._controls["ctrl1"].error == ControlError(0)
 
-    @pytest.mark.asyncio
-    async def test_set_control_error_nonexistent(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_set_control_error_nonexistent(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.set_control_error("nonexistent", ControlError.READ)
 
-        mock_client.publish.assert_not_called()
+        self.mock_client.publish.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_set_control_error_publishes_flag_string(self, mock_client, mock_dispatcher):
+    async def test_set_control_error_publishes_flag_string(self):
         """set_control_error serializes the flag to the wire chars; a combined
         READ|WRITE flag publishes "rw", and the empty flag clears the topic."""
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("ctrl1", ControlMeta(title="Test"), "value")
         error_topic = "/devices/test_device/controls/ctrl1/meta/error"
 
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
         await device.set_control_error("ctrl1", ControlError.READ | ControlError.WRITE)
-        combined_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == error_topic]
+        combined_calls = [c for c in self.mock_client.publish.call_args_list if c[0][0] == error_topic]
         assert combined_calls[0][0][1] == "rw"
 
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
         await device.set_control_error("ctrl1", ControlError(0))
-        clear_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == error_topic]
+        clear_calls = [c for c in self.mock_client.publish.call_args_list if c[0][0] == error_topic]
         assert clear_calls[0][0][1] is None
         assert device._controls["ctrl1"].error == ControlError(0)
 
-    @pytest.mark.asyncio
-    async def test_remove_control(self, mock_client, mock_dispatcher):
+    async def test_remove_control(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(title="Test")
         await device.create_control("ctrl1", meta, "value")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.remove_control("ctrl1")
 
         assert "ctrl1" not in device._controls
-        assert mock_client.publish.call_count == 3
-        mock_client.publish.assert_any_call("/devices/test_device/controls/ctrl1", None, qos=1, retain=True)
-        mock_client.publish.assert_any_call(
+        assert self.mock_client.publish.call_count == 3
+        self.mock_client.publish.assert_any_call(
+            "/devices/test_device/controls/ctrl1", None, qos=1, retain=True
+        )
+        self.mock_client.publish.assert_any_call(
             "/devices/test_device/controls/ctrl1/meta/error", None, qos=1, retain=True
         )
-        mock_client.publish.assert_any_call(
+        self.mock_client.publish.assert_any_call(
             "/devices/test_device/controls/ctrl1/meta", None, qos=1, retain=True
         )
 
-    @pytest.mark.asyncio
-    async def test_removing_a_pushbutton_leaves_its_value_topic_alone(self, mock_client, mock_dispatcher):
+    async def test_removing_a_pushbutton_leaves_its_value_topic_alone(self):
         """Removal clears the button's meta topics, but its value topic holds nothing to delete
         and an empty payload there would read as a press."""
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
         await device.create_control("off", ControlMeta(control_type="pushbutton"), "")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.remove_control("off")
 
-        assert [call.args[0] for call in mock_client.publish.await_args_list] == [
+        assert [call.args[0] for call in self.mock_client.publish.await_args_list] == [
             "/devices/test_device/controls/off/meta/error",
             "/devices/test_device/controls/off/meta",
         ]
 
-    @pytest.mark.asyncio
-    async def test_remove_control_nonexistent(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_remove_control_nonexistent(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.remove_control("nonexistent")
 
-        mock_client.publish.assert_not_called()
+        self.mock_client.publish.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_remove_device(self, mock_client, mock_dispatcher):
+    async def test_remove_device(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta1 = ControlMeta(title="Control 1")
         meta2 = ControlMeta(title="Control 2")
         await device.create_control("ctrl1", meta1, "val1")
         await device.create_control("ctrl2", meta2, "val2")
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.remove_device()
 
         assert len(device._controls) == 0
-        assert mock_client.publish.call_count >= 5
+        assert self.mock_client.publish.call_count >= 5
 
-    @pytest.mark.asyncio
-    async def test_publish_control_meta_full(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_publish_control_meta_full(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(
@@ -700,7 +647,7 @@ class TestDevice:
 
         meta_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if "/meta" in str(c[0][0]) and "controls" in str(c[0][0])
         ]
         assert len(meta_calls) > 0
@@ -714,9 +661,8 @@ class TestDevice:
         assert meta_json["min"] == 200
         assert meta_json["max"] == 100
 
-    @pytest.mark.asyncio
-    async def test_publish_control_meta_empty_enum(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_publish_control_meta_empty_enum(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta(
@@ -730,7 +676,7 @@ class TestDevice:
 
         meta_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if "/meta" in str(c[0][0]) and "controls" in str(c[0][0])
         ]
         assert len(meta_calls) > 0
@@ -739,9 +685,8 @@ class TestDevice:
         assert meta_json["title"]["en"] == "Full Control"
         assert meta_json["enum"] == {"100": {"en": "100"}, "200": {"en": "200"}}
 
-    @pytest.mark.asyncio
-    async def test_publish_control_meta_minimal(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_publish_control_meta_minimal(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
         meta = ControlMeta()
@@ -749,7 +694,7 @@ class TestDevice:
 
         meta_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if "/meta" in str(c[0][0]) and "controls" in str(c[0][0])
         ]
         assert len(meta_calls) > 0
@@ -760,18 +705,19 @@ class TestDevice:
         assert "title" not in meta_json
         assert "order" not in meta_json
 
-    def test_get_control_base_topic(self, mock_dispatcher):
+    def test_get_control_base_topic(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         topic = device._get_control_base_topic("my_control")
         assert topic == "/devices/test_device/controls/my_control"
 
-    @pytest.mark.asyncio
-    async def test_device_meta_format(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_device_meta_format(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
-        meta_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == "/devices/test_device/meta"]
+        meta_calls = [
+            c for c in self.mock_client.publish.call_args_list if c[0][0] == "/devices/test_device/meta"
+        ]
         assert len(meta_calls) == 1
 
         meta_json = json.loads(meta_calls[0][0][1])
@@ -781,12 +727,13 @@ class TestDevice:
         assert meta_json["title"]["en"] == "Test Device"
         assert meta_calls[0][1]["retain"] is True
 
-    @pytest.mark.asyncio
-    async def test_device_meta_without_title(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver")
+    async def test_device_meta_without_title(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver")
         await device.initialize()
 
-        meta_calls = [c for c in mock_client.publish.call_args_list if c[0][0] == "/devices/test_device/meta"]
+        meta_calls = [
+            c for c in self.mock_client.publish.call_args_list if c[0][0] == "/devices/test_device/meta"
+        ]
         assert len(meta_calls) == 1
 
         meta_json = json.loads(meta_calls[0][0][1])
@@ -794,70 +741,66 @@ class TestDevice:
         assert "title" not in meta_json
         assert meta_json["driver"] == "test_driver"
 
-    @pytest.mark.asyncio
-    async def test_remove_device_clears_meta(self, mock_client, mock_dispatcher):
-        device = Device(mock_dispatcher, "test_device", "test_driver", "Test Device")
+    async def test_remove_device_clears_meta(self):
+        device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
-        mock_client.publish.reset_mock()
+        self.mock_client.publish.reset_mock()
 
         await device.remove_device()
 
         clear_calls = [
             c
-            for c in mock_client.publish.call_args_list
+            for c in self.mock_client.publish.call_args_list
             if c[0][0] == "/devices/test_device/meta" and c[0][1] is None
         ]
         assert len(clear_calls) == 1
 
 
-class TestRetainHack:
-    @pytest.mark.asyncio
-    async def test_retain_hack_success(self, mock_dispatcher):
+class TestRetainHack(MockMqttTestCase):
+    async def test_retain_hack_success(self):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.12345):
-            mock_dispatcher.client.add_message("/wbretainhack/1234500", b"2")
+            self.mock_dispatcher.client.add_message("/wbretainhack/1234500", b"2")
 
-            await retain_hack(mock_dispatcher)
+            await retain_hack(self.mock_dispatcher)
 
-            mock_dispatcher.client.subscribe.assert_called()
-            mock_dispatcher.client.publish.assert_called()
-            mock_dispatcher.client.unsubscribe.assert_called()
+            self.mock_dispatcher.client.subscribe.assert_called()
+            self.mock_dispatcher.client.publish.assert_called()
+            self.mock_dispatcher.client.unsubscribe.assert_called()
 
-    @pytest.mark.asyncio
-    async def test_retain_hack_timeout(self, mock_dispatcher, caplog):
+    async def test_retain_hack_timeout(self):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.54321):
-            with caplog.at_level(logging.WARNING):
-                await retain_hack(mock_dispatcher, timeout=1)
+            with self.assertLogs(level=logging.WARNING) as logs:
+                await retain_hack(self.mock_dispatcher, timeout=1)
 
-            assert "Retain hack timeout" in caplog.text
+            assert "Retain hack timeout" in "\n".join(logs.output)
 
 
-class TestRemoveTopicsByDriver:
-    @pytest.mark.asyncio
-    async def test_remove_topics_by_driver(self, mock_dispatcher):
+class TestRemoveTopicsByDriver(MockMqttTestCase):
+    async def test_remove_topics_by_driver(self):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.99999):
             device1_meta = json.dumps({"driver": "wb-mqtt-dali", "title": {"en": "DALI Device 1"}})
-            mock_dispatcher.client.add_message("/devices/dali_device_1/meta", device1_meta.encode())
-            mock_dispatcher.client.add_message("/devices/dali_device_1/controls/ch1", b"100")
-            mock_dispatcher.client.add_message(
+            self.mock_dispatcher.client.add_message("/devices/dali_device_1/meta", device1_meta.encode())
+            self.mock_dispatcher.client.add_message("/devices/dali_device_1/controls/ch1", b"100")
+            self.mock_dispatcher.client.add_message(
                 "/devices/dali_device_1/controls/ch1/meta", b'{"type":"value"}'
             )
 
             device2_meta = json.dumps({"driver": "wb-mqtt-dali"})
-            mock_dispatcher.client.add_message("/devices/dali_device_2/meta", device2_meta.encode())
-            mock_dispatcher.client.add_message("/devices/dali_device_2/controls/level", b"50")
+            self.mock_dispatcher.client.add_message("/devices/dali_device_2/meta", device2_meta.encode())
+            self.mock_dispatcher.client.add_message("/devices/dali_device_2/controls/level", b"50")
 
             other_device_meta = json.dumps({"driver": "other-driver"})
-            mock_dispatcher.client.add_message("/devices/other_device/meta", other_device_meta.encode())
-            mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
+            self.mock_dispatcher.client.add_message("/devices/other_device/meta", other_device_meta.encode())
+            self.mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
 
-            mock_dispatcher.client.add_message("/wbretainhack/9999900", b"2")
+            self.mock_dispatcher.client.add_message("/wbretainhack/9999900", b"2")
 
-            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali", timeout=1)
+            await remove_topics_by_driver(self.mock_dispatcher, "wb-mqtt-dali", timeout=1)
 
-            mock_dispatcher.client.subscribe.assert_any_call("/devices/#")
-            mock_dispatcher.client.unsubscribe.assert_called()
+            self.mock_dispatcher.client.subscribe.assert_any_call("/devices/#")
+            self.mock_dispatcher.client.unsubscribe.assert_called()
 
-            clear_calls = [c for c in mock_dispatcher.client.publish.call_args_list if c[0][1] is None]
+            clear_calls = [c for c in self.mock_dispatcher.client.publish.call_args_list if c[0][1] is None]
 
             cleared_topics = [c[0][0] for c in clear_calls]
 
@@ -870,32 +813,30 @@ class TestRemoveTopicsByDriver:
             assert "/devices/other_device/meta" not in cleared_topics
             assert "/devices/other_device/controls/ch1" not in cleared_topics
 
-    @pytest.mark.asyncio
-    async def test_remove_topics_no_matching(self, mock_dispatcher):
+    async def test_remove_topics_no_matching(self):
         with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.11111):
-            mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
+            self.mock_dispatcher.client.add_message("/devices/other_device/controls/ch1", b"value")
             device_meta = json.dumps({"driver": "other-driver"})
-            mock_dispatcher.client.add_message("/devices/other_device/meta", device_meta.encode())
-            mock_dispatcher.client.add_message("/wbretainhack/1111100", b"2")
+            self.mock_dispatcher.client.add_message("/devices/other_device/meta", device_meta.encode())
+            self.mock_dispatcher.client.add_message("/wbretainhack/1111100", b"2")
 
-            await remove_topics_by_driver(mock_dispatcher, "wb-mqtt-dali", timeout=1)
+            await remove_topics_by_driver(self.mock_dispatcher, "wb-mqtt-dali", timeout=1)
 
-            mock_dispatcher.client.subscribe.assert_called()
-            mock_dispatcher.client.unsubscribe.assert_called()
+            self.mock_dispatcher.client.subscribe.assert_called()
+            self.mock_dispatcher.client.unsubscribe.assert_called()
 
             clear_calls = [
                 c
-                for c in mock_dispatcher.client.publish.call_args_list
+                for c in self.mock_dispatcher.client.publish.call_args_list
                 if c[0][1] is None and c[0][0].startswith("/devices/")
             ]
             assert len(clear_calls) == 0
 
 
-class TestIntegration:  # pylint: disable=too-few-public-methods
-    @pytest.mark.asyncio
-    async def test_device_lifecycle(self, mock_dispatcher):
+class TestIntegration(MockMqttTestCase):
+    async def test_device_lifecycle(self):
         # pylint: disable=protected-access
-        device = Device(mock_dispatcher, "test_dev", "test_driver", "Test Device")
+        device = Device(self.mock_dispatcher, "test_dev", "test_driver", "Test Device")
         await device.initialize()
 
         meta1 = ControlMeta(title="Switch", control_type="switch")
@@ -919,9 +860,9 @@ class TestIntegration:  # pylint: disable=too-few-public-methods
         assert len(device._controls) == 0
 
 
-@pytest.mark.asyncio
-async def test_make_mqtt_client_bounds_the_wait_for_a_publish():
-    """A publish awaiting its confirmation holds DevicePublisher's lock, so the client is
-    built with an explicit timeout instead of aiomqtt's 10 s default. (The client binds the
-    running loop at construction, hence the async test.)"""
-    assert make_mqtt_client("tcp://localhost:1883").timeout == MQTT_PUBLISH_TIMEOUT_S
+class TestMakeMqttClient(VirtualTimeTestCase):
+    async def test_make_mqtt_client_bounds_the_wait_for_a_publish(self):
+        """A publish awaiting its confirmation holds DevicePublisher's lock, so the client is
+        built with an explicit timeout instead of aiomqtt's 10 s default. (The client binds the
+        running loop at construction, hence the async test.)"""
+        assert make_mqtt_client("tcp://localhost:1883").timeout == MQTT_PUBLISH_TIMEOUT_S

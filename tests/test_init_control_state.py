@@ -7,7 +7,7 @@ reconfirm the read schedules (``docs/startup_reconfirm_fade_plan.md``).
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from timeit import default_timer
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -101,6 +101,7 @@ class _StubRead(BusEvent):
     value: Optional[str] = None
     title: Optional[TranslatedTitle] = None
     failed: bool = False
+    source: EventSource = field(default=EventSource.READ, kw_only=True)
 
 
 def _apply_stub_read(control: MqttControlBase, event: BusEvent) -> NotifyResult:
@@ -198,7 +199,7 @@ def _tc_controls():
 
 def _tc_read(mirek, failed=False):
     """One colour read cycle's outcome, the event the DT8 handler emits."""
-    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, EventSource.READ, failed=failed)
+    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, source=EventSource.READ, failed=failed)
 
 
 class _ChunkedPollable(EventPollSchedule):

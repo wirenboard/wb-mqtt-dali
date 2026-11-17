@@ -765,7 +765,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         }
         if not known:
             return None
-        return ColourChanged(known, EventSource.OBSERVED, settle_at)
+        return ColourChanged(known, source=EventSource.OBSERVED, settle_at=settle_at)
 
     def filter_valid_components(self, components: dict[ColourComponent, int]) -> dict[ColourComponent, int]:
         """Drop components whose raw value is the protocol's "not available" sentinel.
@@ -913,7 +913,7 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
             return []  # the cycle publishes once, when its last component lands
         self._read_progress = None
         self._colour.update(progress.done_values)
-        return [ColourChanged(self._colour_picture(), EventSource.READ)]
+        return [ColourChanged(self._colour_picture(), source=EventSource.READ)]
 
     @staticmethod
     async def _send_subbatch_with_retries(
@@ -949,7 +949,9 @@ class Type8Parameters(EventPollSchedule, TypeParameters, Pollable):
         if ct is None:
             return []
         return [
-            ColourChanged({c: None for c in COMPONENTS_BY_COLOUR_TYPE[ct]}, EventSource.READ, failed=True)
+            ColourChanged(
+                {c: None for c in COMPONENTS_BY_COLOUR_TYPE[ct]}, source=EventSource.READ, failed=True
+            )
         ]
 
     def _colour_picture(self) -> dict[ColourComponent, int]:

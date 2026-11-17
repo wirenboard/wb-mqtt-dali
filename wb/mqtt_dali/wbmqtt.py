@@ -104,8 +104,8 @@ def value_is_retained(meta: ControlMeta) -> bool:
 class PublishPolicy(Enum):
     """Whether an update repeating the published value still reaches the topic."""
 
-    ON_CHANGE = auto()  # the value is state: a repeat says nothing new
-    ALWAYS = auto()  # the value is an event: a repeat is a second occurrence
+    ON_CHANGE = auto()  # only if it differs from the last published one
+    ALWAYS = auto()  # every time, even if it is the same
 
 
 @dataclass
@@ -119,6 +119,24 @@ class ControlState:
         # meta can be changed during runtime with set_control_read_only and set_control_title,
         # so we need to make a copy of it to not modify the original meta passed to the constructor
         self.meta = deepcopy(self.meta)
+
+    def has_read_error(self) -> bool:
+        return bool(self.error & ControlError.READ)
+
+    def has_write_error(self) -> bool:
+        return bool(self.error & ControlError.WRITE)
+
+    def clear_errors(self) -> None:
+        self.error = ControlError.NONE
+
+    def set_read_error(self) -> None:
+        self.error |= ControlError.READ
+
+    def clear_write_error(self) -> None:
+        self.error &= ~ControlError.WRITE
+
+    def set_write_error(self) -> None:
+        self.error |= ControlError.WRITE
 
 
 def _publishes_every_update(control: ControlState) -> bool:
@@ -194,14 +212,15 @@ class Device:
         else:
             logging.debug("Can't set value of undeclared control %s", mqtt_control_name)
 
-    async def set_control_state(
+    async def set_control_state(  # pylint: disable=too-many-arguments, R0917
         self,
         mqtt_control_name: str,
         value: Optional[str],
         error: ControlError,
         title: Optional[Union[str, TranslatedTitle]] = None,
+        publish_value_policy: PublishPolicy = PublishPolicy.ON_CHANGE,
     ) -> None:
-        """Publish whichever of the value, the error and the title changed; the news goes last."""
+        """Publish what changed of value, error and title, the value also under ALWAYS; the news goes last."""
         control = self._controls.get(mqtt_control_name)
         if control is None:
             logging.debug("Can't set state of undeclared control %s", mqtt_control_name)
@@ -210,7 +229,11 @@ class Device:
             await self.set_control_title(mqtt_control_name, title)
         # A missing value leaves the value topic alone: publishing None deletes the retained
         # message, which only remove_control means to do.
-        publish_value = value is not None and (control.value != value or _publishes_every_update(control))
+        publish_value = value is not None and (
+            control.value != value
+            or _publishes_every_update(control)
+            or publish_value_policy is PublishPolicy.ALWAYS
+        )
         publish_error = control.error != error
         topic = self._get_control_base_topic(mqtt_control_name)
         if publish_error and not error:

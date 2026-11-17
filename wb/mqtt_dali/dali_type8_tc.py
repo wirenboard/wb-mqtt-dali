@@ -232,7 +232,6 @@ def get_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
                 "colour_temperature_step_warmer",
                 ControlState(
                     ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Warmer", "Теплее")),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepWarmer(short_address)],
@@ -242,7 +241,6 @@ def get_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
                 "colour_temperature_step_cooler",
                 ControlState(
                     ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Cooler", "Холоднее")),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepCooler(short_address)],

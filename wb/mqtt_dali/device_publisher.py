@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Set, Union
 import aiomqtt
 
 from .mqtt_dispatcher import MessageCallback, MQTTDispatcher, get_str_payload
-from .wbmqtt import ControlError, ControlState, Device, TranslatedTitle
+from .wbmqtt import ControlError, ControlState, Device, PublishPolicy, TranslatedTitle
 
 
 @dataclass
@@ -166,13 +166,16 @@ class DevicePublisher:
         value: Optional[str],
         error: ControlError,
         title: Optional[Union[str, TranslatedTitle]] = None,
+        publish_value_policy: PublishPolicy = PublishPolicy.ON_CHANGE,
     ) -> None:
         async with self._lock:
             if device_id not in self._devices:
                 self.logger.warning("Device %s not found", device_id)
                 return
 
-            await self._devices[device_id].set_control_state(control_id, value, error, title)
+            await self._devices[device_id].set_control_state(
+                control_id, value, error, title, publish_value_policy
+            )
 
     async def register_control_handler(
         self, device_id: str, control_id: str, callback: MessageCallback

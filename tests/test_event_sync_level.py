@@ -76,7 +76,7 @@ def _observe(control: ActualLevelControl, command) -> Optional[str]:
     predicted = control.predict_level(command)
     if predicted is None:
         return None
-    control.notify(LevelChanged(predicted, EventSource.OBSERVED))
+    control.notify(LevelChanged(predicted, source=EventSource.OBSERVED))
     return control.control_info.state.value
 
 
@@ -198,9 +198,9 @@ def test_actual_level_shows_an_unknown_level_without_stepping_from_it():
     """A read answering MASK renders like any other level, but the step prediction keeps the
     last real level as its base -- stepping from MASK would invent one."""
     control = _level_control(max_level=254)
-    control.notify(LevelChanged(200, EventSource.READ))
+    control.notify(LevelChanged(200, source=EventSource.READ))
 
-    assert control.notify(LevelChanged(MASK, EventSource.READ)) is NotifyResult.PUBLISH_STATE
+    assert control.notify(LevelChanged(MASK, source=EventSource.READ)) is NotifyResult.PUBLISH_STATE
     assert control.control_info.state.value == _fmt(MASK)
     assert control.current_level == 200
     assert control.predict_level(StepUp(ADDR)) == 201
@@ -221,8 +221,8 @@ def _last_acted_control() -> LastActedControl:
 
 def _crossing(control: LastActedControl, prev: int, new: int) -> Optional[str]:
     """Feed two observed levels; returns the code the control published, if any."""
-    control.notify(LevelChanged(prev, EventSource.OBSERVED))
-    if control.notify(LevelChanged(new, EventSource.OBSERVED)) is not NotifyResult.PUBLISH_STATE:
+    control.notify(LevelChanged(prev, source=EventSource.OBSERVED))
+    if control.notify(LevelChanged(new, source=EventSource.OBSERVED)) is not NotifyResult.PUBLISH_STATE:
         return None
     return control.control_info.state.value
 
@@ -256,9 +256,9 @@ def test_last_acted_ignores_a_level_that_came_from_a_poll():
     """The pair of levels that yields the up-on code when observed says nothing when both came
     from polls: the difference can be a missed frame or a mid-fade sample."""
     control = _last_acted_control()
-    control.notify(LevelChanged(50, EventSource.READ))
+    control.notify(LevelChanged(50, source=EventSource.READ))
 
-    assert control.notify(LevelChanged(200, EventSource.READ)) is NotifyResult.NOTHING_TO_PUBLISH
+    assert control.notify(LevelChanged(200, source=EventSource.READ)) is NotifyResult.NOTHING_TO_PUBLISH
     assert control.control_info.state.value == "0"  # the declared default, untouched
 
     assert _crossing(_last_acted_control(), 50, 200) == "1"
@@ -268,11 +268,11 @@ def test_last_acted_does_not_remember_an_unknown_level():
     """MASK is no side of a crossing: last_acted keeps the last real level to compare against,
     so the rise to 200 is not read as a fall from 255."""
     control = _last_acted_control()
-    control.notify(LevelChanged(100, EventSource.READ))  # the base, from a poll
+    control.notify(LevelChanged(100, source=EventSource.READ))  # the base, from a poll
 
-    assert control.notify(LevelChanged(MASK, EventSource.READ)) is NotifyResult.NOTHING_TO_PUBLISH
+    assert control.notify(LevelChanged(MASK, source=EventSource.READ)) is NotifyResult.NOTHING_TO_PUBLISH
 
-    assert control.notify(LevelChanged(200, EventSource.OBSERVED)) is NotifyResult.PUBLISH_STATE
+    assert control.notify(LevelChanged(200, source=EventSource.OBSERVED)) is NotifyResult.PUBLISH_STATE
     assert control.control_info.state.value == "1"  # 100 -> 200 crosses up-on (150)
 
 
@@ -416,7 +416,7 @@ def test_unsettled_value_corrected_by_resync():
     read corrects it to the settled level (no early re-read needed)."""
     control = _level_control()
     _observe(control, DAPC(ADDR, 200))  # optimistic target
-    control.notify(LevelChanged(150, EventSource.READ))  # confirm read mid-fade
+    control.notify(LevelChanged(150, source=EventSource.READ))  # confirm read mid-fade
     assert control.current_level == 150
-    control.notify(LevelChanged(200, EventSource.READ))  # later re-sync read
+    control.notify(LevelChanged(200, source=EventSource.READ))  # later re-sync read
     assert control.current_level == 200

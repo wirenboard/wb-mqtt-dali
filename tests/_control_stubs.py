@@ -14,7 +14,7 @@ from wb.mqtt_dali.common_dali_device import (
     SingleQueryControl,
 )
 from wb.mqtt_dali.device_publisher import ControlInfo
-from wb.mqtt_dali.events import BusEvent
+from wb.mqtt_dali.events import BusEvent, EventSource
 
 
 class ReadableControl(SingleQueryControl):
@@ -39,4 +39,4 @@ class ReadableControl(SingleQueryControl):
 
     def decode_response(self, response: Optional[Response]) -> BusEvent:
         self.decoded_responses.append(response)
-        return BusEvent()  # a bare marker: no control's notify reacts to it
+        return BusEvent(source=EventSource.READ)  # a bare marker: no control's notify reacts to it

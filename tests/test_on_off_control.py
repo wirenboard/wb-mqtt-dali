@@ -29,6 +29,7 @@ from wb.mqtt_dali.dali_common_parameters import FadeTimeFadeRateParam
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.events import EventSource, LevelChanged
 from wb.mqtt_dali.on_off_control import (
     OffAction,
     OffActionMode,
@@ -41,6 +42,7 @@ from wb.mqtt_dali.on_off_control import (
     on_off_config_to_json,
 )
 from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
+from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 from wb.mqtt_dali.wbmqtt import ControlError
 
 from ._on_off_helpers import BusScript, ScriptedBus, frames, group_settings
@@ -421,6 +423,31 @@ class OnOffStateTest(VirtualTimeTestCase):
         control = _control(SCENE_CONFIG, fade_code=4)
         self.assertEqual(frames(control.get_setup_commands(ADDR, "0")), frames([Off(ADDR)]))
 
+    def test_recall_of_the_last_active_level_shows_on(self):
+        """A recall of the last active level brings no level event: a failed one leaves "0", a
+        successful one shows "1", so a "0" right after it goes out."""
+        control = _control(_last_active_config())
+        control.update_from_percent("0.000")
+        control.apply_command_result("1", [WbGatewayTransmissionError()])
+        self.assertEqual(control.control_info.state.value, "0")
+
+        control.apply_command_result("1", [None])
+        self.assertEqual(control.control_info.state.value, "1")
+        self.assertEqual(frames(control.get_setup_commands(ADDR, "0")), frames([Off(ADDR)]))
+
+    def test_write_error_holds_on_a_prediction_and_clears_on_a_read(self):
+        """``on_off`` holding ``w`` takes an observed level and keeps ``w``; the next read clears it."""
+        control = _control(SCENE_CONFIG)
+        control.update_from_percent("0.000")
+        control.control_info.state.set_write_error()
+
+        control.notify(LevelChanged(200, source=EventSource.OBSERVED))
+        self.assertEqual(control.control_info.state.value, "1")
+        self.assertEqual(control.control_info.state.error, ControlError.WRITE)
+
+        control.notify(LevelChanged(200, source=EventSource.READ))
+        self.assertEqual(control.control_info.state.error, ControlError.NONE)
+
     async def test_write_leaves_the_publish_to_the_observed_command(self):
         """A switch write puts its action on the bus and publishes no value of its own; the
         level the confirming read finds afterwards is what sets the state."""
@@ -471,8 +498,8 @@ class OnOffStateTest(VirtualTimeTestCase):
             self.assertEqual(harness.value_publishes(group.mqtt_id, ON_OFF), ["1"])
 
     async def test_on_off_invalid_mqtt_payload_sends_nothing(self):
-        """Garbage written to the on_off control topic sends no bus commands and
-        surfaces a write error on the control."""
+        """Garbage written to the on_off control topic sends no bus commands, surfaces a write
+        error and publishes the last known value again."""
         async with ScriptedBus() as harness:
             bus = await harness.start_bus({"devices": [_device_entry(_dapc_config())]})
             device = bus.dali_devices[0]
@@ -484,7 +511,7 @@ class OnOffStateTest(VirtualTimeTestCase):
 
             self.assertEqual(harness.sent, [])
             self.assertEqual(harness.control_error(device.mqtt_id, ON_OFF), ControlError.WRITE.to_mqtt())
-            self.assertEqual(harness.value_publishes(device.mqtt_id, ON_OFF), [])
+            self.assertEqual(harness.value_publishes(device.mqtt_id, ON_OFF), ["0"])
 
 
 class OnOffDeviceEditStateTest(VirtualTimeTestCase):

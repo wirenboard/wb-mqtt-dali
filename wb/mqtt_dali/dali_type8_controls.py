@@ -13,7 +13,6 @@ from .common_dali_device import MqttControl, NotifyResult
 from .dali_type8_common import ColourComponent, is_unset_component_value
 from .device_publisher import ControlInfo
 from .events import BusEvent, ColourChanged, EventSource
-from .wbmqtt import ControlError
 
 
 class ColourComponentControl(MqttControl):
@@ -24,8 +23,8 @@ class ColourComponentControl(MqttControl):
 
     A component carried empty (the read cycle failed) or carrying no colour value (the gear
     would not name it) is not a measurement: the reading control puts ``ControlError.READ`` on
-    itself, while its writable ``set_*`` mirror means "requested", not "measured", and simply
-    keeps quiet.
+    itself, while its writable ``set_*`` mirror means "requested", not "measured": it keeps its
+    value, and a successful read only settles its errors.
     """
 
     def __init__(
@@ -42,23 +41,25 @@ class ColourComponentControl(MqttControl):
         )
         self._components = tuple(components)
 
-    def notify(self, event: BusEvent) -> NotifyResult:
+    def notify(self, event: BusEvent) -> NotifyResult:  # pylint: disable=too-many-return-statements
         if not isinstance(event, ColourChanged):
             return NotifyResult.NOTHING_TO_PUBLISH
         mine = {c: event.components[c] for c in self._components if c in event.components}
         if len(mine) < len(self._components):
             return NotifyResult.NOTHING_TO_PUBLISH
-        is_setpoint = self.is_writable()
-        if not is_setpoint and event.source is EventSource.OBSERVED and self.control_info.state.error:
+        if event.source is EventSource.OBSERVED and self.control_info.state.has_read_error():
             return NotifyResult.NOTHING_TO_PUBLISH
         if any(raw is None or is_unset_component_value(c, raw) for c, raw in mine.items()):
-            if is_setpoint:
+            if self.is_writable():
+                if self.control_info.state.error and event.source is EventSource.READ and not event.failed:
+                    self.control_info.state.clear_errors()
+                    return NotifyResult.PUBLISH_STATE
                 return NotifyResult.NOTHING_TO_PUBLISH
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
         self.control_info.state.value = self._format(mine)
-        if not is_setpoint:
-            self.control_info.state.error = ControlError.NONE
+        if event.source is EventSource.READ:
+            self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
     # --- Hooks for subclasses ---

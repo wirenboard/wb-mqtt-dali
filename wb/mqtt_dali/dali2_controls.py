@@ -8,7 +8,13 @@ from .common_dali_device import MqttControl, MqttControlBase, NotifyResult
 from .device import absolute_input_device, feedback, general_purpose_sensor
 from .device_publisher import ControlInfo
 from .events import BusEvent, Dali2InputEvent
-from .wbmqtt import ControlMeta, ControlState, PublishPolicy, TranslatedTitle
+from .wbmqtt import (
+    PUSHBUTTON_CONTROL_TYPE,
+    ControlMeta,
+    ControlState,
+    PublishPolicy,
+    TranslatedTitle,
+)
 
 
 class _InstanceEventControl(MqttControlBase):
@@ -49,7 +55,8 @@ def _event_control(  # pylint: disable=too-many-arguments, R0917
             id=control_id,
             state=ControlState(
                 meta=ControlMeta(control_type, title, read_only=True, order=order),
-                value="0",
+                # A press is an event: there is none before the first one comes.
+                value=None if control_type == PUSHBUTTON_CONTROL_TYPE else "0",
             ),
         ),
         instance_index,
@@ -251,7 +258,6 @@ def get_feedback_controls(feature_address: Instance, suffix: str, order_base: in
                         read_only=False,
                         order=order_base,
                     ),
-                    value="0",
                 ),
             ),
             commands_builder=lambda short_address, _value, addr=feature_address: [
@@ -271,7 +277,6 @@ def get_feedback_controls(feature_address: Instance, suffix: str, order_base: in
                         read_only=False,
                         order=order_base + 1,
                     ),
-                    value="0",
                 ),
             ),
             commands_builder=lambda short_address, _value, addr=feature_address: [

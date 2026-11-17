@@ -168,7 +168,9 @@ class EventSyncCoordinator:  # pylint: disable=too-many-instance-attributes
                     # scheduled themselves is asked for directly.
                     self._schedule_level_confirmations(device, settle_at)
                 else:
-                    await self._dispatch(device, LevelChanged(predicted, EventSource.OBSERVED, settle_at))
+                    await self._dispatch(
+                        device, LevelChanged(predicted, source=EventSource.OBSERVED, settle_at=settle_at)
+                    )
             # A scene sets colour as well as level, whatever the level side made of it.
             if isinstance(command, GoToScene) and device.dt8_handler is not None:
                 await self._apply_scene_colour(device, command.param, settle_at)

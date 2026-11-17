@@ -54,7 +54,7 @@ from .wbdali_utils import (
     is_transmission_error_response,
     send_with_retry,
 )
-from .wbmqtt import ControlError, TranslatedTitle, is_pushbutton
+from .wbmqtt import ControlError, PublishPolicy, TranslatedTitle, is_pushbutton
 
 # A device is allowed to ignore commands until 300 ms after Reset started
 # (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
@@ -1215,18 +1215,27 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 device_id,
             )
             return
+        state = control.control_info.state
         try:
             task = ApplicationControllerTask(ApplicationControllerTaskType.EXECUTE_CONTROL, key)
             self._tasks_queue.put_nowait(task)
             await task.future
-            await self._device_publisher.set_control_error(device_id, control_id, ControlError.NONE)
-            new_value = control.control_info.state.value
-            # A press is the one value no event reports, so confirm is what puts it on the topic.
-            if is_pushbutton(control.control_info.state.meta) and new_value is not None:
-                await self._device_publisher.set_control_value(device_id, control_id, new_value)
+            if state.has_write_error():
+                # homeui shows the value it sent until a publication on the topic replaces it.
+                await self._device_publisher.publish_control_state(
+                    device_id, control_id, state.value, state.error, publish_value_policy=PublishPolicy.ALWAYS
+                )
+            else:
+                # A command publishes no value of its own, except a press, which no event reports.
+                await self._device_publisher.publish_control_state(
+                    device_id, control_id, payload if is_pushbutton(state.meta) else None, state.error
+                )
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
-            await self._device_publisher.set_control_error(device_id, control_id, ControlError.WRITE)
+            state.set_write_error()
+            await self._device_publisher.publish_control_state(
+                device_id, control_id, state.value, state.error, publish_value_policy=PublishPolicy.ALWAYS
+            )
 
     def _get_bus_capabilities(self) -> AggregatedCapabilities:
         return aggregate_capabilities(self.dali_devices)
@@ -1471,15 +1480,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         ],
                         return_exceptions=True,
                     )
-                    for (control_task, value_to_set), result in zip(controls, results):
-                        _device, control = control_task.data
+                    for (control_task, _value_to_set), result in zip(controls, results):
                         if control_task.future.done():
                             continue
                         if isinstance(result, Exception):
                             control_task.future.set_exception(result)
                             continue
                         control_task.future.set_result(result)
-                        control.control_info.state.value = value_to_set
                 except Exception as e:  # pylint: disable=broad-exception-caught
                     # Guard against an unexpected failure while draining/resolving the
                     # batch: resolve every still-pending pulled-off future so no

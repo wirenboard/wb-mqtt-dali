@@ -7,7 +7,7 @@ from typing import Optional
 
 import jsonschema
 from dali.address import Address
-from dali.command import Command
+from dali.command import Command, Response
 from dali.gear.general import (
     DAPC,
     DTR0,
@@ -232,15 +232,15 @@ class OnOffControl(MqttControlBase):
         if not isinstance(event, LevelChanged):
             return NotifyResult.NOTHING_TO_PUBLISH
         if event.failed:
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
         if event.raw_level is None:
             return NotifyResult.NOTHING_TO_PUBLISH
-        # Applying a predicted value while our own read is failing would clear /meta/error=r.
-        if event.source is EventSource.OBSERVED and self.control_info.state.error:
+        if event.source is EventSource.OBSERVED and self.control_info.state.has_read_error():
             return NotifyResult.NOTHING_TO_PUBLISH
         self.control_info.state.value = "0" if event.raw_level == 0 else "1"
-        self.control_info.state.error = ControlError.NONE
+        if event.source is EventSource.READ:
+            self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
     def update_from_percent(self, percent: str) -> None:
@@ -249,7 +249,12 @@ class OnOffControl(MqttControlBase):
             self.control_info.state.value = "0" if float(percent) == 0.0 else "1"
         except ValueError:
             return
-        self.control_info.state.error = ControlError.NONE
+        self.control_info.state.clear_errors()
+
+    def apply_command_result(self, value_to_set: str, responses: list[Response]) -> None:
+        super().apply_command_result(value_to_set, responses)
+        if not self.control_info.state.error:
+            self.control_info.state.value = value_to_set
 
     # --- Private ---
 

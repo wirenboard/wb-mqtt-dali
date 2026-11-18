@@ -16,6 +16,7 @@ from typing import (
     NamedTuple,
     Optional,
     Protocol,
+    Sequence,
     Union,
     runtime_checkable,
 )
@@ -364,11 +365,16 @@ class DaliDeviceAddress:
     random: int
 
 
-def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
+MemoryValueClass = type[location.MemoryValue]
+
+
+def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ):
+    """Read ``value_classes`` of the bank, or all of its values when ``value_classes`` is None."""
     for i in range(3):
         try:
             last_address = yield from bank.LastAddress.read(short_address)
@@ -382,10 +388,16 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
                 raise
     # Reading the last address also sets DTR1 appropriately
 
-    # Bank 0 has a useful value at address 0x02; all other banks
-    # use this for the lock/latch byte
-    start_address = 0x02 if bank.address == 0 else 0x03
-    commands_count = last_address - start_address + 1
+    if value_classes is None:
+        # Bank 0 has a useful value at address 0x02; all other banks
+        # use this for the lock/latch byte
+        start_address = 0x02 if bank.address == 0 else 0x03
+        end_address = last_address
+    else:
+        addresses = [loc.address for value in value_classes for loc in value.locations]
+        start_address = min(addresses)
+        end_address = min(max(addresses), last_address)
+    commands_count = end_address - start_address + 1
     raw_data = [None] * start_address
 
     first_unread_index = 0
@@ -428,7 +440,7 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
         )
 
     result = {}
-    for memory_value in bank.values:
+    for memory_value in bank.values if value_classes is None else value_classes:
         try:
             r = memory_value.from_list(raw_data)
         except MemoryLocationNotImplemented:
@@ -445,6 +457,7 @@ async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-pos
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
     error_label: Optional[str],
     logger: logging.Logger,
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ) -> dict[str, Any]:
     """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
 
@@ -454,7 +467,7 @@ async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-pos
     """
     try:
         data = await driver.run_sequence(
-            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION, logger
+            read_memory_bank(bank, short_address, compat, value_classes), FramePriority.CONFIGURATION, logger
         )
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
@@ -462,12 +475,13 @@ async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-pos
     return {mv.name: parsed for mv, parsed in data.items() if not isinstance(parsed, FlagValue)}
 
 
-async def try_read_bank_as_dict(
+async def try_read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
     logger: logging.Logger,
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ) -> Optional[dict[str, Any]]:
     """Like ``read_bank_as_dict`` but returns ``None`` instead of raising on bank failure.
 
@@ -475,7 +489,7 @@ async def try_read_bank_as_dict(
     can proceed without it.
     """
     try:
-        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger)
+        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger, value_classes)
     except RuntimeError:
         return None
 
@@ -660,7 +674,12 @@ class GeneralMemoryParams(SettingsParamBase):
             self._update_info(
                 res,
                 await driver.run_sequence(
-                    read_memory_bank(bank0, short_address, self._compat),
+                    read_memory_bank(
+                        bank0,
+                        short_address,
+                        self._compat,
+                        [v for v in self.memory_fields_to_json_params if v.bank is bank0],
+                    ),
                     FramePriority.CONFIGURATION,
                     logger,
                 ),
@@ -672,7 +691,12 @@ class GeneralMemoryParams(SettingsParamBase):
             self._update_info(
                 res,
                 await driver.run_sequence(
-                    read_memory_bank(oem.BANK_1, short_address, self._compat),
+                    read_memory_bank(
+                        oem.BANK_1,
+                        short_address,
+                        self._compat,
+                        [v for v in self.memory_fields_to_json_params if v.bank is oem.BANK_1],
+                    ),
                     FramePriority.CONFIGURATION,
                     logger,
                 ),

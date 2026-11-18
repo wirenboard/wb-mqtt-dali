@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.42.0) stable; urgency=medium
+
+  * Device settings open faster: only the part of a device memory bank that
+    holds the shown values is read, not the whole bank. Devices with long
+    manufacturer data in their memory banks gain the most
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 18 Nov 2026 15:33:16 +0500
+
 wb-mqtt-dali (1.41.5) stable; urgency=medium
 
   * Tests only, no changes for users

@@ -3,11 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from e2e.large_installation.installation_profile import (
+from e2e.emulator.installation_profile import (
     DALI_CONFIG_FILE,
     DEVICES_STATE_FILE,
     KNOWN_GEAR_PRODUCTS,
-    PROFILES_DIR,
     SERIAL_CONFIG_FILE,
     GearModel,
     Parity,
@@ -121,10 +120,11 @@ class DevicesStateTest(unittest.TestCase):
 
 
 class ResolveProfileTest(unittest.TestCase):
-    def test_bare_name_is_a_shipped_profile(self):
-        self.assertEqual(resolve_profile_path("site"), PROFILES_DIR / "site")
-        self.assertEqual(resolve_profile_path("./site"), Path("site"))
-        self.assertEqual(resolve_profile_path("/tmp/site"), Path("/tmp/site"))
+    def test_bare_name_is_a_profile_of_the_e2e(self):
+        profiles = Path("/e2e/profiles")
+        self.assertEqual(resolve_profile_path("site", profiles), profiles / "site")
+        self.assertEqual(resolve_profile_path("./site", profiles), Path("site"))
+        self.assertEqual(resolve_profile_path("/tmp/site", profiles), Path("/tmp/site"))
 
     def test_directory_path_is_loaded(self):
         """A directory with the three files loads as a profile."""
@@ -135,37 +135,5 @@ class ResolveProfileTest(unittest.TestCase):
                 (DEVICES_STATE_FILE, {"1": {"gear": {"4": [7]}}}),
             ):
                 Path(tmp, name).write_text(json.dumps(data), encoding="utf-8")
-            result = load_profile(tmp)
+            result = load_profile(Path(tmp))
         self.assertEqual(result.buses[0].gear[1].groups, frozenset({7}))
-
-
-class ShippedProfilesTest(unittest.TestCase):
-    def test_site_matches_the_object(self):
-        """The site profile has the object's 2 / 28 / 25 gear, 14 neighbours, one group per gear."""
-        result = load_profile("site")
-        self.assertEqual([len(b.gear) for b in result.buses], [2, 28, 25])
-        self.assertEqual(len(result.neighbours), 14)
-        self.assertTrue(all(len(g.groups) == 1 for b in result.buses for g in b.gear))
-
-    def test_full_gateway_fills_every_address(self):
-        """64 gear with 52 OTI and 64 control devices with instances 1-4 on each of 3 buses."""
-        result = load_profile("full_gateway")
-        energy = [sum(g.model == GearModel.ENERGY for g in b.gear) for b in result.buses]
-        self.assertEqual([len(b.gear) for b in result.buses], [64] * 3)
-        self.assertEqual(energy, [52] * 3)
-        self.assertEqual([len(b.control_devices) for b in result.buses], [64] * 3)
-        self.assertTrue(
-            all(d.instance_types == (1, 2, 3, 4) for b in result.buses for d in b.control_devices)
-        )
-
-    def test_site_slow_setup_guards_four_relays(self):
-        """site-slow-setup is site with guard_interval_us 150000 on WB-MR6C v.3 32, 45, 51, 53."""
-        result = load_profile("site-slow-setup")
-        guarded = {
-            int(d["slave_id"]): d["device_type"]
-            for d in result.serial_config["devices"]
-            if d.get("guard_interval_us") == 150000
-        }
-        self.assertEqual(guarded, dict.fromkeys((32, 45, 51, 53), "WB-MR6C v.3"))
-        self.assertEqual(sum("guard_interval_us" in d for d in result.serial_config["devices"]), len(guarded))
-        self.assertEqual(result.buses, load_profile("site").buses)

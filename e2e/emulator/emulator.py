@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Emulator process of the large-installation stand: the RS-485 line on a pty with the WB-DALI
-# gateway (its DALI buses and devices) and the neighbour devices from the installation profile.
+# Emulator process: the RS-485 line on a pty with the WB-DALI gateway (its DALI buses and devices)
+# and the neighbour devices from the installation profile.
 
 from __future__ import annotations
 
@@ -15,20 +15,20 @@ from pathlib import Path
 # Puts the checkout root on sys.path when run as a script; pylint does not see the script directory.
 import checkout_path  # pylint: disable=import-error,unused-import
 
-from e2e.large_installation.dali_fakes import ControlDevice, DaliBus, EmulatedGear
-from e2e.large_installation.installation_profile import (
+from e2e.emulator.dali_fakes import ControlDevice, DaliBus, EmulatedGear
+from e2e.emulator.installation_profile import (
     GATEWAY_DEVICE_TYPE,
     InstallationProfile,
     TimingProfile,
     load_profile,
 )
-from e2e.large_installation.modbus_rtu import ModbusSlave, RtuLine
-from e2e.large_installation.template_device import (
+from e2e.emulator.modbus_rtu import ModbusSlave, RtuLine
+from e2e.emulator.template_device import (
     INSTALLED_TEMPLATES_DIR,
     TemplateDevice,
     load_installed_template,
 )
-from e2e.large_installation.wbdali_gateway import EmulatedWbDali
+from e2e.emulator.wbdali_gateway import EmulatedWbDali
 
 GATEWAY_FW_VERSION = "1.2.3"
 # wb-mqtt-serial looks the gateway's firmware up in the release by this signature.
@@ -65,7 +65,7 @@ class Emulator:  # pylint: disable=too-few-public-methods
 
 
 async def run(args: argparse.Namespace) -> None:
-    profile = load_profile(args.profile)
+    profile = load_profile(Path(args.profile))
     emulator = Emulator(profile, Path(args.templates))
     master, slave = os.openpty()
     # The slave end stays open for the emulator's life, so wb-mqtt-serial can close and reopen the port.
@@ -83,8 +83,8 @@ async def run(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="RS-485 / WB-DALI emulator of the large-installation stand")
-    parser.add_argument("--profile", default="site", help="Profile name or directory")
+    parser = argparse.ArgumentParser(description="RS-485 / WB-DALI emulator")
+    parser.add_argument("--profile", required=True, help="Profile directory")
     parser.add_argument("--port", required=True, help="Symlink to create for the serial side of the pty")
     parser.add_argument("--templates", default=str(INSTALLED_TEMPLATES_DIR), help="wb-mqtt-serial templates")
     args = parser.parse_args(argv[1:])

@@ -10,13 +10,8 @@ from dali.gear import general as gear_general
 from dali.gear import led
 from dali.memory import diagnostics, energy, maintenance, oem
 
-from e2e.large_installation.dali_fakes import (
-    ENERGY_WH,
-    ControlDevice,
-    DaliBus,
-    EmulatedGear,
-)
-from e2e.large_installation.installation_profile import (
+from e2e.emulator.dali_fakes import ENERGY_WH, ControlDevice, DaliBus, EmulatedGear
+from e2e.emulator.installation_profile import (
     KNOWN_GEAR_PRODUCTS,
     ControlDeviceSpec,
     GearModel,

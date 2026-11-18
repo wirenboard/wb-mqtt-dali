@@ -1,4 +1,4 @@
-# Run as scripts, the stand modules import each other as `e2e.large_installation.*` from the checkout.
+# Run as scripts, the e2e modules import each other as `e2e.*` from the checkout.
 import sys
 from pathlib import Path
 

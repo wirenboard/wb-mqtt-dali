@@ -42,6 +42,10 @@ class EventPriority(enum.IntEnum):
     HIGH = 2
 
 
+# WB-DALI sends input registers before holding ones; discrete and coil placement is assumed.
+EVENT_TYPE_ORDER = (EventType.INPUT, EventType.HOLDING, EventType.DISCRETE, EventType.COIL)
+
+
 @dataclass(frozen=True)
 class EventKey:
     type: EventType
@@ -149,7 +153,12 @@ class DeviceEvents:
         self._flag = (self._flag + 1) & 0xFF
         used = 0
         ordered = sorted(
-            self._pending.items(), key=lambda item: (-self.enabled.get(item[0], EventPriority.LOW), item[1])
+            self._pending.items(),
+            key=lambda item: (
+                -self.enabled.get(item[0], EventPriority.LOW),
+                EVENT_TYPE_ORDER.index(item[0].type),
+                item[0].address,
+            ),
         )
         keys: dict[EventKey, int] = {}
         for key, sequence in ordered:

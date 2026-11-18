@@ -6,16 +6,16 @@ from dali.address import DeviceShort, GearBroadcast, GearShort, InstanceNumber
 from dali.device.general import QueryInstanceType
 from dali.gear.general import QueryActualLevel, QueryControlGearPresent
 
-from e2e.large_installation.dali_fakes import ControlDevice, DaliBus, EmulatedGear
-from e2e.large_installation.fast_modbus import EventType, ModbusFunction
-from e2e.large_installation.installation_profile import (
+from e2e.emulator.dali_fakes import ControlDevice, DaliBus, EmulatedGear
+from e2e.emulator.fast_modbus import EventType, ModbusFunction
+from e2e.emulator.installation_profile import (
     ControlDeviceSpec,
     GearModel,
     GearSpec,
     TimingProfile,
 )
-from e2e.large_installation.template_device import DeviceTemplate, RegisterKind
-from e2e.large_installation.wbdali_gateway import (
+from e2e.emulator.template_device import DeviceTemplate, RegisterKind
+from e2e.emulator.wbdali_gateway import (
     DRIVER,
     REPLIES_REGISTER,
     EmulatedWbDali,
@@ -245,7 +245,7 @@ class RecordedSleepCase(unittest.IsolatedAsyncioTestCase):
             self.delays.append(round(delay * 1000, 3))
             await REAL_SLEEP(0)
 
-        patcher = unittest.mock.patch("e2e.large_installation.wbdali_gateway.asyncio.sleep", record)
+        patcher = unittest.mock.patch("e2e.emulator.wbdali_gateway.asyncio.sleep", record)
         patcher.start()
         self.addCleanup(patcher.stop)
         task = asyncio.create_task(self.gateway.run())

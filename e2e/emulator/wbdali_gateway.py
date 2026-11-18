@@ -10,13 +10,9 @@ from typing import Callable, Optional
 
 from dali.frame import ForwardFrame
 
-from e2e.large_installation.dali_fakes import DaliBus
-from e2e.large_installation.installation_profile import TimingProfile
-from e2e.large_installation.template_device import (
-    DeviceTemplate,
-    RegisterKind,
-    TemplateDevice,
-)
+from e2e.emulator.dali_fakes import DaliBus
+from e2e.emulator.installation_profile import TimingProfile
+from e2e.emulator.template_device import DeviceTemplate, RegisterKind, TemplateDevice
 from wb.mqtt_dali.wbdali import GatewayReplyStatus, WBDALIConfig
 
 DRIVER = WBDALIConfig()

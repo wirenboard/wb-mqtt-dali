@@ -1,6 +1,7 @@
 import unittest
 
 from e2e.large_installation.e2e_large_installation import (
+    DEFAULT_MAX_STARTUP_TIME_S,
     DEFAULT_PROFILE,
     IterationResult,
     Scenario,
@@ -16,7 +17,6 @@ def result(**changes) -> IterationResult:
         "startup_s": 50.0,
         "state_violations": [],
         "log_violations": [],
-        "startup_over_limit": False,
         "restarts": [],
         "traffic": StartupTraffic(0.0, []),
     }
@@ -26,16 +26,15 @@ def result(**changes) -> IterationResult:
 
 class IterationResultTest(unittest.TestCase):
     def test_clean_iteration_passes(self):
-        """A full start without violations, restarts or a startup limit passes."""
+        """A full start without violations or restarts passes."""
         self.assertFalse(result().failed)
 
     def test_each_criterion_fails_the_iteration(self):
-        """No full start, a startup over the limit, a state mismatch, a warning or a service restart."""
+        """No full start, a state mismatch, a warning or a service restart."""
         warning = LogRecord(DALI_IDENTIFIER, LogLevel.WARNING, "", "x")
         for changes in (
             {"startup_s": None},
             {"restarts": ["wb-mqtt-serial restarted during the iteration (restarts 0 -> 1)"]},
-            {"startup_over_limit": True},
             {"state_violations": ["bus 1: x"]},
             {"log_violations": [warning]},
         ):
@@ -50,7 +49,8 @@ class ParseArgsTest(unittest.TestCase):
             parse_args(["x"])
         args = parse_args(["x", "--scenario", "cold-start"])
         self.assertEqual(
-            (args.scenario, args.profile, args.max_startup_time), (Scenario.COLD_START, DEFAULT_PROFILE, None)
+            (args.scenario, args.profile, args.max_startup_time),
+            (Scenario.COLD_START, DEFAULT_PROFILE, DEFAULT_MAX_STARTUP_TIME_S),
         )
         args = parse_args(["x", "--scenario", "rpc-flood", "--profile", "mine"])
         self.assertEqual((args.scenario, args.profile), (Scenario.RPC_FLOOD, "mine"))

@@ -1,19 +1,14 @@
-import shutil
-import tempfile
 import unittest
 from dataclasses import dataclass
-from pathlib import Path
 
-from e2e.large_installation.installation_profile import (
+from e2e.emulator.installation_profile import (
     bus_device_ids,
     expected_devices,
     profile_from_configs,
 )
-from e2e.large_installation.stand import (
-    ConfigBackup,
+from e2e.large_installation.services import (
     MetaWatcher,
     build_dali_config,
-    build_serial_config,
     full_start_time,
     restarted_services,
 )
@@ -39,7 +34,7 @@ DALI_CONFIG = {
 }
 
 
-class StandConfigTest(unittest.TestCase):
+class ExpectedDevicesTest(unittest.TestCase):
     def test_expected_devices_follow_wb_mqtt_dali_naming(self):
         """Default names and ids for gear and DALI-2 devices; a custom mqtt_id is taken as is."""
         devices = expected_devices(DALI_CONFIG, "wb-dali_5")
@@ -63,53 +58,6 @@ class DaliConfigDebugTest(unittest.TestCase):
         profile = profile_from_configs({"ports": [PORT]}, DALI_CONFIG, {})
         self.assertEqual(build_dali_config(profile), {"gateways": DALI_CONFIG["gateways"]})
         self.assertTrue(profile.dali_config["debug"])
-
-
-class SerialConfigTest(unittest.TestCase):
-    def test_serial_config_section_is_kept_but_for_the_path(self):
-        """Only the gateway's port is installed, unchanged but for the pty path."""
-        other = {"path": "/dev/ttyRS485-1", "devices": [{"device_type": "WB-MSW v.4", "slave_id": "11"}]}
-        profile = profile_from_configs({"ports": [other, PORT]}, DALI_CONFIG, {})
-        config = build_serial_config(profile)
-        self.assertEqual(len(config["ports"]), 1)
-        port = config["ports"][0]
-        self.assertEqual(
-            {k: v for k, v in port.items() if k != "path"}, {k: v for k, v in PORT.items() if k != "path"}
-        )
-        self.assertNotEqual(port["path"], PORT["path"])
-
-
-class ConfigBackupTest(unittest.TestCase):
-    def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.dir)
-        self.existing = self.dir / "serial.conf"
-        self.missing = self.dir / "dali.conf"
-        self.existing.write_text("original", encoding="utf-8")
-
-    def test_take_overwrite_and_restore(self):
-        """The existing file comes back as it was, the missing one is removed again, the backups go."""
-        backup = ConfigBackup([self.existing, self.missing])
-        backup.take()
-        self.assertEqual(
-            sorted(p.name for p in self.dir.iterdir()),
-            ["serial.conf", "serial.conf.e2e_large_installation.bak"],
-        )
-        self.existing.write_text("stand", encoding="utf-8")
-        self.missing.write_text("stand", encoding="utf-8")
-        backup.restore()
-        self.assertEqual(self.existing.read_text(encoding="utf-8"), "original")
-        self.assertFalse(self.missing.exists())
-        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["serial.conf"])
-
-    def test_leftover_backup_is_refused_and_the_file_untouched(self):
-        """A backup left by an interrupted run stops the take; neither file changes."""
-        leftover = self.dir / "serial.conf.e2e_large_installation.bak"
-        leftover.write_text("older original", encoding="utf-8")
-        with self.assertRaises(RuntimeError):
-            ConfigBackup([self.existing]).take()
-        self.assertEqual(self.existing.read_text(encoding="utf-8"), "original")
-        self.assertEqual(leftover.read_text(encoding="utf-8"), "older original")
 
 
 @dataclass

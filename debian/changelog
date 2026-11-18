@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.41.5) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 18 Nov 2026 12:54:44 +0500
+
 wb-mqtt-dali (1.41.4) stable; urgency=medium
 
   * When a command to a device or group fails, its control now shows a write

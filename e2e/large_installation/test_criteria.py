@@ -1,16 +1,12 @@
 import json
 import unittest
 
+from e2e.emulator.installation_profile import ExpectedDevice, GearModel, GearSpec
 from e2e.large_installation.criteria import (
     ReportedDevice,
     bus_state_violations,
     log_violations,
     violation_classes,
-)
-from e2e.large_installation.installation_profile import (
-    ExpectedDevice,
-    GearModel,
-    GearSpec,
 )
 from e2e.large_installation.log_records import (
     DALI_IDENTIFIER,

@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from e2e.large_installation.installation_profile import ExpectedDevice, GearSpec
+from e2e.emulator.installation_profile import ExpectedDevice, GearSpec
 from e2e.large_installation.log_records import LogLevel, LogRecord, message_class
 
 

@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 from e2e.large_installation import rpc_flood
 from e2e.large_installation.rpc_flood import RpcFlood, error_data, request_params
-from e2e.large_installation.test_stand import Message
+from e2e.large_installation.test_services import Message
 
 PORT = {
     "path": "/dev/ttyX",

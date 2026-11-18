@@ -4,15 +4,15 @@ import time
 import tty
 import unittest
 
-from e2e.large_installation.fast_modbus import (
+from e2e.emulator.fast_modbus import (
     DeviceEvents,
     EventKey,
     EventPriority,
     EventType,
     ModbusFunction,
 )
-from e2e.large_installation.installation_profile import Parity, PortProfile
-from e2e.large_installation.modbus_rtu import (
+from e2e.emulator.installation_profile import Parity, PortProfile
+from e2e.emulator.modbus_rtu import (
     RESPONSE_GAP_BYTES,
     RESPONSE_GAP_FIXED_S,
     STALE_INPUT_S,
@@ -22,7 +22,7 @@ from e2e.large_installation.modbus_rtu import (
     crc_ok,
     with_crc,
 )
-from e2e.large_installation.template_device import (
+from e2e.emulator.template_device import (
     RegisterKind,
     TemplateDevice,
     template_from_dict,
@@ -136,6 +136,58 @@ class DeviceEventsTest(unittest.TestCase):
         self.events.confirm(first[2])
         second = self.events.build_response(12)
         self.assertEqual((second[3], second[7:9]), (1, (102).to_bytes(2, "big")))
+
+    def batch_keys(self, max_data_bytes: int = 100) -> list[tuple[EventType, int]]:
+        response = self.events.build_response(max_data_bytes)
+        keys, pos = [], 5
+        for _ in range(response[3]):
+            size = response[pos]
+            keys.append((EventType(response[pos + 1]), int.from_bytes(response[pos + 2 : pos + 4], "big")))
+            pos += 4 + size
+        return keys
+
+    def test_events_go_by_address_not_by_age(self):
+        """Input registers changed from the highest address down are read in ascending address order."""
+        for address in reversed(list(self.values)):
+            self.change(address, 7)
+        self.assertEqual(self.batch_keys(), [(EventType.INPUT, a) for a in (100, 101, 102)])
+
+    def test_register_type_order(self):
+        """An older holding, discrete and coil event goes after a newer input one, in that order."""
+        self.values[1] = 1
+        for event_type in (EventType.COIL, EventType.DISCRETE, EventType.HOLDING):
+            self.events.enabled[EventKey(event_type, 1)] = EventPriority.LOW
+            self.events.notify_change(EventKey(event_type, 1))
+        self.change(102, 7)
+        self.assertEqual(
+            self.batch_keys(),
+            [(EventType.INPUT, 102), (EventType.HOLDING, 1), (EventType.DISCRETE, 1), (EventType.COIL, 1)],
+        )
+
+    def test_high_priority_goes_first(self):
+        """A high-priority event at a higher address goes before low-priority ones."""
+        self.events.enabled[EventKey(EventType.INPUT, 102)] = EventPriority.HIGH
+        for address in self.values:
+            self.change(address, 7)
+        self.assertEqual(self.batch_keys(), [(EventType.INPUT, a) for a in (102, 100, 101)])
+
+    def test_busy_low_address_starves_a_higher_one(self):
+        """With room for two events, registers 100 and 101 changing before every read keep 102 waiting."""
+        self.change(102, 7)
+        for value in range(5):
+            self.change(100, value)
+            self.change(101, value)
+            keys = self.batch_keys(12)
+            self.assertEqual(keys, [(EventType.INPUT, 100), (EventType.INPUT, 101)])
+            self.events.confirm(self.events.build_response(12)[2])
+        self.assertEqual(self.batch_keys(12), [(EventType.INPUT, 102)])
+
+    def test_unconfirmed_batch_is_resent_unchanged(self):
+        """A batch left unconfirmed is sent again as is, even if a lower address changed since."""
+        self.change(101, 7)
+        first = self.batch_keys()
+        self.change(100, 7)
+        self.assertEqual(self.batch_keys(), first)
 
     def test_flag_wraps_after_255(self):
         """Flags of consecutive confirmed batches run 1..255 and wrap to 0."""

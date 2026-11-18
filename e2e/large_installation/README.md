@@ -17,8 +17,8 @@ python3 e2e/large_installation/e2e_large_installation.py --scenario cold-start -
 | `--scenario` | — | обязателен: `cold-start` или `rpc-flood` |
 | `--iterations` | `10` | число итераций |
 | `--profile` | `site` | имя каталога из `profiles/` или путь к каталогу (со `/`) |
-| `--max-startup-time <s>` | — | порог полного старта |
-| `--keep-stand` | off | не разбирать стенд в конце |
+| `--max-startup-time <s>` | `600` | сколько ждать полного старта |
+| `--keep-emulator` | off | не разбирать эмулятор в конце |
 
 Нужны установленные wb-mqtt-serial, wb-mqtt-dali (пакет или проверяемая сборка) и python-dali
 (`dali.tests.fakes`). Скрипт и эмулятор берут `wb.mqtt_dali` из своего checkout, сервисы — то, что
@@ -29,10 +29,10 @@ python3 e2e/large_installation/e2e_large_installation.py --scenario cold-start -
 ## Сценарии
 
 Итерация — холодный старт: оба сервиса останавливаются, запускаются одновременно, скрипт ждёт
-полного старта не дольше 10 мин.
+полного старта не дольше `--max-startup-time`.
 
 - `cold-start` — без нагрузки.
-- `rpc-flood` — как только wb-mqtt-serial ответил на `config/Load`, стенд разом шлёт 200 запросов
+- `rpc-flood` — как только wb-mqtt-serial ответил на `config/Load`, скрипт разом шлёт 200 запросов
   `fw-update/GetFirmwareInfo` к шлюзу. Они встают в очередь wb-mqtt-serial перед записями
   wb-mqtt-dali.
 
@@ -50,7 +50,7 @@ python3 e2e/large_installation/e2e_large_installation.py --scenario cold-start -
 2. **В журнале** wb-mqtt-dali или wb-mqtt-serial за итерацию есть запись WARNING и выше. Уровень
    wb-mqtt-serial берётся из префикса сообщения (`WARNING: `, `ERROR: `).
 3. **Сервис перезапускался**: вырос `NRestarts` из `systemctl show`.
-4. Полный старт не наступил за 10 мин или дольше `--max-startup-time`.
+4. Полный старт не наступил за `--max-startup-time`.
 
 ## Вывод
 
@@ -64,68 +64,19 @@ python3 e2e/large_installation/e2e_large_installation.py --scenario cold-start -
 
 В конце — число проваленных итераций и min / median / max полного старта.
 
-## Эмулятор
-
-`emulator.py`, один процесс на asyncio. Работает весь прогон и хранит состояние между итерациями,
-в том числе старые значения регистров ответов. Вывод — `/run/e2e-large-installation/emulator.log`.
-
-- **Линия RS-485** — Modbus RTU slave на pty, slave-сторона —
-  `/run/e2e-large-installation/ttyLargeInstallation`. Ответ уходит не раньше, чем дошёл бы по
-  проводу на скорости порта из профиля, плюс 0,23 мс + 8 символов от конца запроса. События fast
-  Modbus (0x46) — с паузой арбитража.
-- **WB-DALI** — регистры шаблона `config-wb-dali.json` плюс очередь, указатель и ответы каждой
-  шины. Размер очереди и адреса — из `WBDALIConfig` драйвера, адреса ответов (1500+) — в эмуляторе.
-  - Запись указателя во время кадра оставляет записанный указатель, перезапись слота — новую
-    команду.
-  - Время кадра (`TimingProfile`): прямой 15,8 мс (24-битный 22,5 мс); задержка обратного 7 мс,
-    обратный 9,2 мс, без ответа 10,5 мс; пауза перед прямым по приоритетам 1..5 — 13,5, 14,9,
-    16,3, 17,9, 19,5 мс; `sendtwice` — двойной.
-  - Прошивка 1.2.3, сигнатура `dali3G15`. Fast Modbus: включение событий и чтение с
-    подтверждением, без события перезагрузки.
-- **DALI-устройства** — `dali.tests.fakes.Gear` с ответами на запросы инициализации и опроса
-  wb-mqtt-dali, и свой фейк control device (random address, поиск и адресация, instances).
-  Одновременный ответ нескольких устройств даёт битый обратный кадр.
-- **Соседи** — регистры по шаблону wb-mqtt-serial (объекты с `address`, без `reg_type` — holding)
-  плюс служебные регистры WB. Из нескольких шаблонов одного `device_type` берётся тот же, что у
-  wb-mqtt-serial: последний по отсортированному пути.
-
 ## Профили
 
-Каталог из трёх файлов:
-
-| Файл | Что берётся |
-| --- | --- |
-| `wb-mqtt-serial.conf` | порт с единственным `WB-DALI`: скорость линии, slave id шлюза, соседи (`device_type`, slave id) |
-| `wb-mqtt-dali.conf` | шины `wb-dali_<slave id>`: адреса, random address, имена gear (по имени — модель), `dali2: true` — control device |
-| `devices-state.json` | шина (с 1) → `gear`: адрес → группы, `control_devices`: адрес → типы instances |
-
-```json
-{"1": {"gear": {"0": [3, 4]}, "control_devices": {"0": [1, 2, 3, 4]}}}
-```
-
-Gear без записи — без групп, control device — с instances `[1]`. Запись об устройстве или шине,
-которых нет в `wb-mqtt-dali.conf`, — ошибка.
-
-Модели gear по имени: OTI DALI 15/220-240/1A0 NFC (device types 6, 50, 51, 52, банки 1, 202,
-205–207, DT6), BK-DCL010S-AHA0700ADN, DC MINI JOLLY DALI BI; без имени — gear без GTIN и device
-types.
+Формат профиля и эмулятор — в [`e2e/emulator/README.md`](../emulator/README.md).
 
 | Профиль | Состав |
 | --- | --- |
 | `site` | объект: 14 соседей и WB-DALI 234, 2 / 28 / 25 gear по одной группе |
 | `site-slow-setup` | `site`, у четырёх WB-MR6C v.3 (32, 45, 51, 53) `guard_interval_us` 150000: запись их настроек при подключении растягивается |
 | `full_gateway` | те же соседи, на каждой из 3 шин 64 gear (по 2 группы из 16) и 64 control device с instances 1–4 |
+| `full_gateway_9600` | `full_gateway` на 9600: скорость порта и параметр скорости у устройств |
 
-## Стенд
+## Подготовка
 
-Перед прогоном скрипт:
-1. Сохраняет `/etc/wb-mqtt-serial.conf` и `/etc/wb-mqtt-dali.conf` в
-   `*.e2e_large_installation.bak` и запоминает, какие сервисы были запущены. Если бэкап остался от
-   прерванного прогона, не стартует: верните его (`mv …bak …conf`) или удалите.
-2. Останавливает сервисы и запускает эмулятор.
-3. Пишет конфиги из профиля: у wb-mqtt-serial заменяется только `path`, у wb-mqtt-dali убирается
-   `debug` (он меняет тайминги).
-
-После прогона, в том числе при ошибке и Ctrl-C: останавливает сервисы, затем эмулятор, возвращает
-конфиги и исходное состояние сервисов. С `--keep-stand` ничего не разбирается: эмулятор остаётся
-работать, скрипт печатает его PID, бэкапы остаются.
+Эмулятор и wb-mqtt-serial поднимаются, как описано в
+[«Подготовке эмулятора»](../emulator/README.md#подготовка-эмулятора). Кроме того, скрипт сохраняет
+`/etc/wb-mqtt-dali.conf` и пишет его из профиля без `debug` (он меняет тайминги).

@@ -20,11 +20,7 @@ from dali.memory.energy import BANK_202
 from dali.memory.maintenance import BANK_207
 from dali.tests import fakes
 
-from e2e.large_installation.installation_profile import (
-    ControlDeviceSpec,
-    GearModel,
-    GearSpec,
-)
+from e2e.emulator.installation_profile import ControlDeviceSpec, GearModel, GearSpec
 from wb.mqtt_dali.device import absolute_input_device, general_purpose_sensor
 
 YES = 0xFF

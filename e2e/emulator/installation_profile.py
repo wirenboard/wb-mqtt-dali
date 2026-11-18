@@ -1,6 +1,6 @@
 # Installation profile: a directory with real wb-mqtt-serial and wb-mqtt-dali configs and
-# devices-state.json, what the devices store and no config holds. The emulator and the stand
-# script load the same directory, so the emulated devices and the installed configs agree.
+# devices-state.json, what the devices store and no config holds. The emulator and the e2e script
+# load the same directory, so the emulated devices and the installed configs agree.
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 SERIAL_CONFIG_FILE = "wb-mqtt-serial.conf"
 DALI_CONFIG_FILE = "wb-mqtt-dali.conf"
 DEVICES_STATE_FILE = "devices-state.json"
@@ -107,7 +106,7 @@ class InstallationProfile:
     neighbours: tuple[NeighbourSpec, ...]
     gateway_slave_id: int
     buses: tuple[BusProfile, ...]
-    # The wb-mqtt-serial port section holding the gateway; the stand installs it verbatim but for `path`.
+    # The wb-mqtt-serial port section holding the gateway; installed verbatim but for `path`.
     serial_config: dict
     dali_config: dict
 
@@ -116,13 +115,12 @@ class InstallationProfile:
         return gateway_device_id(self.gateway_slave_id)
 
 
-def resolve_profile_path(name_or_path: str) -> Path:
-    """A bare name is a directory in `profiles/`, anything with a slash is a path."""
-    return Path(name_or_path) if "/" in name_or_path else PROFILES_DIR / name_or_path
+def resolve_profile_path(name_or_path: str, profiles_dir: Path) -> Path:
+    """A bare name is a directory in `profiles_dir`, anything with a slash is a path."""
+    return Path(name_or_path) if "/" in name_or_path else profiles_dir / name_or_path
 
 
-def load_profile(name_or_path: str) -> InstallationProfile:
-    directory = resolve_profile_path(name_or_path)
+def load_profile(directory: Path) -> InstallationProfile:
     return profile_from_configs(
         *(
             json.loads((directory / name).read_text(encoding="utf-8"))

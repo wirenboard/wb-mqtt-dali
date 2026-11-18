@@ -11,7 +11,7 @@ import tty
 from dataclasses import dataclass
 from typing import Optional, Protocol, Sequence
 
-from e2e.large_installation.fast_modbus import (
+from e2e.emulator.fast_modbus import (
     ENABLE_EVENTS,
     EVENTS_REQUEST,
     EVENTS_REQUEST_PDU_SIZE,
@@ -22,7 +22,7 @@ from e2e.large_installation.fast_modbus import (
     no_events_pdu,
     parse_events_request,
 )
-from e2e.large_installation.installation_profile import PortProfile
+from e2e.emulator.installation_profile import PortProfile
 
 CRC_SIZE = 2
 FIXED_REQUEST_SIZE = 8

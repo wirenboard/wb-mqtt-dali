@@ -3,7 +3,7 @@
 
 # Large-installation integration test: real wb-mqtt-serial and wb-mqtt-dali against an emulated
 # RS-485 port with a fully populated WB-DALI and its neighbours. Runs on the controller itself;
-# configs are replaced for the run and restored on exit. See README.md for the stand and criteria.
+# configs are replaced for the run and restored on exit. See README.md for the scenarios and criteria.
 
 from __future__ import annotations
 
@@ -15,19 +15,26 @@ import statistics
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 # Puts the checkout root on sys.path when run as a script; pylint does not see the script directory.
 import checkout_path  # pylint: disable=import-error,unused-import
 from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
-from e2e.large_installation.criteria import (
-    ReportedDevice,
-    bus_state_violations,
-    log_violations,
-    violation_classes,
+from e2e.emulator.emulator_setup import (
+    BACKUP_SUFFIX,
+    DALI_SERVICE,
+    SERIAL_CONFIG,
+    SERIAL_SERVICE,
+    ConfigBackup,
+    EmulatorProcess,
+    active_services,
+    build_serial_config,
+    install_serial_config,
+    systemctl,
 )
-from e2e.large_installation.installation_profile import (
+from e2e.emulator.installation_profile import (
     InstallationProfile,
     bus_device_ids,
     dali_config_buses,
@@ -35,30 +42,27 @@ from e2e.large_installation.installation_profile import (
     load_profile,
     resolve_profile_path,
 )
+from e2e.large_installation.criteria import (
+    ReportedDevice,
+    bus_state_violations,
+    log_violations,
+    violation_classes,
+)
 from e2e.large_installation.log_records import (
     DALI_IDENTIFIER,
     SERIAL_IDENTIFIER,
     LogRecord,
 )
 from e2e.large_installation.rpc_flood import RpcFlood
-from e2e.large_installation.stand import (
-    BACKUP_SUFFIX,
+from e2e.large_installation.services import (
     DALI_CONFIG,
-    DALI_SERVICE,
-    SERIAL_CONFIG,
-    SERIAL_SERVICE,
-    ConfigBackup,
-    EmulatorProcess,
     MetaWatcher,
-    active_services,
     build_dali_config,
-    build_serial_config,
     full_start_time,
-    install_stand_files,
+    install_dali_config,
     read_journal,
     restarted_services,
     service_restarts,
-    systemctl,
 )
 from e2e.large_installation.startup_traffic import FailedWrite, PortLoadSniffer
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
@@ -67,13 +71,14 @@ from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
-STARTUP_LIMIT_S = 600.0
+DEFAULT_MAX_STARTUP_TIME_S = 600.0
 WAIT_POLL_S = 5.0
 # A device whose initialisation failed is initialised by a retry after the full start
 STATE_CHECK_DELAY_S = 60.0
 RPC_TIMEOUT_S = 30.0
 SHOWN_EXAMPLES = 5
 DEFAULT_PROFILE = "site"
+PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 
 
 class Scenario(enum.Enum):
@@ -95,17 +100,12 @@ class IterationResult:
     startup_s: Optional[float]
     state_violations: list[str]
     log_violations: list[LogRecord]
-    startup_over_limit: bool
     restarts: list[str]
     traffic: StartupTraffic
 
     @property
     def failed(self) -> bool:
-        return (
-            self.startup_s is None
-            or self.startup_over_limit
-            or bool(self.state_violations or self.log_violations or self.restarts)
-        )
+        return self.startup_s is None or bool(self.state_violations or self.log_violations or self.restarts)
 
 
 class Run:  # pylint: disable=too-many-instance-attributes
@@ -146,13 +146,11 @@ class Run:  # pylint: disable=too-many-instance-attributes
             await asyncio.sleep(STATE_CHECK_DELAY_S)
         state_violations = await self._check_state()
         records = await read_journal(DALI_IDENTIFIER, t0) + await read_journal(SERIAL_IDENTIFIER, t0)
-        limit = self.args.max_startup_time
         return IterationResult(
             label=label,
             startup_s=startup_s,
             state_violations=state_violations,
             log_violations=log_violations(records),
-            startup_over_limit=limit is not None and startup_s is not None and startup_s > limit,
             restarts=restarted_services(services, await service_restarts(SERIAL_SERVICE, DALI_SERVICE)),
             traffic=StartupTraffic(t0, list(self.sniffer.failed)),
         )
@@ -182,17 +180,17 @@ class Run:  # pylint: disable=too-many-instance-attributes
         await self.sniffer.stop(self.dispatcher)
 
     async def _wait_full_start(self, watcher: MetaWatcher) -> Optional[float]:
-        """When every bus works and every device is initialised, None past the scenario limit."""
+        """When every bus works and every device is initialised, None past `--max-startup-time`."""
         ids = {d.mqtt_id for d in self.devices} | set(
             bus_device_ids(self.dali_config, self.profile.gateway_device_id)
         )
-        deadline = time.monotonic() + STARTUP_LIMIT_S
+        deadline = time.monotonic() + self.args.max_startup_time
         while time.monotonic() < deadline:
             if (started_at := full_start_time(watcher.seen, ids)) is not None:
                 return started_at
             await asyncio.sleep(WAIT_POLL_S)
         logging.warning(
-            "Not started within %.0f s: %s", STARTUP_LIMIT_S, sorted(ids - set(watcher.seen))[:10]
+            "Not started within %.0f s: %s", self.args.max_startup_time, sorted(ids - set(watcher.seen))[:10]
         )
         return None
 
@@ -239,11 +237,9 @@ def _s(value: Optional[float]) -> str:
 def print_iteration(result: IterationResult) -> None:
     print(f"\n=== {result.label}: {'FAIL' if result.failed else 'ok'}")
     if result.startup_s is None:
-        print("  did not start fully within the scenario limit")
+        print("  did not start fully within --max-startup-time")
     for restart in result.restarts:
         print(f"  {restart}")
-    if result.startup_over_limit:
-        print("  full start over --max-startup-time")
     print(f"  criterion 1: {len(result.state_violations)} state mismatches")
     for violation in result.state_violations:
         print(f"    {violation}")
@@ -289,10 +285,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=10, help="Iterations (default: 10)")
     parser.add_argument("--profile", default=DEFAULT_PROFILE, help=f"Profile (default: {DEFAULT_PROFILE})")
     parser.add_argument(
-        "--max-startup-time", dest="max_startup_time", type=float, help="Fail above this full start, s"
+        "--max-startup-time",
+        dest="max_startup_time",
+        type=float,
+        default=DEFAULT_MAX_STARTUP_TIME_S,
+        help=f"Wait this long for the full start, s (default: {DEFAULT_MAX_STARTUP_TIME_S:.0f})",
     )
     parser.add_argument(
-        "--keep-stand", dest="keep_stand", action="store_true", help="Leave the stand running"
+        "--keep-emulator", dest="keep_emulator", action="store_true", help="Leave the emulator running"
     )
     return parser.parse_args(argv[1:])
 
@@ -301,7 +301,8 @@ async def main(argv: list[str]) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("mqtt_client").setLevel(logging.INFO)
-    profile = load_profile(args.profile)
+    profile_path = resolve_profile_path(args.profile, PROFILES_DIR)
+    profile = load_profile(profile_path)
     client = make_mqtt_client(DEFAULT_BROKER_URL)
     dispatcher = MQTTDispatcher(client)
     async with client:
@@ -309,18 +310,19 @@ async def main(argv: list[str]) -> int:
         were_active = await active_services(SERIAL_SERVICE, DALI_SERVICE)
         backup = ConfigBackup([SERIAL_CONFIG, DALI_CONFIG])
         backup.take()
-        emulator = EmulatorProcess(str(resolve_profile_path(args.profile)))
+        emulator = EmulatorProcess(str(profile_path))
         ok = False
         try:
             dali_config = build_dali_config(profile)
             serial_config = build_serial_config(profile)
             await systemctl("stop", DALI_SERVICE, SERIAL_SERVICE)
             await emulator.start()
-            install_stand_files(dali_config, serial_config)
+            install_dali_config(dali_config)
+            install_serial_config(serial_config)
             flood = _rpc_flood(args, profile, dispatcher, serial_config["ports"][0])
             ok = await Run(args, profile, dispatcher, emulator, dali_config, flood).run_cold_starts()
         finally:
-            await _teardown(args.keep_stand, backup, emulator, were_active)
+            await _teardown(args.keep_emulator, backup, emulator, were_active)
             dispatcher_task.cancel()
             try:
                 await dispatcher_task
@@ -338,11 +340,11 @@ def _rpc_flood(
 
 
 async def _teardown(
-    keep_stand: bool, backup: ConfigBackup, emulator: EmulatorProcess, were_active: list[str]
+    keep_emulator: bool, backup: ConfigBackup, emulator: EmulatorProcess, were_active: list[str]
 ) -> None:
-    if keep_stand:
+    if keep_emulator:
         print(
-            f"\nStand kept: emulator pid {emulator.pid}; originals in *{BACKUP_SUFFIX} "
+            f"\nEmulator kept: pid {emulator.pid}; originals in *{BACKUP_SUFFIX} "
             f"next to {SERIAL_CONFIG} and {DALI_CONFIG}"
         )
         return

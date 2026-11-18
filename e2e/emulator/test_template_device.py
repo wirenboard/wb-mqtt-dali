@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from e2e.large_installation.fast_modbus import EventKey, EventType
-from e2e.large_installation.template_device import (
+from e2e.emulator.fast_modbus import EventKey, EventType
+from e2e.emulator.template_device import (
     CONTINUOUS_READ_HOLE_VALUE,
     RegisterKind,
     TemplateDevice,

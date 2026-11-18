@@ -6,7 +6,7 @@ from e2e.large_installation.startup_traffic import (
     QueueTarget,
     queue_target,
 )
-from e2e.large_installation.test_stand import Message
+from e2e.large_installation.test_services import Message
 
 REQUESTS = "/rpc/v1/wb-mqtt-serial/port/Load/wb-mqtt-dali-abc-bus1"
 

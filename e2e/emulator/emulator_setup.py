@@ -1,6 +1,5 @@
-# Stand of the large-installation test on the controller itself: service configs (backed up and
-# restored), the emulator process with its pty, journal reading and the MQTT watcher the
-# scenarios wait on.
+# The emulator on the controller itself: service configs (backed up and restored), the emulator
+# process with its pty and the wb-mqtt-serial config that points the gateway's port at it.
 
 from __future__ import annotations
 
@@ -10,21 +9,17 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from e2e.large_installation.installation_profile import InstallationProfile
-from e2e.large_installation.log_records import LogRecord, record_from_journal_json
-from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from e2e.emulator.installation_profile import InstallationProfile
 
-STAND_DIR = Path("/run/e2e-large-installation")
-SERIAL_PTY = STAND_DIR / "ttyLargeInstallation"
-EMULATOR_LOG = STAND_DIR / "emulator.log"
+EMULATOR_DIR = Path("/run/e2e-emulator")
+SERIAL_PTY = EMULATOR_DIR / "ttyEmulator"
+EMULATOR_LOG = EMULATOR_DIR / "emulator.log"
 EMULATOR_SCRIPT = Path(__file__).resolve().parent / "emulator.py"
 SERIAL_CONFIG = Path("/etc/wb-mqtt-serial.conf")
-DALI_CONFIG = Path("/etc/wb-mqtt-dali.conf")
-BACKUP_SUFFIX = ".e2e_large_installation.bak"
+BACKUP_SUFFIX = ".e2e_emulator.bak"
 DALI_SERVICE = "wb-mqtt-dali"
 SERIAL_SERVICE = "wb-mqtt-serial"
 PROCESS_START_TIMEOUT_S = 15.0
@@ -48,39 +43,17 @@ async def systemctl(action: str, *units: str) -> None:
     await run_cmd("systemctl", action, *units)
 
 
-async def service_restarts(*units: str) -> dict[str, int]:
-    """systemd's `NRestarts` of each unit."""
-    restarts = {}
-    for unit in units:
-        output = await run_cmd("systemctl", "show", "-p", "NRestarts", "--value", unit)
-        restarts[unit] = int(output.strip() or 0)
-    return restarts
-
-
-def restarted_services(before: dict[str, int], after: dict[str, int]) -> list[str]:
-    """One message per unit that systemd restarted between the two snapshots."""
-    return [
-        f"{unit} restarted during the iteration: NRestarts {count} -> {after[unit]}"
-        for unit, count in before.items()
-        if unit in after and after[unit] != count
-    ]
-
-
 async def active_services(*units: str) -> list[str]:
     """Those of `units` that are running now."""
     return [u for u in units if (await run_cmd("systemctl", "is-active", u, check=False)).strip() == "active"]
 
 
-def build_dali_config(profile: InstallationProfile) -> dict:
-    """Stand's wb-mqtt-dali config: the profile's one but for `debug`."""
-    config = dict(profile.dali_config)
-    # DEBUG logging changes wb-mqtt-dali's timing; the object ran without it.
-    config.pop("debug", None)
-    return config
-
-
 def build_serial_config(profile: InstallationProfile) -> dict:
     return {"debug": False, "ports": [{**profile.serial_config, "path": str(SERIAL_PTY)}]}
+
+
+def install_serial_config(serial_config: dict) -> None:
+    SERIAL_CONFIG.write_text(json.dumps(serial_config, indent=2) + "\n", encoding="utf-8")
 
 
 class ConfigBackup:
@@ -121,7 +94,7 @@ class EmulatorProcess:
         self._process: Optional[subprocess.Popen] = None
 
     async def start(self) -> None:
-        STAND_DIR.mkdir(parents=True, exist_ok=True)
+        EMULATOR_DIR.mkdir(parents=True, exist_ok=True)
         SERIAL_PTY.unlink(missing_ok=True)
         with EMULATOR_LOG.open("a", encoding="utf-8") as emulator_log:
             self._process = subprocess.Popen(  # pylint: disable=consider-using-with
@@ -162,41 +135,3 @@ class EmulatorProcess:
     @property
     def pid(self) -> Optional[int]:
         return None if self._process is None else self._process.pid
-
-
-async def read_journal(identifier: str, since: float) -> list[LogRecord]:
-    """Journal records of one syslog identifier since a wall-clock time."""
-    output = await run_cmd(
-        "journalctl", "-o", "json", "--no-pager", f"--since=@{since:.6f}", f"SYSLOG_IDENTIFIER={identifier}"
-    )
-    return [record_from_journal_json(line) for line in output.splitlines() if line.strip()]
-
-
-@dataclass
-class MetaWatcher:
-    """Times of the first live `/meta` publication of each device after `start`."""
-
-    seen: dict[str, float] = field(default_factory=dict)
-
-    async def start(self, dispatcher: MQTTDispatcher) -> None:
-        await dispatcher.subscribe("/devices/+/meta", self.handle)
-
-    async def stop(self, dispatcher: MQTTDispatcher) -> None:
-        await dispatcher.unsubscribe("/devices/+/meta", self.handle)
-
-    def handle(self, message) -> None:
-        if message.retain or not message.payload:
-            return
-        self.seen.setdefault(str(message.topic).split("/")[2], time.time())
-
-
-def full_start_time(seen: dict[str, float], device_ids: set[str]) -> Optional[float]:
-    """When the last of `device_ids` published its `/meta`, None while any is still missing."""
-    if not device_ids <= set(seen):
-        return None
-    return max(seen[i] for i in device_ids)
-
-
-def install_stand_files(dali_config: dict, serial_config: dict) -> None:
-    DALI_CONFIG.write_text(json.dumps(dali_config, indent=2) + "\n", encoding="utf-8")
-    SERIAL_CONFIG.write_text(json.dumps(serial_config, indent=2) + "\n", encoding="utf-8")

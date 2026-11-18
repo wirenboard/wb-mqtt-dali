@@ -56,6 +56,52 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .wbdali import WBDALIDriver
 
+_BANK_205_VALUES = [
+    ControlGearOperatingTime,
+    ControlGearStartCounter,
+    ControlGearExternalSupplyVoltage,
+    ControlGearExternalSupplyVoltageFrequency,
+    ControlGearPowerFactor,
+    ControlGearOverallFailureCondition,
+    ControlGearOverallFailureConditionCounter,
+    ControlGearExternalSupplyUndervoltage,
+    ControlGearExternalSupplyUndervoltageCounter,
+    ControlGearExternalSupplyOvervoltage,
+    ControlGearExternalSupplyOvervoltageCounter,
+    ControlGearOutputPowerLimitation,
+    ControlGearOutputPowerLimitationCounter,
+    ControlGearThermalDerating,
+    ControlGearThermalDeratingCounter,
+    ControlGearThermalShutdown,
+    ControlGearThermalShutdownCounter,
+    ControlGearTemperature,
+    ControlGearOutputCurrentPercent,
+]
+_BANK_206_VALUES = [
+    LightSourceStartCounterResettable,
+    LightSourceStartCounter,
+    LightSourceOnTimeResettable,
+    LightSourceOnTime,
+    LightSourceVoltage,
+    LightSourceCurrent,
+    LightSourceOverallFailureCondition,
+    LightSourceOverallFailureConditionCounter,
+    LightSourceShortCircuit,
+    LightSourceShortCircuitCounter,
+    LightSourceOpenCircuit,
+    LightSourceOpenCircuitCounter,
+    LightSourceThermalDerating,
+    LightSourceThermalDeratingCounter,
+    LightSourceThermalShutdown,
+    LightSourceThermalShutdownCounter,
+    LightSourceTemperature,
+]
+_BANK_207_VALUES = [
+    RatedMedianUsefulLifeOfLuminaire,
+    InternalControlGearReferenceTemperature,
+    RatedMedianUsefulLightSourceStarts,
+]
+
 
 def _get(data: dict, cls):
     """Return the value from a memory bank data dict, or None if unavailable."""
@@ -93,6 +139,7 @@ class Type52Parameters(TypeParameters):
             self._compat,
             "DT52 memory bank 205",
             logger,
+            _BANK_205_VALUES,
         )
         cg.update(self._extract_bank205(data))
         data = await read_bank_as_dict(
@@ -102,6 +149,7 @@ class Type52Parameters(TypeParameters):
             self._compat,
             "DT52 memory bank 206",
             logger,
+            _BANK_206_VALUES,
         )
         ls.update(self._extract_bank206(data))
         data = await read_bank_as_dict(
@@ -111,6 +159,7 @@ class Type52Parameters(TypeParameters):
             self._compat,
             "DT52 memory bank 207",
             logger,
+            _BANK_207_VALUES,
         )
         v = _get(data, InternalControlGearReferenceTemperature)
         if v is not None:

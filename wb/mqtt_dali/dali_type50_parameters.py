@@ -106,6 +106,7 @@ class Type50MemoryBankParam(SettingsParamBase):
             self._compat,
             "DT50 memory bank",
             logger,
+            [spec[0] for spec in _FIELD_SPECS],
         )
 
         self._values = {}

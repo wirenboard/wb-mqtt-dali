@@ -11,7 +11,7 @@ Two invariants nothing enforces: ``settle_at`` (when the bus should have reached
 state) comes with an ``OBSERVED`` event alone, ``failed`` with a ``READ`` alone.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -22,14 +22,17 @@ from .dali_type8_common import ColourComponent
 
 
 class EventSource(Enum):
-    """Where a level/colour event came from."""
+    """Where an event came from."""
 
     READ = "read"  # the outcome of a poll, successful or failed
-    OBSERVED = "observed"  # predicted from a sniffed or own bus command
+    OBSERVED = "observed"  # a frame seen on the bus: a sniffed or own command, a DALI-2 input event
 
 
+@dataclass(frozen=True, kw_only=True)
 class BusEvent:  # pylint: disable=R0903
     """Base of everything dispatched through ``notify``."""
+
+    source: EventSource
 
 
 @dataclass(frozen=True)
@@ -40,7 +43,6 @@ class LevelChanged(BusEvent):
     """
 
     raw_level: Optional[int]
-    source: EventSource
     settle_at: Optional[float] = None
     failed: bool = False
 
@@ -55,7 +57,6 @@ class ColourChanged(BusEvent):
     """
 
     components: dict[ColourComponent, Optional[int]]
-    source: EventSource
     settle_at: Optional[float] = None
     failed: bool = False
 
@@ -68,6 +69,7 @@ class Dali2InputEvent(BusEvent):
     """
 
     event: _Event
+    source: EventSource = field(default=EventSource.OBSERVED, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,7 @@ class QuantityRead(BusEvent):
 
     response: Optional[Response]
     failed: bool
+    source: EventSource = field(default=EventSource.READ, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -118,3 +121,4 @@ class ActiveEnergyRead(BusEvent):
 
     kwh: Optional[float]
     failed: bool
+    source: EventSource = field(default=EventSource.READ, kw_only=True)

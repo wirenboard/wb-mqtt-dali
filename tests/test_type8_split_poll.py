@@ -85,7 +85,7 @@ def _whole_cycle_failure(colour_type: ColourType) -> ColourChanged:
     colour type, whichever subbatch it was that ran out of retries."""
     return ColourChanged(
         {component: None for component in COMPONENTS_BY_COLOUR_TYPE[colour_type]},
-        EventSource.READ,
+        source=EventSource.READ,
         failed=True,
     )
 
@@ -112,8 +112,8 @@ async def test_scene_colour_keeps_masked_component():
 
     assert components == {ColourComponent.RED: 1, ColourComponent.GREEN: 2, ColourComponent.BLUE: 3}
     white = CurrentWhiteControl()
-    white.notify(ColourChanged({ColourComponent.WHITE: 200}, EventSource.READ))  # known current white
-    scene_event = ColourChanged(components, EventSource.OBSERVED)
+    white.notify(ColourChanged({ColourComponent.WHITE: 200}, source=EventSource.READ))  # known current white
+    scene_event = ColourChanged(components, source=EventSource.OBSERVED)
     assert white.notify(scene_event) is NotifyResult.NOTHING_TO_PUBLISH
     assert white.control_info.state.value == "200"
 
@@ -208,7 +208,7 @@ async def test_type8_colour_poll_split_into_subbatches():
                 ColourComponent.BLUE: 30,
                 ColourComponent.WHITE: 40,
             },
-            EventSource.READ,
+            source=EventSource.READ,
         )
     ]
 

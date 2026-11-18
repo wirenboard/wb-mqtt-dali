@@ -82,7 +82,7 @@ from wb.mqtt_dali.virtual_devices import (
     GroupStateSource,
     GroupVirtualDevice,
 )
-from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
+from wb.mqtt_dali.wbdali_utils import MASK, MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
 from ._virtual_time import VirtualTimeEventLoop, VirtualTimeTestCase
@@ -337,7 +337,7 @@ class TestLevelSync(_CoordinatorTestCase):
         )
         device = _GearDevice(5, max_level=254, last_acted=last_acted)
         actual = device.get_mqtt_control("actual_level")
-        device.notify_all(LevelChanged(50, EventSource.READ))  # prime level 50 on both controls
+        device.notify_all(LevelChanged(50, source=EventSource.READ))  # prime level 50 on both controls
         _prime_poll(actual)
         _prime_poll(last_acted)
         coordinator, publisher = _coordinator([device])
@@ -364,7 +364,7 @@ class TestLevelSync(_CoordinatorTestCase):
         _prime_poll(last_acted)
         coordinator, _ = _coordinator([device])
 
-        await coordinator.notify_poll_event(device, LevelChanged(100, EventSource.READ))
+        await coordinator.notify_poll_event(device, LevelChanged(100, source=EventSource.READ))
 
         assert actual.next_due_at == NOW + RESYNC_INTERVAL
         assert last_acted.next_due_at == NOW + RESYNC_INTERVAL
@@ -388,7 +388,7 @@ class TestLevelSync(_CoordinatorTestCase):
         )
         device = _GearDevice(5, max_level=254, last_acted=last_acted, fade_code=8)
         actual = device.get_mqtt_control("actual_level")
-        device.notify_all(LevelChanged(200, EventSource.READ))  # the level both compare against
+        device.notify_all(LevelChanged(200, source=EventSource.READ))  # the level both compare against
         actual.control_info.state.error = ControlError.READ  # its own poll is failing
         _prime_poll(actual)
         _prime_poll(last_acted)
@@ -427,7 +427,7 @@ class TestLevelSync(_CoordinatorTestCase):
             down_off=SimpleNamespace(value=20),
         )
         device = _GearDevice(5, max_level=254, last_acted=last_acted, fade_code=8)
-        device.notify_all(LevelChanged(50, EventSource.READ))  # the level the crossing starts from
+        device.notify_all(LevelChanged(50, source=EventSource.READ))  # the level the crossing starts from
         device.notify_all(SwitchStatusRead(None, True))  # its own poll failed
         _prime_poll(last_acted)
         coordinator, publisher = _coordinator([device])
@@ -777,7 +777,7 @@ def _rgb_read(red: int, green: int, blue: int) -> ColourChanged:
             ColourComponent.GREEN: green,
             ColourComponent.BLUE: blue,
         },
-        EventSource.READ,
+        source=EventSource.READ,
     )
 
 
@@ -876,10 +876,10 @@ class TestRepresentationMirroring(_CoordinatorTestCase):
         device = _colour_device(handler)
         coordinator, publisher = _coordinator([device])
 
-        await coordinator.notify_poll_event(device, LevelChanged(180, EventSource.READ))
+        await coordinator.notify_poll_event(device, LevelChanged(180, source=EventSource.READ))
         await coordinator.notify_poll_event(device, _rgb_read(1, 2, 3))
         await coordinator.notify_poll_event(
-            device, ColourChanged({ColourComponent.WHITE: 4}, EventSource.READ)
+            device, ColourChanged({ColourComponent.WHITE: 4}, source=EventSource.READ)
         )
 
         published = _published(publisher)
@@ -896,9 +896,9 @@ class TestRepresentationMirroring(_CoordinatorTestCase):
         device = _colour_device(handler)
         coordinator, publisher = _coordinator([device])
 
-        await coordinator.notify_poll_event(device, LevelChanged(None, EventSource.READ, failed=True))
+        await coordinator.notify_poll_event(device, LevelChanged(None, source=EventSource.READ, failed=True))
         await coordinator.notify_poll_event(
-            device, ColourChanged({ColourComponent.WHITE: None}, EventSource.READ, failed=True)
+            device, ColourChanged({ColourComponent.WHITE: None}, source=EventSource.READ, failed=True)
         )
         await coordinator.notify_poll_event(device, _rgb_read(1, 2, 3))
 
@@ -915,10 +915,10 @@ class TestRepresentationMirroring(_CoordinatorTestCase):
         device = _level_device()
         coordinator, publisher = _coordinator([device])
 
-        await coordinator.notify_poll_event(device, LevelChanged(180, EventSource.READ))
+        await coordinator.notify_poll_event(device, LevelChanged(180, source=EventSource.READ))
         published_before_failure = len(publisher.publish_control_state.await_args_list)
 
-        await coordinator.notify_poll_event(device, LevelChanged(None, EventSource.READ, failed=True))
+        await coordinator.notify_poll_event(device, LevelChanged(None, source=EventSource.READ, failed=True))
 
         failure_calls = publisher.publish_control_state.await_args_list[published_before_failure:]
         assert [(call.args[1], call.args[3]) for call in failure_calls] == [
@@ -989,6 +989,70 @@ class TestRepresentationMirroring(_CoordinatorTestCase):
 
         assert ("dev-5", "actual_level") not in _published(publisher)
         publisher.set_control_error.assert_not_awaited()
+
+    async def test_observed_command_keeps_the_write_error(self):
+        """Setpoints holding ``w`` from a failed write take the values of an observed command, and
+        keep ``w``: only a read or their own command settles it."""
+        handler = await _make_colour_handler(ColourType.RGBWAF)
+        device = _colour_device(handler)
+        for control_id in ("wanted_level", "dapc", "set_rgb"):
+            device.get_mqtt_control(control_id).control_info.state.set_write_error()
+        coordinator, publisher = _coordinator([device])
+
+        await coordinator.apply_commands(
+            [
+                DAPC(GearShort(5), 200),
+                *(
+                    DTR0(10),
+                    DTR1(20),
+                    DTR2(30),
+                    SetTemporaryRGBDimLevel(GearShort(5)),
+                    Activate(GearShort(5)),
+                ),
+            ]
+        )
+
+        published = _published(publisher)
+        assert published[("dev-5", "wanted_level")] == "79"
+        assert published[("dev-5", "dapc")] == "200"
+        assert published[("dev-5", "set_rgb")] == "10;20;30"
+        for control_id in ("wanted_level", "dapc", "set_rgb"):
+            assert device.get_mqtt_control(control_id).control_info.state.has_write_error()
+
+    async def test_unset_colour_read_clears_the_setpoint_write_error(self):
+        """A colour read whose components are unset still settles ``set_rgb``'s ``w``; the value stays."""
+        handler = await _make_colour_handler(ColourType.RGBWAF)
+        device = _colour_device(handler)
+        set_rgb = device.get_mqtt_control("set_rgb").control_info.state
+        set_rgb.set_write_error()
+        value_before = set_rgb.value
+        coordinator, _publisher = _coordinator([device])
+
+        await coordinator.notify_poll_event(device, _rgb_read(MASK, MASK, MASK))
+
+        assert not set_rgb.error
+        assert set_rgb.value == value_before
+
+    async def test_failed_colour_read_keeps_the_setpoint_write_error(self):
+        """A failed colour read while ``set_rgb`` holds ``w``: ``w`` and the value stay."""
+        handler = await _make_colour_handler(ColourType.RGBWAF)
+        device = _colour_device(handler)
+        set_rgb = device.get_mqtt_control("set_rgb").control_info.state
+        set_rgb.set_write_error()
+        value_before = set_rgb.value
+        coordinator, _publisher = _coordinator([device])
+
+        await coordinator.notify_poll_event(
+            device,
+            ColourChanged(
+                {ColourComponent.RED: None, ColourComponent.GREEN: None, ColourComponent.BLUE: None},
+                source=EventSource.READ,
+                failed=True,
+            ),
+        )
+
+        assert set_rgb.error is ControlError.WRITE
+        assert set_rgb.value == value_before
 
     async def test_group_topic_single_publish(self):
         """A group command moves each group state topic (level and colour) exactly once and

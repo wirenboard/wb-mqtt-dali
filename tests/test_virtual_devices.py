@@ -1221,7 +1221,7 @@ def _group_value(group: GroupVirtualDevice, control_id: str) -> Optional[str]:
 
 
 def _read(raw_level: Optional[int] = 120, failed: bool = False) -> LevelChanged:
-    return LevelChanged(raw_level, EventSource.READ, failed=failed)
+    return LevelChanged(raw_level, source=EventSource.READ, failed=failed)
 
 
 class TestGroupTakesMemberAnswer:
@@ -1317,6 +1317,47 @@ class TestGroupTakesMemberAnswer:
             assert first == second, control_id
 
 
+class TestGroupSetpointWriteError:
+    """``w`` on a group setpoint, after the leading member's read pinned it."""
+
+    @staticmethod
+    def _group_with_write_error(m1, m2) -> GroupVirtualDevice:
+        group = _group_of(m1, m2)
+        group.notify_all(_read(120), m1)
+        group.get_mqtt_control("wanted_level").control_info.state.set_write_error()
+        return group
+
+    def test_read_of_the_leading_member_clears_it(self):
+        """The leading member is read: ``w`` on the group setpoint is cleared."""
+        m1, m2 = _member(1), _member(2)
+        group = self._group_with_write_error(m1, m2)
+
+        group.notify_all(_read(120), m1)
+
+        assert group.get_mqtt_control("wanted_level").control_info.state.error is ControlError.NONE
+
+    def test_prediction_for_the_leading_member_keeps_it(self):
+        """A sniffed command to the leading member moves the group setpoint, ``w`` stays."""
+        m1, m2 = _member(1), _member(2)
+        group = self._group_with_write_error(m1, m2)
+        shown = _group_value(group, "wanted_level")
+
+        group.notify_all(LevelChanged(254, source=EventSource.OBSERVED), m1)
+
+        state = group.get_mqtt_control("wanted_level").control_info.state
+        assert state.value != shown
+        assert state.error is ControlError.WRITE
+
+    def test_read_of_another_member_keeps_it(self):
+        """A member the group does not take its value from is read: ``w`` stays."""
+        m1, m2 = _member(1), _member(2)
+        group = self._group_with_write_error(m1, m2)
+
+        group.notify_all(_read(60), m2)
+
+        assert group.get_mqtt_control("wanted_level").control_info.state.error is ControlError.WRITE
+
+
 # ---------------------------------------------------------------------------
 # Group mirror fed by the event path
 # ---------------------------------------------------------------------------
@@ -1359,14 +1400,14 @@ async def test_group_state_records_member_failure_from_event():
         logger=logging.getLogger("test"),
     )
 
-    await mirror.notify_poll_event(member, LevelChanged(120, EventSource.READ))
+    await mirror.notify_poll_event(member, LevelChanged(120, source=EventSource.READ))
 
     member_value = member.get_mqtt_control("actual_level").control_info.state.value
     publisher.publish_control_state.assert_any_await(
         group_device.mqtt_id, "actual_level", member_value, ControlError.NONE, ANY
     )
 
-    await mirror.notify_poll_event(member, LevelChanged(None, EventSource.READ, failed=True))
+    await mirror.notify_poll_event(member, LevelChanged(None, source=EventSource.READ, failed=True))
 
     publisher.publish_control_state.assert_any_await(
         group_device.mqtt_id, "actual_level", member_value, ControlError.READ, ANY

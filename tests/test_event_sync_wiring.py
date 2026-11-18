@@ -27,7 +27,7 @@ from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.events import EventSource, LevelChanged, StatusRead
 from wb.mqtt_dali.virtual_devices import BroadcastVirtualDevice, GroupVirtualDevice
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
-from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState, PublishPolicy
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
 
@@ -40,8 +40,9 @@ def _mock_control(control_id: str, control_type: str) -> MagicMock:
     """A control stub whose id and meta type are what the confirm path reads."""
     control = MagicMock()
     control.control_info.id = control_id
-    control.control_info.state.meta = ControlMeta(control_type)
-    control.control_info.state.value = "1" if control_type == "pushbutton" else "50"
+    control.control_info.state = ControlState(
+        ControlMeta(control_type), "1" if control_type == "pushbutton" else "50"
+    )
     control.is_dirty.return_value = False
     return control
 
@@ -239,7 +240,9 @@ async def test_setpoint_value_not_published_by_confirm():
 
     await _run_confirm(controller, "dev-5", WANTED_LEVEL, "50")
 
-    controller._device_publisher.set_control_error.assert_any_await("dev-5", "wanted_level", ControlError(0))
+    controller._device_publisher.publish_control_state.assert_awaited_once_with(
+        "dev-5", "wanted_level", None, ControlError.NONE
+    )
     value_calls = [
         c
         for c in controller._device_publisher.set_control_value.await_args_list
@@ -250,7 +253,7 @@ async def test_setpoint_value_not_published_by_confirm():
 
 @pytest.mark.asyncio
 async def test_setpoint_write_error_held_by_confirm():
-    """A failed setpoint write still makes confirm publish the "w" write error."""
+    """A setpoint write failing before the bus: confirm publishes "w" and the last value again."""
     # pylint: disable=protected-access
     controller = make_loop_controller()
     device = MagicMock(spec=DaliDevice)
@@ -262,7 +265,9 @@ async def test_setpoint_write_error_held_by_confirm():
 
     await _run_confirm(controller, "dev-5", SET_RGB, "1;2;3")
 
-    controller._device_publisher.set_control_error.assert_any_await("dev-5", "set_rgb", ControlError.WRITE)
+    controller._device_publisher.publish_control_state.assert_any_await(
+        "dev-5", "set_rgb", "50", ControlError.WRITE, publish_value_policy=PublishPolicy.ALWAYS
+    )
 
 
 @pytest.mark.asyncio
@@ -280,7 +285,9 @@ async def test_group_setpoint_value_not_published_by_confirm():
 
     await _run_confirm(controller, "grp-1", WANTED_LEVEL, "50")
 
-    controller._device_publisher.set_control_error.assert_any_await("grp-1", "wanted_level", ControlError(0))
+    controller._device_publisher.publish_control_state.assert_awaited_once_with(
+        "grp-1", "wanted_level", None, ControlError.NONE
+    )
     controller._device_publisher.set_control_value.assert_not_awaited()
 
 
@@ -298,7 +305,9 @@ async def test_broadcast_button_press_published_by_confirm():
 
     await _run_confirm(controller, "bcast", "off", "1")
 
-    controller._device_publisher.set_control_value.assert_any_await("bcast", "off", "1")
+    controller._device_publisher.publish_control_state.assert_any_await(
+        "bcast", "off", "1", ControlError.NONE
+    )
 
 
 @pytest.mark.asyncio
@@ -315,7 +324,9 @@ async def test_broadcast_setpoint_value_not_published_by_confirm():
 
     await _run_confirm(controller, "bcast", WANTED_LEVEL, "50")
 
-    controller._device_publisher.set_control_error.assert_any_await("bcast", "wanted_level", ControlError(0))
+    controller._device_publisher.publish_control_state.assert_awaited_once_with(
+        "bcast", "wanted_level", None, ControlError.NONE
+    )
     controller._device_publisher.set_control_value.assert_not_awaited()
 
 
@@ -332,7 +343,7 @@ async def test_poll_events_are_dispatched_one_by_one():
     device.name = "dev-5"
     unreachable = MagicMock(spec=DaliDevice)
     unreachable.name = "dev-6"
-    events = [StatusRead(None, True), LevelChanged(120, EventSource.READ)]
+    events = [StatusRead(None, True), LevelChanged(120, source=EventSource.READ)]
     poll_scheduler = MagicMock()
     # The unreachable device comes first: its failure must not cost the next device its events.
     poll_scheduler.poll = AsyncMock(return_value=[(unreachable, RuntimeError("bus down")), (device, events)])
@@ -360,8 +371,8 @@ async def test_button_press_published_by_confirm():
 
     await _run_confirm(controller, "dev-5", "colour_temperature_step_warmer", "1")
 
-    controller._device_publisher.set_control_value.assert_any_await(
-        "dev-5", "colour_temperature_step_warmer", "1"
+    controller._device_publisher.publish_control_state.assert_any_await(
+        "dev-5", "colour_temperature_step_warmer", "1", ControlError.NONE
     )
 
 

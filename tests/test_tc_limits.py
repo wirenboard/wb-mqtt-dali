@@ -345,7 +345,7 @@ async def test_tc_limits_injected_into_control():
 
 
 def _tc_read(mirek: int) -> ColourChanged:
-    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, EventSource.READ)
+    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, source=EventSource.READ)
 
 
 @pytest.mark.asyncio

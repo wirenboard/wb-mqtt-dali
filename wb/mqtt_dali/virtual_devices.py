@@ -37,7 +37,7 @@ from .dali_type8_tc import Type8TcLimits
 from .dali_type8_tc import get_wanted_mqtt_controls as tc_mqtt_controls
 from .device_publisher import ControlInfo, TranslatedTitle
 from .device_registry import DeviceRegistry
-from .events import BusEvent
+from .events import BusEvent, EventSource
 from .on_off_control import (
     OnOffConfig,
     OnOffControl,
@@ -49,7 +49,7 @@ from .settings import SettingsParamBase
 from .utils import merge_json_schemas
 from .wbdali import WBDALIDriver
 from .wbdali_utils import MASK_2BYTES, send_commands_with_retry
-from .wbmqtt import ControlError, as_translated_title
+from .wbmqtt import as_translated_title
 
 ControlId = str
 # Stable per-bus identity for a candidate device. ``device.uid`` (UUID4) survives
@@ -452,11 +452,12 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
     ) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await send_commands_with_retry(
+            responses = await send_commands_with_retry(
                 driver,
                 control.get_setup_commands(self._address, value),
                 self.logger,
             )
+            control.apply_command_result(value, responses)
 
     async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> ApplyResult:
         """Writes the members' group parameters, then this group's own on/off setting."""
@@ -481,15 +482,16 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         if answered is None:
             return False
         answer = self._state_source.record_answer(
-            member.uid, control_id, not answered.control_info.state.error
+            member.uid, control_id, not answered.control_info.state.has_read_error()
         )
         if answer is MemberAnswer.TAKE:
             control.control_info.state.value = answered.control_info.state.value
-            control.control_info.state.error = ControlError.NONE
+            if event.source is EventSource.READ:
+                control.control_info.state.clear_errors()
             return True
         if answer is MemberAnswer.SHOW_ERROR:
             # Only the error goes out: the last value the group showed stays.
-            control.control_info.state.error = ControlError.READ
+            control.control_info.state.set_read_error()
             return True
         return False
 
@@ -507,6 +509,8 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
         if answered is None or answered.control_info.state.value is None:
             return False
         control.control_info.state.value = answered.control_info.state.value
+        if event.source is EventSource.READ:
+            control.control_info.state.clear_errors()
         return True
 
     def _ask_member(
@@ -539,12 +543,12 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
                 continue
             source = self._seed_source(members_by_uid, control_id)
             if source is None:
-                group_control.control_info.state.error = ControlError.READ
+                group_control.control_info.state.set_read_error()
                 continue
             member, seeded_value = source
             group_control.control_info.state.value = seeded_value
             # The control was cloned from the first candidate, error included.
-            group_control.control_info.state.error = ControlError.NONE
+            group_control.control_info.state.clear_errors()
             for setpoint_id in _STATE_SETPOINTS.get(control_id, ()):
                 self._seed_setpoint(member, setpoint_id)
             if control_id == ACTUAL_LEVEL:
@@ -582,7 +586,7 @@ class GroupVirtualDevice:  # pylint: disable=too-many-instance-attributes
             if member is None:
                 continue
             control = member.get_mqtt_control(control_id)
-            if control is None or control.control_info.state.error:
+            if control is None or control.control_info.state.has_read_error():
                 continue
             if control.control_info.state.value is not None:
                 return member, control.control_info.state.value
@@ -639,11 +643,12 @@ class BroadcastVirtualDevice:
     ) -> None:
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await send_commands_with_retry(
+            responses = await send_commands_with_retry(
                 driver,
                 control.get_setup_commands(self._address, value),
                 self.logger,
             )
+            control.apply_command_result(value, responses)
 
     def set_logger(self, logger: logging.Logger) -> None:
         self.logger = logger

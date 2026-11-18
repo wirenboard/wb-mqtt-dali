@@ -36,13 +36,7 @@ from .dali_dimming_curve import DimmingCurveState
 from .device_publisher import ControlInfo
 from .events import BusEvent, EventSource, LevelChanged, StatusRead
 from .wbdali_utils import MASK
-from .wbmqtt import (
-    ALARM_CONTROL_TYPE,
-    ControlError,
-    ControlMeta,
-    ControlState,
-    TranslatedTitle,
-)
+from .wbmqtt import ALARM_CONTROL_TYPE, ControlMeta, ControlState, TranslatedTitle
 
 AddressFactory = Callable[[int], Union[GearBroadcast, GearGroup, GearShort]]
 
@@ -128,24 +122,24 @@ class ActualLevelControl(SingleQueryControl):
         if event.settle_at is not None:
             self.schedule_poll_at(event.settle_at)
         if event.failed:
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
-        # Applying a predicted value while our own read is failing would clear /meta/error=r.
-        if event.source is EventSource.OBSERVED and self.control_info.state.error:
+        if event.source is EventSource.OBSERVED and self.control_info.state.has_read_error():
             return NotifyResult.NOTHING_TO_PUBLISH
         # MASK is shown like any level but is none: step prediction keeps the last real one.
         if event.raw_level <= MAX_GEAR_LEVEL:
             self._level = event.raw_level
         self.control_info.state.value = self._format_level(event.raw_level)
-        self.control_info.state.error = ControlError.NONE
+        if event.source is EventSource.READ:
+            self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
     # --- Hooks for subclasses ---
 
     def decode_response(self, response: Optional[Response]) -> BusEvent:
         if response is None:
-            return LevelChanged(None, EventSource.READ, failed=True)
-        return LevelChanged(response.raw_value.as_integer, EventSource.READ)
+            return LevelChanged(None, source=EventSource.READ, failed=True)
+        return LevelChanged(response.raw_value.as_integer, source=EventSource.READ)
 
     # --- Private ---
 
@@ -229,6 +223,8 @@ class WantedLevelControl(MqttControlBase):
             return NotifyResult.NOTHING_TO_PUBLISH
         percent = self._dimming_curve_state.get_level(event.raw_level)
         self.control_info.state.value = str(round(percent))
+        if event.source is EventSource.READ:
+            self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
 
@@ -263,6 +259,8 @@ class DapcControl(MqttControlBase):
         if event.raw_level is None:
             return NotifyResult.NOTHING_TO_PUBLISH
         self.control_info.state.value = str(event.raw_level)
+        if event.source is EventSource.READ:
+            self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
 
@@ -373,12 +371,12 @@ class ErrorStatusControl(SingleQueryControl):
         if not isinstance(event, StatusRead):
             return NotifyResult.NOTHING_TO_PUBLISH
         if event.failed:
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
         self.control_info.state.value = self.format_response(event.response)
         # The title spells out which status bits are set, so a read changes it with the value.
         self.control_info.state.meta.title = self.format_title(event.response)
-        self.control_info.state.error = ControlError.NONE
+        self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
     def format_response(self, response: Response) -> str:

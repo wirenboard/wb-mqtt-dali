@@ -39,11 +39,12 @@ from .utils import merge_json_schemas
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     check_query_response,
+    has_transmission_error,
     is_transmission_error_response,
     query_response,
     send_commands_with_retry,
 )
-from .wbmqtt import ControlError, ControlMeta, is_alarm, value_is_retained
+from .wbmqtt import ControlMeta, is_alarm, value_is_retained
 
 
 class NotifyResult(Enum):
@@ -176,6 +177,14 @@ class MqttControlBase(EventPollSchedule):
     def is_dirty(self) -> bool:
         return self.value_to_set is not None
 
+    def apply_command_result(self, value_to_set: str, responses: list[Response]) -> None:
+        """Hold a write error unless every frame of the command went out."""
+        del value_to_set
+        if has_transmission_error(responses):
+            self.control_info.state.set_write_error()
+        else:
+            self.control_info.state.clear_write_error()
+
     # --- Private ---
 
     def _apply_quantity_read(
@@ -188,10 +197,10 @@ class MqttControlBase(EventPollSchedule):
         if not isinstance(event, quantity_event):
             return NotifyResult.NOTHING_TO_PUBLISH
         if event.failed:
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
         self.control_info.state.value = format_value(event.response)
-        self.control_info.state.error = ControlError.NONE
+        self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
 
@@ -982,11 +991,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await send_commands_with_retry(
+            responses = await send_commands_with_retry(
                 driver,
                 control.get_setup_commands(self._compat.getAddress(self.address.short), value),
                 self.logger,
             )
+            control.apply_command_result(value, responses)
 
     def poll_controls(
         self,

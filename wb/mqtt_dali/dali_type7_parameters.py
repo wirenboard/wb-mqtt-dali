@@ -184,7 +184,7 @@ class LastActedControl(SingleQueryControl):
         # Only a sniffed command says something about the switching function: a difference
         # between two polls can come from a missed frame or mid-fade. And a code published
         # while the readback is failing would sit beside a standing /meta/error=r.
-        if event.source is not EventSource.OBSERVED or self.control_info.state.error:
+        if event.source is not EventSource.OBSERVED or self.control_info.state.has_read_error():
             return NotifyResult.NOTHING_TO_PUBLISH
         code = self._crossing_code(prev_level, event.raw_level) if prev_level is not None else None
         if code is None:

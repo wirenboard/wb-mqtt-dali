@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,21 +9,42 @@ import aiomqtt
 from wb.mqtt_dali.gateway import BusPollingError, Gateway
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
+from wb.mqtt_dali.wbdali import WBDALIConfig
 
 from ._app_controller_helpers import LoopKiller, wait_until
-from ._broker_link_helpers import RecordingClient
+from ._broker_link_helpers import PORT_LOAD_TOPIC_PREFIX, RecordingClient
 from ._common_schema import load_common_schema
-from ._on_off_helpers import BusScript, ScriptedGatewayClient
 from ._virtual_time import VirtualTimeTestCase
 
 _LAST_ENDPOINT_MARKER = "/rpc/v1/wb-mqtt-dali/Bus/ListCommands"
+_MODBUS_WRITE_REGISTERS = 16
+# wb-mqtt-serial reply status 2, transmission without response, in bits [15..8].
+_NO_BACKWARD_FRAME_REPLY = str(2 << 8)
+
+
+class _EmptyBusClient(RecordingClient):
+    """The gateway of bus 1 of "gw" with nothing on its bus: every queued frame gets no answer."""
+
+    async def publish(
+        self, topic: str, payload: Optional[str] = None, qos: int = 0, retain: bool = False
+    ) -> None:
+        await super().publish(topic, payload, qos, retain)
+        if not topic.startswith(PORT_LOAD_TOPIC_PREFIX) or payload is None:
+            return
+        params = json.loads(payload)["params"]
+        if params["function"] != _MODBUS_WRITE_REGISTERS:
+            return
+        start_slot = (params["address"] - WBDALIConfig().queue_start_modbus_address) // 2
+        for slot in range(start_slot, start_slot + params["count"] // 2):
+            reply_topic = f"/devices/gw/controls/bus_1_bulk_send_reply_{slot}"
+            self.messages.deliver(aiomqtt.Message(reply_topic, _NO_BACKWARD_FRAME_REPLY, 0, False, 0, None))
 
 
 class GatewayRunTests(VirtualTimeTestCase):
     def setUp(self):
         # A configured device is absent from the bus, and publishing its error state raises
         # past every handler of the polling loop.
-        self.client = ScriptedGatewayClient(BusScript(present_shorts=frozenset()), "gw", 1)
+        self.client = _EmptyBusClient()
         self.client.fail("publish", "/devices/gw_bus_1_5/meta", LoopKiller())
         self.dispatcher = MQTTDispatcher(self.client)
         config = {"gateways": [{"device_id": "gw", "buses": [{"devices": [{"short": 5, "random": 123}]}]}]}

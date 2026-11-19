@@ -18,7 +18,7 @@ from .dali_device import DaliDevice
 from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
-from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
+from .mqtt_rpc_client import MQTTRPCClient, rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
 from .on_off_control import on_off_config_from_json, on_off_config_to_json
 from .send_command import (
@@ -27,6 +27,7 @@ from .send_command import (
     build_command_registry,
     parse_expression,
 )
+from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_WEBSOCKET_PORT = 8080
@@ -156,18 +157,28 @@ def check_mqtt_id_conflict(
                 raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
 
 
+def make_bus_driver(
+    gateway_mqtt_device_id: str, bus_index: int, mqtt_dispatcher: MQTTDispatcher
+) -> WBDALIDriver:
+    return WBDALIDriver(
+        WBDALIConfig(device_name=gateway_mqtt_device_id, bus=bus_index),
+        mqtt_dispatcher,
+        logging.getLogger(f"{gateway_mqtt_device_id}_bus_{bus_index}"),
+        MQTTRPCClient(),
+    )
+
+
 def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-arguments
-    gateway_mqtt_device_id: str,
-    bus_index: int,
     data: dict,
     mqtt_dispatcher: MQTTDispatcher,
+    driver: WBDALIDriver,
     gtin_db: DaliDatabase,
     common_schema: dict,
     on_polling_failure: Callable[[], None],
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
     dali2_devices: list[Dali2Device] = []
-    bus_uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
+    bus_uid = f"{driver.config.device_name}_bus_{driver.config.bus}"
     for dev_conf in data.get("devices", []):
         if dev_conf.get("dali2", False):
             device = Dali2Device(
@@ -193,8 +204,6 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
             dali_devices.append(device)
 
     ap_conf = ApplicationControllerConfig(
-        gateway_mqtt_device_id,
-        bus_index,
         dali_devices,
         dali2_devices,
         data.get("bus_monitor_enabled", False),
@@ -205,7 +214,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
         },
     )
 
-    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db, common_schema, on_polling_failure)
+    res = ApplicationController(ap_conf, mqtt_dispatcher, driver, gtin_db, common_schema, on_polling_failure)
     return res
 
 
@@ -255,10 +264,9 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                     buses=list(
                         map(
                             lambda bus: bus_from_json(
-                                gw_conf["device_id"],
-                                bus[0],
                                 bus[1],
                                 mqtt_dispatcher,
+                                make_bus_driver(gw_conf["device_id"], bus[0], mqtt_dispatcher),
                                 gtin_db,
                                 common_schema,
                                 self._on_bus_failure,
@@ -735,10 +743,11 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 buses = []
                 bus_count = 3
                 for bus_index in range(1, bus_count + 1):
-                    apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
+                    apc_conf = ApplicationControllerConfig([], [])
                     apc = ApplicationController(
                         apc_conf,
                         self._mqtt_dispatcher,
+                        make_bus_driver(did, bus_index, self._mqtt_dispatcher),
                         self._gtin_db,
                         self._common_schema,
                         self._on_bus_failure,

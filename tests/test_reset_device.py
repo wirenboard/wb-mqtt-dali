@@ -36,7 +36,7 @@ def _make_bare_controller():
     controller._device_registry = DeviceRegistry()
     controller._devices_by_mqtt_id = {}
     controller._dev = AsyncMock()
-    controller._dev_inst_map = MagicMock(mapping={})
+    controller.driver.dev_inst_map = MagicMock(mapping={})
     controller._gtin_db = MagicMock()
     controller._common_schema = load_common_schema()
     controller._device_publisher = AsyncMock()
@@ -289,10 +289,10 @@ class ResetDeviceTest(VirtualTimeTestCase):
         controller.dali2_devices = [device]
         controller._device_registry.add(device)
         controller._devices_by_mqtt_id[device.mqtt_id] = device
-        # populate _dev_inst_map for this short address using a real mapper so that
+        # populate the driver's dev_inst_map for this short address using a real mapper so that
         # remove_short_address() actually mutates the underlying dict
         other_short = (device.address.short + 1) % 64
-        controller._dev_inst_map = BusDeviceInstanceTypeMapper(
+        controller.driver.dev_inst_map = BusDeviceInstanceTypeMapper(
             initial={
                 (device.address.short, 0): 1,
                 (device.address.short, 1): 2,
@@ -319,10 +319,10 @@ class ResetDeviceTest(VirtualTimeTestCase):
         # internal maps no longer reference the removed device
         assert controller.dali2_devices == []
         assert controller._device_registry.dali2_device_by_short(device.address.short) is None
-        assert (device.address.short, 0) not in controller._dev_inst_map.mapping
-        assert (device.address.short, 1) not in controller._dev_inst_map.mapping
+        assert (device.address.short, 0) not in controller.driver.dev_inst_map.mapping
+        assert (device.address.short, 1) not in controller.driver.dev_inst_map.mapping
         # entries for other short addresses are kept untouched
-        assert (other_short, 0) in controller._dev_inst_map.mapping
+        assert (other_short, 0) in controller.driver.dev_inst_map.mapping
         assert device.mqtt_id not in controller._devices_by_mqtt_id
         controller._device_publisher.remove_device.assert_awaited_once_with(device.mqtt_id)
         # No DALI 1 aggregate refresh for DALI 2 devices

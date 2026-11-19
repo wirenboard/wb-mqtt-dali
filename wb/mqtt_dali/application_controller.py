@@ -29,7 +29,6 @@ from .events import BusEvent, Dali2InputEvent
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
-from .mqtt_rpc_client import MQTTRPCClient
 from .on_off_control import OnOffConfig, gear_params_only
 from .send_command import format_command_expression
 from .short_address import set_short_address_sequence
@@ -40,13 +39,7 @@ from .virtual_devices import (
     GroupVirtualDevice,
     aggregate_capabilities,
 )
-from .wbdali import (
-    DECODABLE_FRAME_BIT_LENGTHS,
-    BusDeviceInstanceTypeMapper,
-    FramePriority,
-    WBDALIConfig,
-    WBDALIDriver,
-)
+from .wbdali import DECODABLE_FRAME_BIT_LENGTHS, FramePriority, WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
     MASK,
@@ -225,9 +218,6 @@ def _count_devices_to_init(result: Optional[CommissioningResult]) -> int:
 
 @dataclass
 class ApplicationControllerConfig:
-    gateway_mqtt_device_id: str
-    # Gateway bus number starting from 1
-    bus: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
     enable_bus_monitor: bool = False
@@ -405,15 +395,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self,
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
+        driver: WBDALIDriver,
         gtin_db: DaliDatabase,
         common_schema: dict,
         on_polling_failure: Callable[[], None],
     ) -> None:
-        self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
-        self.bus_name = TranslatedTitle(f"Bus {config.bus}", f"Шина {config.bus}")
+        self.uid = f"{driver.config.device_name}_bus_{driver.config.bus}"
+        self.bus_name = TranslatedTitle(f"Bus {driver.config.bus}", f"Шина {driver.config.bus}")
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
-        self.logger = logging.getLogger(self.uid)
+        self.logger = driver.logger
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
@@ -423,8 +414,6 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._mqtt_dispatcher = mqtt_dispatcher
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
 
-        self._dev_inst_map = BusDeviceInstanceTypeMapper()
-
         self._polling_task: Optional[asyncio.Task] = None
         self._on_polling_failure = on_polling_failure
 
@@ -432,11 +421,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         # Store the type to correctly decode the following command frame
         self._last_bus_traffic_device_type: int = 0
 
-        cfg = WBDALIConfig(
-            device_name=config.gateway_mqtt_device_id,
-            bus=config.bus,
-        )
-        self._dev = WBDALIDriver(cfg, mqtt_dispatcher, self.logger, MQTTRPCClient(), self._dev_inst_map)
+        self._dev = driver
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
         self._bus_monitor_enabled = config.enable_bus_monitor
@@ -707,7 +692,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         if old_short_address != device.address.short:
             if isinstance(device, Dali2Device):
-                self._dev_inst_map.remove_short_address(old_short_address)
+                self._dev.dev_inst_map.remove_short_address(old_short_address)
                 self._update_dali2_device_instance_map(device)
             self._device_registry.update_short_address(device, old_short_address)
 
@@ -971,7 +956,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self.dali_devices = [d for d in self.dali_devices if d is not device]
         else:
             self.dali2_devices = [d for d in self.dali2_devices if d is not device]
-            self._dev_inst_map.remove_short_address(old_short)
+            self._dev.dev_inst_map.remove_short_address(old_short)
 
         self._device_registry.remove(device)
         self._devices_by_mqtt_id.pop(mqtt_id, None)
@@ -1322,7 +1307,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     def _update_dali2_device_instance_map(self, device: Dali2Device) -> None:
         addr = DeviceShort(device.address.short)
         for inst_num, inst_params in device.instances.items():
-            self._dev_inst_map.add_type(
+            self._dev.dev_inst_map.add_type(
                 short_address=addr,
                 instance_number=InstanceNumber(inst_num),
                 instance_type=inst_params.instance_type,
@@ -1601,7 +1586,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             and len(item.request) in DECODABLE_FRAME_BIT_LENGTHS
         ):
             incoming_command = from_frame(
-                item.request, dev_inst_map=self._dev_inst_map, devicetype=self._last_bus_traffic_device_type
+                item.request,
+                dev_inst_map=self._dev.dev_inst_map,
+                devicetype=self._last_bus_traffic_device_type,
             )
             if item.request_source in [BusTrafficSource.BUS, BusTrafficSource.LUNATONE]:
                 try:

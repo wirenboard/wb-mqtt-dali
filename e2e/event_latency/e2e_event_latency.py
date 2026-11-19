@@ -29,7 +29,6 @@ from typing import AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from dali.address import DeviceShort, InstanceNumber
 from dali.command import Command, from_frame
-from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.device.pushbutton import ShortPress
 from dali.device.pushbutton import instance_type as pushbutton_instance_type
 from dali.frame import ForwardFrame
@@ -80,7 +79,7 @@ READY_TIMEOUT_S = 30.0
 READY_POLL_INTERVAL_S = 0.5
 # Upper bound on how long we wait for the DUT DALI 2 input-device to finish
 # its first init pass after a wb-mqtt-dali restart — that is the moment
-# `_dev_inst_map` gets populated and event frames start decoding as `_Event`.
+# the driver's `dev_inst_map` gets populated and event frames start decoding as `_Event`.
 # Empirically ~8 s for a single missing-device target with retries; 30 s leaves
 # plenty of headroom for stands with several phantom DALI-2 devices.
 DEVICE_READY_TIMEOUT_S = 30.0
@@ -261,7 +260,7 @@ async def dali2_device_ready_subscription(
     `Editor/GetList` becomes responsive as soon as the RPC server is up, which is
     several seconds before `_polling_loop` runs `_initialize_device` for each
     configured device. For DALI 2 input-devices, only the latter call populates
-    `_dev_inst_map` (via `_update_dali2_device_instance_map`), and without it
+    the driver's `dev_inst_map` (via `_update_dali2_device_instance_map`), and without it
     `from_frame` does not decode event frames as `_Event` and short_press<i> is
     never published. `publish_device` emits `/devices/<mqtt_id>/meta` only after
     `try_initialize_device` succeeds; the broker clears the retain flag on that
@@ -441,20 +440,19 @@ async def bus_monitor_listener(
         MONITOR_BUS,
     )
     timeline_log = BusTimelineLog(timing_log_path)
-    dev_inst_map = DeviceInstanceTypeMapper()
+    listener_driver = WBDALIDriver(
+        WBDALIConfig(device_name=monitor_gateway, bus=MONITOR_BUS),
+        mqtt_dispatcher=mqtt_dispatcher,
+        logger=logging.getLogger("monitor_bus"),
+        rpc_client=MQTTRPCClient(),
+    )
+    dev_inst_map = listener_driver.dev_inst_map
     for i in range(burst_size):
         dev_inst_map.add_type(
             short_address=DeviceShort(short_address),
             instance_number=InstanceNumber(i),
             instance_type=pushbutton_instance_type,
         )
-    listener_driver = WBDALIDriver(
-        WBDALIConfig(device_name=monitor_gateway, bus=MONITOR_BUS),
-        mqtt_dispatcher=mqtt_dispatcher,
-        logger=logging.getLogger("monitor_bus"),
-        rpc_client=MQTTRPCClient(),
-        dev_inst_map=dev_inst_map,
-    )
     unregister_listener = None
     try:
         await listener_driver.initialize()

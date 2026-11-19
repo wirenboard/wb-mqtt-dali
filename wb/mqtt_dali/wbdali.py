@@ -628,16 +628,15 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         mqtt_dispatcher: MQTTDispatcher,
         logger: logging.Logger,
         rpc_client: MQTTRPCClient,
-        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
     ) -> None:
         self.logger = logger
-        self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
+        self.logger.debug("device=%s", config.device_name)
 
         self.config = config
         if self.config.bus not in [1, 2, 3]:
             raise ValueError("Bus number must be 1, 2 or 3")
 
-        self.dev_inst_map = dev_inst_map
+        self.dev_inst_map = BusDeviceInstanceTypeMapper()
 
         # Register to be called back with bus traffic
         self.bus_traffic = BusTrafficCallbacks(self.config.queue_size)

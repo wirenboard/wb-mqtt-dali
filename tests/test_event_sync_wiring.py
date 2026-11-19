@@ -52,7 +52,7 @@ def _monitor_controller():
     # pylint: disable=protected-access
     controller = make_loop_controller()
     controller.logger = logging.getLogger("test.wiring")
-    controller._dev_inst_map = None
+    controller.driver.dev_inst_map = None
     controller._last_bus_traffic_device_type = 0
     controller._bus_monitor_enabled = False
     controller._bus_monitor_syslog_enabled = False

@@ -42,6 +42,7 @@ from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import bus_from_json
 from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher
+from wb.mqtt_dali.wbdali import WBDALIConfig
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
 from ._app_controller_helpers import (
@@ -51,6 +52,7 @@ from ._app_controller_helpers import (
     wait_until,
 )
 from ._broker_link_helpers import RecordingClient
+from ._bus_doubles import FakeWBDALIDriver
 from ._common_schema import load_common_schema
 
 # pylint: disable=duplicate-code
@@ -1506,8 +1508,8 @@ async def test_polling_loop_command_stream_does_not_starve_polling():
 async def test_start_rolls_back_on_publisher_bringup_failure():
     """A bringup failure after the driver is up must leave a clean slate.
 
-    The controller is built with its normal constructor (no I/O) but with the
-    driver and publisher classes patched to mocks. The failure is injected at the
+    The controller is built with its normal constructor (no I/O) but with
+    a mock driver and the publisher class patched to a mock. The failure is injected at the
     virtual-device publication step (register_control_handler) — the dangerous
     case where the publisher is already initialized and has registered device
     state/subscriptions. start() must roll back symmetrically: clean up the
@@ -1517,10 +1519,8 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
     awaited, and a subsequent start() succeeds — only possible if the controller
     fell back to UNINITIALIZED, since start() rejects any other state.
     """
-    with patch("wb.mqtt_dali.application_controller.WBDALIDriver") as driver_cls, patch(
-        "wb.mqtt_dali.application_controller.DevicePublisher"
-    ) as publisher_cls:
-        driver = driver_cls.return_value
+    with patch("wb.mqtt_dali.application_controller.DevicePublisher") as publisher_cls:
+        driver = MagicMock(config=WBDALIConfig(device_name="gw", bus=1), logger=logging.getLogger("gw_bus_1"))
         driver.initialize = AsyncMock()
         driver.deinitialize = AsyncMock()
         publisher = publisher_cls.return_value
@@ -1529,14 +1529,9 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         publisher.register_control_handler = AsyncMock(side_effect=[RuntimeError("broker down"), None])
         publisher.cleanup = AsyncMock()
 
-        config = ApplicationControllerConfig(
-            gateway_mqtt_device_id="gw",
-            bus=1,
-            dali_devices=[],
-            dali2_devices=[],
-        )
+        config = ApplicationControllerConfig(dali_devices=[], dali2_devices=[])
         controller = ApplicationController(
-            config, MagicMock(), MagicMock(), load_common_schema(), MagicMock()
+            config, MagicMock(), driver, MagicMock(), load_common_schema(), MagicMock()
         )
 
         with pytest.raises(RuntimeError, match="broker down"):
@@ -1562,13 +1557,10 @@ async def _acking_dispatcher():
 
 
 def _bus_with_device(device, on_polling_failure, dispatcher: MQTTDispatcher) -> ApplicationController:
-    config = ApplicationControllerConfig(
-        gateway_mqtt_device_id="gw",
-        bus=1,
-        dali_devices=[device],
-        dali2_devices=[],
+    config = ApplicationControllerConfig(dali_devices=[device], dali2_devices=[])
+    return ApplicationController(
+        config, dispatcher, FakeWBDALIDriver(), MagicMock(), load_common_schema(), on_polling_failure
     )
-    return ApplicationController(config, dispatcher, MagicMock(), load_common_schema(), on_polling_failure)
 
 
 def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
@@ -1597,13 +1589,10 @@ async def test_dali2_short_address_change_moves_instance_types_to_new_address(ac
         device.address = DaliDeviceAddress(9, 123)
 
     device.apply_parameters = AsyncMock(side_effect=change_short_address)
-    config = ApplicationControllerConfig(
-        gateway_mqtt_device_id="gw",
-        bus=1,
-        dali_devices=[],
-        dali2_devices=[device],
+    config = ApplicationControllerConfig(dali_devices=[], dali2_devices=[device])
+    bus = ApplicationController(
+        config, acking_dispatcher, FakeWBDALIDriver(), MagicMock(), load_common_schema(), MagicMock()
     )
-    bus = ApplicationController(config, acking_dispatcher, MagicMock(), load_common_schema(), MagicMock())
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=0, instance_type=1)
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=1, instance_type=3)
 
@@ -1705,7 +1694,7 @@ class _LogCapture:
         logger.setLevel(self._prev_level)
 
 
-def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[ApplicationController, MagicMock]:
+def _monitor_bus(*, monitor: bool, syslog: bool) -> tuple[ApplicationController, MagicMock]:
     """Build a real controller wired for the bus-monitor path.
 
     Returns the controller and its MQTT dispatcher mock. The publish is an
@@ -1714,10 +1703,9 @@ def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[Appl
     dispatcher = MagicMock()
     dispatcher.publish = AsyncMock()
     bus = bus_from_json(
-        "gw1",
-        uid_bus,
         {"devices": [], "bus_monitor_enabled": monitor, "bus_monitor_syslog_enabled": syslog},
         dispatcher,
+        FakeWBDALIDriver(),
         MagicMock(),
         load_common_schema(),
         MagicMock(),

@@ -11,6 +11,7 @@ import logging
 import pytest
 from dali.address import GearShort
 from dali.gear.general import DAPC, QueryActualLevel
+
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient

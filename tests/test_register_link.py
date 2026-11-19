@@ -14,13 +14,13 @@ import pytest
 import pytest_asyncio
 from dali.address import GearBroadcast, GearShort
 from dali.gear.general import DAPC, Off, QueryActualLevel, QueryControlGearPresent
-
+from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.gateway_link import RegisterLink, _frame_counter_order
 from wb.mqtt_dali.sim.control_gear import SimulatedControlGear
 from wb.mqtt_dali.sim.dali_bus import SimulatedDaliBus
 from wb.mqtt_dali.sim.network import SimulatedModbusNetwork
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
-from wb.mqtt_dali.wbdali_error_response import NoResponseFromGateway
+from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali_error_response import GatewayWriteFailed, NoResponseFromGateway
 from wb.mqtt_dali.wbdali_registers import (
     FRAME_COUNTER_MODULO,
     MONITOR_BASE,
@@ -37,6 +37,14 @@ from wb.mqtt_dali.wbdali_registers import (
 MODULE = "wb-mdali_1"
 
 
+async def send(driver: WBDALIDriver, command):
+    return await driver.send(command, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+
+
+async def send_commands(driver: WBDALIDriver, commands):
+    return await driver.send_commands(commands, BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger)
+
+
 class Stack:  # pylint: disable=too-few-public-methods
     """A simulated module and a register-link driver talking to it."""
 
@@ -47,8 +55,8 @@ class Stack:  # pylint: disable=too-few-public-methods
             self.buses[1].add_gear(unit)
         self.gateway = self.network.add_module(MODULE, self.buses)
 
-    def driver(self, bus: int = 1, transport=None) -> WBDALIDriver:
-        config = WBDALIConfig(device_name=MODULE, bus=bus)
+    def driver(self, bus: int = 1, transport=None, response_timeout_s: float = 1.0) -> WBDALIDriver:
+        config = WBDALIConfig(device_name=MODULE, bus=bus, response_timeout_s=response_timeout_s)
         logger = logging.getLogger("test.register_link")
         link = RegisterLink(config, transport or self.network, logger)
         return WBDALIDriver(config, None, logger, link=link)
@@ -76,29 +84,29 @@ async def driver(stack):
 
 @pytest.mark.asyncio
 async def test_query_reaches_the_gear_and_the_answer_comes_back(stack, driver):
-    await driver.send(DAPC(GearShort(0), 200))
-    response = await driver.send(QueryActualLevel(GearShort(0)))
+    await send(driver, DAPC(GearShort(0), 200))
+    response = await send(driver, QueryActualLevel(GearShort(0)))
     assert response.value == 200
     assert stack.buses[1].gear[0].level == 200
 
 
 @pytest.mark.asyncio
 async def test_command_without_an_answer_completes(stack, driver):
-    response = await driver.send(Off(GearBroadcast()))
+    response = await send(driver, Off(GearBroadcast()))
     assert response.raw_value is None
     assert stack.buses[1].gear[0].level == 0
 
 
 @pytest.mark.asyncio
 async def test_each_answer_in_a_batch_lands_on_its_own_command(driver):
-    await driver.send_commands([DAPC(GearShort(0), 10), DAPC(GearShort(1), 20)])
-    responses = await driver.send_commands([QueryActualLevel(GearShort(0)), QueryActualLevel(GearShort(1))])
+    await send_commands(driver, [DAPC(GearShort(0), 10), DAPC(GearShort(1), 20)])
+    responses = await send_commands(driver, [QueryActualLevel(GearShort(0)), QueryActualLevel(GearShort(1))])
     assert [response.value for response in responses] == [10, 20]
 
 
 @pytest.mark.asyncio
 async def test_query_to_an_empty_address_reports_no_answer(driver):
-    response = await driver.send(QueryControlGearPresent(GearShort(40)))
+    response = await send(driver, QueryControlGearPresent(GearShort(40)))
     assert response.raw_value is None
 
 
@@ -108,7 +116,7 @@ async def test_an_unwired_bus_is_silent(stack):
     instance = stack.driver(bus=2)
     await instance.initialize()
     try:
-        response = await instance.send(QueryControlGearPresent(GearShort(0)))
+        response = await send(instance, QueryControlGearPresent(GearShort(0)))
         assert response.raw_value is None
     finally:
         await instance.deinitialize()
@@ -121,7 +129,7 @@ async def test_a_long_run_of_commands_keeps_answering():
     instance = stack.driver()
     await instance.initialize()
     try:
-        responses = await instance.send_commands([QueryControlGearPresent(GearShort(i)) for i in range(20)])
+        responses = await send_commands(instance, [QueryControlGearPresent(GearShort(i)) for i in range(20)])
         assert len(responses) == 20
         assert all(response.value for response in responses)
     finally:
@@ -132,30 +140,31 @@ async def test_a_long_run_of_commands_keeps_answering():
 async def test_a_module_that_stops_answering_modbus_does_not_hang_the_caller(stack, driver):
     """The Modbus request itself fails, before any reply polling."""
     stack.gateway.reachable = False
-    response = await asyncio.wait_for(driver.send(QueryActualLevel(GearShort(0))), timeout=3.0)
-    assert isinstance(response, NoResponseFromGateway)
+    response = await asyncio.wait_for(send(driver, QueryActualLevel(GearShort(0))), timeout=3.0)
+    assert isinstance(response, GatewayWriteFailed)
 
 
 @pytest.mark.asyncio
 async def test_a_gateway_that_never_transmits_gives_up_on_the_frame(stack, driver):
     """A reply register stuck at "no transmission" must not be polled forever."""
-    driver.response_timeout = 0.2
+    driver.config.response_timeout_s = 0.2
     # Accept the write but never transmit, which is what a wedged queue looks like.
     stack.gateway.buses[1].dali_bus.send_frame = lambda *_: (TransmissionStatus.NO_TRANSMISSION, 0)
     started = asyncio.get_running_loop().time()
-    response = await asyncio.wait_for(driver.send(QueryActualLevel(GearShort(0))), timeout=5.0)
+    response = await asyncio.wait_for(send(driver, QueryActualLevel(GearShort(0))), timeout=5.0)
     elapsed = asyncio.get_running_loop().time() - started
     assert isinstance(response, NoResponseFromGateway)
+    # The link polls for the timeout, then the driver's clock, armed at the ack, runs it again.
     assert 0.2 <= elapsed < 2.0
 
 
 @pytest.mark.asyncio
 async def test_a_module_that_comes_back_answers_again(stack, driver):
-    driver.response_timeout = 0.2
+    driver.config.response_timeout_s = 0.2
     stack.gateway.reachable = False
-    assert isinstance(await driver.send(QueryActualLevel(GearShort(0))), NoResponseFromGateway)
+    assert isinstance(await send(driver, QueryActualLevel(GearShort(0))), GatewayWriteFailed)
     stack.gateway.reachable = True
-    assert (await driver.send(QueryActualLevel(GearShort(0)))).value == 0
+    assert (await send(driver, QueryActualLevel(GearShort(0)))).value == 0
 
 
 @pytest.mark.asyncio
@@ -163,9 +172,9 @@ async def test_repeating_a_query_gets_a_fresh_answer_each_time(driver):
     """Consecutive identical answers must not look like a stale reply register:
     the module clears a reply register when its slot is written, and the link
     relies on that rather than on comparing values."""
-    await driver.send(DAPC(GearShort(0), 42))
+    await send(driver, DAPC(GearShort(0), 42))
     for _ in range(4):
-        assert (await driver.send(QueryActualLevel(GearShort(0)))).value == 42
+        assert (await send(driver, QueryActualLevel(GearShort(0)))).value == 42
 
 
 @pytest.mark.asyncio
@@ -186,7 +195,7 @@ async def test_a_frame_goes_out_whatever_the_pointer_was(stack, driver):
     the property the round-robin discipline lacked on hardware."""
     for stale_pointer in (0, 5, 15):
         stack.gateway.buses[1].pointer = stale_pointer
-        response = await driver.send(QueryControlGearPresent(GearShort(0)))
+        response = await send(driver, QueryControlGearPresent(GearShort(0)))
         assert response.value is True, f"stalled with the pointer at {stale_pointer}"
 
 
@@ -215,7 +224,7 @@ async def test_a_batch_is_one_write_and_one_bulk_read(stack):
     try:
         transport.writes.clear()
         transport.reads.clear()
-        responses = await instance.send_commands([QueryControlGearPresent(GearShort(0)) for _ in range(10)])
+        responses = await send_commands(instance, [QueryControlGearPresent(GearShort(0)) for _ in range(10)])
         assert all(response.value for response in responses)
         # One pointer rewind (1 register) plus one batch write (20 registers).
         assert transport.writes == [(1432, 1), (1400, 20)]
@@ -247,20 +256,19 @@ class _SlowTransport:
 @pytest.mark.asyncio
 async def test_the_reply_clock_covers_the_register_exchanges_of_a_slow_port(stack):
     """Seen on hardware: a 3-frame batch needs five exchanges of ~280 ms each
-    over WebSerial, and the driver — its clock armed before the first of them,
-    from the bus time alone — reported every frame unanswered."""
+    over WebSerial. The driver's reply clock starts at the write ack, which the
+    register link gives once the exchanges are done, so their cost never eats
+    into the time the bus has to answer."""
     transport = _SlowTransport(stack.network, delay_s=0.05)
-    instance = stack.driver(transport=transport)
-    instance.response_timeout = 0.1  # The bus time alone: less than the exchanges cost.
+    instance = stack.driver(transport=transport, response_timeout_s=0.1)
     await instance.initialize()
     try:
         for _ in range(3):
-            response = await instance.send(QueryActualLevel(GearShort(0)))
+            response = await send(instance, QueryActualLevel(GearShort(0)))
             assert not isinstance(response, NoResponseFromGateway)
             assert response.value == 0
-        link = instance._link  # pylint: disable=protected-access
+        link = instance.link
         assert link.round_trip_s >= 0.04
-        assert link.reply_timeout(1, 0.1) > 0.1 + 5 * 0.04
     finally:
         await instance.deinitialize()
 
@@ -272,7 +280,7 @@ async def test_deinitialize_returns_while_a_batch_is_in_flight_on_a_slow_port(st
     transport = _SlowTransport(stack.network, delay_s=0.3)
     instance = stack.driver(transport=transport)
     await instance.initialize()
-    pending = asyncio.ensure_future(instance.send(QueryActualLevel(GearShort(0))))
+    pending = asyncio.ensure_future(send(instance, QueryActualLevel(GearShort(0))))
     await asyncio.sleep(0.4)  # The batch is inside its register exchanges now.
     await asyncio.wait_for(instance.deinitialize(), timeout=2.0)
     pending.cancel()

@@ -1,13 +1,19 @@
 # Type 20 Demand response
 
+from typing import Optional
+
+from dali.command import Response
+
 from .common_dali_device import (
     PERIODIC_STATUS_POLL_INTERVAL,
-    MqttControl,
     MqttControlBase,
+    NotifyResult,
     PropertyStartOrder,
+    SingleQueryControl,
 )
 from .dali_parameters import NumberGearParam, TypeParameters
 from .device_publisher import ControlInfo
+from .events import BusEvent, LoadSheddingRead
 from .gear.demand_response import (
     QueryLoadSheddingCondition,
     QueryReductionFactor1,
@@ -100,6 +106,40 @@ class ReductionFactor3Param(NumberGearParam):
         self.property_order = PropertyStartOrder.SPECIFIC.value + 3
 
 
+class LoadSheddingConditionControl(SingleQueryControl):
+    """The DT20 demand-response reduction the gear currently applies."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                "load_shedding_condition",
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Load Shedding Condition", "Условие снижения нагрузки"),
+                        read_only=True,
+                        enum={
+                            "0": TranslatedTitle("no reduction", "без снижения"),
+                            "1": TranslatedTitle("reduction factor 1", "фактор снижения 1"),
+                            "2": TranslatedTitle("reduction factor 2", "фактор снижения 2"),
+                            "3": TranslatedTitle("reduction factor 3", "фактор снижения 3"),
+                        },
+                    ),
+                    "0",
+                ),
+            ),
+            query_builder=QueryLoadSheddingCondition,
+            poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
+        )
+
+    def notify(self, event: BusEvent) -> NotifyResult:
+        return self._apply_quantity_read(event, LoadSheddingRead, lambda response: str(response.value))
+
+    # --- Hooks for subclasses ---
+
+    def decode_response(self, response: Optional[Response]) -> BusEvent:
+        return LoadSheddingRead(response, response is None)
+
+
 class Type20Parameters(TypeParameters):
     def __init__(self) -> None:
         super().__init__()
@@ -111,26 +151,4 @@ class Type20Parameters(TypeParameters):
         ]
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
-        return [
-            MqttControl(
-                control_info=ControlInfo(
-                    "load_shedding_condition",
-                    ControlState(
-                        ControlMeta(
-                            title=TranslatedTitle("Load Shedding Condition", "Условие снижения нагрузки"),
-                            read_only=True,
-                            enum={
-                                "0": TranslatedTitle("no reduction", "без снижения"),
-                                "1": TranslatedTitle("reduction factor 1", "фактор снижения 1"),
-                                "2": TranslatedTitle("reduction factor 2", "фактор снижения 2"),
-                                "3": TranslatedTitle("reduction factor 3", "фактор снижения 3"),
-                            },
-                        ),
-                        "0",
-                    ),
-                ),
-                query_builder=QueryLoadSheddingCondition,
-                value_formatter=lambda response: str(response.value),
-                poll_interval=PERIODIC_STATUS_POLL_INTERVAL,
-            ),
-        ]
+        return [LoadSheddingConditionControl()]

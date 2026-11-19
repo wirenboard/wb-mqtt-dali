@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 from dali import command
 from dali.address import Address
@@ -19,14 +19,10 @@ from dali.gear.colour import (
 )
 from dali.gear.general import DTR0, DTR1, DTR2, QueryActualLevel, QueryContentDTR0
 
-from .common_dali_device import (
-    ControlPollResult,
-    MqttControl,
-    MqttControlBase,
-    PropertyStartOrder,
-)
+from .common_dali_device import MqttControl, MqttControlBase, PropertyStartOrder
 from .control_ids import CURRENT_COLOUR_TEMPERATURE, SET_COLOUR_TEMPERATURE
 from .dali_type8_common import ColourComponent
+from .dali_type8_controls import ColourComponentControl
 from .device_publisher import ControlInfo
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
@@ -35,7 +31,7 @@ from .wbdali_utils import (
     is_broadcast_or_group_address,
     send_commands_with_retry,
 )
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 MAX_TC_MIREK = MASK_2BYTES - 1
 MIN_TC_MIREK = 1
@@ -43,7 +39,7 @@ MIN_TC_MIREK = 1
 UI_MIN_TC_K = 1000
 UI_MAX_TC_K = 10000
 
-# The limits for UI if physical limits are not set
+# The UI range: every limit declared to the interface is clamped into it.
 UI_MIN_TC_MIREK = tc_kelvin_mirek(UI_MAX_TC_K)
 UI_MAX_TC_MIREK = tc_kelvin_mirek(UI_MIN_TC_K)
 
@@ -135,35 +131,77 @@ class ColourTemperatureValue:
         }
 
 
-def get_wanted_mqtt_controls(
-    tc_min_mirek: int,
-    tc_max_mirek: int,
-) -> list[MqttControlBase]:
-    def _set_colour_temperature_commands_builder(
-        short_address: Address, value_k: str
-    ) -> list[command.Command]:
-        try:
-            tc_k = max(int(value_k), 1)
-            tc_mirek = tc_kelvin_mirek(tc_k)
-            tc_mirek = min(tc_mirek, MAX_TC_MIREK)
-            tc_mirek = max(tc_mirek, MIN_TC_MIREK)
-        except ValueError as e:
-            raise ValueError("colour temperature must be integer") from e
-        return set_colour_temperature_commands_builder(short_address, tc_mirek) + [Activate(short_address)]
+def _set_colour_temperature_commands_builder(short_address: Address, value_k: str) -> list[command.Command]:
+    try:
+        tc_k = max(int(value_k), 1)
+        tc_mirek = tc_kelvin_mirek(tc_k)
+        tc_mirek = min(tc_mirek, MAX_TC_MIREK)
+        tc_mirek = max(tc_mirek, MIN_TC_MIREK)
+    except ValueError as e:
+        raise ValueError("colour temperature must be integer") from e
+    return set_colour_temperature_commands_builder(short_address, tc_mirek) + [Activate(short_address)]
 
-    if tc_min_mirek == MASK_2BYTES:
-        tc_min_mirek = UI_MIN_TC_MIREK
-    if tc_max_mirek == MASK_2BYTES:
-        tc_max_mirek = UI_MAX_TC_MIREK
 
-    min_k = tc_kelvin_mirek(tc_max_mirek)
-    max_k = tc_kelvin_mirek(tc_min_mirek)
-    default_k = 4000
-    if not min_k < default_k < max_k:
-        default_k = min_k
+class _TcControl(ColourComponentControl):
+    """Shared Tc representation: the raw mirek published as kelvin.
 
-    return [
-        MqttControl(
+    A value is published as the gear named it; only the bounds declared to the UI are clamped.
+    """
+
+    def __init__(
+        self,
+        control_info: ControlInfo,
+        commands_builder=None,
+        is_group_state_control: bool = False,
+    ) -> None:
+        super().__init__(
+            control_info,
+            components=[ColourComponent.COLOUR_TEMPERATURE],
+            commands_builder=commands_builder,
+            is_group_state_control=is_group_state_control,
+        )
+
+    # --- Hooks for subclasses ---
+
+    def _format(self, components: dict[ColourComponent, int]) -> str:
+        return str(tc_kelvin_mirek(components[ColourComponent.COLOUR_TEMPERATURE]))
+
+
+class CurrentColourTemperatureControl(_TcControl):
+    def __init__(self) -> None:
+        super().__init__(
+            ControlInfo(
+                CURRENT_COLOUR_TEMPERATURE,
+                ControlState(
+                    ControlMeta(
+                        title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
+                        read_only=True,
+                        units="K",
+                    ),
+                    "4000",
+                ),
+            ),
+            is_group_state_control=True,
+        )
+
+
+class SetColourTemperatureControl(_TcControl):
+    def __init__(self, coolest_mirek: int, warmest_mirek: int) -> None:
+        # An unset limit is a large mirek, so its side decides which UI edge stands in for it.
+        if not MIN_TC_MIREK <= coolest_mirek <= MAX_TC_MIREK:
+            coolest_mirek = UI_MIN_TC_MIREK
+        if not MIN_TC_MIREK <= warmest_mirek <= MAX_TC_MIREK:
+            warmest_mirek = UI_MAX_TC_MIREK
+        coolest_mirek = min(max(coolest_mirek, UI_MIN_TC_MIREK), UI_MAX_TC_MIREK)
+        warmest_mirek = min(max(warmest_mirek, UI_MIN_TC_MIREK), UI_MAX_TC_MIREK)
+        if coolest_mirek >= warmest_mirek:
+            coolest_mirek, warmest_mirek = UI_MIN_TC_MIREK, UI_MAX_TC_MIREK
+        min_k = tc_kelvin_mirek(warmest_mirek)
+        max_k = tc_kelvin_mirek(coolest_mirek)
+        default_k = 4000
+        if not min_k < default_k < max_k:
+            default_k = min_k
+        super().__init__(
             ControlInfo(
                 SET_COLOUR_TEMPERATURE,
                 ControlState(
@@ -178,34 +216,22 @@ def get_wanted_mqtt_controls(
                 ),
             ),
             commands_builder=_set_colour_temperature_commands_builder,
-        ),
-    ]
+        )
 
 
-def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlBase]:
+def get_wanted_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
+    return [SetColourTemperatureControl(limits.tc_min_mirek, limits.tc_max_mirek)]
 
+
+def get_mqtt_controls(limits: Type8TcLimits) -> list[MqttControlBase]:
     return [
-        MqttControl(
-            ControlInfo(
-                CURRENT_COLOUR_TEMPERATURE,
-                ControlState(
-                    ControlMeta(
-                        title=TranslatedTitle("Colour Temperature", "Цветовая температура"),
-                        read_only=True,
-                        units="K",
-                    ),
-                    "4000",
-                ),
-            ),
-            is_group_state_control=True,
-        ),
-        *get_wanted_mqtt_controls(tc_min_mirek, tc_max_mirek),
+        CurrentColourTemperatureControl(),
+        *get_wanted_mqtt_controls(limits),
         MqttControl(
             ControlInfo(
                 "colour_temperature_step_warmer",
                 ControlState(
                     ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Warmer", "Теплее")),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepWarmer(short_address)],
@@ -215,7 +241,6 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
                 "colour_temperature_step_cooler",
                 ControlState(
                     ControlMeta("pushbutton", TranslatedTitle("Colour Temperature Step Cooler", "Холоднее")),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [ColourTemperatureTcStepCooler(short_address)],
@@ -223,26 +248,10 @@ def get_mqtt_controls(tc_min_mirek: int, tc_max_mirek: int) -> list[MqttControlB
     ]
 
 
-def handle_poll_controls_result(new_colour: Optional[ColourTemperatureValue]) -> list[ControlPollResult]:
-    if new_colour is None or new_colour.tc == MASK_2BYTES:
-        value = None
-        error = ControlError.READ
-    else:
-        value = str(tc_kelvin_mirek(new_colour.tc))
-        error = ControlError.NONE
-    return [
-        ControlPollResult(
-            CURRENT_COLOUR_TEMPERATURE,
-            value,
-            error=error,
-        ),
-    ]
-
-
 async def read_colour_temperature_limits_mirek(
     driver: WBDALIDriver,
     short_address: Address,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
 ) -> Type8TcLimits:
     cmds = [
         QueryActualLevel(short_address),
@@ -298,15 +307,13 @@ class TcLimitsSettings(SettingsParamBase):
 
     def _current_values(self) -> dict:
         return {
-            "tc_coolest": self._limits.tc_min_mirek,
-            "tc_warmest": self._limits.tc_max_mirek,
-            "tc_physical_coolest": self._limits.tc_phys_min_mirek,
-            "tc_physical_warmest": self._limits.tc_phys_max_mirek,
+            "tc_coolest": self._shown_limit(self._limits.tc_min_mirek),
+            "tc_warmest": self._shown_limit(self._limits.tc_max_mirek),
+            "tc_physical_coolest": self._shown_limit(self._limits.tc_phys_min_mirek),
+            "tc_physical_warmest": self._shown_limit(self._limits.tc_phys_max_mirek),
         }
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         result = await read_colour_temperature_limits_mirek(driver, short_address, logger)
         self._limits.update_from(result)
         return {self.property_name: self._current_values()}
@@ -316,7 +323,7 @@ class TcLimitsSettings(SettingsParamBase):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.property_name not in value:
             return {}
@@ -459,3 +466,9 @@ class TcLimitsSettings(SettingsParamBase):
                 },
             },
         }
+
+    @staticmethod
+    def _shown_limit(limit_mirek: int) -> int:
+        if limit_mirek == MASK_2BYTES:
+            return MASK_2BYTES
+        return min(max(limit_mirek, UI_MIN_TC_MIREK), UI_MAX_TC_MIREK)

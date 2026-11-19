@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -55,7 +56,9 @@ async def test_device_groups_write_updates_expected_masks(monkeypatch):
         lambda address: "ADD_UPPER",
     )
 
-    result = await param.write(driver, short_address, {"device_groups": desired_state.copy()})
+    result = await param.write(
+        driver, short_address, {"device_groups": desired_state.copy()}, logging.getLogger("test")
+    )
 
     driver.send_commands.assert_awaited_once()
     sent_commands = driver.send_commands.await_args.args[0]
@@ -102,7 +105,7 @@ async def test_device_groups_write_no_changes_skips_driver_call():
     param._groups = current_state.copy()
 
     driver = AsyncMock()
-    result = await param.write(driver, 3, {"device_groups": current_state.copy()})
+    result = await param.write(driver, 3, {"device_groups": current_state.copy()}, logging.getLogger("test"))
 
     assert result == {}
     driver.send_commands.assert_not_called()

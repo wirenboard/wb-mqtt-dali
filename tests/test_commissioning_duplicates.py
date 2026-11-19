@@ -3,10 +3,10 @@
 The per-device fake (unlike the {short: random} one in test_commissioning.py)
 can hold a device without a short address or several sharing one. Simultaneous
 answers merge like on a real bus: identical frames read as one valid frame,
-differing ones as a framing error.
+differing ones as a framing error. It also carries gear that does not implement
+WITHDRAW and so stays in the search after one.
 """
 
-import unittest
 from dataclasses import dataclass
 from typing import Optional
 from unittest.mock import Mock
@@ -33,7 +33,11 @@ from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import Commissioning
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
 
+from ._virtual_time import VirtualTimeTestCase
+
 NEW_RANDOM_START = 0x200000
+BLOCKER_RANDOM = 0x111111
+CONFORMING_RANDOM = 0x444444
 
 
 class MockResponse:  # pylint: disable=R0903
@@ -61,7 +65,7 @@ class PerDeviceFakeDALIBus:
         self.next_random = NEW_RANDOM_START
 
     async def send(
-        self, cmd, source=BusTrafficSource.WB, priority=None
+        self, cmd, source=BusTrafficSource.WB, priority=None, logger=None
     ):  # pylint: disable=R0911 disable=R0912 disable=unused-argument
         self.sent_commands.append(cmd)
 
@@ -152,7 +156,7 @@ class PerDeviceFakeDALIBus:
         return MockResponse()
 
     async def send_commands(
-        self, cmds, source=BusTrafficSource.WB, priority=None
+        self, cmds, source=BusTrafficSource.WB, priority=None, logger=None
     ):  # pylint: disable=unused-argument
         return [await self.send(cmd, source, priority) for cmd in cmds]
 
@@ -171,7 +175,26 @@ class PerDeviceFakeDALIBus:
         return MockResponse(value=None, error=True)
 
 
-class TestCommissioningAddressConflicts(unittest.IsolatedAsyncioTestCase):
+class WithdrawIgnoringBus(PerDeviceFakeDALIBus):
+    """The per-device fake, with `ignoring` devices staying in the search after WITHDRAW."""
+
+    def __init__(self, devices: list[FakeDevice], ignoring: list[FakeDevice]) -> None:
+        super().__init__(devices)
+        self.ignoring = ignoring
+
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
+        response = await super().send(cmd, source, priority)
+        if isinstance(cmd, Withdraw):
+            for device in self.ignoring:
+                device.withdrawn = False
+        return response
+
+
+def programmed_addresses(bus: PerDeviceFakeDALIBus) -> list:
+    return [cmd.address for cmd in bus.sent_commands if isinstance(cmd, ProgramShortAddress)]
+
+
+class TestCommissioningAddressConflicts(VirtualTimeTestCase):
     async def test_duplicate_random_invisible_at_poll_keeps_config_entry(self):
         """Duplicate invisible at poll: B shares X but has no short address,
         so the poll reads X cleanly at short 5.
@@ -320,3 +343,61 @@ class TestCommissioningAddressConflicts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(device_a.short, 5)
         self.assertEqual(device_b.short, 0)
         self.assertFalse(any(isinstance(cmd, Randomise) for cmd in bus.sent_commands))
+
+
+class TestWithdrawIgnoringGear(VirtualTimeTestCase):
+    """Control gear that does not implement WITHDRAW keeps answering COMPARE after it, so the
+    search finds it over and over.
+    A find reporting a short address this run already recorded for that random address is the
+    same device, and is left alone; the search then makes no progress and gives up with its
+    stuck error, which is as far as such a bus can be enumerated.
+    """
+
+    async def test_gear_found_again_gets_no_second_short_address(self):
+        """The blocker holds short address 1 and is found again after WITHDRAW: no address is
+        programmed onto the bus, the journal names it, and the search gives up."""
+        blocker = FakeDevice(short=1, random=BLOCKER_RANDOM)
+        bus = WithdrawIgnoringBus([blocker], ignoring=[blocker])
+
+        commissioning = Commissioning(bus, [DaliDeviceAddress(short=1, random=BLOCKER_RANDOM)])
+        with self.assertLogs("commissioning", "WARNING") as logs:
+            with self.assertRaisesRegex(RuntimeError, "Binary search stuck"):
+                await commissioning.smart_extend()
+
+        self.assertEqual(blocker.short, 1)
+        self.assertEqual(programmed_addresses(bus), [])
+        self.assertTrue(
+            any("did not leave the device search after WITHDRAW" in line for line in logs.output),
+            logs.output,
+        )
+
+    async def test_gear_without_short_address_is_addressed_only_once(self):
+        """The blocker has no short address, so the first find is not a repeat and programs
+        one. Every find after it is, so exactly one address is programmed onto the bus."""
+        blocker = FakeDevice(short=None, random=BLOCKER_RANDOM)
+        bus = WithdrawIgnoringBus([blocker], ignoring=[blocker])
+
+        with self.assertRaisesRegex(RuntimeError, "Binary search stuck"):
+            await Commissioning(bus, []).smart_extend()
+
+        self.assertEqual(blocker.short, 0)
+        self.assertEqual(programmed_addresses(bus), [0])
+
+    async def test_random_address_conflict_is_still_randomised(self):
+        """Two devices really do share a random address and both respect WITHDRAW. The framing
+        error on QUERY SHORT ADDRESS is not a repeat find: the addressless one is randomised
+        between passes and picks up its own short address, the configured one keeps its."""
+        configured = FakeDevice(short=7, random=CONFORMING_RANDOM)
+        duplicate = FakeDevice(short=None, random=CONFORMING_RANDOM)
+        bus = WithdrawIgnoringBus([configured, duplicate], ignoring=[])
+
+        config = [DaliDeviceAddress(short=7, random=CONFORMING_RANDOM)]
+        result = await Commissioning(bus, config).smart_extend()
+
+        self.assertEqual(result.unchanged, config)
+        self.assertEqual(result.changed, [])
+        self.assertEqual(result.missing, [])
+        self.assertEqual((configured.short, configured.random), (7, CONFORMING_RANDOM))
+        self.assertNotEqual(duplicate.random, CONFORMING_RANDOM)
+        self.assertEqual(result.new, [DaliDeviceAddress(short=duplicate.short, random=duplicate.random)])
+        self.assertTrue(any(isinstance(cmd, Randomise) for cmd in bus.sent_commands))

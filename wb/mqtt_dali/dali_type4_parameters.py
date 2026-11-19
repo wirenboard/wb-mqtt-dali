@@ -1,7 +1,6 @@
 # Type 4 Supply voltage controller for incandescent lamps
 
 import logging
-from typing import Optional
 
 from dali.address import GearShort
 from dali.gear.incandescent import QueryDimmingCurve, SelectDimmingCurve
@@ -26,6 +25,6 @@ class Type4Parameters(TypeParameters):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         await self._dimming_curve_parameter.read(driver, short_address, logger)

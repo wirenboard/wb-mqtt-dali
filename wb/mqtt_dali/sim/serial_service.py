@@ -155,11 +155,23 @@ class FakeWbMqttSerial:  # pylint: disable=too-many-instance-attributes
         if function in (6, 16):
             registers = _registers_from_hex(params.get("msg") or "")
             await self.network.write_holding(device_id, address, registers)
-            await self._publish_replies(device_id, address, len(registers))
+            # wb-mqtt-serial acks the write and publishes what it reads back on a
+            # later poll; the daemon takes a reply only for a write it has seen acked.
+            task = asyncio.create_task(self._publish_replies_after_poll(device_id, address, len(registers)))
+            self._tasks.append(task)
+            task.add_done_callback(self._forget_task)
             return {"response": ""}
         raise ValueError(f"unsupported Modbus function {function}")
 
     # -- what wb-mqtt-serial's polling would publish -------------------------
+
+    def _forget_task(self, task: asyncio.Task) -> None:
+        if task in self._tasks:
+            self._tasks.remove(task)
+
+    async def _publish_replies_after_poll(self, device_id: str, address: int, register_count: int) -> None:
+        await asyncio.sleep(self.poll_interval_s)
+        await self._publish_replies(device_id, address, register_count)
 
     async def _publish_replies(self, device_id: str, address: int, register_count: int) -> None:
         """Publish the reply registers a write may have changed.

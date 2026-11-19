@@ -1,21 +1,18 @@
-"""Tests for decoding and publishing general purpose sensor measurement events.
+"""Tests for decoding general purpose sensor measurement events.
 
 IEC 62386-306 measurement events carry a 9-bit value in the 10-bit event field;
 bit 9 is the measurement-event discriminator, not data. These tests assert the
 event round-trips through `Command.from_frame` without raising (the old code
-wrote the 10-bit value into a 9-bit frame slot and crashed), that the decoded
-measurement excludes the discriminator bit, and that the publish path emits the
-actual value.
+wrote the 10-bit value into a 9-bit frame slot and crashed) and that the decoded
+measurement excludes the discriminator bit.
 """
 
 import unittest
-from unittest.mock import AsyncMock
 
-from dali.address import DeviceShort, InstanceNumber
+from dali.address import DeviceShort
 from dali.command import Command
 from dali.device.helpers import DeviceInstanceTypeMapper
 
-from wb.mqtt_dali.dali2_device import InstanceParameters, publish_dali2_event
 from wb.mqtt_dali.device import general_purpose_sensor
 
 # Bit 9 of the 10-bit event field flags a measurement event (vs. data).
@@ -70,22 +67,3 @@ class MeasurementEventDecodeTests(unittest.TestCase):
         self.assertIsInstance(decoded, general_purpose_sensor.MeasurementEvent)
         self.assertEqual(decoded.measurement, 123)
         self.assertEqual(decoded.instance_number, 2)
-
-
-class MeasurementEventPublishTests(unittest.IsolatedAsyncioTestCase):
-    async def test_measurement_event_published_value(self):
-        """Publishing a measurement event writes the actual value (no +512) to
-        the `measurement{instance}` control topic.
-        """
-        event = general_purpose_sensor.MeasurementEvent(
-            short_address=DeviceShort(1), instance_number=4, data=_measurement_data(257)
-        )
-        mqtt_client = AsyncMock()
-        instance = InstanceParameters(InstanceNumber(4), general_purpose_sensor.instance_type)
-
-        await publish_dali2_event(event, "wb-dali_1_1", mqtt_client, instance)
-
-        mqtt_client.publish.assert_awaited_once()
-        topic, value = mqtt_client.publish.await_args.args
-        self.assertEqual(topic, "/devices/wb-dali_1_1/controls/measurement4")
-        self.assertEqual(value, "257")

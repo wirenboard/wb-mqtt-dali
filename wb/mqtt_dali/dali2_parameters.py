@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
 from dali.address import Address, Instance
 from dali.command import Command
@@ -23,9 +23,7 @@ class InstanceParam(NumberSettingsParam):
         self._set_command = set_command
         self._instance_number = instance_number
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         try:
             return await super().read(driver, short_address, logger)
         except RuntimeError:
@@ -38,7 +36,7 @@ class InstanceParam(NumberSettingsParam):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         try:
             return await super().write(driver, short_address, value, logger)

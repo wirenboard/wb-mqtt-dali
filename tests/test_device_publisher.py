@@ -30,6 +30,9 @@ class MockMQTTDispatcher:
         self.unsubscribe = AsyncMock()
         self._subscriptions = {}
 
+    async def publish(self, topic, payload=None, qos=0, retain=False):
+        await self.client.publish(topic, payload, qos=qos, retain=retain)
+
     async def mock_subscribe(self, topic, callback):
         if topic not in self._subscriptions:
             self._subscriptions[topic] = []
@@ -462,6 +465,43 @@ class TestDevicePublisher:
 
         assert "dev1/ctrl1" not in publisher._control_handlers
         assert "dev1/ctrl2" not in publisher._control_handlers
+
+    @pytest.mark.asyncio
+    async def test_add_control_publishes_a_seeded_read_error_after_the_value(self, publisher, mock_client):
+        """A ControlInfo arriving with state.error is published with /meta/error=r in the same
+        single publish, after the value."""
+        device_info = DeviceInfo(
+            "dev1",
+            "Device 1",
+            [ControlInfo("ctrl1", ControlState(ControlMeta("value", "Control 1"), "", ControlError.READ))],
+        )
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        published = [(call.args[0], call.args[1]) for call in mock_client.publish.await_args_list]
+        assert ("/devices/dev1/controls/ctrl1/meta/error", "r") in published
+        value_topic = "/devices/dev1/controls/ctrl1"
+        assert published.index(("/devices/dev1/controls/ctrl1/meta/error", "r")) > [
+            topic for topic, _ in published
+        ].index(value_topic)
+
+    @pytest.mark.asyncio
+    async def test_add_control_publishes_no_value_for_a_pressed_button(self, publisher, mock_client):
+        """A button whose state still holds the last press (a republish after an mqtt_id change)
+        is declared without touching its value topic."""
+        device_info = DeviceInfo(
+            "dev1",
+            "Device 1",
+            [ControlInfo("off", ControlState(ControlMeta("pushbutton", "Off"), "1"))],
+        )
+
+        await publisher.add_device(device_info)
+        await publisher.initialize()
+
+        published = [call.args[0] for call in mock_client.publish.await_args_list]
+        assert "/devices/dev1/controls/off/meta" in published
+        assert "/devices/dev1/controls/off" not in published
 
     @pytest.mark.asyncio
     async def test_add_control_with_all_fields(self, publisher):

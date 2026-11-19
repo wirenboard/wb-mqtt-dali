@@ -3,6 +3,7 @@ DaliDevice integration that injects the read-only fallback for device
 types without dimming curve support.
 """
 
+import logging
 from contextlib import ExitStack
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,11 +12,7 @@ import pytest
 
 from wb.mqtt_dali import dali_device as _dd
 from wb.mqtt_dali import settings as _settings
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    PropertyStartOrder,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, PropertyStartOrder
 from wb.mqtt_dali.dali_common_parameters import GroupsParam
 from wb.mqtt_dali.dali_device import DaliDevice, DaliDeviceType
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
@@ -27,20 +24,9 @@ from wb.mqtt_dali.dali_type17_parameters import (
     Type17Parameters,
 )
 
+from ._common_schema import load_common_schema
+
 # pylint: disable=redefined-outer-name
-
-
-@pytest.fixture(autouse=True)
-def _stub_common_schema(monkeypatch):
-    # Prevent file system access in DaliDeviceBase.__init__ by providing a
-    # non-empty common schema. monkeypatch restores the original value after
-    # each test so we don't leak state into other tests in the same process.
-    monkeypatch.setattr(
-        DaliDeviceBase,
-        "_common_schema",
-        {"title": "test-schema", "properties": {}},
-        raising=False,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +108,7 @@ async def test_read_only_param_read_does_not_touch_bus(monkeypatch):
     param = DimmingCurveParam(state)
     driver = AsyncMock()
     address = MagicMock()
-    result = await param.read(driver, address)
+    result = await param.read(driver, address, logging.getLogger("test"))
 
     assert result == {param.property_name: DimmingCurveType.LOGARITHMIC}
     assert param.value == DimmingCurveType.LOGARITHMIC
@@ -145,11 +131,13 @@ async def test_read_only_param_write_is_noop_and_does_not_touch_bus(monkeypatch)
     address = MagicMock()
 
     # Value dict containing our property — must not raise.
-    res_with_key = await param.write(driver, address, {param.property_name: DimmingCurveType.LINEAR})
+    res_with_key = await param.write(
+        driver, address, {param.property_name: DimmingCurveType.LINEAR}, logging.getLogger("test")
+    )
     assert res_with_key == {}
 
     # Value dict without our property — also no-op.
-    res_without_key = await param.write(driver, address, {"other": 1})
+    res_without_key = await param.write(driver, address, {"other": 1}, logging.getLogger("test"))
     assert res_without_key == {}
 
     # State must remain at LOGARITHMIC — write on a read-only param cannot
@@ -202,6 +190,7 @@ def _make_dali_device(short: int = 1) -> DaliDevice:
         DaliDeviceAddress(short=short, random=0x123456),
         bus_id="bus_test",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
     )
 
 
@@ -263,7 +252,8 @@ async def _initialize(
         # Stub GroupsParam.read so we don't need to mock the bus protocol
         stack.enter_context(patch.object(GroupsParam, "read", new=AsyncMock(return_value={"groups": []})))
 
-        return await device._initialize_impl(driver)
+        initialization = await device._initialize_impl(driver)
+        return initialization.parameter_handlers, initialization.group_parameter_handlers
 
 
 def _find_dimming_curve_param(handlers) -> Optional[DimmingCurveParam]:
@@ -335,7 +325,7 @@ async def test_unsupported_types_get_read_only_fallback(device_type):
     driver = AsyncMock()
     driver.send = AsyncMock(side_effect=AssertionError("Bus access forbidden"))
     address = MagicMock()
-    result = await param.read(driver, address)
+    result = await param.read(driver, address, logging.getLogger("test"))
     assert result == {"dimming_curve": DimmingCurveType.LOGARITHMIC}
     assert param.value == DimmingCurveType.LOGARITHMIC
 

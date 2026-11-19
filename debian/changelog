@@ -1,15 +1,14 @@
-wb-mqtt-dali (1.26.0) stable; urgency=medium
+wb-mqtt-dali (1.44.0) stable; urgency=medium
 
   * The bus driver reaches its WB-DALI module through a gateway link: the controller's
     (wb-mqtt-serial in between) or a direct register link for hosts that own the Modbus
     side — the WASM device editor, the simulator. One driver, one queue, one decoder.
-  * The register link sizes the driver's reply clock from the measured cost of its
-    register exchanges, delivers ring slots found in one poll in frame-counter order,
-    and the send queue no longer swallows its cancellation mid-batch.
+  * The register link rewinds the module before every batch, hands the replies over only
+    after the write is acked, and delivers ring slots found in one poll in frame-counter order.
 
- -- Evgeny Boger <boger@wirenboard.com>  Mon, 31 Aug 2026 18:30:00 +0500
+ -- Evgeny Boger <boger@wirenboard.com>  Thu, 19 Nov 2026 18:30:00 +0500
 
-wb-mqtt-dali (1.25.0) stable; urgency=medium
+wb-mqtt-dali (1.43.0) stable; urgency=medium
 
   * A simulated DALI installation is available in the source tree (wb/mqtt_dali/sim):
     WB-DALI modules with their register map, control gear and DALI-2 devices that answer
@@ -18,7 +17,341 @@ wb-mqtt-dali (1.25.0) stable; urgency=medium
     It is not installed by this package: it is used by the test suite and by hosts that
     build from the sources.
 
- -- Evgeny Boger <boger@wirenboard.com>  Mon, 31 Aug 2026 15:30:00 +0500
+ -- Evgeny Boger <boger@wirenboard.com>  Thu, 19 Nov 2026 18:00:00 +0500
+
+wb-mqtt-dali (1.42.3) stable; urgency=medium
+
+  * Internal refactoring and tests, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 16:32:21 +0500
+
+wb-mqtt-dali (1.42.2) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 15:56:43 +0500
+
+wb-mqtt-dali (1.42.1) stable; urgency=medium
+
+  * If the common device settings schema file is missing or damaged, the
+    service stops at startup with an error in the log instead of restarting
+    endlessly
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 14:36:49 +0500
+
+wb-mqtt-dali (1.42.0) stable; urgency=medium
+
+  * Device settings open faster: only the part of a device memory bank that
+    holds the shown values is read, not the whole bank. Devices with long
+    manufacturer data in their memory banks gain the most
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 18 Nov 2026 15:33:16 +0500
+
+wb-mqtt-dali (1.41.5) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 18 Nov 2026 12:54:44 +0500
+
+wb-mqtt-dali (1.41.4) stable; urgency=medium
+
+  * When a command to a device or group fails, its control now shows a write
+    error and the slider returns to the last known value instead of sticking on
+    the sent one
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 17 Nov 2026 16:40:00 +0500
+
+wb-mqtt-dali (1.41.3) stable; urgency=medium
+
+  * Manufacturer and model are no longer described in the device settings schema; their values are still reported and shown in the web UI as before
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 17 Nov 2026 16:13:57 +0500
+
+wb-mqtt-dali (1.41.2) stable; urgency=medium
+
+  * Code restructuring, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 13 Nov 2026 17:23:55 +0500
+
+wb-mqtt-dali (1.41.1) stable; urgency=medium
+
+  * Large installation e2e test added, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 13 Nov 2026 15:24:30 +0500
+
+wb-mqtt-dali (1.41.0) stable; urgency=medium
+
+  * Device parameters show correct values after a controller reboot or a wb-mqtt-serial restart
+  * Commands on a busy bus get their answer instead of "no response from gateway"
+  * Device search finds every device type (and its controls) on a noisy bus
+  * A cancelled operation stops sending its commands to the bus
+  * The journal stays free of "There are N pending publish calls" warnings at startup
+  * When the serial port is busy or wb-mqtt-serial fails, SendCommand and the bus monitor say
+    "gateway write skipped: serial port busy" / "gateway write failed"
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 15:23:08 +0500
+
+wb-mqtt-dali (1.40.2) stable; urgency=medium
+
+  * Test suite rework, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 15:18:07 +0500
+
+wb-mqtt-dali (1.40.1) stable; urgency=medium
+
+  * A DALI command is no longer failed with a "no transmission" gateway error before the gateway
+    has sent it: wb-mqtt-dali waits for the command's actual result
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 13:39:31 +0500
+
+wb-mqtt-dali (1.40.0) stable; urgency=medium
+
+  * Code restructuring, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 12:18:51 +0500
+
+wb-mqtt-dali (1.39.4) stable; urgency=medium
+
+  * Device control values are published with MQTT QoS 1, as in other Wiren Board services
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 11 Nov 2026 18:08:14 +0500
+
+wb-mqtt-dali (1.39.3) stable; urgency=medium
+
+  * On a large installation wb-mqtt-dali stops about twice as fast and no longer fills
+    the journal with thousands of "There are N pending publish calls" warnings
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 11 Nov 2026 13:24:55 +0500
+
+wb-mqtt-dali (1.39.2) stable; urgency=medium
+
+  * Fix lost input events from a DALI-2 device after changing its short address
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 05 Nov 2026 21:07:12 +0500
+
+wb-mqtt-dali (1.39.1) stable; urgency=medium
+
+  * Stop logging a second error with a traceback ("Future exception was never
+    retrieved") after a failed bus scan; the scan failure itself is still logged
+    and reported in the scan state
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 05 Nov 2026 15:21:38 +0500
+
+wb-mqtt-dali (1.39.0) stable; urgency=medium
+
+  * Show 17-bit Helvar frames in the bus monitor
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 18:27:52 +0500
+
+wb-mqtt-dali (1.38.0) stable; urgency=medium
+
+  * Support gateway reply statuses 6 (legacy broken reply) and 7 (failed to send)
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 02 Nov 2026 16:15:12 +0500
+
+wb-mqtt-dali (1.37.2) stable; urgency=medium
+
+  * Translate the bus name in group and broadcast device titles
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 16:54:02 +0500
+
+wb-mqtt-dali (1.37.1) stable; urgency=medium
+
+  * The package is now distributed under the WB License (MIT-WB): the software may only be
+    used on Wiren Board controllers
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 16:34:55 +0500
+
+wb-mqtt-dali (1.37.0) stable; urgency=medium
+
+  * Less journal spam: no power on the bus, gateway overheat and unresponsive devices are
+    reported once instead of on every command
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 30 Oct 2026 10:40:05 +0500
+
+wb-mqtt-dali (1.36.2) stable; urgency=medium
+
+  * Wait for wb-mqtt-serial at startup instead of exiting with a traceback and restarting:
+    one critical message while waiting, the buses start as soon as wb-mqtt-serial is up
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 29 Oct 2026 15:00:00 +0500
+
+wb-mqtt-dali (1.36.1) stable; urgency=medium
+
+  * DT51 energy meter shows a read error when the gateway fails (e.g. no power on the bus)
+    instead of logging "Error polling device" on every poll cycle
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 28 Oct 2026 16:22:47 +0500
+
+wb-mqtt-dali (1.36.0) stable; urgency=medium
+
+  * Identification numbers, the OEM one included, are sent as strings: long numbers no longer
+    lose their last digits in the web interface
+  * The device settings schema no longer describes the GTIN, the identification numbers, the
+    gear types and the firmware and hardware versions; the values are still sent, and the web
+    interface shows them on its own
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 27 Oct 2026 12:55:32 +0500
+
+wb-mqtt-dali (1.35.0) stable; urgency=medium
+
+  * Fix a bus stopping polling after a device had not answered for about 17 hours
+  * On an unexpected error the service now restarts instead of leaving the bus silent
+  * A device MQTT ID or gateway device ID that is empty or contains $ # + / " or ' is now
+    a configuration error
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 23 Oct 2026 10:38:28 +0500
+
+wb-mqtt-dali (1.34.0) stable; urgency=medium
+
+  * DALI devices that stay silent instead of reporting the end of their device type list no
+    longer fail to initialize
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 22 Oct 2026 12:19:55 +0500
+
+wb-mqtt-dali (1.33.3) stable; urgency=medium
+
+  * No changes for the service: the repository now holds the scripts that find, review and
+    prepare the pictures of DALI devices
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 14 Oct 2026 13:07:39 +0500
+
+wb-mqtt-dali (1.33.2) stable; urgency=medium
+
+  * Remove the "Current colour" setting from DT8 device settings: the current colour is shown
+    and set with the device controls
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 13:24:14 +0500
+
+wb-mqtt-dali (1.33.1) stable; urgency=medium
+
+  * Update the DALI product database
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 02 Oct 2026 12:47:15 +0500
+
+wb-mqtt-dali (1.33.0) stable; urgency=medium
+
+  * Stop with exit code 2 when the MQTT broker rejects the login instead of reconnecting
+    forever; other connection failures are still retried
+  * Report a broken -b/--broker URL as an argument error (exit code 2) instead of a traceback
+  * SIGINT/SIGTERM during startup end the service with exit code 0
+  * Log an error when the service stops without the broker and cannot remove its retained
+    topics
+  * Require python3-wb-common >= 2.4.0, the version all WB services are aligned on
+
+ -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Wed, 23 Sep 2026 07:41:55 +0000
+
+wb-mqtt-dali (1.32.2) stable; urgency=medium
+
+  * The device and group settings page no longer reports unsaved changes right after it
+    opens when an on/off action's fade time is left at "use device settings".
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 23 Sep 2026 12:00:00 +0500
+
+wb-mqtt-dali (1.32.1) stable; urgency=medium
+
+  * Re-read a luminaire that was still dimming when the service started once its own fade
+    time has passed, instead of a flat six seconds.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 17 Sep 2026 17:40:00 +0500
+
+wb-mqtt-dali (1.32.0) stable; urgency=medium
+
+  * Add an on/off control for devices and groups, with a configurable turn-on action
+    (scene, last active level, level or raw DAPC) and turn-off action (off or DAPC),
+    each with its own fade time.
+  * Publish a group that has an on/off control from the start of the service, without
+    waiting for its ballasts to answer.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 17 Sep 2026 12:00:00 +0500
+
+wb-mqtt-dali (1.31.0) stable; urgency=medium
+
+  * The wanted colour temperature slider and the colour temperature limits card stay within
+    1000-10000 K, whatever limits the luminaire reports.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 15 Sep 2026 11:20:00 +0500
+
+wb-mqtt-dali (1.30.0) stable; urgency=medium
+
+  * Publish every device and group with its real state at once, instead of builder defaults
+    until the first poll; a control that could not be read carries /meta/error=r from that
+    same publish.
+  * Keep control values and errors when the control set is rebuilt on a colour-temperature
+    limits change.
+  * Publish nothing to a pushbutton's value topic when its control appears or goes away, so
+    republishing a device no longer looks like a press.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 08 Sep 2026 19:30:00 +0500
+
+wb-mqtt-dali (1.29.0) stable; urgency=medium
+
+  * The internal logic of polling devices and publishing their state has changed.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 08 Sep 2026 18:05:00 +0500
+
+wb-mqtt-dali (1.28.0) stable; urgency=medium
+
+  * A lost connection to the MQTT broker no longer restarts the buses: the devices stay in
+    the interface, their state keeps being read and is published again once the connection
+    is back. Controls polled during the outage show a read error until the first successful
+    read after it; the rest keep their values.
+  * A connection lost without the socket being closed is noticed within 15-30 s instead of
+    1-2 minutes.
+  * Stopping the service now also removes its RPC endpoint markers from the broker; they
+    used to stay behind.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 07 Sep 2026 14:15:00 +0500
+
+wb-mqtt-dali (1.27.1) stable; urgency=medium
+
+  * A device that failed to initialise at service start was no longer retried once its
+    settings page had been opened: it kept only the level and on/off controls until a
+    service restart. The retries now continue until the device answers and comes up in full.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 04 Sep 2026 11:25:00 +0500
+
+wb-mqtt-dali (1.27.0) stable; urgency=medium
+
+  * Values, errors and meta now go to the broker at QoS 2.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 03 Sep 2026 10:35:30 +0500
+
+wb-mqtt-dali (1.26.0) stable; urgency=medium
+
+  * Commissioning takes less time when the bus has many unaddressed devices.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 01 Sep 2026 11:23:58 +0500
+
+wb-mqtt-dali (1.25.0) stable; urgency=medium
+
+  * Some control gear keeps answering the device search after a WITHDRAW. Commissioning gave
+    such gear a new short address on every run, and the configuration collected several
+    entries for one device. Now the run stops with an error naming that gear, and the
+    configuration stays as it was: the bus cannot be enumerated past such gear.
+  * wb-mqtt-dali-address-with-randomise takes --search-only: it reports what is on the bus
+    and writes nothing to it.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 31 Aug 2026 20:59:21 +0500
+
+wb-mqtt-dali (1.24.0) stable; urgency=medium
+
+  * A new tool, wb-mqtt-dali-address-with-randomise, addresses the gear that answers the
+    device search only after a RANDOMISE sent to all devices on the bus: it hands out free
+    short addresses to the ones that have none and brings the configuration in line with
+    the bus. Run it by hand, with the service stopped, on a bus that holds no other devices
+    — the RANDOMISE it sends re-rolls the random address of every conforming device.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Mon, 31 Aug 2026 20:40:59 +0500
+
+wb-mqtt-dali (1.23.1) stable; urgency=medium
+
+  * Fix two sections both titled "Scenes" on the settings page of a DT8 device, and of a bus
+    or group with DT8 gear: the light-level scenes and the colour scenes looked the same,
+    each with its own Set button, so one could be written by mistake for the other. The
+    colour ones are now titled "Colour scenes" / «Цветовые сцены».
+
+ -- Evgeny Boger <wb-claude-mail-00001-7@proton.me>  Sat, 29 Aug 2026 21:48:46 +0000
 
 wb-mqtt-dali (1.23.0) stable; urgency=medium
 

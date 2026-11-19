@@ -11,7 +11,7 @@
 # Scenario:
 #   1. Set the device's arc-power level via the hammer driver so
 #      QueryActualLevel returns a deterministic byte.
-#   2. On the long driver: extend `response_timeout` to a large value and
+#   2. On the long driver, created with a large `response_timeout_s`,
 #      submit LONG_BURST QueryActualLevel commands at the long driver's
 #      priority via a single `send_commands` call. Do not await — the
 #      driver pipelines internally.
@@ -43,6 +43,7 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbmqtt import make_mqtt_client
 
@@ -170,31 +171,32 @@ async def run_test(  # pylint: disable=too-many-locals
 ) -> None:
     logger = logging.getLogger()
     driver_long = WBDALIDriver(
-        WBDALIConfig(device_name=long_gateway, bus=DALI_BUS),
+        WBDALIConfig(device_name=long_gateway, bus=DALI_BUS, response_timeout_s=LONG_RESPONSE_TIMEOUT),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logger,
+        rpc_client=MQTTRPCClient(),
     )
     driver_hammer = WBDALIDriver(
         WBDALIConfig(device_name=hammer_gateway, bus=DALI_BUS),
         mqtt_dispatcher=mqtt_dispatcher,
         logger=logger,
+        rpc_client=MQTTRPCClient(),
     )
     await driver_long.initialize()
     try:
         await driver_hammer.initialize()
         try:
-            driver_long.response_timeout = LONG_RESPONSE_TIMEOUT
             logging.info(
                 "long driver=%s response_timeout=%.1f s; hammer driver=%s",
                 long_gateway,
-                driver_long.response_timeout,
+                driver_long.config.response_timeout_s,
                 hammer_gateway,
             )
 
             addr = GearShort(short_address)
             logging.info("Setting arc-power level %d on short=%d", LEVEL, short_address)
             await driver_hammer.send_commands(
-                [DAPC(addr, LEVEL)], BusTrafficSource.WB, FramePriority.USER_ACTION
+                [DAPC(addr, LEVEL)], BusTrafficSource.WB, FramePriority.USER_ACTION, driver_hammer.logger
             )
 
             events: List[TrafficEvent] = []
@@ -224,7 +226,9 @@ async def run_test(  # pylint: disable=too-many-locals
                 )
                 long_cmds = [QueryActualLevel(addr) for _ in range(LONG_BURST)]
                 long_task = asyncio.create_task(
-                    driver_long.send_commands(long_cmds, BusTrafficSource.WB, LONG_DRIVER_PRIORITY)
+                    driver_long.send_commands(
+                        long_cmds, BusTrafficSource.WB, LONG_DRIVER_PRIORITY, driver_long.logger
+                    )
                 )
 
                 await asyncio.wait_for(trigger_event.wait(), timeout=5.0)
@@ -238,7 +242,9 @@ async def run_test(  # pylint: disable=too-many-locals
                     HAMMER_DRIVER_PRIORITY.value,
                 )
                 hammer_task = asyncio.create_task(
-                    driver_hammer.send_commands(hammer_cmds, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY)
+                    driver_hammer.send_commands(
+                        hammer_cmds, BusTrafficSource.WB, HAMMER_DRIVER_PRIORITY, driver_hammer.logger
+                    )
                 )
 
                 await hammer_task

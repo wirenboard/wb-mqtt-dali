@@ -6,9 +6,10 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dali.address import DeviceShort, GearShort, InstanceNumber
+import pytest_asyncio
+from dali.address import DeviceBroadcast, DeviceShort, GearShort, InstanceNumber
 from dali.command import Response, from_frame
-from dali.device.general import EnableInstance
+from dali.device.general import EnableInstance, StartQuiescentMode
 from dali.frame import BackwardFrame, BackwardFrameError, ForwardFrame
 from dali.gear.general import QueryActualLevel, QueryControlGearPresent
 
@@ -32,20 +33,29 @@ from wb.mqtt_dali.commissioning import (
     CommissioningResult,
     CommissioningStage,
 )
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
+from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
+from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import bus_from_json
+from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher
+from wb.mqtt_dali.wbdali import WBDALIConfig
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
-from ._app_controller_helpers import make_loop_controller, stop_loop
+from ._app_controller_helpers import (
+    LoopKiller,
+    make_loop_controller,
+    stop_loop,
+    wait_until,
+)
+from ._broker_link_helpers import RecordingClient
+from ._bus_doubles import FakeWBDALIDriver
+from ._common_schema import load_common_schema
 
 # pylint: disable=duplicate-code
-
-# Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-methods
@@ -67,6 +77,7 @@ def _make_bare_controller():
     controller.logger = logging.getLogger("test")
     controller._dev = AsyncMock()
     controller._gtin_db = MagicMock()
+    controller._common_schema = load_common_schema()
     controller._devices_by_mqtt_id = {}
     controller._init_scheduler = MagicMock()
     controller._init_scheduler.remove = MagicMock()
@@ -657,8 +668,7 @@ class TestCommissioningTaskTerminalBranches:
             "wb.mqtt_dali.application_controller.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ):
-            with pytest.raises(RuntimeError):
-                await controller._commissioning_task()
+            await controller._commissioning_task()
 
         assert controller._commissioning_state.status == CommissioningStatus.FAILED
         assert controller._commissioning_state.error == "bus offline"
@@ -705,8 +715,7 @@ class TestCommissioningTaskTerminalBranches:
             new=AsyncMock(return_value=None),
         ):
             mock_cls.side_effect = _make_commissioning
-            with pytest.raises(RuntimeError):
-                await controller._commissioning_task()
+            await controller._commissioning_task()
 
         assert controller._commissioning_state.status == CommissioningStatus.FAILED
         assert controller._commissioning_state.error == "DALI-2 phase failed"
@@ -1499,8 +1508,8 @@ async def test_polling_loop_command_stream_does_not_starve_polling():
 async def test_start_rolls_back_on_publisher_bringup_failure():
     """A bringup failure after the driver is up must leave a clean slate.
 
-    The controller is built with its normal constructor (no I/O) but with the
-    driver and publisher classes patched to mocks. The failure is injected at the
+    The controller is built with its normal constructor (no I/O) but with
+    a mock driver and the publisher class patched to a mock. The failure is injected at the
     virtual-device publication step (register_control_handler) — the dangerous
     case where the publisher is already initialized and has registered device
     state/subscriptions. start() must roll back symmetrically: clean up the
@@ -1510,10 +1519,8 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
     awaited, and a subsequent start() succeeds — only possible if the controller
     fell back to UNINITIALIZED, since start() rejects any other state.
     """
-    with patch("wb.mqtt_dali.application_controller.WBDALIDriver") as driver_cls, patch(
-        "wb.mqtt_dali.application_controller.DevicePublisher"
-    ) as publisher_cls:
-        driver = driver_cls.return_value
+    with patch("wb.mqtt_dali.application_controller.DevicePublisher") as publisher_cls:
+        driver = MagicMock(config=WBDALIConfig(device_name="gw", bus=1), logger=logging.getLogger("gw_bus_1"))
         driver.initialize = AsyncMock()
         driver.deinitialize = AsyncMock()
         publisher = publisher_cls.return_value
@@ -1522,13 +1529,10 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         publisher.register_control_handler = AsyncMock(side_effect=[RuntimeError("broker down"), None])
         publisher.cleanup = AsyncMock()
 
-        config = ApplicationControllerConfig(
-            gateway_mqtt_device_id="gw",
-            bus=1,
-            dali_devices=[],
-            dali2_devices=[],
+        config = ApplicationControllerConfig(dali_devices=[], dali2_devices=[])
+        controller = ApplicationController(
+            config, MagicMock(), driver, MagicMock(), load_common_schema(), MagicMock()
         )
-        controller = ApplicationController(config, MagicMock(), MagicMock())
 
         with pytest.raises(RuntimeError, match="broker down"):
             await controller.start()
@@ -1541,6 +1545,122 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         # re-publish the broadcast device without a duplicate-handler error.
         await controller.start()
         await controller.stop()
+
+
+@pytest_asyncio.fixture(name="acking_dispatcher")
+async def _acking_dispatcher():
+    """A running dispatcher whose client acknowledges the driver's port/Load writes."""
+    dispatcher = MQTTDispatcher(RecordingClient())
+    dispatch_task = asyncio.create_task(dispatcher.run())
+    yield dispatcher
+    dispatch_task.cancel()
+
+
+def _bus_with_device(device, on_polling_failure, dispatcher: MQTTDispatcher) -> ApplicationController:
+    config = ApplicationControllerConfig(dali_devices=[device], dali2_devices=[])
+    return ApplicationController(
+        config, dispatcher, FakeWBDALIDriver(), MagicMock(), load_common_schema(), on_polling_failure
+    )
+
+
+def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
+    device = MagicMock(spec=DaliDevice)
+    device.address = DaliDeviceAddress(5, 123)
+    device.mqtt_id = "gw_bus_1_dev"
+    device.name = "dev"
+    device.is_initialized = False
+    device.initialize = initialize
+    return device
+
+
+@pytest.mark.asyncio
+async def test_dali2_short_address_change_moves_instance_types_to_new_address(acking_dispatcher):
+    """A DALI-2 device's short address changes 5 -> 9 through apply_parameters: the driver's
+    instance map holds its instance types under 9 and nothing under 5."""
+    device = MagicMock(spec=Dali2Device)
+    device.address = DaliDeviceAddress(5, 123)
+    device.mqtt_id = "gw_bus_1_dev"
+    device.name = "dev"
+    device.is_initialized = False
+    device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
+    device.instances = {0: SimpleNamespace(instance_type=1), 1: SimpleNamespace(instance_type=3)}
+
+    async def change_short_address(_driver, _params):
+        device.address = DaliDeviceAddress(9, 123)
+
+    device.apply_parameters = AsyncMock(side_effect=change_short_address)
+    config = ApplicationControllerConfig(dali_devices=[], dali2_devices=[device])
+    bus = ApplicationController(
+        config, acking_dispatcher, FakeWBDALIDriver(), MagicMock(), load_common_schema(), MagicMock()
+    )
+    bus.driver.dev_inst_map.add_type(short_address=5, instance_number=0, instance_type=1)
+    bus.driver.dev_inst_map.add_type(short_address=5, instance_number=1, instance_type=3)
+
+    await bus.start()
+    try:
+        await asyncio.wait_for(bus.apply_parameters(device, {"short_address": 9}), timeout=1.0)
+    finally:
+        await bus.stop()
+
+    mapper = bus.driver.dev_inst_map
+    assert mapper.get_type(short_address=9, instance_number=0) == 1
+    assert mapper.get_type(short_address=9, instance_number=1) == 3
+    assert mapper.get_type(short_address=5, instance_number=0) is None
+    assert mapper.get_type(short_address=5, instance_number=1) is None
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_ended_by_stop_does_not_call_failure_handler(acking_dispatcher):
+    """start() then stop() on a bus whose device keeps failing init: the failure handler is never called."""
+    on_failure = MagicMock()
+    initialize = AsyncMock(side_effect=RuntimeError("no response"))
+    bus = _bus_with_device(_uninitialized_device(initialize), on_failure, acking_dispatcher)
+
+    await bus.start()
+    await asyncio.wait_for(wait_until(lambda: initialize.await_count > 0), timeout=1.0)
+    await bus.stop()
+    await asyncio.sleep(0)
+
+    on_failure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_survives_a_task_its_caller_gave_up_on_in_quiescent_mode(acking_dispatcher):
+    """In quiescent mode a task whose caller was cancelled is dropped: the loop goes on
+    and rejects the next task, the failure handler is never called."""
+    on_failure = MagicMock()
+    device = _uninitialized_device(AsyncMock(side_effect=RuntimeError("no response")))
+    bus = _bus_with_device(device, on_failure, acking_dispatcher)
+    await bus.start()
+    bus.driver.bus_traffic.notify_bus_frame(StartQuiescentMode(DeviceBroadcast()).frame, 1)
+    await asyncio.sleep(0.01)
+
+    abandoned = asyncio.create_task(bus.identify_device(device))
+    await asyncio.sleep(0)
+    abandoned.cancel()
+
+    with pytest.raises(RuntimeError, match="quiescent"):
+        await asyncio.wait_for(bus.identify_device(device), timeout=1.0)
+    on_failure.assert_not_called()
+    await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_polling_loop_ends_when_polling_a_device_raises(acking_dispatcher):
+    """Building the poll of an initialized device raises: the polling loop ends,
+    the failure handler is called once and stop() still completes."""
+    failed = asyncio.Event()
+    on_failure = MagicMock(side_effect=failed.set)
+    device = _uninitialized_device(AsyncMock())
+    device.is_initialized = True
+    device.poll_controls.side_effect = LoopKiller()
+    bus = _bus_with_device(device, on_failure, acking_dispatcher)
+
+    await bus.start()
+    await asyncio.wait_for(failed.wait(), timeout=3.0)
+    await bus.stop()
+
+    on_failure.assert_called_once_with()
 
 
 # --- bus-monitor syslog mirroring --------------------------------------------
@@ -1574,19 +1694,20 @@ class _LogCapture:
         logger.setLevel(self._prev_level)
 
 
-def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[ApplicationController, MagicMock]:
+def _monitor_bus(*, monitor: bool, syslog: bool) -> tuple[ApplicationController, MagicMock]:
     """Build a real controller wired for the bus-monitor path.
 
     Returns the controller and its MQTT dispatcher mock. The publish is an
     AsyncMock so the one-shot publish task is awaitable.
     """
     dispatcher = MagicMock()
-    dispatcher.client.publish = AsyncMock()
+    dispatcher.publish = AsyncMock()
     bus = bus_from_json(
-        "gw1",
-        uid_bus,
         {"devices": [], "bus_monitor_enabled": monitor, "bus_monitor_syslog_enabled": syslog},
         dispatcher,
+        FakeWBDALIDriver(),
+        MagicMock(),
+        load_common_schema(),
         MagicMock(),
     )
     return bus, dispatcher
@@ -1607,13 +1728,31 @@ async def test_monitor_lines_logged_when_enabled():
         )
         await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    mqtt_payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    mqtt_payload = dispatcher.publish.call_args.args[1]
     timestamp, _, body = mqtt_payload.partition(" ")
     assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", timestamp)
     assert " - " in body
     assert log.messages == [body]
     assert not log.messages[0].startswith(timestamp)
+
+
+@pytest.mark.asyncio
+async def test_monitor_line_refused_by_the_broker_link_is_no_error():
+    """The monitor publish fails with the broker link down: the syslog mirror line is the only
+    record on the bus logger, nothing at error level."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=True)
+    dispatcher.publish.side_effect = BrokerDisconnectedError("Broker disconnected")
+    command = EnableInstance(DeviceShort(3), InstanceNumber(2))
+    with _LogCapture(bus.uid) as log:
+        bus.driver.bus_traffic.notify_command(
+            command.frame, Response(BackwardFrame(42)), BusTrafficSource.WB, 0
+        )
+        await asyncio.sleep(0.01)
+
+    dispatcher.publish.assert_called_once()
+    assert len(log.messages) == 1
+    assert log.levels[0] < logging.ERROR
 
 
 @pytest.mark.asyncio
@@ -1628,8 +1767,8 @@ async def test_monitor_request_with_response_is_one_combined_line():
     bus.driver.bus_traffic.notify_command(command.frame, response, BusTrafficSource.WB, 0)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     timestamp, _, body = payload.partition(" ")
     assert re.fullmatch(r"\d{2}:\d{2}:\d{2}\.\d{3}", timestamp)
 
@@ -1650,8 +1789,8 @@ async def test_monitor_silent_yes_no_query_publishes_the_no_answer():
     bus.driver.bus_traffic.notify_command(command.frame, command.response(None), BusTrafficSource.WB, 0)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     _, _, body = payload.partition(" ")
     request_part, sep, response_part = body.partition(" - ")
     assert sep == " - "
@@ -1669,8 +1808,8 @@ async def test_monitor_unanswered_query_publishes_no_response():
     bus.driver.bus_traffic.notify_command(command.frame, command.response(None), BusTrafficSource.WB, 0)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     _, _, body = payload.partition(" ")
     request_part, sep, response_part = body.partition(" - ")
     assert sep == " - "
@@ -1687,8 +1826,8 @@ async def test_monitor_fire_and_forget_request_has_no_arrow():
     bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(16, 0xFF93), 7)
     await asyncio.sleep(0)
 
-    dispatcher.client.publish.assert_called_once()
-    payload = dispatcher.client.publish.call_args.args[1]
+    dispatcher.publish.assert_called_once()
+    payload = dispatcher.publish.call_args.args[1]
     _, _, body = payload.partition(" ")
     assert " - " not in body
     assert body.startswith("<<")
@@ -1705,7 +1844,7 @@ async def test_monitor_not_logged_when_flag_off():
         await asyncio.sleep(0)
 
     assert not log.messages
-    dispatcher.client.publish.assert_called_once()
+    dispatcher.publish.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -1718,7 +1857,7 @@ async def test_monitor_not_logged_when_monitor_disabled():
         await asyncio.sleep(0)
 
     assert not log.messages
-    dispatcher.client.publish.assert_not_called()
+    dispatcher.publish.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1743,6 +1882,18 @@ async def test_monitor_problems_logged_at_warning_normal_at_info():
         await asyncio.sleep(0)
 
     assert log.levels == [logging.WARNING, logging.WARNING, logging.INFO, logging.WARNING]
+
+
+@pytest.mark.asyncio
+async def test_monitor_shows_undecodable_forward_frames_as_raw_data():
+    """FF17 and FF25 from the bus go out as hex and `FF<n>`, not as a command."""
+    bus, dispatcher = _monitor_bus(monitor=True, syslog=False)
+    bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(17, 0x014602), 7)
+    bus.driver.bus_traffic.notify_bus_frame(ForwardFrame(25, 0x1234567), 8)
+    await asyncio.sleep(0)
+
+    bodies = [call.args[1].partition(" ")[2] for call in dispatcher.publish.call_args_list]
+    assert bodies == ["<< 014602 FF17 (fc: 7)", "<< 1234567 FF25 (fc: 8)"]
 
 
 # --- monitor line formatting -------------------------------------------------

@@ -14,16 +14,21 @@ from wb.mqtt_dali.application_controller import (
 )
 
 # pylint: disable=too-many-public-methods
+from wb.mqtt_dali.common_dali_device import ControlsPollRequestResult, MqttControl
 from wb.mqtt_dali.dali_device import DaliDevice
+from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.device_init_scheduler import (
     INIT_RETRY_INITIAL_DELAY,
     INIT_RETRY_MAX_DELAY,
     INIT_RETRY_MULTIPLIER,
     DeviceInitScheduler,
 )
+from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
-from wb.mqtt_dali.wbmqtt import ControlError
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
+
+from ._control_stubs import ReadableControl
 
 
 class TestDeviceInitScheduler:
@@ -43,7 +48,7 @@ class TestDeviceInitScheduler:
 
         scheduler.schedule("dev_1", current_time=100.0)
 
-        assert scheduler.get_retry_count("dev_1") == 1
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == "dev_1"
 
     def test_schedule_with_delay(self):
         """Device scheduled with delay is not ready until the delay elapses."""
@@ -68,7 +73,7 @@ class TestDeviceInitScheduler:
         scheduler.remove("nonexistent")
 
     def test_get_first_attempt_ready_filters_retries(self):
-        """Only devices with retry_count == 0 are returned as first attempts."""
+        """Only devices that never failed are returned as first attempts."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
         scheduler.schedule("dev_2", current_time=100.0)
@@ -123,29 +128,31 @@ class TestDeviceInitScheduler:
 
         assert not scheduler.has_pending
 
-    def test_record_failure_increments_count(self):
-        """Each failure increments the retry counter."""
+    def test_record_failure_marks_failed(self):
+        """A recorded failure turns the device into a retry."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
 
         scheduler.record_failure("dev_1", current_time=100.0)
 
-        assert scheduler.get_retry_count("dev_1") == 1
+        assert scheduler.get_first_attempt_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == []
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == "dev_1"
 
-    def test_record_failure_returns_delay(self):
-        """First failure returns the initial delay value."""
+    def test_record_failure_delays_retry_by_initial_delay(self):
+        """First failure makes the device a retry candidate exactly after the initial delay."""
         scheduler = DeviceInitScheduler()
         scheduler.schedule("dev_1", current_time=100.0)
 
-        delay = scheduler.record_failure("dev_1", current_time=100.0)
+        scheduler.record_failure("dev_1", current_time=100.0)
 
-        assert delay == INIT_RETRY_INITIAL_DELAY
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY - 0.1) is None
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == "dev_1"
 
     def test_record_failure_nonexistent(self):
-        """Recording failure for unknown device returns 0 and does not raise."""
+        """Recording failure for unknown device does not raise and schedules nothing."""
         scheduler = DeviceInitScheduler()
-        delay = scheduler.record_failure("nonexistent", current_time=100.0)
-        assert delay == 0.0
+        scheduler.record_failure("nonexistent", current_time=100.0)
+        assert not scheduler.has_pending
 
     def test_exponential_backoff(self):
         """Each consecutive failure doubles the delay: 5 -> 10 -> 20 -> 40."""
@@ -160,8 +167,9 @@ class TestDeviceInitScheduler:
         ]
 
         for expected in expected_delays:
-            delay = scheduler.record_failure("dev_1", current_time=0.0)
-            assert delay == expected
+            scheduler.record_failure("dev_1", current_time=0.0)
+            assert scheduler.get_one_retry_ready(expected - 0.1) is None
+            assert scheduler.get_one_retry_ready(expected) == "dev_1"
 
     def test_backoff_caps_at_max(self):
         """Delay never exceeds INIT_RETRY_MAX_DELAY regardless of failure count."""
@@ -169,9 +177,21 @@ class TestDeviceInitScheduler:
         scheduler.schedule("dev_1", current_time=0.0)
 
         for _ in range(20):
-            delay = scheduler.record_failure("dev_1", current_time=0.0)
+            scheduler.record_failure("dev_1", current_time=0.0)
 
-        assert delay == INIT_RETRY_MAX_DELAY
+        assert scheduler.get_one_retry_ready(INIT_RETRY_MAX_DELAY - 0.1) is None
+        assert scheduler.get_one_retry_ready(INIT_RETRY_MAX_DELAY) == "dev_1"
+
+    def test_backoff_survives_long_failure_streak(self):
+        """Past the float overflow of multiplier**N (1025 failures) the delay stays at max."""
+        scheduler = DeviceInitScheduler()
+        scheduler.schedule("dev_1", current_time=0.0)
+
+        for _ in range(2000):
+            scheduler.record_failure("dev_1", current_time=100.0)
+
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_MAX_DELAY - 1) is None
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_MAX_DELAY) == "dev_1"
 
     def test_clear(self):
         """clear() removes all pending devices."""
@@ -182,34 +202,6 @@ class TestDeviceInitScheduler:
         scheduler.clear()
 
         assert not scheduler.has_pending
-
-    def test_get_retry_count_nonexistent(self):
-        """Retry count for unknown device is 0."""
-        scheduler = DeviceInitScheduler()
-        assert scheduler.get_retry_count("nonexistent") == 0
-
-    def test_custom_parameters(self):
-        """Scheduler respects custom initial_delay, multiplier, max_delay."""
-        scheduler = DeviceInitScheduler(initial_delay=1.0, multiplier=3.0, max_delay=10.0)
-        scheduler.schedule("dev_1", current_time=0.0)
-
-        d1 = scheduler.record_failure("dev_1", current_time=0.0)
-        d2 = scheduler.record_failure("dev_1", current_time=0.0)
-        d3 = scheduler.record_failure("dev_1", current_time=0.0)
-
-        assert d1 == 1.0
-        assert d2 == 3.0
-        assert d3 == 9.0
-
-    def test_custom_parameters_cap(self):
-        """Custom max_delay caps the backoff correctly."""
-        scheduler = DeviceInitScheduler(initial_delay=1.0, multiplier=3.0, max_delay=10.0)
-        scheduler.schedule("dev_1", current_time=0.0)
-
-        for _ in range(10):
-            delay = scheduler.record_failure("dev_1", current_time=0.0)
-
-        assert delay == 10.0
 
     def test_batch_first_attempt(self):
         """All 10 devices scheduled at once are returned together for first attempt."""
@@ -247,6 +239,9 @@ def _make_mock_device(mqtt_id="dev_1", name="DALI 1", is_initialized=False):
     device.initialize = AsyncMock()
     device.get_mqtt_controls = MagicMock(return_value=[])
     device.get_common_mqtt_controls = MagicMock(return_value=[])
+    # Initial read drains poll_controls: an empty, already-drained round reads nothing.
+    device.poll_controls = MagicMock(return_value=ControlsPollRequestResult(has_more=False))
+    device.get_mqtt_control = MagicMock(return_value=None)
     device.set_logger = MagicMock()
     device.time_until_next_poll = MagicMock(return_value=1.0)
     return device
@@ -291,7 +286,7 @@ class TestTryInitializeDevice:
 
     @pytest.mark.asyncio
     async def test_failure_stays_in_scheduler(self):
-        """Failed init keeps device in scheduler with incremented retry count."""
+        """Failed init keeps device in scheduler as a retry."""
         driver, publisher, scheduler, handler, logger = _make_init_deps()
         device = _make_mock_device()
         device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
@@ -301,7 +296,7 @@ class TestTryInitializeDevice:
 
         assert result is False
         assert scheduler.has_pending
-        assert scheduler.get_retry_count(device.mqtt_id) == 1
+        assert scheduler.get_one_retry_ready(100.0 + INIT_RETRY_INITIAL_DELAY) == device.mqtt_id
 
     @pytest.mark.asyncio
     async def test_failure_publishes_error_controls(self):
@@ -309,10 +304,10 @@ class TestTryInitializeDevice:
         driver, publisher, scheduler, handler, logger = _make_init_deps()
         device = _make_mock_device()
         device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
-        mock_control = MagicMock()
-        mock_control.control_info.id = "brightness"
-        mock_control.is_readable = MagicMock(return_value=True)
-        device.get_common_mqtt_controls = MagicMock(return_value=[mock_control])
+        readable_control = ReadableControl(
+            ControlInfo("brightness", ControlState(ControlMeta(read_only=True), "0"))
+        )
+        device.get_common_mqtt_controls = MagicMock(return_value=[readable_control])
         scheduler.schedule(device.mqtt_id, 0.0)
 
         await try_initialize_device(device, driver, publisher, scheduler, handler, logger, 100.0)
@@ -339,9 +334,10 @@ class TestTryInitializeDevice:
         driver, publisher, scheduler, handler, logger = _make_init_deps()
         device = _make_mock_device()
         device.initialize = AsyncMock(side_effect=RuntimeError("no response"))
-        writable_control = MagicMock()
-        writable_control.control_info.id = "button"
-        writable_control.is_readable = MagicMock(return_value=False)
+        writable_control = MqttControl(
+            ControlInfo("button", ControlState(ControlMeta(read_only=False), "0")),
+            commands_builder=lambda address, value: [],
+        )
         device.get_common_mqtt_controls = MagicMock(return_value=[writable_control])
         scheduler.schedule(device.mqtt_id, 0.0)
 
@@ -378,11 +374,12 @@ def _make_controller():
     ctrl._fetch_scheduler = SettingsFetchScheduler()
     ctrl._device_publisher = _make_publisher()
     ctrl._dev = AsyncMock()
+    ctrl._event_sync = AsyncMock()
     ctrl._handle_on_topic = MagicMock()
     ctrl.dali_devices = []
     ctrl.dali2_devices = []
     ctrl._device_registry = DeviceRegistry()
-    ctrl._dev_inst_map = MagicMock()
+    ctrl.driver.dev_inst_map = MagicMock()
     ctrl._group_devices_by_number = {}
     ctrl._devices_by_mqtt_id = {}
     ctrl._broadcast_device = BroadcastVirtualDevice(
@@ -416,7 +413,7 @@ class TestPollStep:
 
         await ctrl._poll_step(t)
         assert ctrl._poll_scheduler.poll_turn is True
-        assert ctrl._init_scheduler.get_retry_count("r1") == 2
+        retry_dev.initialize.assert_awaited_once()
 
         ctrl._poll_devices.reset_mock()
         await ctrl._poll_step(t)
@@ -516,3 +513,52 @@ class TestPollStep:
         timeout = await ctrl._poll_step(t0 + 2.0)
         assert ctrl._poll_scheduler.poll_turn is True
         assert timeout <= 0.01
+
+
+# --- ApplicationController._load_device_info_task tests ---
+
+
+class TestLoadDeviceInfoTask:
+    @pytest.mark.asyncio
+    async def test_publishes_controls_for_device_that_failed_to_initialize(self):
+        # pylint: disable=protected-access
+        """A device whose start-up init failed is on MQTT with the common controls only, retry
+        still pending. Opening its settings page must publish its own control set and clear
+        the retry."""
+        ctrl = _make_controller()
+        ctrl._device_publisher.has_device = MagicMock(return_value=True)
+        dev = _make_mock_device(mqtt_id="r1", is_initialized=False)
+        dev.dimming_curve_type = DimmingCurveType.LOGARITHMIC
+        dev.get_mqtt_controls = MagicMock(return_value=["set_rgb"])
+        dev.load_info = AsyncMock()
+        ctrl.dali_devices = [dev]
+        ctrl._devices_by_mqtt_id = {"r1": dev}
+        ctrl._init_scheduler.schedule("r1", 0.0)
+        ctrl._init_scheduler.record_failure("r1", 0.0)
+
+        await ctrl._load_device_info_task(dev, False)
+
+        dev.initialize.assert_awaited_once()
+        ctrl._device_publisher.remove_device.assert_awaited_once_with("r1")
+        assert ctrl._device_publisher.add_device.await_args.args[0].controls == ["set_rgb"]
+        assert not ctrl._init_scheduler.has_pending
+        dev.load_info.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_does_not_republish_initialized_device(self):
+        # pylint: disable=protected-access
+        """Opening the settings page of a device that is already up must not touch its MQTT
+        publication -- dropping and re-adding the controls would flap the topics."""
+        ctrl = _make_controller()
+        dev = _make_mock_device(mqtt_id="d1", is_initialized=True)
+        dev.dimming_curve_type = DimmingCurveType.LOGARITHMIC
+        dev.load_info = AsyncMock()
+        ctrl.dali_devices = [dev]
+        ctrl._devices_by_mqtt_id = {"d1": dev}
+
+        await ctrl._load_device_info_task(dev, False)
+
+        dev.initialize.assert_not_awaited()
+        ctrl._device_publisher.remove_device.assert_not_awaited()
+        ctrl._device_publisher.add_device.assert_not_awaited()
+        dev.load_info.assert_awaited_once()

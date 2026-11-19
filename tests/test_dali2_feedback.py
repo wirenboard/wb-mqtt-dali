@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import jsonschema
 import pytest
@@ -20,6 +21,7 @@ from dali.device.general import (
     QueryDeviceGroupsSixteenToTwentyThree,
     QueryDeviceGroupsTwentyFourToThirtyOne,
     QueryDeviceGroupsZeroToSeven,
+    QueryEventPriority,
     QueryFeatureType,
     QueryInstanceType,
     QueryNextFeatureType,
@@ -27,7 +29,7 @@ from dali.device.general import (
 )
 from dali.frame import BackwardFrame
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device, InstanceParameters, InstanceTypeParam
 from wb.mqtt_dali.dali2_type32_parameters import (
     pack_feedback_timing,
@@ -36,9 +38,11 @@ from wb.mqtt_dali.dali2_type32_parameters import (
 from wb.mqtt_dali.device.feedback import (
     ActivateFeedback,
     QueryActiveFeedbackBrightness,
+    QueryActiveFeedbackColour,
     QueryFeedbackActive,
     QueryFeedbackCapability,
     QueryFeedbackTiming,
+    QueryInactiveFeedbackColour,
     SetActiveFeedbackBrightness,
     SetFeedbackTiming,
     StopFeedback,
@@ -50,10 +54,9 @@ from wb.mqtt_dali.send_command import (
     parse_expression,
 )
 
-# pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
-# Prevent file system access in DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}
+# pylint: disable=protected-access
 
 
 # Capability bits per IEC 62386-332:2017 Table 1
@@ -77,6 +80,15 @@ def _no_response() -> Response:
     return Response(None)
 
 
+def _default_answer(cmd: Command) -> Response:
+    """Answer to an unscripted command: no features, silent feedback capability, 0 otherwise."""
+    if isinstance(cmd, (QueryFeatureType, QueryNextFeatureType)):
+        return _numeric(FEATURE_TYPE_NONE)
+    if isinstance(cmd, QueryFeedbackCapability) or cmd.response is None:
+        return _no_response()
+    return cmd.response(BackwardFrame(0))
+
+
 _DEVICE_GROUP_QUERIES = (
     QueryDeviceGroupsZeroToSeven,
     QueryDeviceGroupsEightToFifteen,
@@ -90,6 +102,7 @@ def _bare_dali2_device(short: int = 1) -> Dali2Device:
         DaliDeviceAddress(short=short, random=0x123456),
         bus_id="bus_test",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
     )
 
 
@@ -104,6 +117,7 @@ class FakeDriver:
     Each per-scope dict maps a command class to either a single Response
     (returned every call) or a list of Responses (consumed in order; once
     exhausted, returns no-answer).
+    An unscripted command gets `_default_answer`.
     """
 
     def __init__(
@@ -135,7 +149,7 @@ class FakeDriver:
         if isinstance(instance_attr, (Device, FeatureDevice)):
             return self._dispatch_scripted("__device__", self.device_level, cmd)
         if instance_attr is None or instance_attr.value is None:
-            return _no_response()
+            return _default_answer(cmd)
         inst = instance_attr.value
         return self._dispatch_scripted(inst, self.per_instance.get(inst, {}), cmd)
 
@@ -152,10 +166,19 @@ class FakeDriver:
                 return next(self._iters[key])
             except StopIteration:
                 return _no_response()
-        return _no_response()
+        return _default_answer(cmd)
 
     async def send_commands(self, cmds, *_args, **_kwargs) -> list[Response]:
         return [await self.send(c) for c in cmds]
+
+    async def run_sequence(self, seq, *_args, **_kwargs):
+        try:
+            cmd = next(seq)
+            while True:
+                answer = self.send_commands(cmd) if isinstance(cmd, list) else self.send(cmd)
+                cmd = seq.send(await answer)
+        except StopIteration as stop:
+            return stop.value
 
 
 # ----------------------------------------------------------------------------
@@ -221,25 +244,7 @@ async def test_discovery_adds_feedback_params_with_full_capability():
 
     await params.discover_feedback(driver, DeviceShort(5), logging.getLogger("test"))
 
-    # Stub child param reads — we only care about discovery side effects.
-    with patch.object(InstanceTypeParam, "read", new=AsyncMock(return_value={})):
-        with patch(
-            "wb.mqtt_dali.dali2_parameters.InstanceParam.read",
-            new=AsyncMock(return_value={}),
-        ), patch(
-            "wb.mqtt_dali.dali2_device.InstanceActiveParam.read",
-            new=AsyncMock(return_value={}),
-        ), patch(
-            "wb.mqtt_dali.dali2_device.EventPriorityParam.read",
-            new=AsyncMock(return_value={}),
-        ), patch(
-            "wb.mqtt_dali.dali2_device.EventSchemeParam.read",
-            new=AsyncMock(return_value={}),
-        ), patch(
-            "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read",
-            new=AsyncMock(return_value={}),
-        ):
-            await params.read(driver, DeviceShort(5), logging.getLogger("test"))
+    await params.read(driver, DeviceShort(5), logging.getLogger("test"))
 
     schema_after = params.get_schema(group_and_broadcast=False)
     instance_props = schema_after["properties"]["instance0"]["properties"]
@@ -265,41 +270,18 @@ async def test_dali2_feedback_force_reload_does_not_re_discover():
         device_level=_make_feature_script([32], CAPABILITY_FULL),
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
+    await device.initialize(driver)
+    await device.load_info(driver)
+    first_discovery_calls = sum(
+        1
+        for c in driver.calls
+        if isinstance(c, (QueryFeatureType, QueryNextFeatureType, QueryFeedbackCapability))
+    )
+    assert first_discovery_calls > 0
 
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general, patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.PowerCycleNotificationParam.read",
-        new=AsyncMock(side_effect=stub_read),
-    ), patch(
-        "wb.mqtt_dali.dali2_device.DeviceGroupsParam.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        general_handler = MagicMock()
-        general_handler.read = AsyncMock(return_value={})
-        general_handler.get_schema = MagicMock(return_value={})
-        mock_general.return_value = general_handler
-
-        await device.load_info(driver)
-        first_discovery_calls = sum(
-            1
-            for c in driver.calls
-            if isinstance(c, (QueryFeatureType, QueryNextFeatureType, QueryFeedbackCapability))
-        )
-        assert first_discovery_calls > 0
-
-        before_calls = len(driver.calls)
-        await device.load_info(driver, force_reload=True)
-        new_calls = driver.calls[before_calls:]
+    before_calls = len(driver.calls)
+    await device.load_info(driver, force_reload=True)
+    new_calls = driver.calls[before_calls:]
 
     new_classes = [type(c) for c in new_calls]
     assert QueryFeatureType not in new_classes
@@ -319,41 +301,18 @@ async def test_dali2_feedback_repeated_load_info_no_extra_bus_traffic():
         per_instance={0: _make_per_instance_script([32], CAPABILITY_FULL)},
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
+    await device.initialize(driver)
+    await device.load_info(driver)
+    first_discovery_calls = sum(
+        1
+        for c in driver.calls
+        if isinstance(c, (QueryFeatureType, QueryNextFeatureType, QueryFeedbackCapability))
+    )
+    assert first_discovery_calls > 0
 
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general, patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.PowerCycleNotificationParam.read",
-        new=AsyncMock(side_effect=stub_read),
-    ), patch(
-        "wb.mqtt_dali.dali2_device.DeviceGroupsParam.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        general_handler = MagicMock()
-        general_handler.read = AsyncMock(return_value={})
-        general_handler.get_schema = MagicMock(return_value={})
-        mock_general.return_value = general_handler
-
-        await device.load_info(driver)
-        first_discovery_calls = sum(
-            1
-            for c in driver.calls
-            if isinstance(c, (QueryFeatureType, QueryNextFeatureType, QueryFeedbackCapability))
-        )
-        assert first_discovery_calls > 0
-
-        before_calls = len(driver.calls)
-        await device.load_info(driver)
-        new_calls = driver.calls[before_calls:]
+    before_calls = len(driver.calls)
+    await device.load_info(driver)
+    new_calls = driver.calls[before_calls:]
 
     new_classes = [type(c) for c in new_calls]
     assert QueryFeatureType not in new_classes
@@ -374,22 +333,8 @@ async def _run_discovery_and_get_props(capability: Optional[int], features: list
         per_instance={0: _make_per_instance_script(features, capability)},
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
-
     await params.discover_feedback(driver, DeviceShort(1), logging.getLogger("test"))
-    with patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        await params.read(driver, DeviceShort(1), logging.getLogger("test"))
+    await params.read(driver, DeviceShort(1), logging.getLogger("test"))
 
     return params.get_schema(False)["properties"]["instance0"]["properties"]
 
@@ -488,25 +433,11 @@ async def test_dali2_feedback_capability_query_no_answer(caplog):
         },
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
-
     with caplog.at_level(logging.DEBUG, logger="test"):
         await params.discover_feedback(driver, DeviceShort(3), logging.getLogger("test"))
 
-    with patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        # Should not raise even though capability has no answer.
-        await params.read(driver, DeviceShort(3), logging.getLogger("test"))
+    # Should not raise even though capability has no answer.
+    await params.read(driver, DeviceShort(3), logging.getLogger("test"))
 
     schema = params.get_schema(False)["properties"]["instance0"]["properties"]
     for key in (
@@ -585,30 +516,8 @@ async def test_dali2_feedback_feature_discovered_in_load_info():
         per_instance={0: _make_per_instance_script([32], CAPABILITY_FULL)},
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
-
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general, patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.PowerCycleNotificationParam.read",
-        new=AsyncMock(side_effect=stub_read),
-    ), patch(
-        "wb.mqtt_dali.dali2_device.DeviceGroupsParam.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        general_handler = MagicMock()
-        general_handler.read = AsyncMock(return_value={})
-        general_handler.get_schema = MagicMock(return_value={})
-        mock_general.return_value = general_handler
-        await device.load_info(driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
     instance_props = device.schema["properties"]["instance0"]["properties"]
     assert "active_feedback_brightness" in instance_props
@@ -667,38 +576,23 @@ async def test_dali2_feedback_timing_card_hidden_without_capability():
 
 
 async def _load_device_with_feedback(device: Dali2Device) -> None:
-    """Run device.load_info with all non-feedback handlers stubbed out."""
+    """Initialize and load the device on a FakeDriver whose instance 0 has full feedback."""
     driver = FakeDriver(
         num_instances=1,
         instance_types={0: 0},
-        per_instance={0: _make_per_instance_script([32], CAPABILITY_FULL)},
+        per_instance={
+            0: {
+                **_make_per_instance_script([32], CAPABILITY_FULL),
+                # The settings schema rejects 0 for these.
+                QueryEventPriority: _numeric(2),
+                QueryActiveFeedbackColour: _numeric(63),
+                QueryInactiveFeedbackColour: _numeric(63),
+            }
+        },
     )
 
-    async def stub(*_args, **_kwargs):
-        return {}
-
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general, patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub)
-    ), patch("wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub)), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.PowerCycleNotificationParam.read",
-        new=AsyncMock(side_effect=stub),
-    ), patch(
-        "wb.mqtt_dali.dali2_device.DeviceGroupsParam.read", new=AsyncMock(side_effect=stub)
-    ):
-        general_handler = MagicMock()
-        general_handler.read = AsyncMock(return_value={})
-        general_handler.write = AsyncMock(return_value={})
-        general_handler.get_schema = MagicMock(return_value={})
-        general_handler.requires_mqtt_controls_refresh = False
-        general_handler.name = MagicMock(en="general")
-        mock_general.return_value = general_handler
-        await device.load_info(driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
 
 def _make_capture_driver() -> tuple[MagicMock, list]:
@@ -732,36 +626,14 @@ async def test_dali2_feedback_timing_pack_unpack_through_apply_parameters():
 
     capture_driver, sent = _make_capture_driver()
 
-    payload = {
-        "instance0": {
-            "feedback_timing": {
-                "feedback_timing_duty_cycle": 3,
-                "feedback_timing_period": 2,
-                "feedback_timing_cycles": 1,
-            }
-        }
+    payload = deepcopy(device.params)
+    payload["instance0"]["feedback_timing"] = {
+        "feedback_timing_duty_cycle": 3,
+        "feedback_timing_period": 2,
+        "feedback_timing_cycles": 1,
     }
 
-    async def stub(*_args, **_kwargs):
-        return {}
-
-    with patch("wb.mqtt_dali.dali2_parameters.InstanceParam.write", new=AsyncMock(side_effect=stub)), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.write", new=AsyncMock(side_effect=stub)
-    ), patch("wb.mqtt_dali.dali2_device.EventPriorityParam.write", new=AsyncMock(side_effect=stub)), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.write", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.write", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.PowerCycleNotificationParam.write",
-        new=AsyncMock(side_effect=stub),
-    ), patch(
-        "wb.mqtt_dali.dali2_device.DeviceGroupsParam.write", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.common_dali_device.jsonschema.validate"
-    ), patch.object(
-        type(device), "_apply_common_parameters", new=AsyncMock()
-    ):
-        await device.apply_parameters(capture_driver, payload)
+    await device.apply_parameters(capture_driver, payload)
 
     # DTR0 carries the packed byte: cycles<<6 | period<<3 | duty.
     # duty=3 (0b011), period=2 (0b010), cycles=1 (0b01) = 0b01_010_011 = 0x53.
@@ -782,9 +654,7 @@ async def test_dali2_feedback_timing_pack_unpack_through_apply_parameters():
 @pytest.mark.asyncio
 async def test_dali2_feedback_timing_card_schema_accepts_three_subfield_payload():
     """Pin the timing card schema shape: a dict keyed by the three suffixed
-    sub-fields under `feedback_timing` validates against device.schema.
-    Catches schema/data shape regressions that the apply_parameters test
-    can't see because it patches jsonschema.validate."""
+    sub-fields under `feedback_timing` validates against device.schema."""
     device = _bare_dali2_device(short=11)
     await _load_device_with_feedback(device)
 
@@ -862,22 +732,8 @@ async def test_dali2_feature_type_mask_iterates_next_until_254():
         },
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
-
     await params.discover_feedback(driver, DeviceShort(1), logging.getLogger("test"))
-    with patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        await params.read(driver, DeviceShort(1), logging.getLogger("test"))
+    await params.read(driver, DeviceShort(1), logging.getLogger("test"))
 
     next_calls = [c for c in driver.calls if isinstance(c, QueryNextFeatureType)]
     # Three QueryNextFeatureType calls: 32, 33, then 254 terminator.
@@ -903,22 +759,8 @@ async def test_dali2_feature_type_single_value():
         },
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
-
     await params.discover_feedback(driver, DeviceShort(1), logging.getLogger("test"))
-    with patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        await params.read(driver, DeviceShort(1), logging.getLogger("test"))
+    await params.read(driver, DeviceShort(1), logging.getLogger("test"))
 
     next_calls = [c for c in driver.calls if isinstance(c, QueryNextFeatureType)]
     assert next_calls == []
@@ -942,22 +784,8 @@ async def _run_with_script(
         per_instance={instance: script},
     )
 
-    async def stub_read(*_args, **_kwargs):
-        return {}
-
     await params.discover_feedback(driver, DeviceShort(1), logging.getLogger("test"))
-    with patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub_read)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub_read)
-    ):
-        await params.read(driver, DeviceShort(1), logging.getLogger("test"))
+    await params.read(driver, DeviceShort(1), logging.getLogger("test"))
     return params, driver
 
 
@@ -1065,31 +893,6 @@ async def test_dali2_feedback_capability_command_uses_feature_addressing_on_wire
 # ----------------------------------------------------------------------------
 
 
-async def _run_load_info(device: Dali2Device, driver: FakeDriver) -> None:
-    async def stub(*_args, **_kwargs):
-        return {}
-
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general, patch(
-        "wb.mqtt_dali.dali2_parameters.InstanceParam.read", new=AsyncMock(side_effect=stub)
-    ), patch("wb.mqtt_dali.dali2_device.InstanceActiveParam.read", new=AsyncMock(side_effect=stub)), patch(
-        "wb.mqtt_dali.dali2_device.EventPriorityParam.read", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.EventSchemeParam.read", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.InstanceGroupParamBase.read", new=AsyncMock(side_effect=stub)
-    ), patch(
-        "wb.mqtt_dali.dali2_device.PowerCycleNotificationParam.read",
-        new=AsyncMock(side_effect=stub),
-    ), patch(
-        "wb.mqtt_dali.dali2_device.DeviceGroupsParam.read", new=AsyncMock(side_effect=stub)
-    ):
-        general_handler = MagicMock()
-        general_handler.read = AsyncMock(return_value={})
-        general_handler.get_schema = MagicMock(return_value={})
-        mock_general.return_value = general_handler
-        await device.load_info(driver)
-
-
 @pytest.mark.asyncio
 async def test_dali2_feedback_device_level_discovered_in_load_info():
     """Device with a device-level Part 332 feature gets a top-level `feedback`
@@ -1101,7 +904,8 @@ async def test_dali2_feedback_device_level_discovered_in_load_info():
         per_instance={0: _make_feature_script([], None)},
         device_level=_make_feature_script([32], CAPABILITY_FULL),
     )
-    await _run_load_info(device, driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
     top_level_props = device.schema["properties"]
     assert "feedback" in top_level_props
@@ -1124,7 +928,8 @@ async def test_dali2_feedback_device_level_no_feature_keeps_card_absent():
         per_instance={0: _make_feature_script([], None)},
         device_level=_make_feature_script([], None),
     )
-    await _run_load_info(device, driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
     assert "feedback" not in device.schema["properties"]
 
@@ -1144,7 +949,8 @@ async def test_dali2_feedback_device_level_heuristic_fallback():
             QueryFeedbackCapability: _numeric(BIT_VOLUME | BIT_PITCH),
         },
     )
-    await _run_load_info(device, driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
     feedback_card = device.schema["properties"].get("feedback")
     assert feedback_card is not None
@@ -1163,7 +969,8 @@ async def test_dali2_feedback_device_level_uses_feature_device_addressing():
         per_instance={0: _make_feature_script([], None)},
         device_level=_make_feature_script([32], CAPABILITY_FULL),
     )
-    await _run_load_info(device, driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
     feature_type_calls = [c for c in driver.calls if isinstance(c, QueryFeatureType)]
     capability_calls = [c for c in driver.calls if isinstance(c, QueryFeedbackCapability)]
@@ -1184,7 +991,8 @@ async def test_dali2_feedback_device_and_instance_coexist():
         per_instance={0: _make_feature_script([32], CAPABILITY_VISIBLE_BRIGHTNESS)},
         device_level=_make_feature_script([32], CAPABILITY_AUDIBLE_VOLUME_PITCH),
     )
-    await _run_load_info(device, driver)
+    await device.initialize(driver)
+    await device.load_info(driver)
 
     top_level = device.schema["properties"]
     assert "feedback" in top_level  # device-level audible
@@ -1429,17 +1237,36 @@ async def test_dali2_feedback_runtime_init_survives_discovery_no_answer():
     )
 
     # Use the full initialize() so is_initialized flips to True via the public path.
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as mock_general:
-        general_handler = MagicMock()
-        general_handler.read = AsyncMock(return_value={})
-        general_handler.get_schema = MagicMock(return_value={})
-        mock_general.return_value = general_handler
-        await device.initialize(driver)
+    await device.initialize(driver)
 
     assert device.is_initialized is True
     ids = [c.control_info.id for c in device._build_mqtt_controls()]
     assert all(not cid.startswith("activate_feedback") for cid in ids)
     assert all(not cid.startswith("stop_feedback") for cid in ids)
+
+
+@pytest.mark.asyncio
+async def test_dali2_init_stores_the_controls_of_its_discovered_instances():
+    """Initialization leaves the device holding its controls, not just able to build them: an
+    occupancy instance is discovered and its controls are what the device publishes."""
+    device = _bare_dali2_device(short=41)
+    silent_script = {
+        QueryFeatureType: [_numeric(FEATURE_TYPE_NONE)],
+        QueryNextFeatureType: [_numeric(FEATURE_TYPE_NONE)],
+    }
+    driver = FakeDriver(
+        num_instances=1,
+        instance_types={0: 3},  # occupancy
+        per_instance={0: silent_script},
+        device_level=silent_script,
+    )
+
+    await device.initialize(driver)
+
+    assert [c.id for c in device.get_mqtt_controls()] == [
+        c.control_info.id for c in device._build_mqtt_controls()
+    ]
+    assert device.get_mqtt_controls(), "occupancy instance should contribute controls"
 
 
 # ----------------------------------------------------------------------------

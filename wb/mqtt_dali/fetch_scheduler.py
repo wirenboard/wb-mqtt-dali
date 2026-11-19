@@ -78,7 +78,7 @@ class SettingsFetchScheduler:
         short = entry.device.address.short
         address = entry.device.dali_commands.getAddress(short)
         try:
-            done = await entry.param.fetch(driver, address, logger)
+            done = await entry.param.fetch(driver, address, entry.device.logger)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # One param's failure must not stall the others; drop it like a completed one.
             logger.warning(

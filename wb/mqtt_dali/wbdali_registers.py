@@ -49,7 +49,7 @@ FRAME_SIZE_CODES = {bits: code for code, bits in FRAME_SIZE_BITS.items()}
 class TransmissionStatus(IntEnum):
     """The status byte the gateway reports for a sent frame.
 
-    Mirrors the layout `WBDALIDriver._handle_reply_message` decodes.
+    Mirrors the layout `WBDALIDriver.on_reply` decodes.
     """
 
     NO_TRANSMISSION = 0

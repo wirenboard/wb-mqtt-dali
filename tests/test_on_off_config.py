@@ -6,6 +6,7 @@ settings, the silent skip on dali2 entries, duplicate group numbers, and the
 SetDevice/SetGroup/GetGroup editor flows with the ``enabled`` RPC representation.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -22,13 +23,7 @@ from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.config_validator import validate_config
 from wb.mqtt_dali.control_ids import ON_OFF
 from wb.mqtt_dali.dali_device import DaliDevice
-from wb.mqtt_dali.gateway import (
-    Gateway,
-    WbDaliGateway,
-    bus_from_json,
-    bus_to_json,
-    save_configuration,
-)
+from wb.mqtt_dali.gateway import Gateway, WbDaliGateway, bus_to_json, save_configuration
 from wb.mqtt_dali.on_off_control import (
     FADE_TIME_USE_DEVICE,
     OnOffControl,
@@ -37,15 +32,21 @@ from wb.mqtt_dali.on_off_control import (
     on_off_config_to_json,
     on_off_editor_schema,
 )
+from wb.mqtt_dali.wbdali_error_response import NoPowerOnBus
 
-from ._common_schema import load_common_schema
-from ._on_off_helpers import (
-    BusScript,
-    ScriptedBus,
-    ScriptedDriver,
+from ._bus_doubles import (
+    GATEWAY_ID,
+    INIT_S,
+    SETTLE_S,
+    FakeWBDALIDriver,
     frames,
     group_settings,
+    is_published,
+    make_bus,
+    running_bus,
+    settle_init,
 )
+from ._common_schema import load_common_schema
 from ._virtual_time import VirtualTimeTestCase
 
 
@@ -103,6 +104,28 @@ def _bus_config(shorts, group_numbers) -> dict:
         "devices": [{"short": short, "random": 0xABCDEF + short} for short in shorts],
         "groups": [{"number": number, "on_off": VALID_ON_OFF} for number in group_numbers],
     }
+
+
+def _gateway(bus, config_path: str = "") -> Gateway:
+    """A Gateway serving ``bus`` alone."""
+    gateway = Gateway({}, MagicMock(), config_path, MagicMock(), load_common_schema(), command_registry={})
+    gateway.wb_dali_gateways = [WbDaliGateway(uid=GATEWAY_ID, buses=[bus])]
+    return gateway
+
+
+def _with_dead_group(driver: FakeWBDALIDriver, number: int) -> FakeWBDALIDriver:
+    """Frames to group ``number`` on ``driver`` fail with no power on the bus."""
+    send = driver.send
+
+    async def send_with_dead_group(cmd, source=None, priority=None, logger=None):
+        if getattr(cmd, "destination", None) == GearGroup(number):
+            response = NoPowerOnBus()
+            driver.report(cmd, response, source)
+            return response
+        return await send(cmd, source, priority, logger)
+
+    driver.send = send_with_dead_group
+    return driver
 
 
 class OnOffParserTest(unittest.TestCase):
@@ -237,17 +260,12 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
     async def test_on_off_config_survives_save_configuration(self):
         """A bus loaded from JSON with a device on_off block and a groups list writes
         both back verbatim in save_configuration."""
-        bus = bus_from_json(
-            "gw1",
-            1,
+        bus = make_bus(
             {
                 "devices": [{"short": 5, "random": 123, "on_off": VALID_ON_OFF}],
                 "groups": [{"number": 3, "on_off": VALID_ON_OFF}],
             },
-            MagicMock(),
-            MagicMock(),
-            load_common_schema(),
-            MagicMock(),
+            FakeWBDALIDriver(),
         )
         gateway = WbDaliGateway(uid="gw1", buses=[bus])
 
@@ -261,14 +279,9 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
         """An on_off block on a ``dali2: true`` entry passes the schema and is silently
         skipped: the config loads, no control appears and the block is not written back."""
         _validate(_config(device_on_off=VALID_ON_OFF, dali2=True))
-        bus = bus_from_json(
-            "gw1",
-            1,
+        bus = make_bus(
             {"devices": [{"short": 5, "random": 123, "dali2": True, "on_off": VALID_ON_OFF}]},
-            MagicMock(),
-            MagicMock(),
-            load_common_schema(),
-            MagicMock(),
+            FakeWBDALIDriver(),
         )
         self.assertEqual(len(bus.dali2_devices), 1)
         self.assertIsNone(bus.dali2_devices[0].get_mqtt_control(ON_OFF))
@@ -279,10 +292,9 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
     async def test_unreported_group_keeps_its_settings_on_save(self):
         """The only gear on the bus reports group 3 and not group 5: the on/off setting keeps
         group 5 in the rewritten config all the same."""
-        async with ScriptedBus(BusScript(groups={1: {3}})) as harness:
-            bus = await harness.start_bus(_bus_config(shorts=[1], group_numbers=[3, 5]))
-            await harness.wait_until(lambda: bus.dali_devices[0].is_initialized)
-            await harness.settle()
+        bus_data = _bus_config(shorts=[1], group_numbers=[3, 5])
+        async with running_bus(bus_data, FakeWBDALIDriver(groups={1: {3}})) as (bus, _client):
+            await asyncio.sleep(INIT_S)
 
             self.assertEqual(set(group_settings(bus)), {3, 5})
             written = _save_to_temp([WbDaliGateway(uid="gw1", buses=[bus])])
@@ -294,62 +306,44 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
     async def test_configured_group_survives_its_last_member_leaving(self):
         """Clearing the last member's group membership through SetDevice leaves the configured
         group published with its settings: an enabled on/off block keeps a group alive."""
-        config = {"gateways": [{"device_id": "gw1", "buses": [_bus_config(shorts=[5], group_numbers=[3])]}]}
-        async with ScriptedBus(BusScript(groups={5: {3}})) as harness:
+        config = _bus_config(shorts=[5], group_numbers=[3])
+        async with running_bus(config, FakeWBDALIDriver(groups={5: {3}})) as (bus, client):
             with patch("wb.mqtt_dali.gateway.save_configuration") as save_mock:
-                gateway = Gateway(
-                    config=config,
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path="",
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
+                gateway = _gateway(bus)
                 member = bus.dali_devices[0]
-                await harness.wait_until(lambda: member.is_initialized)
-                await harness.settle()
+                await asyncio.sleep(INIT_S)
                 group_mqtt_id = bus.group_devices[3].mqtt_id
                 settings = await gateway.get_device_rpc_handler({"deviceId": member.uid})
 
                 await gateway.set_device_rpc_handler(
                     {"deviceId": member.uid, "config": {**settings["config"], "groups": NO_GROUPS}}
                 )
-                await harness.settle()
+                await asyncio.sleep(SETTLE_S)
 
                 self.assertEqual(group_settings(bus), {3: on_off_config_from_json(VALID_ON_OFF)})
                 self.assertIn(3, bus.group_devices)
-                self.assertIn(group_mqtt_id, harness.published_devices())
+                self.assertTrue(is_published(client, f"/devices/{group_mqtt_id}/meta"))
                 self.assertEqual(save_mock.call_count, 1)
 
     async def test_unconfigured_group_goes_away_with_its_last_member(self):
         """A group published only because a ballast reported it has no settings to keep it:
         SetDevice clearing that membership unpublishes the group."""
-        config = {"gateways": [{"device_id": "gw1", "buses": [_bus_config(shorts=[5], group_numbers=[])]}]}
-        async with ScriptedBus(BusScript(groups={5: {3}})) as harness:
+        config = _bus_config(shorts=[5], group_numbers=[])
+        async with running_bus(config, FakeWBDALIDriver(groups={5: {3}})) as (bus, client):
             with patch("wb.mqtt_dali.gateway.save_configuration"):
-                gateway = Gateway(
-                    config=config,
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path="",
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
+                gateway = _gateway(bus)
                 member = bus.dali_devices[0]
-                await harness.wait_until(lambda: member.is_initialized)
-                await harness.settle()
+                await asyncio.sleep(INIT_S)
                 group_mqtt_id = bus.group_devices[3].mqtt_id
                 settings = await gateway.get_device_rpc_handler({"deviceId": member.uid})
 
                 await gateway.set_device_rpc_handler(
                     {"deviceId": member.uid, "config": {**settings["config"], "groups": NO_GROUPS}}
                 )
-                await harness.settle()
+                await asyncio.sleep(SETTLE_S)
 
                 self.assertNotIn(3, bus.group_devices)
-                self.assertNotIn(group_mqtt_id, harness.published_devices())
+                self.assertFalse(is_published(client, f"/devices/{group_mqtt_id}/meta"))
 
 
 class OnOffDeviceEditorTest(VirtualTimeTestCase):
@@ -363,20 +357,12 @@ class OnOffDeviceEditorTest(VirtualTimeTestCase):
             {"on_off": {"enabled": False}},
         )
 
-        config = {"gateways": [{"device_id": "gw1", "buses": [{"devices": [{"short": 5, "random": 1}]}]}]}
-        async with ScriptedBus() as harness:
+        config = {"devices": [{"short": 5, "random": 1}]}
+        async with running_bus(config, FakeWBDALIDriver()) as (bus, _client):
             with patch("wb.mqtt_dali.gateway.save_configuration") as save_mock:
-                gateway = Gateway(
-                    config=config,
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path="",
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
+                gateway = _gateway(bus)
                 device = bus.dali_devices[0]
-                await harness.wait_until(lambda: device.is_initialized)
+                await asyncio.sleep(INIT_S)
                 settings = await gateway.get_device_rpc_handler({"deviceId": device.uid})
                 self.assertEqual(settings["config"]["on_off"], {"enabled": False})
 
@@ -424,24 +410,12 @@ class OnOffDeviceEditorTest(VirtualTimeTestCase):
         """A config block without fade_time reads back as -1 in every fade-capable action;
         sending that answer back leaves the config and the control unchanged."""
         on_off = {"on_action": {"mode": "last_active_level"}, "off_action": {"mode": "dapc"}}
-        config = {
-            "gateways": [
-                {"device_id": "gw1", "buses": [{"devices": [{"short": 5, "random": 1, "on_off": on_off}]}]}
-            ]
-        }
-        async with ScriptedBus() as harness:
+        config = {"devices": [{"short": 5, "random": 1, "on_off": on_off}]}
+        async with running_bus(config, FakeWBDALIDriver()) as (bus, _client):
             with patch("wb.mqtt_dali.gateway.save_configuration"):
-                gateway = Gateway(
-                    config=config,
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path="",
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
+                gateway = _gateway(bus)
                 device = bus.dali_devices[0]
-                await harness.wait_until(lambda: device.is_initialized)
+                await asyncio.sleep(INIT_S)
                 original = device.on_off_config
                 control = device.get_mqtt_control(ON_OFF)
 
@@ -464,7 +438,7 @@ class OnOffDeviceEditorTest(VirtualTimeTestCase):
         """OnOffSettingsParam is one of the device's parameter handlers, so load_info merges
         its editor schema into the GetDevice schema instead of the block being hand-merged."""
         device = DaliDevice(DaliDeviceAddress(6, 0x654321), "gw_bus_1", MagicMock(), load_common_schema())
-        driver = ScriptedDriver()
+        driver = FakeWBDALIDriver()
         await device.initialize(driver)
         await device.load_info(driver, force_reload=True)
         self.assertIn("on_off", device.schema["properties"])
@@ -475,10 +449,9 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
     async def test_bus_to_json_lists_group_ids(self):
         """The tree GetList serves lists every group of the bus - the one the gear reports and
         the configured memberless one - each with the id GetGroup takes."""
-        async with ScriptedBus(BusScript(groups={1: {3}})) as harness:
-            bus = await harness.start_bus(_bus_config(shorts=[1], group_numbers=[5]))
-            await harness.wait_until(lambda: bus.dali_devices[0].is_initialized)
-            await harness.settle()
+        bus_data = _bus_config(shorts=[1], group_numbers=[5])
+        async with running_bus(bus_data, FakeWBDALIDriver(groups={1: {3}})) as (bus, _client):
+            await asyncio.sleep(INIT_S)
 
             self.assertEqual(
                 bus_to_json(bus)["groups"],
@@ -492,24 +465,9 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
             config_path = os.path.join(tmp, "wb-mqtt-dali.conf")
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write("{}")
-            config = {
-                "gateways": [
-                    {
-                        "device_id": "gw1",
-                        "buses": [{"devices": [], "groups": [{"number": 3, "on_off": SCENE_ON_OFF}]}],
-                    }
-                ]
-            }
-            async with ScriptedBus() as harness:
-                gateway = Gateway(
-                    config=config,
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path=config_path,
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
+            config = {"devices": [], "groups": [{"number": 3, "on_off": SCENE_ON_OFF}]}
+            async with running_bus(config, FakeWBDALIDriver()) as (bus, _client):
+                gateway = _gateway(bus, config_path)
 
                 result = await gateway.get_group_rpc_handler({"groupId": f"{bus.uid}_g3"})
                 self.assertEqual(result["config"]["on_off"], {"enabled": True, **SCENE_ON_OFF})
@@ -554,24 +512,10 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
             config_path = os.path.join(tmp, "wb-mqtt-dali.conf")
             with open(config_path, "w", encoding="utf-8") as f:
                 f.write("{}")
-            script = BusScript(groups={1: {3, 5}}, dead_groups=frozenset({5}))
-            async with ScriptedBus(script) as harness:
-                gateway = Gateway(
-                    config={
-                        "gateways": [
-                            {"device_id": "gw1", "buses": [{"devices": [{"short": 1, "random": 1}]}]}
-                        ]
-                    },
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path=config_path,
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
-                await harness.wait_until(lambda: bus.dali_devices[0].is_initialized)
-                await harness.settle()
-                harness.drain()
+            driver = _with_dead_group(FakeWBDALIDriver(groups={1: {3, 5}}), 5)
+            async with running_bus({"devices": [{"short": 1, "random": 1}]}, driver) as (bus, client):
+                gateway = _gateway(bus, config_path)
+                await settle_init(client, driver)
 
                 await gateway.set_group_rpc_handler(
                     {
@@ -579,7 +523,7 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
                         "config": {"min_level": 10, "on_off": {"enabled": True, **VALID_ON_OFF}},
                     }
                 )
-                self.assertEqual(frames(harness.sent), frames([DTR0(10), SetMinLevel(GearGroup(3))]))
+                self.assertEqual(frames(driver.sent), frames([DTR0(10), SetMinLevel(GearGroup(3))]))
                 self.assertEqual(group_settings(bus), {3: on_off_config_from_json(VALID_ON_OFF)})
                 with open(config_path, "r", encoding="utf-8") as f:
                     written = json.load(f)
@@ -603,22 +547,11 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
     async def test_set_group_on_off_out_of_range_rejected(self):
         """An enabled block with an out-of-range field (percent > 100) is stopped by the editor
         schema: ValidationError propagates, nothing reaches the bus and nothing is saved."""
-        async with ScriptedBus(BusScript(groups={1: {3}})) as harness:
+        bus_data = {"devices": [{"short": 1, "random": 1}]}
+        async with running_bus(bus_data, FakeWBDALIDriver(groups={1: {3}})) as (bus, _client):
             with patch("wb.mqtt_dali.gateway.save_configuration") as save_mock:
-                gateway = Gateway(
-                    config={
-                        "gateways": [
-                            {"device_id": "gw1", "buses": [{"devices": [{"short": 1, "random": 1}]}]}
-                        ]
-                    },
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path="",
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
-                await harness.wait_until(lambda: 3 in bus.group_devices)
+                gateway = _gateway(bus)
+                await asyncio.sleep(INIT_S)
 
                 block = {
                     "enabled": True,
@@ -635,22 +568,11 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
     async def test_editor_block_requires_boolean_enabled(self):
         """An Editor-RPC on_off block with a missing or non-boolean ``enabled`` field is
         rejected before anything reaches the bus or the config file."""
-        async with ScriptedBus(BusScript(groups={1: {3}})) as harness:
+        bus_data = {"devices": [{"short": 1, "random": 1}]}
+        async with running_bus(bus_data, FakeWBDALIDriver(groups={1: {3}})) as (bus, _client):
             with patch("wb.mqtt_dali.gateway.save_configuration") as save_mock:
-                gateway = Gateway(
-                    config={
-                        "gateways": [
-                            {"device_id": "gw1", "buses": [{"devices": [{"short": 1, "random": 1}]}]}
-                        ]
-                    },
-                    mqtt_dispatcher=harness.dispatcher,
-                    config_path="",
-                    gtin_db=MagicMock(),
-                    common_schema=load_common_schema(),
-                    command_registry={},
-                )
-                bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
-                await harness.wait_until(lambda: 3 in bus.group_devices)
+                gateway = _gateway(bus)
+                await asyncio.sleep(INIT_S)
 
                 for block in (
                     dict(VALID_ON_OFF),

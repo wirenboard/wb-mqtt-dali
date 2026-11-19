@@ -379,7 +379,7 @@ def _make_controller():
     ctrl.dali_devices = []
     ctrl.dali2_devices = []
     ctrl._device_registry = DeviceRegistry()
-    ctrl._dev_inst_map = MagicMock()
+    ctrl.driver.dev_inst_map = MagicMock()
     ctrl._group_devices_by_number = {}
     ctrl._devices_by_mqtt_id = {}
     ctrl._broadcast_device = BroadcastVirtualDevice(

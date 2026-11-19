@@ -11,7 +11,7 @@ from dali.command import Command
 from dali.frame import ForwardFrame
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
-from wb.mqtt_dali.gateway import Gateway, bus_from_json
+from wb.mqtt_dali.gateway import Gateway, bus_from_json, make_bus_driver
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
 from wb.mqtt_dali.wbdali import FramePriority
@@ -140,7 +140,12 @@ class BusStartDuringOutageTests(unittest.IsolatedAsyncioTestCase):
         dispatcher = MQTTDispatcher(client)
         dispatcher.connection_lost()
         bus = bus_from_json(
-            "gw", 1, {"devices": []}, dispatcher, MagicMock(), load_common_schema(), MagicMock()
+            {"devices": []},
+            dispatcher,
+            make_bus_driver("gw", 1, dispatcher),
+            MagicMock(),
+            load_common_schema(),
+            MagicMock(),
         )
 
         await bus.start()

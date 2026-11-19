@@ -109,7 +109,8 @@ class DaliDeviceType(IntEnum):
 class HelvarDigidimError(RuntimeError):
     def __init__(self) -> None:
         super().__init__(
-            "answers QUERY CONTROL GEAR but not QUERY DEVICE TYPE: looks like it does not support DALI commands"
+            "answers QUERY CONTROL GEAR but not QUERY DEVICE TYPE: "
+            "looks like it does not support DALI commands"
         )
 
 
@@ -353,7 +354,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         readable_controls = [c for c in mqtt_controls if isinstance(c, Pollable)]
         return [*readable_controls, *self._standalone_pollables]
 
-    async def _initialize_impl(  # pylint: disable=too-many-branches
+    async def _initialize_impl(  # pylint: disable=too-many-branches, too-many-locals, too-many-statements
         self, driver: WBDALIDriver
     ) -> InitializationResult:
         address = GearShort(self.address.short)

@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 from dali.address import GearBroadcast, GearShort
 from dali.gear.general import DAPC, Off, QueryActualLevel, QueryControlGearPresent
+
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.gateway_link import RegisterLink, _frame_counter_order
 from wb.mqtt_dali.sim.control_gear import SimulatedControlGear

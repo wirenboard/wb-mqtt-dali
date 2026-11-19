@@ -1,7 +1,6 @@
 # Type 52 Diagnostics and maintenance (IEC 62386-253:2023)
 
 import logging
-from typing import Optional
 
 from dali.address import Address
 from dali.memory.diagnostics import (
@@ -57,6 +56,52 @@ from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .wbdali import WBDALIDriver
 
+_BANK_205_VALUES = [
+    ControlGearOperatingTime,
+    ControlGearStartCounter,
+    ControlGearExternalSupplyVoltage,
+    ControlGearExternalSupplyVoltageFrequency,
+    ControlGearPowerFactor,
+    ControlGearOverallFailureCondition,
+    ControlGearOverallFailureConditionCounter,
+    ControlGearExternalSupplyUndervoltage,
+    ControlGearExternalSupplyUndervoltageCounter,
+    ControlGearExternalSupplyOvervoltage,
+    ControlGearExternalSupplyOvervoltageCounter,
+    ControlGearOutputPowerLimitation,
+    ControlGearOutputPowerLimitationCounter,
+    ControlGearThermalDerating,
+    ControlGearThermalDeratingCounter,
+    ControlGearThermalShutdown,
+    ControlGearThermalShutdownCounter,
+    ControlGearTemperature,
+    ControlGearOutputCurrentPercent,
+]
+_BANK_206_VALUES = [
+    LightSourceStartCounterResettable,
+    LightSourceStartCounter,
+    LightSourceOnTimeResettable,
+    LightSourceOnTime,
+    LightSourceVoltage,
+    LightSourceCurrent,
+    LightSourceOverallFailureCondition,
+    LightSourceOverallFailureConditionCounter,
+    LightSourceShortCircuit,
+    LightSourceShortCircuitCounter,
+    LightSourceOpenCircuit,
+    LightSourceOpenCircuitCounter,
+    LightSourceThermalDerating,
+    LightSourceThermalDeratingCounter,
+    LightSourceThermalShutdown,
+    LightSourceThermalShutdownCounter,
+    LightSourceTemperature,
+]
+_BANK_207_VALUES = [
+    RatedMedianUsefulLifeOfLuminaire,
+    InternalControlGearReferenceTemperature,
+    RatedMedianUsefulLightSourceStarts,
+]
+
 
 def _get(data: dict, cls):
     """Return the value from a memory bank data dict, or None if unavailable."""
@@ -84,9 +129,7 @@ class Type52Parameters(TypeParameters):
         super().__init__()
         self._compat = DaliCommandsCompatibilityLayer()
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, _logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         cg: dict = {}
         ls: dict = {}
         data = await read_bank_as_dict(
@@ -94,7 +137,9 @@ class Type52Parameters(TypeParameters):
             BANK_205,
             short_address,
             self._compat,
-            error_label="DT52 memory bank 205",
+            "DT52 memory bank 205",
+            logger,
+            _BANK_205_VALUES,
         )
         cg.update(self._extract_bank205(data))
         data = await read_bank_as_dict(
@@ -102,7 +147,9 @@ class Type52Parameters(TypeParameters):
             BANK_206,
             short_address,
             self._compat,
-            error_label="DT52 memory bank 206",
+            "DT52 memory bank 206",
+            logger,
+            _BANK_206_VALUES,
         )
         ls.update(self._extract_bank206(data))
         data = await read_bank_as_dict(
@@ -110,7 +157,9 @@ class Type52Parameters(TypeParameters):
             BANK_207,
             short_address,
             self._compat,
-            error_label="DT52 memory bank 207",
+            "DT52 memory bank 207",
+            logger,
+            _BANK_207_VALUES,
         )
         v = _get(data, InternalControlGearReferenceTemperature)
         if v is not None:

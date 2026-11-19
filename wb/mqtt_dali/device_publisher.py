@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Set, Union
 import aiomqtt
 
 from .mqtt_dispatcher import MessageCallback, MQTTDispatcher, get_str_payload
-from .wbmqtt import ControlError, ControlState, Device, TranslatedTitle
+from .wbmqtt import ControlError, ControlState, Device, PublishPolicy, TranslatedTitle
 
 
 @dataclass
@@ -159,6 +159,24 @@ class DevicePublisher:
             device = self._devices[device_id]
             await device.set_control_error(control_id, error)
 
+    async def publish_control_state(  # pylint: disable=too-many-arguments, R0917
+        self,
+        device_id: str,
+        control_id: str,
+        value: Optional[str],
+        error: ControlError,
+        title: Optional[Union[str, TranslatedTitle]] = None,
+        publish_value_policy: PublishPolicy = PublishPolicy.ON_CHANGE,
+    ) -> None:
+        async with self._lock:
+            if device_id not in self._devices:
+                self.logger.warning("Device %s not found", device_id)
+                return
+
+            await self._devices[device_id].set_control_state(
+                control_id, value, error, title, publish_value_policy
+            )
+
     async def register_control_handler(
         self, device_id: str, control_id: str, callback: MessageCallback
     ) -> None:
@@ -222,7 +240,7 @@ class DevicePublisher:
             raise RuntimeError(f"Device {device_id} already exists")
 
         device = Device(
-            mqtt_client=self._mqtt_dispatcher.client,
+            mqtt_dispatcher=self._mqtt_dispatcher,
             device_mqtt_name=device_id,
             driver_name="wb-mqtt-dali",
             device_title=device_info.title,
@@ -258,7 +276,11 @@ class DevicePublisher:
 
     async def _add_control(self, device: Device, control_info: ControlInfo) -> None:
         value = control_info.state.value if control_info.state.value is not None else ""
-        await device.create_control(control_info.id, control_info.state.meta, value)
+        await device.create_control(
+            control_info.id, control_info.state.meta, value, control_info.state.publish_policy
+        )
+        if control_info.state.error:
+            await device.set_control_error(control_info.id, control_info.state.error)
 
     def _get_control_on_topic(self, device_id: str, control_id: str) -> str:
         return f"/devices/{device_id}/controls/{control_id}/on"

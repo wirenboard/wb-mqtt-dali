@@ -22,21 +22,23 @@ from dali.sequences import progress as seq_progress
 from dali.sequences import sleep as seq_sleep
 
 from .bus_traffic import BusTrafficCallbacks, BusTrafficSource
-from .gateway_link import GatewayLink, MqttSerialLink
-from .mqtt_dispatcher import (  # noqa: F401
+from .gateway_link import GatewayLink, GatewayWriteResult, MqttSerialLink
+from .mqtt_dispatcher import (  # noqa: F401  # get_int_payload: re-exported for callers
     MQTTDispatcher,
     get_int_payload,
-    get_str_payload,
 )
+from .mqtt_rpc_client import MQTTRPCClient
 from .overheat_rate_limiter import OverheatRateLimiter
 from .send_command import LazyCommandExpression, format_command_expression
 from .wbdali_error_response import (
     GatewayUnavailable,
+    GatewayWriteFailed,
+    GatewayWriteSkipped,
     NoPowerOnBus,
     NoResponseFromGateway,
-    NoTransmission,
     Overheat,
     TransmissionCancelled,
+    TransmissionFailed,
     UnknownResponseStatus,
     WbGatewayTransmissionError,
 )
@@ -47,6 +49,49 @@ class GatewayMetaErrorPayload(Enum):
 
     OK = ""
     UNREACHABLE = "r"
+
+
+class GatewayCondition(Enum):
+    """Bus state reported by the gateway's status of the last answered command."""
+
+    NORMAL = "normal"
+    NO_POWER_ON_BUS = "no power on bus"
+    OVERHEAT = "overheat"
+
+
+class GatewayReplyStatus(Enum):
+    """Status byte [15..8] of the gateway's reply to a sent frame."""
+
+    UNKNOWN = -1
+    NO_TRANSMISSION = 0  # slot written, frame not sent yet: the gateway zeroes the reply on a slot write
+    BACKWARD_FRAME = 1
+    NO_BACKWARD_FRAME = 2
+    BROKEN_BACKWARD_FRAME = 3
+    NO_POWER_ON_BUS = 4
+    OVERHEAT = 5
+    LEGACY_BROKEN_BACKWARD_FRAME = 6  # legacy code, same as BROKEN_BACKWARD_FRAME
+    TRANSMISSION_FAILED = 7
+
+    @classmethod
+    def _missing_(cls, value):
+        return cls.UNKNOWN
+
+
+_WRITE_ERROR_BY_RESULT = {
+    GatewayWriteResult.SKIPPED: GatewayWriteSkipped,
+    GatewayWriteResult.FAILED: GatewayWriteFailed,
+}
+
+
+# Statuses absent here (0, 7 and unknown ones) say nothing about the bus and keep the condition.
+_GATEWAY_CONDITION_BY_STATUS = {
+    GatewayReplyStatus.BACKWARD_FRAME: GatewayCondition.NORMAL,
+    GatewayReplyStatus.NO_BACKWARD_FRAME: GatewayCondition.NORMAL,
+    GatewayReplyStatus.BROKEN_BACKWARD_FRAME: GatewayCondition.NORMAL,
+    GatewayReplyStatus.NO_POWER_ON_BUS: GatewayCondition.NO_POWER_ON_BUS,
+    GatewayReplyStatus.OVERHEAT: GatewayCondition.OVERHEAT,
+    GatewayReplyStatus.LEGACY_BROKEN_BACKWARD_FRAME: GatewayCondition.NORMAL,
+}
 
 
 class FramePriority(Enum):
@@ -73,11 +118,15 @@ class FramePriority(Enum):
 # pylint: disable=duplicate-code
 
 
-from .gateway_link import (  # noqa: E402  # pylint: disable=wrong-import-position
-    WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
-)
+# Arbitrary and kept generous. Counted from the write ack, it has to cover:
+# - the gateway executing every command queued ahead of this one: up to 16 x ~95 ms by the
+#   IEC 62386-101 timings (24-bit frame sent twice at the lowest priority, no answer), longer
+#   when other masters win the bus; the WB-DALI firmware timings are not measured;
+# - wb-mqtt-serial reading the reply event: its port thread does it, with no bound while the port is busy.
+# Too short: a command that ran gets NoResponseFromGateway and the gateway queue is reset.
+# Too long: only a reply that is really lost is noticed later.
+WAIT_DALI_RESPONSE_TIMEOUT_S = 5.0
 
-WAIT_DALI_RESPONSE_TIMEOUT_S = 1.5 * WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0
 WAIT_COMMANDS_FOR_BATCH_TIMEOUT_S = 0.01
 
 FRAME_COUNTER_MODULO = 1 << 16
@@ -99,11 +148,11 @@ BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND = BUS_MONITOR_RING_SIZE
 
 
 # Frame sizes a DALI bus can carry: FF16 (IEC 62386-102), FF24 (IEC 62386-103),
-# FF25 (proprietary), BF8.
-FORWARD_FRAME_BIT_LENGTHS = frozenset((16, 24, 25))
+# FF25 (proprietary), FF17 (proprietary, Helvar), BF8.
+FORWARD_FRAME_BIT_LENGTHS = frozenset((16, 17, 24, 25))
 BACKWARD_FRAME_BIT_LENGTH = 8
 
-# Forward-frame sizes `dali.command.from_frame` can decode; FF25 has no decoding.
+# Forward-frame sizes `dali.command.from_frame` can decode; FF17 and FF25 have no decoding.
 DECODABLE_FRAME_BIT_LENGTHS = frozenset((16, 24))
 
 UNREADABLE_FRAME_BIT_LENGTH = 16
@@ -121,6 +170,8 @@ class WBDALIConfig:
     queue_start_modbus_address: int = 1400
     queue_bulk_send_pointer_modbus_address: int = 1432
     queue_modbus_bus_offset: int = 1000
+    # Per-command wait for a DALI reply, counted from the write ack
+    response_timeout_s: float = WAIT_DALI_RESPONSE_TIMEOUT_S
 
 
 @dataclass(frozen=True)
@@ -422,16 +473,89 @@ class SendQueueItem:
     command: Command
     source: BusTrafficSource
     priority: FramePriority
+    logger: logging.Logger
+    # Taken into a gateway write: the caller's cancellation no longer cancels the command
+    sent: bool = False
 
 
 @dataclass
 class WaitResponseItem:
     send_item: SendQueueItem
-    timeout_handler: asyncio.Handle
     sequence_id: int
+    timeout_handler: Optional[asyncio.Handle] = None
 
     def cancel_timeout(self) -> None:
-        self.timeout_handler.cancel()
+        if self.timeout_handler is not None:
+            self.timeout_handler.cancel()
+
+
+@dataclass
+class GatewaySlot:
+    waiter: Optional[WaitResponseItem] = None
+    # The next reply in this slot is the late one of a timed-out command
+    reply_timed_out: bool = False
+
+
+class GatewayQueueMirror:
+    def __init__(self, size: int) -> None:
+        self._slots = [GatewaySlot() for _ in range(size)]
+        self._write_slot = 0
+        self._pointer_reset_needed = False
+        self._any_reply_timed_out = False
+
+    @property
+    def write_slot(self) -> int:
+        return self._write_slot
+
+    @property
+    def slots_to_ring_end(self) -> int:
+        return len(self._slots) - self._write_slot
+
+    @property
+    def pointer_reset_needed(self) -> bool:
+        return self._pointer_reset_needed
+
+    @property
+    def any_reply_timed_out(self) -> bool:
+        return self._any_reply_timed_out
+
+    def commands_in_slots(self) -> list[WaitResponseItem]:
+        return [slot.waiter for slot in self._slots if slot.waiter is not None]
+
+    def on_pointer_reset(self) -> None:
+        self.clear_slots()
+        self._write_slot = 0
+        self._pointer_reset_needed = False
+        self._any_reply_timed_out = False
+
+    def on_write_acked(self, waiter: WaitResponseItem) -> None:
+        """Put the command at the write pointer and advance it."""
+        self._slots[self._write_slot] = GatewaySlot(waiter)
+        self._write_slot = (self._write_slot + 1) % len(self._slots)
+
+    def is_late_reply(self, slot: int) -> bool:
+        """True for the first reply in a slot whose command timed out."""
+        if not self._slots[slot].reply_timed_out:
+            return False
+        self._slots[slot].reply_timed_out = False
+        return True
+
+    def command_awaiting_reply(self, slot: int) -> Optional[WaitResponseItem]:
+        waiter = self._slots[slot].waiter
+        if waiter is None or waiter.send_item.future.done():
+            return None
+        return waiter
+
+    def on_reply_timeout(self, slot: int) -> None:
+        self._slots[slot].reply_timed_out = True
+        self._pointer_reset_needed = True
+        self._any_reply_timed_out = True
+
+    def request_pointer_reset(self) -> None:
+        self._pointer_reset_needed = True
+
+    def clear_slots(self) -> None:
+        self._slots = [GatewaySlot() for _ in self._slots]
 
 
 def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FramePriority) -> int:
@@ -479,55 +603,60 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FrameP
     return result
 
 
+class BusDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
+    def remove_short_address(self, short_address: int) -> None:
+        for key in [k for k in self._mapping if k[0] == short_address]:
+            self._mapping.pop(key, None)
+
+
 class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     """One DALI bus of one WB-DALI module.
 
     The DALI side — queueing, matching answers to frames, decoding them,
     sequences — lives here; the module is reached through a
     :class:`~wb.mqtt_dali.gateway_link.GatewayLink`. With no ``link`` given the
-    controller's is built: wb-mqtt-serial in between, over ``mqtt_dispatcher``.
+    controller's is built: wb-mqtt-serial in between, over ``mqtt_dispatcher``
+    and ``rpc_client``.
     """
 
-    def __init__(  # pylint: disable=too-many-arguments, R0917
+    def __init__(  # pylint: disable=too-many-arguments, too-many-positional-arguments
         self,
         config: WBDALIConfig,
         mqtt_dispatcher: Optional[MQTTDispatcher],
         logger: logging.Logger,
-        dev_inst_map: Optional[DeviceInstanceTypeMapper] = None,
+        rpc_client: Optional[MQTTRPCClient] = None,
+        *,
         link: Optional[GatewayLink] = None,
     ) -> None:
-        self.logger = logger.getChild(f"{config.device_name}_bus{config.bus}")
-        self.logger.debug("device=%s, dev_inst_map=%s", config.device_name, dev_inst_map)
+        self.logger = logger
+        self.logger.debug("device=%s", config.device_name)
 
         self.config = config
         if self.config.bus not in [1, 2, 3]:
             raise ValueError("Bus number must be 1, 2 or 3")
 
-        self.dev_inst_map = dev_inst_map
+        self.dev_inst_map = BusDeviceInstanceTypeMapper()
 
         # Register to be called back with bus traffic
         self.bus_traffic = BusTrafficCallbacks(self.config.queue_size)
 
         self._send_queue: asyncio.Queue[SendQueueItem] = asyncio.Queue(maxsize=self.config.queue_size)
 
-        self._waiting_for_responses: dict[int, WaitResponseItem] = {}
+        self._queue_mirror = GatewayQueueMirror(self.config.queue_size)
+        self._batch: list[SendQueueItem] = []
 
         # Lock to ensure only one sender at a time
         self._send_queue_lock = asyncio.Lock()
         self._queue_sender_task: Optional[asyncio.Task] = None
 
-        self._mqtt_dispatcher = mqtt_dispatcher
         self._overheat_rate_limiter = OverheatRateLimiter()
+        self._gateway_condition = GatewayCondition.NORMAL
 
         if link is None:
-            if mqtt_dispatcher is None:
-                raise ValueError("WBDALIDriver needs a gateway link or an MQTT dispatcher to build one")
-            link = MqttSerialLink(config, mqtt_dispatcher, self.logger)
+            if mqtt_dispatcher is None or rpc_client is None:
+                raise ValueError("WBDALIDriver needs a gateway link, or an MQTT dispatcher and RPC client")
+            link = MqttSerialLink(config, mqtt_dispatcher, rpc_client, self.logger)
         self._link = link
-
-        # The start index in the gateway queue of the current batch being sent
-        self._batch_start_index = 0
-        self._next_queue_index = 0
 
         self._bus_monitor_frame_handler = BusMonitorFrameHandler(
             self.bus_traffic, self.logger, self.dev_inst_map
@@ -536,52 +665,28 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         # The index of the next item to send to the gateway, used for bus monitor tracking
         self._send_queue_item_index = 0
 
-        self._gateway_unavailable = False
-        self._pending_resync = False
-
-        self._response_timeout = WAIT_DALI_RESPONSE_TIMEOUT_S
-
-    @property
-    def response_timeout(self) -> float:
-        """Per-command timeout for waiting on a DALI response from the gateway, in seconds.
-
-        Applied when the command is dispatched in `_send_to_gateway`: items
-        already in-flight keep the timeout they were scheduled with.
-        """
-        return self._response_timeout
-
-    @response_timeout.setter
-    def response_timeout(self, timeout: float) -> None:
-        self._response_timeout = timeout
+        # Broker session in which wb-mqtt-serial reported the gateway unreachable; None once withdrawn.
+        self._unreachable_reported_in_session: Optional[int] = None
+        # Broker session the gateway queue was last synced with; a newer one means a reconnect to catch up.
+        self._synced_session = link.session
 
     @property
     def link(self) -> GatewayLink:
         return self._link
 
     @property
-    def rpc_client_id(self) -> str:
-        """The MQTT link's RPC client id; empty for a link that speaks no RPC."""
-        return getattr(self._link, "rpc_client_id", "")
-
-    @property
-    def rpc_id_counter(self) -> int:
-        return getattr(self._link, "rpc_id_counter", 0)
-
-    @property
-    def batch_start_index(self) -> int:
-        """Get the start index in the gateway queue of the current batch being sent."""
-        return self._batch_start_index
-
-    @property
     def gateway_unavailable(self) -> bool:
-        """True while wb-mqtt-serial reports the gateway device as unreachable (`r`)."""
-        return self._gateway_unavailable
+        return self._gateway_reported_unreachable or not self._link.connected
 
     async def initialize(self) -> None:
         self.logger.debug("Initializing...")
+
         self._queue_sender_task = asyncio.create_task(self._queue_sender())
-        await self._link.resync()
+
+        self._synced_session = self._link.session
+        self._queue_mirror.request_pointer_reset()
         await self._link.start(self)
+
         self.logger.debug("Initialized successfully")
 
     async def deinitialize(self) -> None:
@@ -595,11 +700,8 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 pass
             self._queue_sender_task = None
 
-        for resp_waiter in self._waiting_for_responses.values():
-            resp_waiter.cancel_timeout()
-            if not resp_waiter.send_item.future.done():
-                resp_waiter.send_item.future.set_result(TransmissionCancelled())
-        self._waiting_for_responses.clear()
+        self._fail_waiters(self._queue_mirror.commands_in_slots(), TransmissionCancelled)
+        self._queue_mirror.clear_slots()
 
         await self._link.stop()
         self.logger.debug("Deinitialized successfully")
@@ -612,21 +714,21 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         """Tell the link whether DALI-2 control devices are configured on this bus."""
         self._link.set_has_control_devices(present)
 
-    async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
-        """Send a Modbus RPC command through the MQTT link (kept for callers that speak RPC)."""
-        link = self._link  # the MQTT link; a register link has no RPC to speak
-        await link.send_modbus_rpc_no_response(function, address, count, msg)  # type: ignore[attr-defined]
+    async def _reset_queue_in_gateway(self) -> GatewayWriteResult:
+        self.logger.debug("Resetting message queue in gateway")
+        self._fail_waiters(self._queue_mirror.commands_in_slots(), NoResponseFromGateway)
 
-    async def _reset_queue_in_gateway(self) -> None:
-        await self._link.resync()
+        result = await self._link.reset_pointer()
+        if result == GatewayWriteResult.DONE:
+            if self._queue_mirror.any_reply_timed_out:
+                self.logger.warning("Gateway did not reply, queue reset")
+            self._queue_mirror.on_pointer_reset()
+        return result
 
-    def _handle_meta_error_message(self, message: aiomqtt.Message) -> None:
-        try:
-            payload = get_str_payload(message).strip()
-        except (AttributeError, UnicodeDecodeError) as exc:
-            self.logger.error("Failed to parse /meta/error payload: %s", exc)
-            return
-        self.on_gateway_error_payload(payload)
+    @property
+    def _gateway_reported_unreachable(self) -> bool:
+        # A report from an older broker session is stale: its withdrawal was lost with that session.
+        return self._unreachable_reported_in_session == self._link.session
 
     def on_gateway_error_payload(self, payload: str) -> None:
         """wb-mqtt-serial's `/meta/error` for the module: `r` fails pending traffic, `` resyncs."""
@@ -639,76 +741,33 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             self.logger.debug("Ignoring /meta/error payload %r", payload)
             return
 
-        if should_unavailable == self._gateway_unavailable:
+        if should_unavailable == self._gateway_reported_unreachable:
             return
 
         if should_unavailable:
             self.logger.warning("Gateway reported unreachable; failing pending DALI traffic")
-            self._gateway_unavailable = True
-            self._drain_pending_with_gateway_unavailable()
+            self._unreachable_reported_in_session = self._link.session
+            self._fail_waiters(self._queue_mirror.commands_in_slots(), GatewayUnavailable)
+            self._queue_mirror.clear_slots()
         else:
             self.logger.info("Gateway reported reachable; queue resync deferred to next batch")
-            self._reset_queue_state_locally()
-            self._pending_resync = True
-            self._gateway_unavailable = False
+            self._queue_mirror.request_pointer_reset()
+            self._unreachable_reported_in_session = None
 
-    def _drain_pending_with_gateway_unavailable(self) -> None:
-        # Resolve in-flight waiters whose timeout handlers would otherwise fire
-        # later and replace our GatewayUnavailable response with NoResponseFromGateway.
-        for resp_waiter in list(self._waiting_for_responses.values()):
-            resp_waiter.cancel_timeout()
-            if not resp_waiter.send_item.future.done():
-                response = GatewayUnavailable()
-                resp_waiter.send_item.future.set_result(response)
-                self.bus_traffic.notify_command(
-                    resp_waiter.send_item.command.frame,
-                    response,
-                    resp_waiter.send_item.source,
-                    resp_waiter.sequence_id,
-                )
-        self._waiting_for_responses.clear()
-
-    def _reset_queue_state_locally(self) -> None:
-        self._next_queue_index = 0
-        self._batch_start_index = 0
-        self._waiting_for_responses.clear()
-
-    def _fail_batch_gateway_unavailable(self, items: list[SendQueueItem]) -> None:
-        for item in items:
-            if not item.future.done():
-                response = GatewayUnavailable()
-                item.future.set_result(response)
-                self.bus_traffic.notify_command(
-                    item.command.frame,
-                    response,
-                    item.source,
-                    self._send_queue_item_index,
-                )
-                self._send_queue_item_index += 1
-
-    def _handle_reply_message(self, message: aiomqtt.Message) -> None:
-        """A reply register publication from wb-mqtt-serial (see the MQTT link)."""
-        if message.retain:
-            self.logger.debug("Received retained message, ignoring...")
-            return  # Ignore retained messages
-
-        try:
-            resp: Optional[int] = get_int_payload(message)
-        except ValueError as exc:
-            self.logger.error(
-                "Failed to parse reply payload '%s' from topic '%s': %s",
-                message.payload,
-                message.topic,
-                exc,
-            )
-            resp = None
-
-        resp_pointer = int(
-            str(message.topic)
-            .rsplit("/", maxsplit=1)[-1]
-            .replace(f"bus_{self.config.bus}_bulk_send_reply_", "")
+    def _sync_with_broker_session(self) -> None:
+        """Catch up with a broker reconnect: fail pending waiters, schedule the reset."""
+        session = self._link.session
+        if session == self._synced_session:
+            return
+        self.logger.info(
+            "Broker session %d -> %d; failing pending DALI traffic, queue resync deferred to next batch",
+            self._synced_session,
+            session,
         )
-        self.on_reply(resp_pointer, resp)
+        self._synced_session = session
+        self._fail_waiters(self._queue_mirror.commands_in_slots(), GatewayUnavailable)
+        self._queue_mirror.clear_slots()
+        self._queue_mirror.request_pointer_reset()
 
     def on_monitor_slot(self, raw: int) -> None:
         """A bus monitor ring slot from the link."""
@@ -717,28 +776,27 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     def on_reply(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
         self, resp_pointer: int, resp: Optional[int]
     ) -> None:
-        """The reply register of queue index ``resp_pointer`` holds ``resp``.
+        """The reply register of gateway slot ``resp_pointer`` holds ``resp`` (None: unreadable).
 
         Reply register format:
         [7..0]   - Backward Frame (8 bit)
-        [15..8]  - status:
-                   0 - no transmission
-                   1 - transmission with backward response
-                   2 - transmission without response
-                   3 - broken response
-                   4 - transmission impossible (no power on bus)
-                   5 - gateway overheat
-        ``None`` is an unreadable publication.
+        [15..8]  - status, see GatewayReplyStatus
         """
-        resp_waiter = self._waiting_for_responses.get(resp_pointer)
+        if resp == 0:
+            # A direct read between the slot write and its execution, not a reply.
+            self.logger.debug("Slot %d is not executed yet, waiting for its reply", resp_pointer)
+            return
+
+        # A slot takes a command only after its write ack: anything published before belongs to no command.
+        if self._queue_mirror.is_late_reply(resp_pointer):
+            self.logger.warning("Gateway reply came after the timeout, slot %d", resp_pointer)
+            return
+        resp_waiter = self._queue_mirror.command_awaiting_reply(resp_pointer)
         if resp_waiter is None:
-            self.logger.warning("Received response for unknown pointer: %d", resp_pointer)
+            self.logger.debug("Dropping reply in slot %d: no command waits for it", resp_pointer)
             return
         resp_waiter.cancel_timeout()
         resp_future = resp_waiter.send_item.future
-        if resp_future.done():
-            self.logger.debug("Response future already done for pointer: %d", resp_pointer)
-            return
 
         if resp is None:
             # Unparseable payload: fail the waiter now so the caller does not
@@ -753,31 +811,18 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             )
             return
 
+        logger = resp_waiter.send_item.logger
         backward_frame_byte = resp & 0xFF
-        status = (resp >> 8) & 0xFF
+        status_byte = (resp >> 8) & 0xFF
+        status = GatewayReplyStatus(status_byte)
 
-        if status != 5:
+        if status != GatewayReplyStatus.OVERHEAT:
             self._overheat_rate_limiter.on_non_overheat_response()
+        self._update_gateway_condition(status)
 
-        if status == 0:
-            # No transmission
-            self.logger.debug(
-                "%s (%d) status 0: No transmission",
-                LazyCommandExpression(resp_waiter.send_item.command),
-                resp_pointer,
-            )
-            response = NoTransmission()
-            resp_future.set_result(response)
-            self.bus_traffic.notify_command(
-                resp_waiter.send_item.command.frame,
-                response,
-                resp_waiter.send_item.source,
-                resp_waiter.sequence_id,
-            )
-            return
-        if status == 1:
+        if status == GatewayReplyStatus.BACKWARD_FRAME:
             # Transmission with backward response
-            self.logger.debug(
+            logger.debug(
                 "%s (%d) status 1: Transmission with backward response, backward_frame=0x%02x",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -795,9 +840,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 2:
+        if status == GatewayReplyStatus.NO_BACKWARD_FRAME:
             # Transmission without response
-            self.logger.debug(
+            logger.debug(
                 "%s (%d) status 2: Transmission without response",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -814,12 +859,16 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 3:
+        if status in (
+            GatewayReplyStatus.BROKEN_BACKWARD_FRAME,
+            GatewayReplyStatus.LEGACY_BROKEN_BACKWARD_FRAME,
+        ):
             # Broken response (framing error)
-            self.logger.error(
-                "%s (%d) status 3: Broken response, backward_frame=0x%02x",
+            logger.debug(
+                "%s (%d) status %d: Broken response, backward_frame=0x%02x",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
+                status_byte,
                 backward_frame_byte,
             )
             if resp_waiter.send_item.command.response is not None:
@@ -834,9 +883,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 4:
+        if status == GatewayReplyStatus.NO_POWER_ON_BUS:
             # Transmission impossible (no power on bus)
-            self.logger.error(
+            logger.debug(
                 "%s (%d) status 4: Transmission impossible - no power on bus",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -850,9 +899,9 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
-        if status == 5:
+        if status == GatewayReplyStatus.OVERHEAT:
             # Gateway overheat
-            self.logger.error(
+            logger.debug(
                 "%s (%d) status 5: Gateway overheat",
                 LazyCommandExpression(resp_waiter.send_item.command),
                 resp_pointer,
@@ -867,13 +916,28 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 resp_waiter.sequence_id,
             )
             return
+        if status == GatewayReplyStatus.TRANSMISSION_FAILED:
+            logger.debug(
+                "%s (%d) status 7: Transmission failed",
+                LazyCommandExpression(resp_waiter.send_item.command),
+                resp_pointer,
+            )
+            response = TransmissionFailed()
+            resp_future.set_result(response)
+            self.bus_traffic.notify_command(
+                resp_waiter.send_item.command.frame,
+                response,
+                resp_waiter.send_item.source,
+                resp_waiter.sequence_id,
+            )
+            return
 
         # Unknown status
-        self.logger.error(
+        logger.debug(
             "%s (%d) unknown status %d, backward_frame=0x%02x, full response=0x%04x",
             LazyCommandExpression(resp_waiter.send_item.command),
             resp_pointer,
-            status,
+            status_byte,
             backward_frame_byte,
             resp,
         )
@@ -886,11 +950,25 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             resp_waiter.sequence_id,
         )
 
+    def _update_gateway_condition(self, status: GatewayReplyStatus) -> None:
+        condition = _GATEWAY_CONDITION_BY_STATUS.get(status)
+        if condition is None or condition == self._gateway_condition:
+            return
+        if self._gateway_condition == GatewayCondition.NO_POWER_ON_BUS:
+            self.logger.info("DALI bus power restored")
+        elif self._gateway_condition == GatewayCondition.OVERHEAT:
+            self.logger.info("DALI gateway overheat is over")
+        if condition == GatewayCondition.NO_POWER_ON_BUS:
+            self.logger.warning("No power on DALI bus")
+        elif condition == GatewayCondition.OVERHEAT:
+            self.logger.warning("DALI gateway overheat")
+        self._gateway_condition = condition
+
     async def run_sequence(
         self,
         seq,
-        priority: FramePriority = FramePriority.USER_ACTION,
-        progress=None,
+        priority: FramePriority,
+        logger: logging.Logger,
     ) -> Any:
         """Run a generator-based DALI command sequence.
 
@@ -901,10 +979,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         available in various places in the python-dali library.
         :param priority: Forward-frame arbitration priority applied to every
         frame emitted by the sequence.
-        :param progress: A function to call with progress updates, used by
-        some sequences to provide status information. The function must
-        accept a single argument. A suitable example is `progress=print` to
-        use the built-in `print()` function.
+        :param logger: Logger of the sender for the commands' exchange.
         :return: Depends on the sequence being used
         """
 
@@ -928,16 +1003,15 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     if isinstance(cmd, seq_sleep):
                         await asyncio.sleep(cmd.delay)
                     elif isinstance(cmd, seq_progress):
-                        if progress:
-                            progress(cmd)
+                        pass
                     elif isinstance(cmd, list):
                         response = await self._send_commands_internal(
-                            cmd, BusTrafficSource.WB, priority, lock_queue=False
+                            cmd, BusTrafficSource.WB, priority, False, logger
                         )
                     else:
                         response = (
                             await self._send_commands_internal(
-                                [cmd], BusTrafficSource.WB, priority, lock_queue=False
+                                [cmd], BusTrafficSource.WB, priority, False, logger
                             )
                         )[0]
         finally:
@@ -946,27 +1020,30 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
     async def send(
         self,
         cmd: Command,
-        source: BusTrafficSource = BusTrafficSource.WB,
-        priority: FramePriority = FramePriority.USER_ACTION,
+        source: BusTrafficSource,
+        priority: FramePriority,
+        logger: logging.Logger,
     ) -> Response:
         """Send a single DALI command and optionally wait for a response.
         Args:
             cmd: The DALI command to send.
             source: Source identifier for bus-traffic logging.
             priority: Forward-frame arbitration priority.
+            logger: Logger of the sender for the command's exchange.
         Returns:
             Response from the DALI device when ``cmd.response`` is set,
             otherwise ``Response(None)``. Internal transmission errors are
             returned as ``WbGatewayTransmissionError`` or its subclasses.
         """
 
-        return (await self.send_commands([cmd], source, priority))[0]
+        return (await self.send_commands([cmd], source, priority, logger))[0]
 
     async def send_commands(
         self,
         commands: Sequence[Command],
-        source: BusTrafficSource = BusTrafficSource.WB,
-        priority: FramePriority = FramePriority.USER_ACTION,
+        source: BusTrafficSource,
+        priority: FramePriority,
+        logger: logging.Logger,
     ) -> List[Response]:
         """Send a sequence of DALI commands as one ordered batch.
 
@@ -982,6 +1059,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             commands: DALI commands to send.
             source: Source identifier for bus-traffic logging.
             priority: Forward-frame arbitration priority for the first frame.
+            logger: Logger of the sender for the commands' exchange.
         Returns:
             List of responses aligned with ``commands``: response objects
             when the command has ``response`` set, otherwise
@@ -989,41 +1067,25 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             as ``WbGatewayTransmissionError`` or its subclasses.
         """
 
-        return await self._send_commands_internal(commands, source, priority, lock_queue=True)
+        return await self._send_commands_internal(commands, source, priority, True, logger)
 
-    # pylint: disable-next=too-many-return-statements, too-many-branches, too-many-statements
     async def _queue_sender(self) -> None:
-        batch: list[SendQueueItem] = []
         timeout = None
         while True:
             item = None
             try:
-                resp_waiter = self._waiting_for_responses.get(self._next_queue_index)
-                if resp_waiter is not None and not resp_waiter.send_item.future.done():
-                    try:
-                        await self._send_to_gateway(batch, self._batch_start_index)
-                    finally:
-                        batch = []
-                        self._batch_start_index = self._next_queue_index
-                    try:
-                        await resp_waiter.send_item.future
-                    except asyncio.CancelledError:
-                        if not resp_waiter.send_item.future.cancelled():
-                            raise
+                resp_waiter = self._queue_mirror.command_awaiting_reply(
+                    self._queue_mirror.write_slot + len(self._batch)
+                )
+                if resp_waiter is not None:
+                    await self._send_to_gateway()
+                    await resp_waiter.send_item.future
 
                 try:
                     item = await asyncio.wait_for(self._send_queue.get(), timeout)
                 except asyncio.TimeoutError:
-                    # Not `continue` inside the `finally`: that discards whatever
-                    # the send raised — including the cancellation deinitialize()
-                    # sends while a batch is still in flight on a slow link, which
-                    # left the sender running and deinitialize() waiting forever.
-                    try:
-                        await self._send_to_gateway(batch, self._batch_start_index)
-                    finally:
-                        batch = []
-                        self._batch_start_index = self._next_queue_index
-                        timeout = None
+                    await self._send_to_gateway()
+                    timeout = None
                     continue
 
                 self.logger.debug("Processing queue item: %s", LazyCommandExpression(item.command))
@@ -1035,16 +1097,11 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                     )
                     continue
 
-                batch.append(item)
-                self._next_queue_index += 1
+                self._batch.append(item)
 
-                if self._next_queue_index == self.config.queue_size:
-                    try:
-                        await self._send_to_gateway(batch, self._batch_start_index)
-                    finally:
-                        batch = []
-                        self._batch_start_index = 0
-                        self._next_queue_index = 0
+                # A write is contiguous: the batch ends at the end of the ring.
+                if len(self._batch) == self._queue_mirror.slots_to_ring_end:
+                    await self._send_to_gateway()
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 try:
@@ -1058,59 +1115,106 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 if item is not None and not item.future.done():
                     item.future.set_result(WbGatewayTransmissionError())
 
-    async def _send_to_gateway(self, items: list[SendQueueItem], start_index: int) -> None:
-        if len(items) > 0:
-            await self._overheat_rate_limiter.wait_before_send()
-            if self._gateway_unavailable:
-                self._fail_batch_gateway_unavailable(items)
+    async def _send_to_gateway(self) -> None:
+        """Write the batch at the gateway write pointer."""
+        items, self._batch = self._batch, []
+        if not items:
+            return
+        await self._overheat_rate_limiter.wait_before_send()
+        self._sync_with_broker_session()
+        waiters = []
+        for item in items:
+            waiters.append(WaitResponseItem(item, self._send_queue_item_index))
+            self._send_queue_item_index += 1
+        if self.gateway_unavailable:
+            self._fail_waiters(waiters, GatewayUnavailable)
+            return
+        try:
+            if self._queue_mirror.pointer_reset_needed:
+                reset_result = await self._reset_queue_in_gateway()
+                if reset_result != GatewayWriteResult.DONE:
+                    self._fail_waiters(waiters, _WRITE_ERROR_BY_RESULT[reset_result])
+                    return
+
+            self._fail_waiters(
+                [waiter for waiter in waiters if waiter.send_item.future.cancelled()], TransmissionCancelled
+            )
+            waiters = [waiter for waiter in waiters if not waiter.send_item.future.cancelled()]
+            if not waiters:
                 return
-            if self._pending_resync:
-                await self._reset_queue_in_gateway()
-                self._pending_resync = False
-            regs_32bit = []
-            for current_index, item in enumerate(items, start_index):
-
-                def timeout_callback(index=current_index):
-                    waiter_to_clear = self._waiting_for_responses.get(index)
-                    if waiter_to_clear is not None and not waiter_to_clear.send_item.future.done():
-                        response = NoResponseFromGateway()
-                        waiter_to_clear.send_item.future.set_result(response)
-                        self.bus_traffic.notify_command(
-                            waiter_to_clear.send_item.command.frame,
-                            response,
-                            waiter_to_clear.send_item.source,
-                            waiter_to_clear.sequence_id,
-                        )
-                        self.logger.error(
-                            "Timeout waiting for response %s for queue index %d",
-                            LazyCommandExpression(waiter_to_clear.send_item.command),
-                            index,
-                        )
-
-                timeout_handler = asyncio.get_running_loop().call_later(
-                    self._link.reply_timeout(len(items), self._response_timeout),
-                    timeout_callback,
+            for waiter in waiters:
+                waiter.send_item.sent = True
+            regs_32bit = [
+                encode_frame_for_modbus(
+                    waiter.send_item.command.frame,
+                    waiter.send_item.command.sendtwice,
+                    waiter.send_item.priority,
                 )
-                self._waiting_for_responses[current_index] = WaitResponseItem(
-                    item, timeout_handler, self._send_queue_item_index
+                for waiter in waiters
+            ]
+            result = await self._link.write_slots(self._queue_mirror.write_slot, regs_32bit)
+            if result != GatewayWriteResult.DONE:
+                self._fail_waiters(waiters, _WRITE_ERROR_BY_RESULT[result])
+                if result == GatewayWriteResult.FAILED:
+                    # The write may have run, and the gateway may still be executing these slots.
+                    self._queue_mirror.request_pointer_reset()
+                # A skipped write left the gateway pointer here: the next batch takes these slots.
+                return
+            for waiter in waiters:
+                waiter.timeout_handler = asyncio.get_running_loop().call_later(
+                    self.config.response_timeout_s,
+                    self._handle_reply_timeout,
+                    waiter,
+                    self._queue_mirror.write_slot,
                 )
+                self._queue_mirror.on_write_acked(waiter)
+        except asyncio.CancelledError:
+            self._fail_waiters(waiters, TransmissionCancelled)
+            raise
+        except Exception:
+            self._fail_waiters(waiters, WbGatewayTransmissionError)
+            self._queue_mirror.request_pointer_reset()
+            raise
 
-                result = encode_frame_for_modbus(item.command.frame, item.command.sendtwice, item.priority)
-                regs_32bit.append(result)
-                self._send_queue_item_index += 1
+    def _handle_reply_timeout(self, waiter: WaitResponseItem, slot: int) -> None:
+        if waiter.send_item.future.done():
+            return
+        self._queue_mirror.on_reply_timeout(slot)
+        self._fail_waiters([waiter], NoResponseFromGateway)
+        waiter.send_item.logger.debug(
+            "Timeout waiting for response %s for queue index %d",
+            LazyCommandExpression(waiter.send_item.command),
+            slot,
+        )
 
-            await self._link.send_slots(start_index, regs_32bit, self._response_timeout)
+    def _fail_waiters(
+        self, waiters: list[WaitResponseItem], response_type: type[WbGatewayTransmissionError]
+    ) -> None:
+        for waiter in waiters:
+            waiter.cancel_timeout()
+            future = waiter.send_item.future
+            # A cancelled command is still reported: bus traffic goes out in sequence_id order.
+            if future.done() and not future.cancelled():
+                continue
+            response = response_type()
+            if not future.cancelled():
+                future.set_result(response)
+            self.bus_traffic.notify_command(
+                waiter.send_item.command.frame, response, waiter.send_item.source, waiter.sequence_id
+            )
 
+    # pylint: disable-next=too-many-arguments, too-many-positional-arguments, too-many-locals, too-many-branches
     async def _send_commands_internal(
         self,
         commands: Sequence[Command],
         source: BusTrafficSource,
         priority: FramePriority,
         lock_queue: bool,
+        logger: logging.Logger,
     ) -> list[Response]:
-        if self.logger.isEnabledFor(logging.DEBUG):
-            self.logger.debug("send: %s", ", ".join(format_command_expression(cmd) for cmd in commands))
-        if self._gateway_unavailable:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("send: %s", ", ".join(format_command_expression(cmd) for cmd in commands))
+        if self.gateway_unavailable:
             # Synthesise bus-traffic so listeners see the dropped frames just like real errors.
             for cmd in commands:
                 response = GatewayUnavailable()
@@ -1123,7 +1227,27 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 commands_to_send.append(EnableDeviceType(cmd.devicetype))
             commands_to_send.append(cmd)
         priorities = _compute_frame_priorities(commands_to_send, priority)
-        responses = await self._send_expanded(commands_to_send, priorities, source, lock_queue)
+        items: list[SendQueueItem] = []
+        try:
+            if lock_queue:
+                await self._send_queue_lock.acquire()
+            try:
+                for cmd, frame_priority in zip(commands_to_send, priorities):
+                    item = SendQueueItem(
+                        asyncio.get_running_loop().create_future(), cmd, source, frame_priority, logger
+                    )
+                    items.append(item)
+                    await self._send_queue.put(item)
+            finally:
+                if lock_queue:
+                    self._send_queue_lock.release()
+
+            responses = await asyncio.gather(*(asyncio.shield(item.future) for item in items))
+        except asyncio.CancelledError:
+            for item in items:
+                if not item.sent:
+                    item.future.cancel()
+            raise
         filtered_responses: list[Response] = []
         i = 0
         for cmd in commands:
@@ -1134,27 +1258,6 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             i += 1
 
         return filtered_responses
-
-    async def _send_expanded(
-        self,
-        commands: Sequence[Command],
-        priorities: Sequence[FramePriority],
-        source: BusTrafficSource,
-        lock_queue: bool,
-    ) -> list[Response]:
-        """Queue every frame and wait for its answer; the wire, as opposed to the memo."""
-        response_futures: list[asyncio.Future] = []
-        if lock_queue:
-            await self._send_queue_lock.acquire()
-        try:
-            for cmd, frame_priority in zip(commands, priorities):
-                fut = asyncio.get_running_loop().create_future()
-                response_futures.append(fut)
-                await self._send_queue.put(SendQueueItem(fut, cmd, source, frame_priority))
-        finally:
-            if lock_queue:
-                self._send_queue_lock.release()
-        return await asyncio.gather(*response_futures)
 
 
 def _is_dtr_set(cmd: Command) -> bool:

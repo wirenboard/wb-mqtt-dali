@@ -76,6 +76,8 @@ Physical DALI Bus (Modbus)
 - **`application_controller.py`** — Per-bus state machine: `UNINITIALIZED → INITIALIZING → READY ↔ COMMISSIONING / IN_QUIESCENT_MODE`. Polling loop, state sync, RPC delegation.
 - **`commissioning.py`** — Device discovery via binary search (`BinarySearchAddressFinder`). Produces `CommissioningResult` (new/missing/changed).
 - **`wbdali.py`** — WB-DALI driver: command queuing and transport to `wb-mqtt-serial` via MQTT RPC + reply topics (no direct bus I/O).
+- **`events.py`** — The `BusEvent` set (`LevelChanged`, `ColourChanged`, `Dali2InputEvent`, `…Read`) dispatched to every control of a device via `notify`.
+- **`event_sync_coordinator.py`** — Turns bus frames into events and dispatches them, together with those the poll path decodes from its own answers.
 - **`device_publisher.py`** — Publishes state to MQTT; runs the polling loop.
 - **`mqtt_dispatcher.py`** — Routes incoming MQTT messages to handlers.
 - **`mqtt_rpc_server.py`** — JSON-RPC over MQTT (commissioning, device control).

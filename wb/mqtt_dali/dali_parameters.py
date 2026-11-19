@@ -56,7 +56,7 @@ class TypeParameters:
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         """
         Must be called before any other read, write or get_schema operations
@@ -73,9 +73,7 @@ class OptionalGearParam(NumberGearParam, OptionalSetting):
         super().__init__(name, property_name)
         OptionalSetting.__init__(self)
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         try:
             result = await super().read(driver, short_address, logger)
         except NoAnswerError:
@@ -90,7 +88,7 @@ class OptionalGearParam(NumberGearParam, OptionalSetting):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self.is_absent:
             return {}
@@ -111,9 +109,7 @@ class DimmingCurveParam(NumberGearParam):
         self.property_order = PropertyStartOrder.COMMON.value
         self.description = self._build_description()
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         if self.query_command_class is None:
             return self._assume_standard_curve()
         try:
@@ -123,7 +119,7 @@ class DimmingCurveParam(NumberGearParam):
                 # The gear reported its curve before, so it does implement the query: losing the
                 # answer now is a bus problem, not a feature the gear does not have.
                 raise
-            if self.value is None and logger is not None:
+            if self.value is None:
                 # Only the first assumption says so; _assume_standard_curve() sets the value.
                 logger.info(
                     "Gear at %s does not report its dimming curve; the standard one is assumed",
@@ -140,7 +136,7 @@ class DimmingCurveParam(NumberGearParam):
         driver: WBDALIDriver,
         short_address: Address,
         value: dict,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> dict:
         if self._is_read_only:
             # Read-only fallback never touches the bus; the curve is fixed at

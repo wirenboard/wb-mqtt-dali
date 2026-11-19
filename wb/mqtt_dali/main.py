@@ -5,7 +5,7 @@ import logging
 import os
 import signal
 import sys
-from typing import Iterable
+from typing import Iterable, Optional
 
 import aiomqtt
 import jsonschema
@@ -13,9 +13,10 @@ from wb_common.mqtt_client import DEFAULT_BROKER_URL
 
 from .commissioning import Commissioning, check_presence, search_short
 from .config_validator import validate_config
-from .gateway import Gateway
+from .gateway import BusPollingError, Gateway
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
+from .mqtt_rpc_client import MQTTRPCClient
 from .send_command import (
     build_command_registry,
     format_response,
@@ -26,17 +27,24 @@ from .wbdali import FramePriority
 from .wbdali import WBDALIConfig as WBDALIDriverNewConfig
 from .wbdali import WBDALIDriver as WBDALIDriverNew
 from .wbdali_utils import send_commands_with_retry
-from .wbmqtt import make_mqtt_client
+from .wbmqtt import make_mqtt_client, parse_broker_url
 
 CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 WB_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
 DEV_SCHEMA_FILEPATH = "./wb-mqtt-dali.schema.json"
 GTIN_DB_FILEPATH = "/usr/share/wb-mqtt-dali/products.csv"
+COMMON_DEVICE_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-dali/schemas/common_device.schema.json"
 
 
 EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+EXIT_INVALIDARGUMENT = 2
 EXIT_NOTCONFIGURED = 6
 SEND_BATCH_SIZE = 16
+RECONNECT_DELAY_S = 1.0
+# MQTT 5 reason codes for a rejected login (paho reports a 3.1.1 CONNACK 4/5 the same way):
+# bad user name or password, not authorized
+MQTT_LOGIN_REJECTED_CODES = (134, 135)
 
 
 def _stderr_goes_to_journal() -> bool:
@@ -82,19 +90,6 @@ def _make_log_handler() -> logging.Handler:
     return handler
 
 
-async def wait_for_cancel():
-    cancel_event = asyncio.Event()
-
-    def signal_handler():
-        cancel_event.set()
-
-    loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGINT, signal_handler)
-    loop.add_signal_handler(signal.SIGTERM, signal_handler)
-    await cancel_event.wait()
-    raise asyncio.CancelledError()
-
-
 async def dispatcher(mqtt_dispatcher: MQTTDispatcher):
     try:
         await mqtt_dispatcher.run()
@@ -116,53 +111,157 @@ def load_config(config_filepath: str) -> dict:
 
     with open(config_filepath, "r", encoding="utf-8") as config_file:
         config = json.load(config_file)
-        jsonschema.validate(instance=config, schema=schema, format_checker=jsonschema.draft4_format_checker)
+        jsonschema.validate(
+            instance=config,
+            schema=schema,
+            format_checker=jsonschema.draft4_format_checker,
+        )
     validate_config(config)
     return config
 
 
-async def _teardown_children(gateway: Gateway, tasks: Iterable[asyncio.Task]) -> None:
+def load_common_device_schema() -> dict:
+    with open(COMMON_DEVICE_SCHEMA_FILEPATH, "r", encoding="utf-8") as schema_file:
+        return json.load(schema_file)
+
+
+async def _cancel_tasks(tasks: Iterable[asyncio.Task]) -> None:
     for task in tasks:
         if not task.done():
             task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, aiomqtt.MqttError):
+        except (asyncio.CancelledError, aiomqtt.MqttError, BusPollingError):
             pass
         except Exception:  # pylint: disable=broad-exception-caught
             logging.exception("Error while awaiting service child task during teardown")
-    try:
-        await gateway.stop()
-    except Exception:  # pylint: disable=broad-exception-caught
-        logging.exception("Error while stopping gateway during teardown")
 
 
-async def _serve_connection(client, mqtt_dispatcher: MQTTDispatcher, gateway: Gateway, on_connected) -> bool:
-    """Run one broker session. Returns True to stop the reconnect loop
-    (graceful shutdown), False to reconnect. Propagates MqttError to the
-    caller after tearing the children down so the loop can back off.
-    `on_connected` is invoked once the session is established.
+def _is_login_rejected(error: aiomqtt.MqttError) -> bool:
+    reason_code = getattr(error, "rc", None)
+    return getattr(reason_code, "value", reason_code) in MQTT_LOGIN_REJECTED_CODES
+
+
+class BrokerSessions:
+    """The service across broker sessions.
+
+    A lost link ends the session, not the buses: `gateway.run()` runs once; every later session
+    only has the dispatcher restore its subscriptions and replay its retained mirror.
     """
-    async with client:
-        on_connected()
-        dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
-        gateway_task = asyncio.create_task(gateway.start())
-        cancel_task = asyncio.create_task(wait_for_cancel())
-        children = (gateway_task, dispatcher_task, cancel_task)
+
+    def __init__(
+        self,
+        client: aiomqtt.Client,
+        mqtt_dispatcher: MQTTDispatcher,
+        gateway: Gateway,
+        stop_requested: Optional[asyncio.Event] = None,
+    ) -> None:
+        self._client = client
+        self._mqtt_dispatcher = mqtt_dispatcher
+        self._gateway = gateway
+        self._gateway_task: Optional[asyncio.Task] = None
+        self._stop_requested = stop_requested or asyncio.Event()
+        # Log the loss once per outage, not once per failed reconnect attempt.
+        self._log_next_link_error = True
+
+    def request_stop(self) -> None:
+        self._stop_requested.set()
+
+    async def run(self) -> int:
+        """Serve until a stop request, a rejected login or a failed bus; returns the exit code."""
+        while not self._stop_requested.is_set():
+            try:
+                await self._serve_connection()
+                return EXIT_SUCCESS
+            except BusPollingError:
+                return EXIT_FAILURE
+            except aiomqtt.MqttError as e:
+                if _is_login_rejected(e):
+                    # a configuration problem no reconnect fixes, at startup and later alike
+                    logging.error("%s. MQTT login rejected, exiting", str(e))
+                    await self._stop_gateway()
+                    return EXIT_INVALIDARGUMENT
+                if self._log_next_link_error:
+                    self._log_next_link_error = False
+                    logging.error("%s. Reconnecting", str(e))
+                await self._wait_before_reconnect()
+        # Stopped during an outage: the buses still come down; the next start cleans the broker.
+        if self._gateway_task is not None:
+            logging.error("MQTT broker is not connected, retained topics cannot be removed")
+        await self._stop_gateway()
+        return EXIT_SUCCESS
+
+    # --- Private ---
+
+    async def _serve_connection(self) -> None:
+        """Run one broker session: return on a stop request, raise `MqttError` when the link drops.
+
+        Raises `BusPollingError` when the polling loop of a bus dies."""
+        async with self._client:
+            self._log_next_link_error = True
+            await self._mqtt_dispatcher.connection_restored()
+            if self._gateway_task is None:
+                self._gateway_task = asyncio.create_task(self._gateway.run())
+            # The replay runs beside the message loop: a bus command sent meanwhile needs its reply.
+            replay_task = asyncio.create_task(self._mqtt_dispatcher.replay_retained())
+            dispatcher_task = asyncio.create_task(dispatcher(self._mqtt_dispatcher))
+            stop_task = asyncio.create_task(self._stop_requested.wait())
+            session_tasks = [replay_task, dispatcher_task, stop_task]
+            try:
+                await self._wait_for_session_end(replay_task, dispatcher_task, stop_task)
+            except aiomqtt.MqttError:
+                await _cancel_tasks(session_tasks)
+                self._mqtt_dispatcher.connection_lost()
+                raise
+            except BusPollingError:
+                await self._stop_gateway()
+                await _cancel_tasks(session_tasks)
+                raise
+            await self._stop_gateway()
+            await _cancel_tasks(session_tasks)
+
+    async def _wait_for_session_end(
+        self,
+        replay_task: asyncio.Task,
+        dispatcher_task: asyncio.Task,
+        stop_task: asyncio.Task,
+    ) -> None:
+        pending = {self._gateway_task, replay_task, dispatcher_task, stop_task}
+        while True:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            if stop_task in done:
+                return
+            if dispatcher_task in done:
+                # The message stream ends only with the connection.
+                dispatcher_task.result()
+                raise aiomqtt.MqttError("Message stream ended")
+            # A finished replay is just done; a failed one or a failed gateway run propagates.
+            for task in done:
+                task.result()
+
+    async def _wait_before_reconnect(self) -> None:
         try:
-            await asyncio.gather(*children)
-        except asyncio.CancelledError:
-            return True
-        finally:
-            # Runs on graceful shutdown, on a gathered task raising MqttError,
-            # and on a broker drop surfacing from the client context exit — so
-            # no previous-session task or half-started gateway survives into the
-            # next reconnect iteration.
-            await _teardown_children(gateway, children)
-    return False
+            await asyncio.wait_for(self._stop_requested.wait(), RECONNECT_DELAY_S)
+        except asyncio.TimeoutError:
+            pass
+
+    async def _stop_gateway(self) -> None:
+        if self._gateway_task is not None:
+            await _cancel_tasks([self._gateway_task])
+        try:
+            await self._gateway.stop()
+        except Exception:  # pylint: disable=broad-exception-caught
+            logging.exception("Error while stopping gateway")
 
 
 async def default_service(args, client_factory=make_mqtt_client, gateway_factory=Gateway):
+    # Installed before anything else: a SIGTERM while the config or the gateway is loading ends
+    # the service with 0, not with the signal.
+    stop_requested = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGINT, stop_requested.set)
+    loop.add_signal_handler(signal.SIGTERM, stop_requested.set)
+
     try:
         config = load_config(args.config)
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -174,29 +273,17 @@ async def default_service(args, client_factory=make_mqtt_client, gateway_factory
         logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     gtin_db = DaliDatabase(GTIN_DB_FILEPATH)
+    try:
+        common_schema = load_common_device_schema()
+    except (OSError, ValueError) as e:
+        logging.error("Failed to load common device schema: %s", e)
+        return EXIT_NOTCONFIGURED
 
     client = client_factory(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
-    gateway = gateway_factory(config, mqtt_dispatcher, args.config, gtin_db)
-    # Single-element list so the on_connected closure can mutate it; True means
-    # the next MqttError is the first since a successful connect and gets logged.
-    is_first_connection = [True]
-
-    def _on_connected():
-        is_first_connection[0] = True
-
-    while True:
-        try:
-            if await _serve_connection(client, mqtt_dispatcher, gateway, _on_connected):
-                break
-        except aiomqtt.MqttError as e:
-            if is_first_connection[0]:
-                is_first_connection[0] = False
-                logging.error("%s. Reconnecting", str(e))
-            await asyncio.sleep(1)
-
-    return EXIT_SUCCESS
+    gateway = gateway_factory(config, mqtt_dispatcher, args.config, gtin_db, common_schema)
+    return await BrokerSessions(client, mqtt_dispatcher, gateway, stop_requested).run()
 
 
 async def check_presence_service(gateway: str, args, dali2: bool, bus: int = 1):
@@ -206,7 +293,10 @@ async def check_presence_service(gateway: str, args, dali2: bool, bus: int = 1):
     async with client:
         dispatcher_task = asyncio.create_task(dispatcher(mqtt_dispatcher))
         driver = WBDALIDriverNew(
-            WBDALIDriverNewConfig(gateway, bus), mqtt_dispatcher=mqtt_dispatcher, logger=logging.getLogger()
+            WBDALIDriverNewConfig(gateway, bus),
+            mqtt_dispatcher=mqtt_dispatcher,
+            logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         if dali2:
@@ -235,6 +325,7 @@ async def binary_search_service(gateway: str, args, dali2: bool, bus: int = 1):
             WBDALIDriverNewConfig(gateway, bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         commissioning = Commissioning(driver, [], dali2)
@@ -255,6 +346,7 @@ async def short_search_service(gateway: str, args, dali2: bool, bus: int = 1):
             WBDALIDriverNewConfig(gateway, bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logging.getLogger(),
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         await search_short(driver, dali2)
@@ -295,6 +387,7 @@ async def send_command_service(  # pylint: disable=too-many-locals, too-many-bra
             WBDALIDriverNewConfig(gateway, args.bus),
             mqtt_dispatcher=mqtt_dispatcher,
             logger=logger,
+            rpc_client=MQTTRPCClient(),
         )
         await driver.initialize()
         try:
@@ -360,6 +453,15 @@ async def send_command_service(  # pylint: disable=too-many-locals, too-many-bra
     return EXIT_SUCCESS
 
 
+def _broker_url(value: str) -> str:
+    """argparse type for -b: the URL as given, once parse_broker_url() accepts it; exit 2 otherwise"""
+    try:
+        parse_broker_url(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    return value
+
+
 async def main(argv):  # pylint: disable=too-many-return-statements
     parser = argparse.ArgumentParser(description="Wiren Board MQTT DALI Bridge")
     parser.add_argument(
@@ -383,7 +485,7 @@ async def main(argv):  # pylint: disable=too-many-return-statements
         "--broker",
         "--broker_url",
         dest="broker_url",
-        type=str,
+        type=_broker_url,
         help="MQTT broker url",
         default=DEFAULT_BROKER_URL,
     )

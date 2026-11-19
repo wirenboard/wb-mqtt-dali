@@ -13,26 +13,29 @@ their contents come back:
   writes, and the link polls the reply registers and the ring on its own.
 
 Both hand the driver the same two things — the value of a reply register by
-queue index, and the value of a monitor ring slot — through
+queue slot, and the value of a monitor ring slot — through
 :class:`GatewayListener`. Every batch the driver sends is one call to
-``send_slots``; the link decides what "slot" means on the wire (the MQTT link
-uses the driver's queue index as the physical slot, the register link rewinds
+``write_slots``; the link decides what "slot" means on the wire (the MQTT link
+uses the driver's queue slot as the physical slot, the register link rewinds
 the module and always writes from slot 0 — measured to be the only discipline
 a lost frame cannot stall).
+
+The driver takes a reply only for a slot whose write it has seen acked: a link
+returns ``GatewayWriteResult.DONE`` from ``write_slots`` first and delivers the
+replies after.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import random
-import string
-from typing import List, Optional, Protocol
+from enum import Enum
+from typing import Any, List, Optional, Protocol
 
 import aiomqtt
 
 from .mqtt_dispatcher import MQTTDispatcher, get_int_payload, get_str_payload
+from .mqtt_rpc_client import MQTTRPCClient, MQTTRPCError, MQTTRPCRequestTimeoutError
 from .wbdali_registers import (
     FRAME_COUNTER_MODULO,
     MONITOR_REGISTERS_PER_SLOT,
@@ -46,7 +49,12 @@ from .wbdali_registers import (
     to_registers,
 )
 
-WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
+# Arbitrary: wb-mqtt-serial gives no bound while its port is busy.
+WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 5000
+# wb-mqtt-serial checks total_timeout only when its port is free, so this does not bound the ack.
+PORT_LOAD_ACK_TIMEOUT_S = WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS / 1000.0 + 1.0
+# wb-mqtt-serial's error for a request dropped by `total_timeout` before it went to the port.
+RPC_REQUEST_TIMEOUT_REASON = "RPC request timeout"
 
 # Register link pacing. Polling a reply register every 5 ms costs nothing
 # against a 46 ms bus; the ring is read briskly when someone watches the
@@ -54,13 +62,6 @@ WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS = 1000
 # lazily on a bus of plain gear.
 REPLY_POLL_INTERVAL_S = 0.005
 REPLY_TIME_PER_EXTRA_FRAME_S = 0.2
-# A batch is a rewind, a slot write, at least one poll and the bulk read, and
-# it may first wait for a ring poll to release the module. On a controller
-# these are sub-millisecond; over WebSerial each is a USB round trip (tens of
-# milliseconds, more when three buses share the port), and the driver's reply
-# clock — armed before the exchange starts — has to cover them.
-REGISTER_EXCHANGES_PER_BATCH = 5
-ROUND_TRIP_HEADROOM = 2.0
 INITIAL_ROUND_TRIP_S = 0.02
 ROUND_TRIP_SMOOTHING = 0.25
 MONITOR_POLL_INTERVAL_S = 0.1
@@ -70,11 +71,17 @@ MONITOR_QUIET_POLL_INTERVAL_S = 1.0
 BUS_MONITOR_TOPIC_INDEX_BASE = 1
 
 
+class GatewayWriteResult(Enum):
+    DONE = "done"
+    SKIPPED = "skipped"  # wb-mqtt-serial dropped the write before it reached the port
+    FAILED = "failed"  # wb-mqtt-serial answered with an error or did not answer in time
+
+
 class GatewayListener(Protocol):
     """What a link reports back to the driver."""
 
-    def on_reply(self, index: int, value: Optional[int]) -> None:
-        """The reply register of queue index ``index`` holds ``value`` (None: unreadable)."""
+    def on_reply(self, resp_pointer: int, resp: Optional[int]) -> None:
+        """The reply register of queue slot ``resp_pointer`` holds ``resp`` (None: unreadable)."""
 
     def on_monitor_slot(self, raw: int) -> None:
         """A bus monitor ring slot holds a new value."""
@@ -86,20 +93,25 @@ class GatewayListener(Protocol):
 class GatewayLink(Protocol):
     """The transport half of a WB-DALI bus driver; see the module docstring."""
 
+    @property
+    def connected(self) -> bool:
+        """Whether writes can reach the module at all (the broker is up, for the MQTT link)."""
+
+    @property
+    def session(self) -> int:
+        """Bumped on every reconnect: replies and reports from an older session are stale."""
+
     async def start(self, listener: GatewayListener) -> None:
         """Begin delivering replies and ring slots to ``listener``."""
 
     async def stop(self) -> None:
         """Stop delivering; safe to call more than once."""
 
-    async def resync(self) -> None:
+    async def reset_pointer(self) -> GatewayWriteResult:
         """Point the module's queue back at slot 0."""
 
-    async def send_slots(self, first_index: int, frames: List[int], reply_timeout: float) -> None:
-        """Arm ``frames`` (32-bit slot values) as queue indices ``first_index..``."""
-
-    def reply_timeout(self, frames: int, base: float) -> float:
-        """How long the driver should wait for the replies of a batch of ``frames``."""
+    async def write_slots(self, first_slot: int, frames: List[int]) -> GatewayWriteResult:
+        """Arm ``frames`` (32-bit slot values) as queue slots ``first_slot..``; replies come after."""
 
     def set_bus_monitor_enabled(self, enabled: bool) -> None:
         """Someone is (not) watching the bus monitor."""
@@ -121,23 +133,27 @@ class RegisterTransport(Protocol):
 class MqttSerialLink:
     """The controller link: wb-mqtt-serial in between (see module docstring)."""
 
-    def __init__(self, config, mqtt_dispatcher: MQTTDispatcher, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config,
+        mqtt_dispatcher: MQTTDispatcher,
+        rpc_client: MQTTRPCClient,
+        logger: logging.Logger,
+    ) -> None:
         self.config = config
         self.logger = logger
         self._mqtt_dispatcher = mqtt_dispatcher
+        self._rpc_client = rpc_client
         self._listener: Optional[GatewayListener] = None
-        client_id_suffix = "".join(random.sample(string.ascii_letters + string.digits, 8))
-        self._rpc_client_id = f"{mqtt_dispatcher.client_id.replace('/', '_')}-{client_id_suffix}"
-        self._rpc_id_counter = 0
         self._meta_error_topic = f"/devices/{self.config.device_name}/meta/error"
 
     @property
-    def rpc_client_id(self) -> str:
-        return self._rpc_client_id
+    def connected(self) -> bool:
+        return self._mqtt_dispatcher.connected
 
     @property
-    def rpc_id_counter(self) -> int:
-        return self._rpc_id_counter
+    def session(self) -> int:
+        return self._mqtt_dispatcher.session
 
     def _reply_topic(self, index: int) -> str:
         return f"/devices/{self.config.device_name}/controls/bus_{self.config.bus}_bulk_send_reply_{index}"
@@ -150,6 +166,7 @@ class MqttSerialLink:
 
     async def start(self, listener: GatewayListener) -> None:
         self._listener = listener
+        await self._rpc_client.start(self._mqtt_dispatcher)
         self.logger.debug("Subscribing to reply topics...")
         for i in range(self.config.queue_size):
             await self._mqtt_dispatcher.subscribe(self._reply_topic(i), self._on_reply_message)
@@ -159,16 +176,22 @@ class MqttSerialLink:
         await self._mqtt_dispatcher.subscribe(self._meta_error_topic, self._on_meta_error_message)
 
     async def stop(self) -> None:
-        if not self._mqtt_dispatcher.is_running:
-            return
         for i in range(self.config.queue_size):
             await self._mqtt_dispatcher.unsubscribe(self._reply_topic(i))
         for i in range(BUS_MONITOR_TOPIC_INDEX_BASE, MONITOR_RING_SIZE + BUS_MONITOR_TOPIC_INDEX_BASE):
             await self._mqtt_dispatcher.unsubscribe(self._monitor_topic(i))
         await self._mqtt_dispatcher.unsubscribe(self._meta_error_topic)
+        await self._rpc_client.stop()
 
-    async def send_modbus_rpc_no_response(self, function: int, address: int, count: int, msg: str) -> None:
-        """Send a Modbus RPC command without expecting a response."""
+    async def send_modbus_rpc(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+        self,
+        function: int,
+        address: int,
+        count: int,
+        msg: str,
+        ensure_configured_device: bool = False,
+    ) -> GatewayWriteResult:
+        """Write and wait for the ack."""
         self.logger.debug(
             "Sending Modbus RPC command: function=%d, address=%d, count=%d, msg=%s",
             function,
@@ -176,50 +199,49 @@ class MqttSerialLink:
             count,
             msg,
         )
-        self._rpc_id_counter += 1
-        await self._mqtt_dispatcher.client.publish(
-            f"/rpc/v1/wb-mqtt-serial/port/Load/{self._rpc_client_id}",
-            json.dumps(
-                {
-                    "params": {
-                        "device_id": self.config.device_name,
-                        "function": function,
-                        "address": address,
-                        "count": count,
-                        # "response_timeout": 8,
-                        "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
-                        "frame_timeout": 0,
-                        "format": "HEX",
-                        "msg": msg,
-                    },
-                    "id": self._rpc_id_counter,
-                }
-            ),
-        )
 
-    async def resync(self) -> None:
-        self.logger.debug("Resetting message queue in gateway")
+        params: dict[str, Any] = {
+            "device_id": self.config.device_name,
+            "function": function,
+            "address": address,
+            "count": count,
+            # "response_timeout": 8,
+            "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
+            "frame_timeout": 0,
+            "format": "HEX",
+            "msg": msg,
+        }
+        if ensure_configured_device:
+            params["ensure"] = "configured_device"
+        try:
+            await self._rpc_client.call("wb-mqtt-serial", "port", "Load", params, PORT_LOAD_ACK_TIMEOUT_S)
+        except MQTTRPCError as exc:
+            reason = exc.data or exc.rpc_message
+            if isinstance(exc, MQTTRPCRequestTimeoutError) and reason == RPC_REQUEST_TIMEOUT_REASON:
+                self.logger.debug("Gateway write failed (%s)", reason)
+                return GatewayWriteResult.SKIPPED
+            self.logger.warning("Gateway write failed (%s)", reason)
+            return GatewayWriteResult.FAILED
+        return GatewayWriteResult.DONE
+
+    async def reset_pointer(self) -> GatewayWriteResult:
         pointer_address = (
             self.config.queue_bulk_send_pointer_modbus_address
             + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
         )
-        await self.send_modbus_rpc_no_response(function=6, address=pointer_address, count=1, msg="0000")
+        # ensure: wb-mqtt-serial writes the gateway setup first.
+        return await self.send_modbus_rpc(
+            function=6, address=pointer_address, count=1, msg="0000", ensure_configured_device=True
+        )
 
-    async def send_slots(self, first_index: int, frames: List[int], reply_timeout: float) -> None:
-        del reply_timeout  # the replies arrive as publications; the driver keeps the clock
+    async def write_slots(self, first_slot: int, frames: List[int]) -> GatewayWriteResult:
         msg = "".join([f"{((reg & 0xFFFF) << 16) | ((reg >> 16) & 0xFFFF):08x}" for reg in frames])
         buffer_address = (
             self.config.queue_start_modbus_address
             + (self.config.bus - 1) * self.config.queue_modbus_bus_offset
-            + first_index * 2
+            + first_slot * 2
         )
-        await self.send_modbus_rpc_no_response(
-            function=16, address=buffer_address, count=len(frames) * 2, msg=msg
-        )
-
-    def reply_timeout(self, frames: int, base: float) -> float:
-        del frames
-        return base
+        return await self.send_modbus_rpc(function=16, address=buffer_address, count=len(frames) * 2, msg=msg)
 
     def set_bus_monitor_enabled(self, enabled: bool) -> None:
         """wb-mqtt-serial streams the ring regardless; nothing to pace here."""
@@ -232,6 +254,10 @@ class MqttSerialLink:
     def _on_reply_message(self, message: aiomqtt.Message) -> None:
         if message.retain:
             self.logger.debug("Received retained message, ignoring...")
+            return
+        if not message.payload:
+            # wb-mqtt-serial clears every reply topic when it starts.
+            self.logger.debug("Dropping empty reply on topic '%s'", message.topic)
             return
         try:
             value: Optional[int] = get_int_payload(message)
@@ -280,6 +306,8 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
     A batch is one exchange: rewind the pointer, write the frames into slots
     ``0..n-1`` in one register write, poll the last slot's reply register until
     the module reports a transmission, then read every reply register. The
+    replies are handed over under the driver's slot numbers once ``write_slots``
+    has returned, as wb-mqtt-serial's would arrive after its ack. The
     module transmits armed slots strictly from its pointer and clears a slot's
     reply the moment the slot is written, which is what makes the last slot's
     status mean "the whole batch went out" and a non-zero reply mean "this
@@ -314,6 +342,14 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
     @property
     def device_id(self) -> str:
         return self.config.device_name
+
+    @property
+    def connected(self) -> bool:
+        return True
+
+    @property
+    def session(self) -> int:
+        return 0
 
     @property
     def round_trip_s(self) -> float:
@@ -364,30 +400,19 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
             self._monitor_task.cancel()
             self._monitor_task = None
 
-    async def resync(self) -> None:
-        async with self._lock:
-            await self._write_pointer(0)
+    async def reset_pointer(self) -> GatewayWriteResult:
+        """Nothing to do: every batch rewinds the pointer before its write."""
+        return GatewayWriteResult.DONE
 
     async def _write_pointer(self, slot: int) -> None:
         await self._write(queue_pointer_address(self.config.bus), [slot])
 
-    def reply_timeout(self, frames: int, base: float) -> float:
-        # The link gives up polling a little before the driver's own clock
-        # runs out, so an unanswered slot is reported once, by the driver —
-        # after the register exchanges the batch costs on this transport.
-        return (
-            self._poll_deadline(frames, base)
-            + REPLY_POLL_INTERVAL_S * 4
-            + REGISTER_EXCHANGES_PER_BATCH * self._round_trip_s * ROUND_TRIP_HEADROOM
-        )
-
-    @staticmethod
-    def _poll_deadline(frames: int, base: float) -> float:
+    def _poll_deadline(self, frames: int) -> float:
         # Each frame ahead of the polled slot needs its own bus time (46 ms
         # answered, more for send-twice) before the module can even reach it.
-        return base + REPLY_TIME_PER_EXTRA_FRAME_S * (frames - 1)
+        return self.config.response_timeout_s + REPLY_TIME_PER_EXTRA_FRAME_S * (frames - 1)
 
-    async def send_slots(self, first_index: int, frames: List[int], reply_timeout: float) -> None:
+    async def write_slots(self, first_slot: int, frames: List[int]) -> GatewayWriteResult:
         registers: List[int] = []
         for frame in frames:
             registers.extend(to_registers(frame))
@@ -399,21 +424,32 @@ class RegisterLink:  # pylint: disable=too-many-instance-attributes
                 # pointer is on, so this is what guarantees the frames go out.
                 await self._write_pointer(0)
                 await self._write(queue_slot_address(bus, 0), registers)
-                if (
-                    await self._poll_reply(len(frames) - 1, self._poll_deadline(len(frames), reply_timeout))
-                    is None
-                ):
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                self.logger.error("Writing a batch of %d frames failed: %s", len(frames), error)
+                return GatewayWriteResult.FAILED
+            try:
+                if await self._poll_reply(len(frames) - 1, self._poll_deadline(len(frames))) is None:
                     self.logger.error("No reply for a batch of %d frames", len(frames))
                 # Earlier slots may have been consumed before a stall; report
                 # what actually happened, slot by slot.
                 values = await self._read(reply_address(bus, 0), len(frames))
             except Exception as error:  # pylint: disable=broad-exception-caught
-                self.logger.error("DALI transaction failed: %s", error)
-        if self._listener is None:
+                # Written, so the frames may have gone out: the driver's reply clock decides.
+                self.logger.error("Reading the replies of a batch failed: %s", error)
+        replies = [
+            (first_slot + offset, value)
+            for offset, value in enumerate(values)
+            if (value >> 8) != TransmissionStatus.NO_TRANSMISSION
+        ]
+        if replies:
+            asyncio.get_running_loop().call_soon(self._deliver_replies, replies)
+        return GatewayWriteResult.DONE
+
+    def _deliver_replies(self, replies: List[tuple]) -> None:
+        if self._listener is None or self._closed:
             return
-        for offset, value in enumerate(values):
-            if (value >> 8) != TransmissionStatus.NO_TRANSMISSION:
-                self._listener.on_reply(first_index + offset, value)
+        for slot, value in replies:
+            self._listener.on_reply(slot, value)
 
     async def _poll_reply(self, slot: int, deadline_s: float) -> Optional[int]:
         address = reply_address(self.config.bus, slot)

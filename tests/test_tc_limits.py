@@ -2,6 +2,7 @@
 # Tests for TC limits feature: reading limits, TcLimitsSettings handler,
 # rebuild_mqtt_controls, ApplyResult propagation, sync_controls_after_broadcast
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +10,7 @@ from dali.address import GearBroadcast, GearGroup, GearShort
 from dali.gear.colour import (
     StoreColourTemperatureTcLimit,
     StoreColourTemperatureTcLimitDTR2,
+    tc_kelvin_mirek,
 )
 from dali.gear.general import DTR0, DTR1, DTR2
 
@@ -16,23 +18,37 @@ from wb.mqtt_dali.common_dali_device import (
     ApplyResult,
     DaliDeviceAddress,
     DaliDeviceBase,
+    InitializationResult,
     MqttControl,
     MqttControlBase,
+    NotifyResult,
 )
+from wb.mqtt_dali.control_ids import CURRENT_COLOUR_TEMPERATURE, SET_COLOUR_TEMPERATURE
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
+from wb.mqtt_dali.dali_type8_common import ColourComponent
+from wb.mqtt_dali.dali_type8_parameters import Type8Parameters
 from wb.mqtt_dali.dali_type8_tc import (
     MAX_TC_MIREK,
     MIN_TC_MIREK,
+    UI_MAX_TC_K,
     UI_MAX_TC_MIREK,
+    UI_MIN_TC_K,
     UI_MIN_TC_MIREK,
     ColourTemperatureValue,
+    CurrentColourTemperatureControl,
     TcLimitsSettings,
     Type8TcLimits,
+    get_wanted_mqtt_controls,
     read_colour_temperature_limits_mirek,
 )
 from wb.mqtt_dali.device_publisher import ControlInfo
+from wb.mqtt_dali.events import ColourChanged, EventSource
 from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
-from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState, TranslatedTitle
+from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
+from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+
+from ._common_schema import load_common_schema
+from ._control_stubs import ReadableControl
 
 
 def _make_response(msb, lsb):
@@ -87,7 +103,7 @@ async def test_read_limits_returns_four_values():
             phys_coolest_lsb,  # 12: QueryContentDTR0
         ]
     )
-    result = await read_colour_temperature_limits_mirek(driver, GearShort(1))
+    result = await read_colour_temperature_limits_mirek(driver, GearShort(1), logging.getLogger("test"))
     assert result.tc_min_mirek == 100
     assert result.tc_max_mirek == 400
     assert result.tc_phys_min_mirek == 50
@@ -121,7 +137,7 @@ async def test_read_limits_defaults_none_to_extremes():
             none_resp,
         ]
     )
-    result = await read_colour_temperature_limits_mirek(driver, GearShort(1))
+    result = await read_colour_temperature_limits_mirek(driver, GearShort(1), logging.getLogger("test"))
     assert result.tc_min_mirek == MIN_TC_MIREK
     assert result.tc_max_mirek == MAX_TC_MIREK
     assert result.tc_phys_min_mirek == MIN_TC_MIREK
@@ -177,22 +193,188 @@ async def test_tc_limits_read_mutates_shared_limits():
     handler = TcLimitsSettings(limits)
     driver = AsyncMock()
 
-    # New values: cool=120, warm=380, phys_cool=60, phys_warm=480
-    driver.send_commands = AsyncMock(return_value=_make_reread_response(380, 120, 480, 60))
-    result = await handler.read(driver, GearShort(1))
+    # New values: cool=120, warm=380, phys_cool=130, phys_warm=480
+    driver.send_commands = AsyncMock(return_value=_make_reread_response(380, 120, 480, 130))
+    result = await handler.read(driver, GearShort(1), logging.getLogger("test"))
     assert result == {
         "tc_limits": {
             "tc_coolest": 120,
             "tc_warmest": 380,
-            "tc_physical_coolest": 60,
+            "tc_physical_coolest": 130,
             "tc_physical_warmest": 480,
         }
     }
     # Shared limits mutated in-place
     assert limits.tc_min_mirek == 120
     assert limits.tc_max_mirek == 380
-    assert limits.tc_phys_min_mirek == 60
+    assert limits.tc_phys_min_mirek == 130
     assert limits.tc_phys_max_mirek == 480
+
+
+async def _tc_handler(tc_min_mirek: int, tc_max_mirek: int) -> Type8Parameters:
+    """A DT8 handler that identified its colour type as Tc and read back the given user limits
+    (physical ones left at the extremes), the way ``read_mandatory_info`` discovers them."""
+    status = MagicMock()
+    status.raw_value = MagicMock(error=False)
+    status.colour_type_xy_active = False
+    status.colour_type_colour_temperature_Tc_active = True
+    status.colour_type_primary_N_active = False
+    driver = AsyncMock()
+    driver.send = AsyncMock(return_value=status)
+    driver.send_commands = AsyncMock(
+        return_value=_make_reread_response(tc_max_mirek, tc_min_mirek, MAX_TC_MIREK, MIN_TC_MIREK)
+    )
+    handler = Type8Parameters()
+    await handler.read_mandatory_info(driver, GearShort(1), logging.getLogger("test"))
+    return handler
+
+
+def _predicted_tc(handler: Type8Parameters, mirek: int) -> int:
+    """The mirek the handler puts in the event it predicts from a sniffed Tc command."""
+    event = handler.apply_observed_colour({ColourComponent.COLOUR_TEMPERATURE: mirek}, settle_at=0.0)
+    return event.components[ColourComponent.COLOUR_TEMPERATURE]
+
+
+# --- Tests for the UI range the limits are declared within ---
+
+
+def _slider_range_k(tc_min_mirek: int, tc_max_mirek: int) -> tuple[int, int]:
+    """The min and max, in K, of the wanted-colour-temperature control built for these limits."""
+    limits = Type8TcLimits(tc_min_mirek=tc_min_mirek, tc_max_mirek=tc_max_mirek)
+    meta = get_wanted_mqtt_controls(limits)[0].control_info.state.meta
+    return meta.minimum, meta.maximum
+
+
+async def _card(warmest, coolest, phys_warmest, phys_coolest) -> dict:
+    """The limits as the settings card declares them after reading these raw mirek words."""
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(
+        return_value=_make_reread_response(warmest, coolest, phys_warmest, phys_coolest)
+    )
+    return (await TcLimitsSettings(_make_limits()).read(driver, GearShort(1), logging.getLogger("test")))[
+        "tc_limits"
+    ]
+
+
+def test_slider_keeps_limits_inside_the_ui_range():
+    assert _slider_range_k(tc_kelvin_mirek(6500), tc_kelvin_mirek(2700)) == (2702, 6535)
+
+
+def test_slider_clamps_a_limit_outside_the_ui_range():
+    """Gear naming 800 K as its warmest: the slider starts at the UI edge instead."""
+    assert _slider_range_k(tc_kelvin_mirek(6500), tc_kelvin_mirek(800)) == (UI_MIN_TC_K, 6535)
+
+
+def test_slider_spans_the_ui_range_for_the_extreme_limits():
+    """The 1 and 65534 mirek gear without limits of its own answers, and the values the read
+    falls back to when it gets no answer: 1000...10000 K, not 15 K...1000000 K."""
+    assert _slider_range_k(MIN_TC_MIREK, MAX_TC_MIREK) == (UI_MIN_TC_K, UI_MAX_TC_K)
+
+
+def test_slider_spans_the_ui_range_for_unset_limits():
+    assert _slider_range_k(MASK_2BYTES, MASK_2BYTES) == (UI_MIN_TC_K, UI_MAX_TC_K)
+
+
+def test_slider_spans_the_ui_range_when_the_gear_span_lies_outside_it():
+    """Gear that only does 800...900 K: both ends land on the same UI edge, so the slider takes
+    the whole range rather than collapsing to a point."""
+    assert _slider_range_k(tc_kelvin_mirek(900), tc_kelvin_mirek(800)) == (UI_MIN_TC_K, UI_MAX_TC_K)
+
+
+def test_slider_spans_the_ui_range_for_inverted_limits():
+    assert _slider_range_k(tc_kelvin_mirek(2700), tc_kelvin_mirek(6500)) == (UI_MIN_TC_K, UI_MAX_TC_K)
+
+
+def test_slider_survives_a_zero_limit():
+    """A zero answer used to raise in the Kelvin conversion and leave the device uninitialised."""
+    assert _slider_range_k(0, tc_kelvin_mirek(2700)) == (2702, UI_MAX_TC_K)
+
+
+def test_slider_takes_the_ui_edge_only_on_the_side_with_the_unset_limit():
+    """An unset limit is the largest mirek there is, so clamping it would move the coolest end
+    to the warm edge instead of the cool one."""
+    assert _slider_range_k(MASK_2BYTES, tc_kelvin_mirek(2700)) == (2702, UI_MAX_TC_K)
+
+
+def test_slider_takes_the_ui_edge_only_on_the_side_with_the_impossible_limit():
+    assert _slider_range_k(tc_kelvin_mirek(6500), 0) == (UI_MIN_TC_K, 6535)
+
+
+@pytest.mark.asyncio
+async def test_card_clamps_limits_outside_the_ui_range():
+    """The gear's 1 and 65534 mirek reach the card as the UI bounds, not as 1000000 K and 15 K."""
+    card = await _card(MAX_TC_MIREK, MIN_TC_MIREK, MAX_TC_MIREK, MIN_TC_MIREK)
+    assert card == {
+        "tc_coolest": UI_MIN_TC_MIREK,
+        "tc_warmest": UI_MAX_TC_MIREK,
+        "tc_physical_coolest": UI_MIN_TC_MIREK,
+        "tc_physical_warmest": UI_MAX_TC_MIREK,
+    }
+
+
+@pytest.mark.asyncio
+async def test_card_keeps_limits_inside_the_ui_range():
+    card = await _card(370, 153, 500, 110)
+    assert (card["tc_coolest"], card["tc_warmest"]) == (153, 370)
+
+
+@pytest.mark.asyncio
+async def test_card_keeps_an_unset_limit_unset():
+    """MASK is what the card's switch reads, so it must not become a colour temperature."""
+    card = await _card(MASK_2BYTES, MASK_2BYTES, MASK_2BYTES, MASK_2BYTES)
+    assert set(card.values()) == {MASK_2BYTES}
+
+
+@pytest.mark.asyncio
+async def test_tc_limits_injected_into_control():
+    """The limits a Tc handler reads bound the set_colour_temperature slider and clamp what it
+    predicts from a sniffed command, while a read is published exactly as the gear answered
+    it."""
+    handler = await _tc_handler(tc_min_mirek=120, tc_max_mirek=380)
+    controls = {c.control_info.id: c for c in handler.get_mqtt_controls()}
+
+    wanted_meta = controls[SET_COLOUR_TEMPERATURE].control_info.state.meta
+    assert (wanted_meta.minimum, wanted_meta.maximum) == (tc_kelvin_mirek(380), tc_kelvin_mirek(120))
+
+    control = controls[CURRENT_COLOUR_TEMPERATURE]
+    predicted = handler.apply_observed_colour({ColourComponent.COLOUR_TEMPERATURE: 100}, settle_at=0.0)
+    assert control.notify(predicted) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == str(tc_kelvin_mirek(120))  # below the coolest limit
+
+    assert control.notify(_tc_read(100)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == str(tc_kelvin_mirek(100))
+
+
+def _tc_read(mirek: int) -> ColourChanged:
+    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, source=EventSource.READ)
+
+
+@pytest.mark.asyncio
+async def test_tc_prediction_clamped_to_the_ui_range_when_a_limit_is_not_implemented():
+    """Gear without the Tc limit registers answers MASK, and clamping to that verbatim would
+    report 15 K for every colour temperature: the UI range stands in for the unknown bound,
+    while a bound the gear did give still clamps. A read passes through either way."""
+    both_unknown = await _tc_handler(tc_min_mirek=MASK_2BYTES, tc_max_mirek=MASK_2BYTES)
+    assert _predicted_tc(both_unknown, 250) == 250  # inside the stand-in range, not clamped to MASK
+    assert _predicted_tc(both_unknown, UI_MAX_TC_MIREK + 500) == UI_MAX_TC_MIREK
+
+    warmest_known = await _tc_handler(tc_min_mirek=MASK_2BYTES, tc_max_mirek=500)
+    assert _predicted_tc(warmest_known, 250) == 250
+    assert _predicted_tc(warmest_known, 600) == 500  # past the warmest limit the gear did report
+
+    control = CurrentColourTemperatureControl()
+    assert control.notify(_tc_read(600)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == str(tc_kelvin_mirek(600))
+
+
+def test_a_zero_colour_temperature_read_is_a_read_error():
+    """0 mirek has no Kelvin: the control must flag the read instead of raising while it
+    converts, and it must not overwrite the temperature it last had."""
+    control = CurrentColourTemperatureControl()
+    control.notify(_tc_read(250))
+    assert control.notify(_tc_read(0)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.error is ControlError.READ
+    assert control.control_info.state.value == str(tc_kelvin_mirek(250))
 
 
 @pytest.mark.asyncio
@@ -200,14 +382,14 @@ async def test_tc_limits_write_empty_input_returns_empty():
     limits = _make_limits()
     handler = TcLimitsSettings(limits)
     driver = AsyncMock()
-    result = await handler.write(driver, GearShort(1), {})
+    result = await handler.write(driver, GearShort(1), {}, logging.getLogger("test"))
     assert result == {}
     driver.send_commands.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_tc_limits_write_no_changes_returns_empty():
-    limits = _make_limits(cool=100, warm=400, phys_cool=50, phys_warm=500)
+    limits = _make_limits(cool=100, warm=400, phys_cool=110, phys_warm=500)
     handler = TcLimitsSettings(limits)
     driver = AsyncMock()
     result = await handler.write(
@@ -217,10 +399,11 @@ async def test_tc_limits_write_no_changes_returns_empty():
             "tc_limits": {
                 "tc_coolest": 100,
                 "tc_warmest": 400,
-                "tc_physical_coolest": 50,
+                "tc_physical_coolest": 110,
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     assert result == {}
     driver.send_commands.assert_not_called()
@@ -228,13 +411,13 @@ async def test_tc_limits_write_no_changes_returns_empty():
 
 @pytest.mark.asyncio
 async def test_tc_limits_write_single_field_sends_correct_commands():
-    limits = _make_limits(cool=100, warm=400, phys_cool=50, phys_warm=500)
+    limits = _make_limits(cool=100, warm=400, phys_cool=110, phys_warm=500)
     handler = TcLimitsSettings(limits)
     driver = AsyncMock()
-    reread_resp = _make_reread_response(400, 150, 500, 50)
+    reread_resp = _make_reread_response(400, 150, 500, 110)
 
-    async def mock_send_commands(cmds, _source=None, priority=None):
-        del priority
+    async def mock_send_commands(cmds, _source=None, priority=None, logger=None):
+        del priority, logger
         if len(cmds) == 4:
             return [MagicMock() for _ in cmds]
         return reread_resp
@@ -248,10 +431,11 @@ async def test_tc_limits_write_single_field_sends_correct_commands():
             "tc_limits": {
                 "tc_coolest": 150,
                 "tc_warmest": 400,
-                "tc_physical_coolest": 50,
+                "tc_physical_coolest": 110,
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     # Should have sent one store command batch + one re-read batch
     assert driver.send_commands.call_count == 2
@@ -266,7 +450,7 @@ async def test_tc_limits_write_single_field_sends_correct_commands():
         "tc_limits": {
             "tc_coolest": 150,
             "tc_warmest": 400,
-            "tc_physical_coolest": 50,
+            "tc_physical_coolest": 110,
             "tc_physical_warmest": 500,
         }
     }
@@ -281,8 +465,8 @@ async def test_tc_limits_write_physical_before_user():
     reread_resp = _make_reread_response(420, 80, 520, 40)
     sent_selectors = []
 
-    async def mock_send_commands(cmds, _source=None, priority=None):
-        del priority
+    async def mock_send_commands(cmds, _source=None, priority=None, logger=None):
+        del priority, logger
         if len(cmds) == 4 and isinstance(cmds[3], StoreColourTemperatureTcLimit):
             sent_selectors.append(cmds[2].param)
             return [MagicMock() for _ in cmds]
@@ -302,6 +486,7 @@ async def test_tc_limits_write_physical_before_user():
                 "tc_physical_warmest": 520,
             }
         },
+        logging.getLogger("test"),
     )
     # Physical limits should be sent first
     assert sent_selectors == [
@@ -330,6 +515,7 @@ async def test_tc_limits_write_broadcast_returns_empty():
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     assert result == {}
 
@@ -352,6 +538,7 @@ async def test_tc_limits_write_group_returns_empty():
                 "tc_physical_warmest": 500,
             }
         },
+        logging.getLogger("test"),
     )
     assert result == {}
 
@@ -366,7 +553,7 @@ def test_has_changes_returns_false_when_missing():
 
 
 def test_has_changes_returns_false_when_same():
-    limits = _make_limits(cool=100, warm=400, phys_cool=50, phys_warm=500)
+    limits = _make_limits(cool=100, warm=400, phys_cool=110, phys_warm=500)
     handler = TcLimitsSettings(limits)
     assert (
         handler.has_changes(
@@ -374,7 +561,7 @@ def test_has_changes_returns_false_when_same():
                 "tc_limits": {
                     "tc_coolest": 100,
                     "tc_warmest": 400,
-                    "tc_physical_coolest": 50,
+                    "tc_physical_coolest": 110,
                     "tc_physical_warmest": 500,
                 }
             }
@@ -459,9 +646,6 @@ def test_colour_value_schema_tracks_user_limits_live():
 
 # --- Helpers for rebuild_mqtt_controls / ApplyResult / sync_controls_after_broadcast ---
 
-# Prevent file system access in DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}  # pylint: disable=protected-access
-
 
 class _TestDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
     """Concrete subclass that implements _build_mqtt_controls for testing."""
@@ -475,7 +659,7 @@ class _TestDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribut
         return self._mqtt_controls_factory()
 
     async def _initialize_impl(self, driver):
-        return (self._extra_param_handlers, [])
+        return InitializationResult(self._extra_param_handlers, [], self._build_mqtt_controls())
 
 
 def _make_device(**kwargs):
@@ -486,18 +670,17 @@ def _make_device(**kwargs):
         "default_mqtt_id_part": "d",
         "compat": DaliCommandsCompatibilityLayer(),
         "gtin_db": MagicMock(),
+        "common_schema": load_common_schema(),
     }
     defaults.update(kwargs)
     return _TestDevice(**defaults)
 
 
 def _make_readable_control(control_id):
-    return MqttControl(
+    return ReadableControl(
         ControlInfo(
             control_id, ControlState(ControlMeta("range", TranslatedTitle(control_id, control_id)), "0")
-        ),
-        query_builder=lambda addr: MagicMock(),
-        value_formatter=lambda resp: "0",
+        )
     )
 
 

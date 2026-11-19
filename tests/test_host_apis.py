@@ -11,46 +11,48 @@ from timeit import default_timer
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from wb.mqtt_dali.application_controller import (
     ApplicationController,
     ApplicationControllerConfig,
     ApplicationControllerState,
     CommissioningStatus,
 )
-from wb.mqtt_dali.common_dali_device import (
-    DATA_DIR_ENV,
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    data_dir,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_init_scheduler import DeviceInitScheduler
 from wb.mqtt_dali.gateway import Gateway
 
 from ._app_controller_helpers import make_loop_controller
+from ._common_schema import load_common_schema
 
 
-def _controller(driver_factory):
+def _controller(driver):
+    driver.config.device_name = "gw"
+    driver.config.bus = 1
     return ApplicationController(
-        ApplicationControllerConfig("gw", 1, [], []), MagicMock(), MagicMock(), driver_factory=driver_factory
+        ApplicationControllerConfig([], []),
+        MagicMock(),
+        driver,
+        MagicMock(),
+        load_common_schema(),
+        MagicMock(),
     )
 
 
 def test_a_host_hands_in_its_own_driver_through_the_factory():
-    """The factory receives the same arguments the default construction uses."""
+    """Every bus driver the gateway builds goes through the factory, with make_bus_driver's arguments."""
+    # pylint: disable=protected-access
+    gateway = Gateway.__new__(Gateway)
+    gateway._mqtt_dispatcher = MagicMock()
     driver = MagicMock()
-    factory = MagicMock(return_value=driver)
-    controller = _controller(factory)
-    assert controller.driver is driver
-    config, dispatcher, logger, dev_inst_map = factory.call_args.args
-    assert (config.device_name, config.bus) == ("gw", 1)
-    assert dispatcher is not None and logger is controller.logger and dev_inst_map is not None
+    gateway._driver_factory = MagicMock(return_value=driver)
+    assert gateway._make_driver("gw", 2) is driver
+    gateway._driver_factory.assert_called_once_with("gw", 2, gateway._mqtt_dispatcher)
 
 
 def test_the_monitor_flag_and_the_bus_population_reach_the_driver():
     driver = MagicMock()
-    controller = _controller(lambda *_: driver)
+    controller = _controller(driver)
     controller.set_bus_monitor_enabled(True)
     driver.set_bus_monitor_enabled.assert_called_with(True)
     controller._notify_bus_population()  # pylint: disable=protected-access
@@ -103,22 +105,12 @@ async def test_commissioning_is_awaitable_per_bus():
 
 
 def test_group_membership_can_be_seeded_before_the_first_read():
-    DaliDeviceBase.set_common_schema({"title": "test-schema"})
-    device = DaliDevice(DaliDeviceAddress(short=1, random=0), "bus", MagicMock())
+    device = DaliDevice(
+        DaliDeviceAddress(short=1, random=0), "bus", MagicMock(), load_common_schema(), None, None
+    )
     assert device.groups == set()
     device.seed_groups([1, 5, 40])  # 40 is not a DALI group
     assert device.groups == {1, 5}
-
-
-def test_the_data_dir_can_be_relocated(monkeypatch, tmp_path):
-    (tmp_path / "schemas").mkdir()
-    (tmp_path / "schemas" / "common_device.schema.json").write_text(json.dumps({"title": "relocated"}))
-    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path))
-    assert data_dir() == str(tmp_path)
-    DaliDeviceBase.set_common_schema({})
-    DaliDevice(DaliDeviceAddress(short=1, random=0), "bus", MagicMock())
-    assert DaliDeviceBase._common_schema == {"title": "relocated"}  # pylint: disable=protected-access
-    DaliDeviceBase.set_common_schema({"title": "test-schema"})
 
 
 @pytest.mark.asyncio
@@ -140,6 +132,7 @@ async def test_start_hands_the_driver_the_configured_monitor_state():
     controller.dali_devices = []
     controller.dali2_devices = []
     controller._devices_by_mqtt_id = {}  # pylint: disable=protected-access
+    controller._group_devices_by_number = {}  # pylint: disable=protected-access
     controller._init_scheduler = MagicMock()  # pylint: disable=protected-access
     controller._polling_loop = MagicMock(return_value=_never())  # pylint: disable=protected-access
     await controller.start()

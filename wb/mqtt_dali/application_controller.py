@@ -3,20 +3,12 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from timeit import default_timer
-from typing import Any, Callable, Coroutine, Iterable, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Mapping, Optional, Type, Union
 
 import aiomqtt
-from dali.address import (
-    DeviceBroadcast,
-    DeviceShort,
-    GearBroadcast,
-    GearGroup,
-    InstanceNumber,
-)
+from dali.address import DeviceBroadcast, DeviceShort, GearBroadcast, InstanceNumber
 from dali.command import Command, Response, YesNoResponse, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
-from dali.device.helpers import DeviceInstanceTypeMapper
 from dali.exceptions import ResponseError
 from dali.frame import ForwardFrame, Frame
 from dali.gear.general import EnableDeviceType
@@ -24,39 +16,38 @@ from dali.gear.general import EnableDeviceType
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
-from .common_dali_device import ControlPollResult, DaliDeviceAddress, read_product_name
+from .common_dali_device import DaliDeviceAddress, Pollable, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
-from .dali2_device import Dali2Device, publish_dali2_event
+from .dali2_device import Dali2Device
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .device_registry import DeviceRegistry
-from .event_sync_coordinator import EventSyncCoordinator, is_event_sync_owned_setpoint
+from .event_sync_coordinator import EventSyncCoordinator
+from .events import BusEvent, Dali2InputEvent
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
-from .mqtt_dispatcher import MQTTDispatcher, get_str_payload
+from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
+from .on_off_control import OnOffConfig, gear_params_only
 from .send_command import format_command_expression
 from .short_address import set_short_address_sequence
 from .utils import merge_json_schemas
 from .virtual_devices import (
     AggregatedCapabilities,
     BroadcastVirtualDevice,
-    GroupSpec,
-    GroupStateUpdateKind,
     GroupVirtualDevice,
     aggregate_capabilities,
 )
-from .wbdali import WBDALIConfig, WBDALIDriver
+from .wbdali import DECODABLE_FRAME_BIT_LENGTHS, FramePriority, WBDALIDriver
 from .wbdali_error_response import WbGatewayTransmissionError
 from .wbdali_utils import (
     MASK,
-    AsyncDeviceInstanceTypeMapper,
     check_query_response,
     is_transmission_error_response,
     send_with_retry,
 )
-from .wbmqtt import ControlError
+from .wbmqtt import ControlError, PublishPolicy, TranslatedTitle, is_pushbutton
 
 # A device is allowed to ignore commands until 300 ms after Reset started
 # (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
@@ -81,13 +72,6 @@ class CommissioningStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-
-
-# How a host builds the bus driver: the controller takes the default (WBDALIDriver
-# over the MQTT link); a host that owns the Modbus side hands in its own.
-DriverFactory = Callable[
-    [WBDALIConfig, MQTTDispatcher, logging.Logger, DeviceInstanceTypeMapper], WBDALIDriver
-]
 
 
 class CommissioningStartResult(str, Enum):
@@ -234,13 +218,11 @@ def _count_devices_to_init(result: Optional[CommissioningResult]) -> int:
 
 @dataclass
 class ApplicationControllerConfig:
-    gateway_mqtt_device_id: str
-    # Gateway bus number starting from 1
-    bus: int
     dali_devices: list[DaliDevice]
     dali2_devices: list[Dali2Device]
     enable_bus_monitor: bool = False
     enable_bus_monitor_syslog: bool = False
+    group_on_off: dict[int, OnOffConfig] = field(default_factory=dict)
 
 
 class ApplicationControllerTaskType(Enum):
@@ -303,7 +285,7 @@ class PollScheduler:
 
     async def poll(
         self, driver: WBDALIDriver, current_time: float
-    ) -> list[tuple[DaliDevice, Union[list[ControlPollResult], BaseException]]]:
+    ) -> list[tuple[DaliDevice, Union[list[BusEvent], BaseException]]]:
         if not self._devices:
             return []
         default_max_commands = 3
@@ -372,20 +354,17 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
 ) -> bool:
     """Try to initialize device. Publish on success or error. Returns True on success."""
     mqtt_id = device.mqtt_id
-    is_retry = scheduler.get_retry_count(mqtt_id) > 0
     try:
         await device.initialize(driver)
         if publisher.has_device(mqtt_id):
             await publisher.remove_device(mqtt_id)
         await publish_device(device, publisher, control_handler)
         scheduler.record_success(mqtt_id)
-        if is_retry:
-            logger.info("Device %s initialized successfully after retry", device.name)
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
-        delay = scheduler.record_failure(mqtt_id, current_time)
-        if not is_retry:
-            logger.warning("Failed to initialize device %s, retrying in %.0fs: %s", device.name, delay, e)
+        scheduler.record_failure(mqtt_id, current_time)
+        if device.is_initialized:
+            logger.warning("Failed to publish device %s: %s", device.name, e)
         if not publisher.has_device(mqtt_id):
             await publish_device(device, publisher, control_handler, error=True)
         return False
@@ -407,23 +386,25 @@ async def publish_device(
     await publisher.add_device(device_info)
     await publisher.register_control_handler(device.mqtt_id, "+", control_handler)
     for control in common_controls:
-        if control.is_readable():
+        if isinstance(control, Pollable):
             await publisher.set_control_error(device.mqtt_id, control.control_info.id, ControlError.READ)
 
 
 class ApplicationController:  # pylint: disable=too-many-instance-attributes, too-many-public-methods
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
+        driver: WBDALIDriver,
         gtin_db: DaliDatabase,
-        driver_factory: Optional[DriverFactory] = None,
+        common_schema: dict,
+        on_polling_failure: Callable[[], None],
     ) -> None:
-        self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
-        self.bus_name = f"Bus {config.bus}"
+        self.uid = f"{driver.config.device_name}_bus_{driver.config.bus}"
+        self.bus_name = TranslatedTitle(f"Bus {driver.config.bus}", f"Шина {driver.config.bus}")
         self.dali_devices = config.dali_devices
         self.dali2_devices = config.dali2_devices
-        self.logger = logging.getLogger(self.uid)
+        self.logger = driver.logger
 
         self._state = ApplicationControllerState.UNINITIALIZED
         self._state_lock = asyncio.Lock()
@@ -433,19 +414,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._mqtt_dispatcher = mqtt_dispatcher
         self._device_publisher = DevicePublisher(mqtt_dispatcher, self.logger)
 
-        self._dev_inst_map = AsyncDeviceInstanceTypeMapper()
-
         self._polling_task: Optional[asyncio.Task] = None
+        self._on_polling_failure = on_polling_failure
 
         # Special gear commands are preceded by EnableDeviceType
         # Store the type to correctly decode the following command frame
         self._last_bus_traffic_device_type: int = 0
 
-        cfg = WBDALIConfig(
-            device_name=config.gateway_mqtt_device_id,
-            bus=config.bus,
-        )
-        self._dev = (driver_factory or WBDALIDriver)(cfg, mqtt_dispatcher, self.logger, self._dev_inst_map)
+        self._dev = driver
         self._first_attempts_done = asyncio.Event()
 
         self._bus_monitor_topic = f"/wb-dali/{self.uid}/bus_monitor"
@@ -464,9 +440,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             mqtt_id_prefix=self.uid,
             bus_name=self.bus_name,
         )
-        self._group_devices_by_number: dict[int, GroupVirtualDevice] = {}
+        self._group_devices_by_number: dict[int, GroupVirtualDevice] = {
+            number: self._make_group_device(number, on_off) for number, on_off in config.group_on_off.items()
+        }
 
         self._gtin_db = gtin_db
+        self._common_schema = common_schema
 
         self._tasks_queue: asyncio.Queue[ApplicationControllerTask] = asyncio.Queue()
 
@@ -548,8 +527,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         try:
             await self._device_publisher.initialize()
             await self._publish_virtual_device(self._broadcast_device)
+            # Groups configured in the file go out before any ballast has answered: their
+            # settings are all that is known about them until membership is read.
+            for group_device in self._group_devices_by_number.values():
+                await self._publish_virtual_device(group_device)
 
-            current_time = default_timer()
+            current_time = asyncio.get_running_loop().time()
             for device in self.dali_devices + self.dali2_devices:
                 self._devices_by_mqtt_id[device.mqtt_id] = device
                 device.set_logger(self.logger)
@@ -568,6 +551,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             except Exception:  # pylint: disable=broad-exception-caught
                 self.logger.exception("Error deinitializing WBDALIDriver during start() rollback")
             self._devices_by_mqtt_id.pop(self._broadcast_device.mqtt_id, None)
+            # The group devices stay in the map: they carry the settings a later start() republishes.
+            for group_device in self._group_devices_by_number.values():
+                self._devices_by_mqtt_id.pop(group_device.mqtt_id, None)
             async with self._state_lock:
                 self._state = ApplicationControllerState.UNINITIALIZED
             raise
@@ -582,6 +568,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         self._notify_bus_population()
 
         self._polling_task = asyncio.create_task(self._polling_loop())
+        self._polling_task.add_done_callback(self._report_polling_failure)
 
     async def stop(self) -> None:
         async with self._state_lock:
@@ -615,6 +602,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 pass
             except asyncio.TimeoutError:
                 self.logger.warning("Polling task did not stop within 2s; abandoning")
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass  # already reported by _report_polling_failure
             self._polling_task = None
 
         # Cancel any queued ApplicationControllerTasks so that callers awaiting
@@ -731,7 +720,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
         if old_short_address != device.address.short:
             if isinstance(device, Dali2Device):
-                self._dev_inst_map.update_mapping(old_short_address, device.address.short)
+                self._dev.dev_inst_map.remove_short_address(old_short_address)
+                self._update_dali2_device_instance_map(device)
             self._device_registry.update_short_address(device, old_short_address)
 
         if isinstance(device, DaliDevice):
@@ -739,13 +729,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_broadcast_device()
 
     async def load_group_info(self, group_index: int) -> dict:
-        res = {}
-        for device in self.dali_devices:
-            if device.is_initialized and group_index in device.groups:
-                handlers = device.get_group_parameter_handlers()
-                for handler in handlers:
-                    merge_json_schemas(res, handler.get_schema(group_and_broadcast=True))
-        return res
+        group_device = self._group_devices_by_number.get(group_index)
+        if group_device is None:
+            raise ValueError(f"Group {group_index} not found")
+        return {"config": group_device.params, "schema": group_device.schema}
+
+    @property
+    def group_devices(self) -> Mapping[int, GroupVirtualDevice]:
+        return self._group_devices_by_number
 
     async def apply_group_parameters(self, group_index: int, new_params: dict) -> None:
         async with self._state_lock:
@@ -814,6 +805,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     async def _load_device_info_task(
         self, device: Union[DaliDevice, Dali2Device], force_reload: bool
     ) -> None:
+        if not device.is_initialized:
+            await self._do_init_device(device.mqtt_id, asyncio.get_running_loop().time())
         await device.load_info(self._dev, force_reload)
         if isinstance(device, DaliDevice):
             # Group membership turns up on a settings read: the gear may have been silent about
@@ -821,28 +814,30 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_group_virtual_devices()
 
     async def _apply_group_parameters_task(self, group_index: int, new_params: dict) -> None:
-        group_parameter_handlers = []
-        group_parameter_types: set[tuple[str, str]] = set()
-        for device in self.dali_devices:
-            if device.is_initialized and group_index in device.groups:
-                handlers = device.get_group_parameter_handlers()
-                for handler in handlers:
-                    handler_key = (type(handler).__name__, getattr(handler, "property_name", ""))
-                    if handler_key not in group_parameter_types:
-                        group_parameter_types.add(handler_key)
-                        group_parameter_handlers.append(handler)
-        for handler in group_parameter_handlers:
-            await handler.write(self._dev, GearGroup(group_index), new_params)
-        for device in self.dali_devices:
-            if not device.is_initialized or group_index not in device.groups:
+        group_device = self._group_devices_by_number.get(group_index)
+        if group_device is None:
+            raise ValueError(f"Group {group_index} not found")
+        members = self._group_members(group_index)
+        # A member re-reads only what went on the bus; the on/off block is the group's own setting.
+        gear_params = gear_params_only(new_params)
+
+        result = await group_device.apply_parameters(self._dev, new_params)
+
+        for device in members:
+            if not device.is_initialized:
                 continue
             try:
-                if await device.sync_controls_after_broadcast(self._dev, new_params):
+                if await device.sync_controls_after_broadcast(self._dev, gear_params):
                     await self._device_publisher.remove_device(device.mqtt_id)
                     await publish_device(device, self._device_publisher, self._run_on_topic_handler)
                     self._devices_by_mqtt_id[device.mqtt_id] = device
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 self.logger.warning("Failed to sync device %s: %s", device.name, exc)
+
+        await self._refresh_group_virtual_devices()
+        group_device = self._group_devices_by_number.get(group_index)
+        if group_device is not None and result.needs_mqtt_controls_refresh:
+            await self._rebuild_group_virtual_device(group_index, group_device)
 
     async def _apply_bus_parameters_task(self, new_params: dict) -> None:
         bus_parameter_handlers = []
@@ -856,7 +851,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                         bus_parameter_types.add(handler_key)
                         bus_parameter_handlers.append(handler)
         for handler in bus_parameter_handlers:
-            await handler.write(self._dev, GearBroadcast(), new_params)
+            await handler.write(self._dev, GearBroadcast(), new_params, self.logger)
         for device in self.dali_devices:
             if not device.is_initialized:
                 continue
@@ -893,7 +888,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._update_dali2_devices(res_dali2, on_device_initialized)
 
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), device.logger)
         await asyncio.sleep(RESET_SETTLE_TIME_S)
 
         if isinstance(device, DaliDevice):
@@ -901,14 +896,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 DaliDeviceAddress(device.address.short, device.address.random),
                 self.uid,
                 self._gtin_db,
+                self._common_schema,
                 mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
                 name=device.name if device.has_custom_name else None,
+                on_off=device.on_off_config,
             )
         else:
             new_device = Dali2Device(
                 DaliDeviceAddress(device.address.short, device.address.random),
                 self.uid,
                 self._gtin_db,
+                self._common_schema,
                 mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
                 name=device.name if device.has_custom_name else None,
             )
@@ -962,10 +960,12 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         return results
 
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), self.logger)
+        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), device.logger)
         await asyncio.sleep(RESET_SETTLE_TIME_S)
         reported = await self._dev.run_sequence(
-            set_short_address_sequence(device.dali_commands, device.address.short, MASK, self.logger)
+            set_short_address_sequence(device.dali_commands, device.address.short, MASK, device.logger),
+            FramePriority.USER_ACTION,
+            device.logger,
         )
         if reported != MASK:
             self.logger.warning(
@@ -984,7 +984,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self.dali_devices = [d for d in self.dali_devices if d is not device]
         else:
             self.dali2_devices = [d for d in self.dali2_devices if d is not device]
-            self._dev_inst_map.remove_short_address(old_short)
+            self._dev.dev_inst_map.remove_short_address(old_short)
 
         self._device_registry.remove(device)
         self._devices_by_mqtt_id.pop(mqtt_id, None)
@@ -999,7 +999,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._refresh_broadcast_device()
 
     async def _commissioning_task(self):
-        start_time = default_timer()
+        start_time = asyncio.get_running_loop().time()
 
         try:
             await asyncio.sleep(1)
@@ -1017,7 +1017,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 self._commissioning_state.mark_dali2()
                 obj = Commissioning(self._dev, [d.address for d in self.dali2_devices], True, _cb)
                 res_dali2 = await obj.smart_extend()
-                self.logger.debug("Commissioning completed in %.2f seconds", default_timer() - start_time)
+                self.logger.debug(
+                    "Commissioning completed in %.2f seconds", asyncio.get_running_loop().time() - start_time
+                )
 
                 await self._read_devices_info(res_dali, res_dali2)
             finally:
@@ -1031,7 +1033,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self.logger.error("Commissioning failed: %s", error)
             self._commissioning_state.mark_failed(error, self._build_commissioning_summary())
             self._publish_commissioning_state()
-            raise
+            return
 
         self._commissioning_state.mark_completed(self._build_commissioning_summary())
         self._publish_commissioning_state()
@@ -1122,7 +1124,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         all_names = await self._resolve_initial_names(all_addresses, compat)
 
         return [
-            device_cls(addr, self.uid, self._gtin_db, name=name)
+            device_cls(addr, self.uid, self._gtin_db, self._common_schema, name=name)
             for addr, name in zip(all_addresses, all_names)
         ]
 
@@ -1231,21 +1233,27 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 device_id,
             )
             return
+        state = control.control_info.state
         try:
             task = ApplicationControllerTask(ApplicationControllerTaskType.EXECUTE_CONTROL, key)
             self._tasks_queue.put_nowait(task)
             await task.future
-            await self._device_publisher.set_control_error(device_id, control_id, ControlError.NONE)
-            # Setpoints event sync owns (real-device wanted_level/dapc/set_*) are published
-            # from the observed truth via the monitor path; confirm only holds their write
-            # error here. Non-owned writables and virtual-device setpoints echo as before.
-            owned = isinstance(device, DaliDevice) and is_event_sync_owned_setpoint(control_id)
-            new_value = control.control_info.state.value
-            if not owned and new_value is not None:
-                await self._device_publisher.set_control_value(device_id, control_id, new_value)
+            if state.has_write_error():
+                # homeui shows the value it sent until a publication on the topic replaces it.
+                await self._device_publisher.publish_control_state(
+                    device_id, control_id, state.value, state.error, publish_value_policy=PublishPolicy.ALWAYS
+                )
+            else:
+                # A command publishes no value of its own, except a press, which no event reports.
+                await self._device_publisher.publish_control_state(
+                    device_id, control_id, payload if is_pushbutton(state.meta) else None, state.error
+                )
         except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("Error executing control %s for device %s: %s", control_id, device_id, e)
-            await self._device_publisher.set_control_error(device_id, control_id, ControlError.WRITE)
+            state.set_write_error()
+            await self._device_publisher.publish_control_state(
+                device_id, control_id, state.value, state.error, publish_value_policy=PublishPolicy.ALWAYS
+            )
 
     def _get_bus_capabilities(self) -> AggregatedCapabilities:
         return aggregate_capabilities(self.dali_devices)
@@ -1256,8 +1264,26 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             active_groups.update(device.groups)
         return sorted(active_groups)
 
-    def _build_group_spec(self, group_number: int) -> GroupSpec:
-        return GroupSpec.from_devices(d for d in self.dali_devices if group_number in d.groups)
+    def _group_members(self, group_number: int) -> list[DaliDevice]:
+        return [d for d in self.dali_devices if group_number in d.groups]
+
+    def _make_group_device(
+        self, group_number: int, on_off_config: Optional[OnOffConfig] = None
+    ) -> GroupVirtualDevice:
+        return GroupVirtualDevice(
+            group_number,
+            self._device_registry,
+            self.uid,
+            self.bus_name,
+            on_off_config=on_off_config,
+        )
+
+    async def _rebuild_group_virtual_device(self, group_number: int, old_device: GroupVirtualDevice) -> None:
+        new_device = self._make_group_device(group_number, old_device.on_off_config)
+        await self._device_publisher.remove_device(old_device.mqtt_id)
+        self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
+        await self._publish_virtual_device(new_device)
+        self._group_devices_by_number[group_number] = new_device
 
     async def _publish_virtual_device(
         self, device: Union[GroupVirtualDevice, BroadcastVirtualDevice]
@@ -1277,7 +1303,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         device.set_logger(self.logger)
 
     async def _try_init_new_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        current_time = default_timer()
+        current_time = asyncio.get_running_loop().time()
         self._devices_by_mqtt_id[device.mqtt_id] = device
         self._init_scheduler.schedule(device.mqtt_id, current_time)
         await self._do_init_device(device.mqtt_id, current_time)
@@ -1310,7 +1336,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     def _update_dali2_device_instance_map(self, device: Dali2Device) -> None:
         addr = DeviceShort(device.address.short)
         for inst_num, inst_params in device.instances.items():
-            self._dev_inst_map.add_type(
+            self._dev.dev_inst_map.add_type(
                 short_address=addr,
                 instance_number=InstanceNumber(inst_num),
                 instance_type=inst_params.instance_type,
@@ -1326,6 +1352,9 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         )
 
         for group_number in sorted(existing_groups - active_groups):
+            # An on/off setting keeps its group published; only the editor can take that group away.
+            if self._group_devices_by_number[group_number].on_off_config is not None:
+                continue
             device = self._group_devices_by_number.pop(group_number)
             self.logger.debug(
                 "Removing group virtual device: group=%d mqtt_id=%s",
@@ -1336,8 +1365,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._devices_by_mqtt_id.pop(device.mqtt_id, None)
 
         for group_number in sorted(active_groups - existing_groups):
-            spec = self._build_group_spec(group_number)
-            device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
+            device = self._make_group_device(group_number)
             self.logger.debug(
                 "Adding group virtual device: group=%d mqtt_id=%s",
                 group_number,
@@ -1347,19 +1375,14 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._group_devices_by_number[group_number] = device
 
         for group_number in sorted(active_groups & existing_groups):
-            spec = self._build_group_spec(group_number)
             old_device = self._group_devices_by_number[group_number]
-            if old_device.update_in_place(spec):
+            if old_device.update_in_place():
                 continue
             self.logger.debug(
                 "Rebuilding group virtual device: group=%d capabilities or state-set changed",
                 group_number,
             )
-            new_device = GroupVirtualDevice.for_group(group_number, spec, self.uid, self.bus_name)
-            await self._device_publisher.remove_device(old_device.mqtt_id)
-            self._devices_by_mqtt_id.pop(old_device.mqtt_id, None)
-            await self._publish_virtual_device(new_device)
-            self._group_devices_by_number[group_number] = new_device
+            await self._rebuild_group_virtual_device(group_number, old_device)
 
     async def _refresh_broadcast_device(self) -> None:
         new_caps = self._get_bus_capabilities()
@@ -1428,117 +1451,124 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     async def _polling_loop(  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         self,
     ) -> None:
-        next_poll_time = default_timer()
+        loop = asyncio.get_running_loop()
+        next_poll_time = loop.time()
         item = None
         while not self._stop_requested:
             try:
-                try:
-                    if item is None:
-                        queue_timeout = max(0.001, next_poll_time - default_timer())
-                        item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
-                except asyncio.TimeoutError:
-                    if self._in_quiescent_mode:
-                        next_poll_time = default_timer() + 1.0
-                        continue
-                    next_poll_time = default_timer() + await self._poll_step(default_timer())
-                    continue
-
+                if item is None:
+                    queue_timeout = max(0.001, next_poll_time - loop.time())
+                    item = await asyncio.wait_for(self._tasks_queue.get(), queue_timeout)
+            except asyncio.TimeoutError:
+                pass
+            # Polled outside the except block: an error from the poll step must not chain the timeout.
+            if item is None:
                 if self._in_quiescent_mode:
-                    if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
-                        _device, control = item.data
-                        control.value_to_set = None
-                    item.future.set_exception(RuntimeError("Cannot execute tasks while in quiescent mode"))
-                    item = None
+                    next_poll_time = loop.time() + 1.0
                     continue
+                next_poll_time = loop.time() + await self._poll_step(loop.time())
+                continue
 
+            if self._in_quiescent_mode:
                 if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
-                    controls = []
-                    try:
-                        while (
-                            item is not None
-                            and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
-                        ):
-                            _device, control = item.data
-                            controls.append((item, control.value_to_set))
-                            control.value_to_set = None
-                            try:
-                                item = self._tasks_queue.get_nowait()
-                            except asyncio.QueueEmpty:
-                                item = None
-                        results = await asyncio.gather(
-                            *[
-                                control_task.data[0].execute_control(
-                                    self._dev, control_task.data[1].control_info.id, value_to_set
-                                )
-                                for control_task, value_to_set in controls
-                            ],
-                            return_exceptions=True,
-                        )
-                        for (control_task, value_to_set), result in zip(controls, results):
-                            _device, control = control_task.data
-                            if control_task.future.done():
-                                continue
-                            if isinstance(result, Exception):
-                                control_task.future.set_exception(result)
-                                continue
-                            control_task.future.set_result(result)
-                            control.control_info.state.value = value_to_set
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        # Guard against an unexpected failure while draining/resolving the
-                        # batch: resolve every still-pending pulled-off future so no
-                        # one-shot on-topic task hangs, then let the loop continue.
-                        self.logger.exception("Unexpected error while processing EXECUTE_CONTROL batch")
-                        for control_task, _value_to_set in controls:
-                            if not control_task.future.done():
-                                control_task.future.set_exception(e)
-
-                else:
-                    try:
-                        if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
-                            await self._run_commissioning_in_child_task()
-                            self._poll_scheduler.clear()
-                        elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
-                            await self._load_device_info_task(*item.data)
-                        elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
-                            device, new_params = item.data
-                            if not item.future.done():
-                                item.future.set_result(await device.apply_parameters(self._dev, new_params))
-                        elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
-                            group_index, new_params = item.data
-                            await self._apply_group_parameters_task(group_index, new_params)
-                        elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
-                            await self._apply_bus_parameters_task(item.data)
-                        elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
-                            await item.data.identify(self._dev)
-                        elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE_SETTINGS:
-                            await self._reset_device_settings_task(item.data)
-                        elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE:
-                            await self._reset_device_task(item.data)
-                        elif item.task_type == ApplicationControllerTaskType.SEND_COMMAND_BATCH:
-                            batch_result = await self._send_command_batch_task(item.data)
-                            if not item.future.done():
-                                item.future.set_result(batch_result)
-                        if not item.future.done():
-                            item.future.set_result(None)
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        if not item.future.done():
-                            item.future.set_exception(e)
-                    finally:
-                        item = None
-
-                # Slip a poll into the gap between bursts of tasks: if the queue
-                # is now empty and the polling interval has elapsed, run a poll
-                # step immediately instead of waiting for the queue_timeout to fire.
-                if (
-                    not self._in_quiescent_mode
-                    and self._tasks_queue.empty()
-                    and next_poll_time <= default_timer()
-                ):
-                    next_poll_time = default_timer() + await self._poll_step(default_timer())
-
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                self.logger.error("Unexpected error in polling loop: %s", e, exc_info=True)
+                    _device, control = item.data
+                    control.value_to_set = None
+                if not item.future.done():
+                    item.future.set_exception(RuntimeError("Cannot execute tasks while in quiescent mode"))
                 item = None
+                continue
+
+            if item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL:
+                controls = []
+                try:
+                    while (
+                        item is not None and item.task_type == ApplicationControllerTaskType.EXECUTE_CONTROL
+                    ):
+                        _device, control = item.data
+                        controls.append((item, control.value_to_set))
+                        control.value_to_set = None
+                        try:
+                            item = self._tasks_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            item = None
+                    results = await asyncio.gather(
+                        *[
+                            control_task.data[0].execute_control(
+                                self._dev, control_task.data[1].control_info.id, value_to_set
+                            )
+                            for control_task, value_to_set in controls
+                        ],
+                        return_exceptions=True,
+                    )
+                    for (control_task, _value_to_set), result in zip(controls, results):
+                        if control_task.future.done():
+                            continue
+                        if isinstance(result, Exception):
+                            control_task.future.set_exception(result)
+                            continue
+                        control_task.future.set_result(result)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    # Guard against an unexpected failure while draining/resolving the
+                    # batch: resolve every still-pending pulled-off future so no
+                    # one-shot on-topic task hangs, then let the loop continue.
+                    self.logger.exception("Unexpected error while processing EXECUTE_CONTROL batch")
+                    for control_task, _value_to_set in controls:
+                        if not control_task.future.done():
+                            control_task.future.set_exception(e)
+
+            else:
+                try:
+                    if item.task_type == ApplicationControllerTaskType.COMMISSIONING:
+                        await self._run_commissioning_in_child_task()
+                        self._poll_scheduler.clear()
+                    elif item.task_type == ApplicationControllerTaskType.LOAD_INFO:
+                        await self._load_device_info_task(*item.data)
+                    elif item.task_type == ApplicationControllerTaskType.APPLY_SETTING:
+                        device, new_params = item.data
+                        if not item.future.done():
+                            item.future.set_result(await device.apply_parameters(self._dev, new_params))
+                    elif item.task_type == ApplicationControllerTaskType.APPLY_GROUP_SETTING:
+                        group_index, new_params = item.data
+                        await self._apply_group_parameters_task(group_index, new_params)
+                    elif item.task_type == ApplicationControllerTaskType.APPLY_BUS_SETTING:
+                        await self._apply_bus_parameters_task(item.data)
+                    elif item.task_type == ApplicationControllerTaskType.IDENTIFY_DEVICE:
+                        await item.data.identify(self._dev)
+                    elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE_SETTINGS:
+                        await self._reset_device_settings_task(item.data)
+                    elif item.task_type == ApplicationControllerTaskType.RESET_DEVICE:
+                        await self._reset_device_task(item.data)
+                    elif item.task_type == ApplicationControllerTaskType.SEND_COMMAND_BATCH:
+                        batch_result = await self._send_command_batch_task(item.data)
+                        if not item.future.done():
+                            item.future.set_result(batch_result)
+                    if not item.future.done():
+                        item.future.set_result(None)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    if not item.future.done():
+                        item.future.set_exception(e)
+                finally:
+                    item = None
+
+            # Slip a poll into the gap between bursts of tasks: if the queue
+            # is now empty and the polling interval has elapsed, run a poll
+            # step immediately instead of waiting for the queue_timeout to fire.
+            if not self._in_quiescent_mode and self._tasks_queue.empty() and next_poll_time <= loop.time():
+                next_poll_time = loop.time() + await self._poll_step(loop.time())
+
+    def _report_polling_failure(self, task: asyncio.Task) -> None:
+        error = None if task.cancelled() else task.exception()
+        if error is None and self._stop_requested:
+            return
+        self.logger.critical(
+            (
+                "Polling loop failed, exiting"
+                if error is not None
+                else "Polling loop ended without a stop request, exiting"
+            ),
+            exc_info=error,
+        )
+        self._on_polling_failure()
 
     async def _run_commissioning_in_child_task(self) -> None:
         child = asyncio.create_task(self._commissioning_task())
@@ -1552,105 +1582,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             self._current_commissioning_task = None
 
     async def _poll_devices(self, poll_scheduler: PollScheduler, current_time: float) -> None:
-        try:
-            responses = await poll_scheduler.poll(self._dev, current_time)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            self.logger.exception("Error polling devices %s", str(e))
-        else:
-            for device, device_responses in responses:
-                if isinstance(device_responses, BaseException):
-                    self.logger.error("Error polling device %s: %s", device.name, device_responses)
-                else:
-                    await self._publish_poll_results(device, device_responses)
-
-    async def _publish_poll_results(self, device: DaliDevice, responses: Iterable[ControlPollResult]) -> None:
-        responses = list(responses)
-        tasks = []
-        for response in responses:
-            control = device.get_mqtt_control(response.control_id)
-            if response.error:
-                if control is not None:
-                    control.read_error = True
-                tasks.append(
-                    self._device_publisher.set_control_error(
-                        device.mqtt_id, response.control_id, ControlError.READ
-                    )
-                )
-                continue
-            if control is not None:
-                control.read_error = False
-            if response.title is not None:
-                tasks.append(
-                    self._device_publisher.set_control_title(
-                        device.mqtt_id, response.control_id, response.title
-                    )
-                )
-            if response.value is not None:
-                tasks.append(
-                    self._device_publisher.set_control_value(
-                        device.mqtt_id, response.control_id, response.value
-                    )
-                )
-        tasks.extend(self._build_group_state_tasks(device, responses))
-
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    self.logger.error(
-                        "Error updating MQTT control for device %s: %s",
-                        device.name,
-                        result,
-                    )
-
-        # Mirror the readback onto the quantity's setpoints (§5): keeps wanted_level/dapc/
-        # set_* in sync even for commands prediction can't follow.
-        await self._event_sync.publish_poll_setpoint_mirror(device, responses)
-
-    def _build_group_state_tasks(
-        self,
-        device: DaliDevice,
-        responses: Iterable[ControlPollResult],
-    ) -> list[Coroutine]:
-        if not device.groups:
-            return []
-        tasks: list[Coroutine] = []
-        for group_number in device.groups:
-            group_device = self._group_devices_by_number.get(group_number)
-            if group_device is None:
-                continue
-            source = group_device.state_source
-            for response in responses:
-                control_id = response.control_id
-                if control_id not in source.control_ids:
-                    continue
-                action = source.record_poll(
-                    candidate_uid=device.uid,
-                    control_id=control_id,
-                    success=not response.error,
-                    value=response.value,
-                )
-                if action is None:
-                    continue
-                if action.kind is GroupStateUpdateKind.VALUE:
-                    tasks.append(
-                        self._device_publisher.set_control_value(
-                            group_device.mqtt_id,
-                            action.control_id,
-                            action.payload,
-                        )
-                    )
-                elif action.kind is GroupStateUpdateKind.ERROR:
-                    # Group state only surfaces read failures; action.payload carries the
-                    # matching wire string ("r") for the update's polymorphic value slot.
-                    tasks.append(
-                        self._device_publisher.set_control_error(
-                            group_device.mqtt_id,
-                            action.control_id,
-                            ControlError.READ,
-                        )
-                    )
-        return tasks
+        responses = await poll_scheduler.poll(self._dev, current_time)
+        for device, device_responses in responses:
+            if isinstance(device_responses, BaseException):
+                self.logger.error("Error polling device %s: %s", device.name, device_responses)
+            else:
+                for event in device_responses:
+                    await self._event_sync.notify_poll_event(device, event)
 
     async def _handle_start_quiescent_mode(self) -> None:
         self._in_quiescent_mode = True
@@ -1673,9 +1611,15 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
 
     def _handle_bus_traffic_frame(self, item: BusTrafficItem) -> None:
         incoming_command = None
-        if not item.request.error and isinstance(item.request, ForwardFrame):
+        if (
+            not item.request.error
+            and isinstance(item.request, ForwardFrame)
+            and len(item.request) in DECODABLE_FRAME_BIT_LENGTHS
+        ):
             incoming_command = from_frame(
-                item.request, dev_inst_map=self._dev_inst_map, devicetype=self._last_bus_traffic_device_type
+                item.request,
+                dev_inst_map=self._dev.dev_inst_map,
+                devicetype=self._last_bus_traffic_device_type,
             )
             if item.request_source in [BusTrafficSource.BUS, BusTrafficSource.LUNATONE]:
                 try:
@@ -1695,14 +1639,13 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             ):
                 device = self._device_registry.dali2_device_by_short(incoming_command.short_address.address)
                 if device is not None:
-                    instance = device.instances.get(incoming_command.instance_number)
-                    if instance is not None:
-                        self._one_shot_tasks.add(
-                            publish_dali2_event(
-                                incoming_command, device.mqtt_id, self._mqtt_dispatcher.client, instance
-                            ),
-                            "Publish DALI 2 event to MQTT",
-                        )
+                    self._one_shot_tasks.add(
+                        self._event_sync.notify_dali2_event(
+                            device,
+                            Dali2InputEvent(incoming_command),
+                        ),
+                        "Dispatch DALI 2 event",
+                    )
 
             # Our own polling queries reach here as WB frames too; they change no state and
             # would only churn tasks. Only send-only gear commands (queries declare a response
@@ -1757,13 +1700,16 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         # MQTT keeps the leading timestamp; the log mirror omits it because
         # journald already stamps each record (and self.logger is named by bus uid).
         self._one_shot_tasks.add(
-            self._mqtt_dispatcher.client.publish(
-                self._bus_monitor_topic, f"{timestamp} {body}", qos=2, retain=False
-            ),
-            "Publish DALI bus traffic to MQTT",
+            self._publish_monitor_line_to_mqtt(f"{timestamp} {body}"), "Publish DALI bus traffic to MQTT"
         )
         if self._bus_monitor_syslog_enabled:
             self.logger.log(level, body)
+
+    async def _publish_monitor_line_to_mqtt(self, line: str) -> None:
+        try:
+            await self._mqtt_dispatcher.publish(self._bus_monitor_topic, line, qos=2, retain=False)
+        except BrokerDisconnectedError as exc:
+            self.logger.debug("Bus monitor line not published: %s", exc)
 
 
 def format_frame_hex(frame: Frame) -> str:

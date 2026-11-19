@@ -1,5 +1,6 @@
 """Tests for DT51 (Energy reporting) support."""
 
+import logging
 from decimal import Decimal
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -18,15 +19,16 @@ from dali.memory.energy import (
 )
 from dali.memory.location import FlagValue
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam, Type51Parameters
+from wb.mqtt_dali.events import ActiveEnergyRead
+from wb.mqtt_dali.wbdali_error_response import NoPowerOnBus
 from wb.mqtt_dali.wbmqtt import ControlError
 
-# pylint: disable=redefined-outer-name
+from ._common_schema import load_common_schema
 
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
+# pylint: disable=redefined-outer-name
 
 
 def _ok_byte_response(value: int):
@@ -71,8 +73,8 @@ def _make_run_sequence_dispatcher(per_bank):
     listed raises MemoryLocationNotImplemented.
     """
 
-    async def _dispatch(seq, priority=None):
-        del priority
+    async def _dispatch(seq, priority=None, logger=None):
+        del priority, logger
         # read_memory_bank is a generator we don't drive — inspect its closure for the target bank.
         # Contract: works only because read_memory_bank is a sync generator with a local named `bank`.
         # If it becomes async or the local is renamed, this lookup returns None and bank-202 tests
@@ -101,7 +103,7 @@ async def test_type51_load_info_bank_202_only(mock_driver):
     mock_driver.run_sequence.side_effect = _make_run_sequence_dispatcher(
         {202: _bank_data_active(energy=1000, power=42)}
     )
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
 
     assert set(result.keys()) == {"energy_reporting"}
     assert result["energy_reporting"] == {"active_energy": 1.0, "active_power": 42}
@@ -118,7 +120,7 @@ async def test_type51_load_info_all_three_banks(mock_driver):
         }
     )
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert set(result.keys()) == {"energy_reporting"}
     assert result["energy_reporting"] == {
         "active_energy": 0.1,
@@ -137,7 +139,7 @@ async def test_type51_load_info_bank_202_failure_raises(mock_driver):
         {202: ResponseError("framing error")}
     )
     with pytest.raises(RuntimeError, match="Failed to read DT51 memory bank 202"):
-        await param.read(mock_driver, short_address=1)
+        await param.read(mock_driver, 1, logging.getLogger("test"))
 
 
 @pytest.mark.asyncio
@@ -145,7 +147,7 @@ async def test_type51_load_info_bank_202_not_implemented_raises(mock_driver):
     param = Type51EnergyParam()
     mock_driver.run_sequence.side_effect = _make_run_sequence_dispatcher({})
     with pytest.raises(RuntimeError, match="Failed to read DT51 memory bank 202"):
-        await param.read(mock_driver, short_address=1)
+        await param.read(mock_driver, 1, logging.getLogger("test"))
 
 
 @pytest.mark.asyncio
@@ -157,7 +159,7 @@ async def test_type51_load_info_field_flagvalue_skipped(mock_driver):
             203: {ApparentEnergy: FlagValue.TMASK, ApparentPower: 7},
         }
     )
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert result["energy_reporting"] == {"active_energy": 0.555, "apparent_power": 7}
 
 
@@ -171,7 +173,7 @@ async def test_type51_load_info_energy_in_kwh_three_decimals(mock_driver):
             204: {ActiveEnergyLoadside: Decimal("5000"), ActivePowerLoadside: 3},
         }
     )
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     fields = result["energy_reporting"]
     assert fields["active_energy"] == 12.345
     assert isinstance(fields["active_energy"], float)
@@ -205,7 +207,7 @@ async def test_type51_schema_includes_present_sections_after_read(mock_driver):
             203: _bank_data_apparent(),
         }
     )
-    await param.read(mock_driver, short_address=1)
+    await param.read(mock_driver, 1, logging.getLogger("test"))
     schema = param.get_schema(False)
     inner = schema["properties"]["energy_reporting"]["properties"]
     assert "apparent_energy" in inner
@@ -242,8 +244,8 @@ def _ok_int_response(value: int):
 
 
 async def _initialize_dt51_device(scale_byte: Optional[int]) -> DaliDevice:
-    async def fake_run_sequence(seq, priority=None):
-        del priority
+    async def fake_run_sequence(seq, priority=None, logger=None):
+        del priority, logger
         name = seq.gi_code.co_name
         if name == "query_device_types_sequence":
             seq.close()
@@ -251,8 +253,8 @@ async def _initialize_dt51_device(scale_byte: Optional[int]) -> DaliDevice:
         seq.close()
         raise AssertionError(f"unexpected run_sequence target: {name}")
 
-    async def fake_send_commands(cmds, source=None, priority=None):
-        del source, priority
+    async def fake_send_commands(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         # _read_active_scale issues [DTR1, DTR0, ReadMemoryLocation]; the last
         # response carries the scale byte (or signals "not implemented" with raw_value=None).
         is_scale_read = len(cmds) == 3 and isinstance(cmds[-1], ReadMemoryLocation)
@@ -268,7 +270,9 @@ async def _initialize_dt51_device(scale_byte: Optional[int]) -> DaliDevice:
     driver.run_sequence = AsyncMock(side_effect=fake_run_sequence)
     driver.send_commands = AsyncMock(side_effect=fake_send_commands)
 
-    dev = DaliDevice(DaliDeviceAddress(short=3, random=0), "bus1", MagicMock(), None, None)
+    dev = DaliDevice(
+        DaliDeviceAddress(short=3, random=0), "bus1", MagicMock(), load_common_schema(), None, None
+    )
     await dev.initialize(driver)
     return dev
 
@@ -279,6 +283,11 @@ async def _make_initialized_device_with_type51(scale_byte: Optional[int] = 0) ->
     # pylint: disable=protected-access
     dev._pollables = list(dev._standalone_pollables)
     dev._current_round = []
+    # Rewind the cycle initialize()'s one-shot read consumed, so these tests drive one at now=0.
+    for pollable in dev._pollables:
+        pollable.cancel_pending_poll()
+        pollable.next_due_at = None
+        pollable.scale_byte = scale_byte
     return dev
 
 
@@ -289,9 +298,19 @@ async def test_type51_mqtt_control_present_after_initialize():
     assert "active_energy" in control_ids
 
 
-def _energy_bytes_to_kwh_str(scale_byte: int, energy_bytes: list) -> str:
+@pytest.mark.asyncio
+async def test_type51_energy_control_carries_the_init_read_value():
+    """The state a real bus leaves after start, un-rewound: initialize()'s one-shot read drives a
+    whole DT51 cycle, so active_energy already holds the energy it read (0 Wh here, the fake
+    driver's answer) instead of the empty builder default."""
+    dev = await _initialize_dt51_device(scale_byte=0)
+    energy = next(c for c in dev.get_mqtt_controls() if c.id == "active_energy")
+    assert energy.state.value == "0.000"
+
+
+def _energy_bytes_to_kwh(scale_byte: int, energy_bytes: list) -> float:
     wh = float(ActiveEnergy.raw_to_value(bytes([scale_byte, *energy_bytes])))
-    return f"{wh / 1000.0:.3f}"
+    return wh / 1000.0
 
 
 async def _run_one_chunk(dev: DaliDevice, driver, now: float):
@@ -306,8 +325,8 @@ async def test_type51_chunked_poll_assembles_value():
     energy_bytes = [0x00, 0x00, 0x00, 0x00, 0x01, 0x2C]  # 300 Wh
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         idx = (len(sent_calls) - 1) * 2
         return [
@@ -329,9 +348,7 @@ async def test_type51_chunked_poll_assembles_value():
     assert results[1] == []
     final = results[2]
     assert len(final) == 1
-    assert final[0].control_id == "active_energy"
-    assert final[0].error == ControlError(0)
-    assert final[0].value == _energy_bytes_to_kwh_str(0, energy_bytes)
+    assert final[0] == ActiveEnergyRead(pytest.approx(_energy_bytes_to_kwh(0, energy_bytes)), False)
 
 
 @pytest.mark.asyncio
@@ -345,11 +362,13 @@ async def test_type51_chunked_poll_assembles_value():
     ],
 )
 async def test_type51_chunked_poll_publishes_kwh_three_decimals(scale_byte, energy_bytes, expected_value):
+    """The assembled kWh is formatted to three decimals by the control that owns the
+    quantity, so the event carries the number and the topic gets the string."""
     dev = await _make_initialized_device_with_type51(scale_byte=scale_byte)
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         idx = (len(sent_calls) - 1) * 2
         return [
@@ -368,9 +387,10 @@ async def test_type51_chunked_poll_publishes_kwh_three_decimals(scale_byte, ener
 
     final = results[2]
     assert len(final) == 1
-    assert final[0].control_id == "active_energy"
-    assert final[0].error == ControlError(0)
-    assert final[0].value == expected_value
+    control = dev.get_mqtt_control("active_energy")
+    assert dev.notify_all(final[0]) == [control]
+    assert control.control_info.state.value == expected_value
+    assert control.control_info.state.error == ControlError.NONE
 
 
 @pytest.mark.asyncio
@@ -379,8 +399,8 @@ async def test_type51_chunked_poll_each_chunk_writes_dtr():
     energy_bytes = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         idx = (len(sent_calls) - 1) * 2
         return [
@@ -413,8 +433,8 @@ async def test_type51_chunked_poll_failure_publishes_error():
     energy_bytes = [0x10, 0x20]
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         if len(sent_calls) == 1:
             return [
@@ -431,9 +451,49 @@ async def test_type51_chunked_poll_failure_publishes_error():
     result1 = await _run_one_chunk(dev, driver, now=0.0)
     assert result1 == []
     result2 = await _run_one_chunk(dev, driver, now=1.0)
-    assert len(result2) == 1
-    assert result2[0].control_id == "active_energy"
-    assert result2[0].error == ControlError.READ
+    assert result2 == [ActiveEnergyRead(None, True)]
+    control = dev.get_mqtt_control("active_energy")
+    assert dev.notify_all(result2[0]) == [control]
+    assert control.control_info.state.error == ControlError.READ
+
+
+@pytest.mark.asyncio
+async def test_type51_failed_cycle_reports_the_error_with_no_value_to_publish():
+    """A cycle that failed before assembling a reading keeps the value the control already holds:
+    publishing a missing value would delete the retained topic."""
+    dev = await _make_initialized_device_with_type51(scale_byte=0)
+    control = dev.get_mqtt_control("active_energy")
+    value_before = control.control_info.state.value
+
+    async def fake_send_failing(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
+        return [MagicMock(), MagicMock(), _bad_response(), _bad_response()]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send_failing)
+
+    result = await _run_one_chunk(dev, driver, now=0.0)
+
+    assert result == [ActiveEnergyRead(None, True)]
+    assert dev.notify_all(result[0]) == [control]
+    assert control.control_info.state.error == ControlError.READ
+    assert control.control_info.state.value == value_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scale_byte", [None, 0], ids=["scale_chunk", "energy_chunk"])
+async def test_type51_gateway_error_reply_fails_the_cycle(scale_byte):
+    """A gateway error reply in a chunk ends the cycle with a read error instead of raising."""
+    dev = await _make_initialized_device_with_type51(scale_byte=scale_byte)
+
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
+        return [MagicMock(), MagicMock(), NoPowerOnBus(), _ok_byte_response(0)]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+
+    assert await _run_one_chunk(dev, driver, now=0.0) == [ActiveEnergyRead(None, True)]
 
 
 @pytest.mark.asyncio
@@ -442,8 +502,8 @@ async def test_type51_chunked_poll_restarts_after_failure():
     energy_bytes_attempt_2 = [0x00, 0x00, 0x00, 0x00, 0x00, 0x09]  # 9 Wh
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         if len(sent_calls) == 1:
             return [MagicMock(), MagicMock(), _ok_byte_response(0x99), _ok_byte_response(0x88)]
@@ -462,7 +522,7 @@ async def test_type51_chunked_poll_restarts_after_failure():
 
     await _run_one_chunk(dev, driver, now=0.0)
     failure = await _run_one_chunk(dev, driver, now=1.0)
-    assert failure[0].error == ControlError.READ
+    assert failure[0].failed is True
 
     completion_time = 1.0 + 200.0
     result: list = []
@@ -470,9 +530,9 @@ async def test_type51_chunked_poll_restarts_after_failure():
         result = await _run_one_chunk(dev, driver, now=completion_time + float(i))
         if i < 2:
             assert result == []
-    assert result[0].control_id == "active_energy"
-    assert result[0].error == ControlError(0)
-    assert result[0].value == _energy_bytes_to_kwh_str(0, energy_bytes_attempt_2)
+    assert result[0] == ActiveEnergyRead(
+        pytest.approx(_energy_bytes_to_kwh(0, energy_bytes_attempt_2)), False
+    )
 
     # Restarting the cycle resets DTR0 back to byte 0x05.
     first_post_failure_chunk = sent_calls[2]
@@ -485,8 +545,8 @@ async def test_type51_chunked_poll_no_publish_on_partial():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         return [MagicMock(), MagicMock(), _ok_byte_response(0xAB), _ok_byte_response(0xCD)]
 
@@ -497,7 +557,7 @@ async def test_type51_chunked_poll_no_publish_on_partial():
     assert await _run_one_chunk(dev, driver, now=1.0) == []
     final = await _run_one_chunk(dev, driver, now=2.0)
     assert len(final) == 1
-    assert final[0].error == ControlError(0)
+    assert final[0].failed is False
 
 
 @pytest.mark.asyncio
@@ -507,15 +567,15 @@ async def test_type51_unfinished_cycle_continues_regardless_of_the_schedule():
     handler = Type51Parameters()
     handler.scale_byte = 0
 
-    async def fake_send(cmds, priority=None):
-        del cmds, priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
         return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
 
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
 
     def step(now: float):
-        return handler.next_poll_step(driver, GearShort(3), max_commands=3, default_max_commands=3, now=now)
+        return handler.next_poll_step(driver, GearShort(3), 3, 3, now, logging.getLogger("test"))
 
     assert await step(0.0).poll_coroutine() == []  # cycle open, 2 of 6 bytes read
     assert handler.has_in_progress_read()
@@ -540,8 +600,8 @@ async def test_type51_cancelled_cycle_waits_out_the_interval():
     """
     dev = await _make_initialized_device_with_type51(scale_byte=0)
 
-    async def fake_send(cmds, priority=None):
-        del cmds, priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
         return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
 
     driver = AsyncMock()
@@ -560,8 +620,8 @@ async def test_type51_cancelled_cycle_waits_out_the_interval():
 async def test_type51_refresh_paced_120s_after_success():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
 
-    async def fake_send(cmds, priority=None):
-        del cmds, priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
         return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
 
     driver = AsyncMock()
@@ -592,8 +652,8 @@ async def test_type51_refresh_paced_120s_after_failure():
     dev = await _make_initialized_device_with_type51(scale_byte=0)
     sent_calls = []
 
-    async def fake_send(cmds, priority=None):
-        del priority
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         # First chunk succeeds, second chunk fails — so cycle-start and cycle-end differ.
         if len(sent_calls) == 1:
@@ -606,7 +666,7 @@ async def test_type51_refresh_paced_120s_after_failure():
     cycle_start = 0.0
     assert await _run_one_chunk(dev, driver, now=cycle_start) == []
     failure = await _run_one_chunk(dev, driver, now=30.0)
-    assert failure[0].error == ControlError.READ
+    assert failure[0].failed is True
     assert driver.send_commands.await_count == 2
 
     # 120 s window measured from cycle-start, not from the failure that ended the cycle: a
@@ -638,21 +698,21 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     control_ids = [c.id for c in dev.get_mqtt_controls()]
     assert "active_energy" in control_ids
 
-    async def fake_send_failing(cmds, priority=None):
-        del cmds, priority
+    async def fake_send_failing(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
         return [MagicMock(), MagicMock(), _bad_response(), _bad_response()]
 
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send_failing)
     result = await _run_one_chunk(dev, driver, now=0.0)
-    assert result[0].error == ControlError.READ
+    assert result[0].failed is True
 
     energy_bytes = [0, 0, 0, 0, 0x10, 0x00]  # 4096 Wh
 
     sent_calls = []
 
-    async def fake_send_ok(cmds, priority=None):
-        del priority
+    async def fake_send_ok(cmds, source=None, priority=None, logger=None):
+        del source, priority, logger
         sent_calls.append(list(cmds))
         if len(sent_calls) == 1:
             return [MagicMock(), MagicMock(), _ok_byte_response(0), _ok_byte_response(0)]
@@ -673,10 +733,34 @@ async def test_type51_mqtt_control_error_when_bank_202_unresponsive():
     assert res_scale == []
     assert res1 == []
     assert res2 == []
-    assert res3[0].error == ControlError(0)
-    assert res3[0].value == _energy_bytes_to_kwh_str(0, energy_bytes)
+    assert res3[0] == ActiveEnergyRead(pytest.approx(_energy_bytes_to_kwh(0, energy_bytes)), False)
 
     assert isinstance(sent_calls[0][1], DTR0)
     assert sent_calls[0][1].param == 0x04
     assert isinstance(sent_calls[1][1], DTR0)
     assert sent_calls[1][1].param == 0x05
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scale_byte", [None, 0], ids=["scale_chunk", "energy_chunk"])
+async def test_type51_failed_chunk_leaves_one_warning_with_the_error(scale_byte, caplog):
+    """A chunk failing on a gateway error reply: one WARNING naming the control, the chunk's
+    commands and the error."""
+    dev = await _make_initialized_device_with_type51(scale_byte=scale_byte)
+
+    async def fake_send(cmds, source=None, priority=None, logger=None):
+        del cmds, source, priority, logger
+        return [MagicMock(), MagicMock(), NoPowerOnBus(), _ok_byte_response(0)]
+
+    driver = AsyncMock()
+    driver.send_commands = AsyncMock(side_effect=fake_send)
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG):
+        await _run_one_chunk(dev, driver, now=0.0)
+
+    warnings = [record.getMessage() for record in caplog.records if record.levelno > logging.DEBUG]
+    assert len(warnings) == 1
+    assert "active_energy" in warnings[0]
+    assert str(ReadMemoryLocation(GearShort(3))) in warnings[0]
+    assert "no power on bus" in warnings[0]

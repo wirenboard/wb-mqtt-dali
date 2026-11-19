@@ -1,0 +1,136 @@
+import asyncio
+import json
+import logging
+from typing import Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import aiomqtt
+
+from wb.mqtt_dali.gateway import BusPollingError, Gateway
+from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
+from wb.mqtt_dali.wbdali import WBDALIConfig
+
+from ._app_controller_helpers import LoopKiller, wait_until
+from ._broker_link_helpers import PORT_LOAD_TOPIC_PREFIX, RecordingClient
+from ._common_schema import load_common_schema
+from ._virtual_time import VirtualTimeTestCase
+
+_LAST_ENDPOINT_MARKER = "/rpc/v1/wb-mqtt-dali/Bus/ListCommands"
+_MODBUS_WRITE_REGISTERS = 16
+# wb-mqtt-serial reply status 2, transmission without response, in bits [15..8].
+_NO_BACKWARD_FRAME_REPLY = str(2 << 8)
+
+
+class _EmptyBusClient(RecordingClient):
+    """The gateway of bus 1 of "gw" with nothing on its bus: every queued frame gets no answer."""
+
+    async def publish(
+        self, topic: str, payload: Optional[str] = None, qos: int = 0, retain: bool = False
+    ) -> None:
+        await super().publish(topic, payload, qos, retain)
+        if not topic.startswith(PORT_LOAD_TOPIC_PREFIX) or payload is None:
+            return
+        params = json.loads(payload)["params"]
+        if params["function"] != _MODBUS_WRITE_REGISTERS:
+            return
+        start_slot = (params["address"] - WBDALIConfig().queue_start_modbus_address) // 2
+        for slot in range(start_slot, start_slot + params["count"] // 2):
+            reply_topic = f"/devices/gw/controls/bus_1_bulk_send_reply_{slot}"
+            self.messages.deliver(aiomqtt.Message(reply_topic, _NO_BACKWARD_FRAME_REPLY, 0, False, 0, None))
+
+
+class GatewayRunTests(VirtualTimeTestCase):
+    def setUp(self):
+        # A configured device is absent from the bus, and publishing its error state raises
+        # past every handler of the polling loop.
+        self.client = _EmptyBusClient()
+        self.client.fail("publish", "/devices/gw_bus_1_5/meta", LoopKiller())
+        self.dispatcher = MQTTDispatcher(self.client)
+        config = {"gateways": [{"device_id": "gw", "buses": [{"devices": [{"short": 5, "random": 123}]}]}]}
+        self.gateway = Gateway(
+            config=config,
+            mqtt_dispatcher=self.dispatcher,
+            config_path="/nonexistent.conf",
+            gtin_db=MagicMock(),
+            common_schema=load_common_schema(),
+            command_registry={},
+        )
+        self.dispatch_task: Optional[asyncio.Task] = None
+
+    async def asyncSetUp(self):
+        self.dispatch_task = asyncio.create_task(self.dispatcher.run())
+
+    async def asyncTearDown(self):
+        self.dispatch_task.cancel()
+
+    async def test_run_raises_when_a_bus_polling_loop_dies(self):
+        """The polling loop of the only bus dies: run() raises BusPollingError."""
+        with self.assertRaises(BusPollingError):
+            await self._run()
+        await self.gateway.stop()
+
+    async def test_stop_after_a_bus_polling_loop_died_removes_the_bus_topics(self):
+        """run() has raised BusPollingError: stop() completes and clears the retained topics of the bus."""
+        with self.assertRaises(BusPollingError):
+            await self._run()
+        self.client.failures.clear()
+        self.client.clear()
+
+        await self.gateway.stop()
+
+        self.assertIn(
+            ("/devices/gw_bus_1_broadcast/meta", None), [(p.topic, p.payload) for p in self.client.publishes]
+        )
+
+    # --- Private ---
+
+    async def _run(self) -> None:
+        with patch("wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()), patch(
+            "wb.mqtt_dali.gateway.wait_for_rpc_endpoint", AsyncMock()
+        ), patch("wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=MQTTRPCCallTimeoutError("no reply"))):
+            await asyncio.wait_for(self.gateway.run(), timeout=5.0)
+
+
+class GatewayWaitForWbMqttSerialTests(VirtualTimeTestCase):
+    async def test_waits_for_wb_mqtt_serial_then_starts_the_buses(self):
+        """No config/Load RPC: one CRITICAL without traceback, run() keeps waiting and publishes nothing;
+        wb-mqtt-serial publishes the RPC: the buses and the RPC endpoints come up."""
+        client = RecordingClient()
+        dispatcher = MQTTDispatcher(client)
+        dispatch_task = asyncio.create_task(dispatcher.run())
+        self.addCleanup(dispatch_task.cancel)
+        config = {"gateways": [{"device_id": "gw", "buses": [{"devices": []}]}]}
+        gateway = Gateway(
+            config, dispatcher, "/nonexistent.conf", MagicMock(), load_common_schema(), command_registry={}
+        )
+
+        with patch("wb.mqtt_dali.gateway.WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S", 0.01), patch(
+            "wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()
+        ), patch(
+            "wb.mqtt_dali.gateway.rpc_call", AsyncMock(side_effect=MQTTRPCCallTimeoutError("no reply"))
+        ), self.assertLogs(
+            level=logging.INFO
+        ) as logs:
+            run_task = asyncio.create_task(gateway.run())
+            await asyncio.wait_for(
+                wait_until(lambda: any(r.levelno == logging.CRITICAL for r in logs.records)), timeout=5.0
+            )
+            await asyncio.sleep(0.1)
+
+            self.assertFalse(run_task.done())
+            self.assertEqual([p.topic for p in client.publishes], [])
+
+            client.messages.deliver(
+                aiomqtt.Message("/rpc/v1/wb-mqtt-serial/config/Load", "1", 0, True, 0, None)
+            )
+            await asyncio.wait_for(
+                wait_until(lambda: _LAST_ENDPOINT_MARKER in [p.topic for p in client.publishes]), timeout=5.0
+            )
+        await gateway.stop()
+        await asyncio.wait_for(run_task, timeout=5.0)
+
+        critical = [r for r in logs.records if r.levelno == logging.CRITICAL]
+        self.assertEqual(len(critical), 1)
+        self.assertIsNone(critical[0].exc_info)
+        self.assertTrue(any(p.topic.startswith("/devices/gw_bus_1") for p in client.publishes))

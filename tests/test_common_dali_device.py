@@ -1,24 +1,53 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+import logging
+from copy import deepcopy
+from typing import NamedTuple
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from dali.address import GearShort
+from dali.command import Response, YesNoResponse
+from dali.frame import BackwardFrame
+from dali.gear.general import QueryStatus, QueryStatusResponse
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.common_dali_device import (
     DaliDeviceAddress,
     DaliDeviceBase,
-    MqttControl,
-    MqttControlBase,
+    InitializationResult,
+    NotifyResult,
+    Pollable,
 )
+from wb.mqtt_dali.control_ids import LAST_ACTED
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
+from wb.mqtt_dali.dali_controls import ErrorStatusControl
+from wb.mqtt_dali.dali_type7_parameters import LastActedControl
+from wb.mqtt_dali.dali_type16_parameters import ThermalGearProtectionControl
+from wb.mqtt_dali.dali_type20_parameters import LoadSheddingConditionControl
+from wb.mqtt_dali.dali_type21_parameters import ThermalLampProtectionControl
+from wb.mqtt_dali.dali_type49_parameters import IntegratedPowerSupplyControl
 from wb.mqtt_dali.device_publisher import ControlInfo
+from wb.mqtt_dali.events import (
+    PowerSupplyRead,
+    QuantityRead,
+    StatusRead,
+    SwitchStatusRead,
+    ThermalGearProtectionRead,
+    ThermalLampProtectionRead,
+)
+from wb.mqtt_dali.gear.switching_function import SwitchingFunctionSwitchStatusResponse
+from wb.mqtt_dali.gear.thermal_gear_protection import (
+    FailureStatusResponse as ThermalGearFailureStatusResponse,
+)
+from wb.mqtt_dali.gear.thermal_lamp_protection import (
+    FailureStatusResponse as ThermalLampFailureStatusResponse,
+)
 from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
-# pylint: disable=invalid-name
+from ._common_schema import load_common_schema
+from ._control_stubs import ReadableControl
 
-# Prevent file system access in __init__ by providing a non-empty common schema
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
+# pylint: disable=invalid-name
 
 
 @pytest.mark.asyncio
@@ -32,6 +61,7 @@ def test_default_mqtt_id_when_no_custom():
         default_mqtt_id_part="dev",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     # default mqtt id is composed from bus_id, default_mqtt_id_part and short address
     assert d.default_mqtt_id == "bus1_dev5"
@@ -49,6 +79,7 @@ def test_custom_mqtt_id_at_init_and_flag():
         default_mqtt_id_part="p",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         mqtt_id="custom_id",
     )
     assert d.mqtt_id == "custom_id"
@@ -66,6 +97,7 @@ def test_mqtt_id_setter_changes_internal_state():
         default_mqtt_id_part="x",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     default = d.default_mqtt_id
     # set to a custom value
@@ -88,6 +120,7 @@ def test_default_name_when_no_custom():
         default_mqtt_id_part="dev",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     assert d.default_name == "Lamp 3"
     assert d.name == "Lamp 3"
@@ -104,6 +137,7 @@ def test_custom_name_at_init_and_flag():
         default_mqtt_id_part="p",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         name="My Custom Name",
     )
     assert d.name == "My Custom Name"
@@ -121,6 +155,7 @@ def test_name_equal_to_default_at_init_is_not_custom():
         default_mqtt_id_part="p",
         compat=object(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         name=default_name,
     )
     assert d.name == default_name
@@ -137,6 +172,7 @@ def test_name_setter_changes_internal_state():
         default_mqtt_id_part="l",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     default = d.default_name
     assert d.name == default
@@ -164,6 +200,7 @@ def test_name_setter_empty_string_is_custom():
         default_mqtt_id_part="d",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     # Empty string is falsy but should still be treated as custom if different from default
     d.name = ""
@@ -185,12 +222,11 @@ def test_name_none_at_init_uses_default():
         default_mqtt_id_part="s",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         name=None,
     )
     assert d.name == "Sensor 9"
     assert d.has_custom_name is False
-    # Prevent file system access in __init__ by providing a non-empty common schema
-    DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}
 
 
 class ConcreteDaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
@@ -201,7 +237,7 @@ class ConcreteDaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-a
         super().__init__(*args, **kwargs)
 
     async def _initialize_impl(self, driver):
-        return (self._extra_param_handlers, [])
+        return InitializationResult(self._extra_param_handlers, [], self._build_mqtt_controls())
 
 
 def _make_device(**kwargs):
@@ -212,6 +248,7 @@ def _make_device(**kwargs):
         "default_mqtt_id_part": "d",
         "compat": DaliCommandsCompatibilityLayer(),
         "gtin_db": MagicMock(),
+        "common_schema": load_common_schema(),
     }
     defaults.update(kwargs)
     return ConcreteDaliDevice(**defaults)
@@ -225,6 +262,15 @@ def _make_mock_param_handler(read_return=None, schema_return=None):
 
 
 @pytest.mark.asyncio
+async def test_load_info_raises_when_not_initialized():
+    d = _make_device()
+    driver = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await d.load_info(driver)
+
+
+@pytest.mark.asyncio
 async def test_load_info_populates_params_and_schema():
     d = _make_device()
     driver = AsyncMock()
@@ -235,6 +281,7 @@ async def test_load_info_populates_params_and_schema():
         mock_gmp_instance = _make_mock_param_handler(read_return={"gtin": 123})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params["short_address"] == 1
@@ -242,7 +289,7 @@ async def test_load_info_populates_params_and_schema():
     assert d.params["name"] == d.name
     assert d.params["mqtt_id"] == d.mqtt_id
     assert d.params.get("gtin") == 123
-    assert d.schema is not None
+    assert {"name", "mqtt_id", "short_address"} <= d.schema["properties"].keys()
 
 
 @pytest.mark.asyncio
@@ -269,6 +316,7 @@ async def test_load_info_force_reload_reloads_even_if_params_present():
         mock_gmp_instance = _make_mock_param_handler(read_return={"firmware_version": "1.0"})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver, force_reload=True)
 
     assert d.params["short_address"] == 1
@@ -285,6 +333,7 @@ async def test_load_info_merges_params_from_multiple_handlers():
         mock_gmp_instance = _make_mock_param_handler(read_return={"gtin": 456})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params["gtin"] == 456
@@ -302,6 +351,7 @@ async def test_load_info_later_handler_overrides_earlier():
         mock_gmp_instance = _make_mock_param_handler(read_return={"gtin": 123})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     # extra_handler comes after GeneralMemoryParams, so its value wins
@@ -321,6 +371,7 @@ async def test_load_info_merges_schemas_from_handlers():
         MockGMP.return_value = mock_gmp_instance
 
         with patch("wb.mqtt_dali.common_dali_device.merge_json_schemas") as mock_merge:
+            await d.initialize(driver)
             await d.load_info(driver)
             # merge_json_schemas should be called for each non-None schema
             assert mock_merge.call_count == 2
@@ -337,6 +388,7 @@ async def test_load_info_skips_none_schemas():
         MockGMP.return_value = mock_gmp_instance
 
         with patch("wb.mqtt_dali.common_dali_device.merge_json_schemas") as mock_merge:
+            await d.initialize(driver)
             await d.load_info(driver)
             mock_merge.assert_not_called()
 
@@ -352,6 +404,7 @@ async def test_load_info_stores_parameter_handlers():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert len(d._parameter_handlers) == 2
@@ -360,20 +413,33 @@ async def test_load_info_stores_parameter_handlers():
 
 
 @pytest.mark.asyncio
-async def test_load_info_schema_is_deepcopy_of_common():
-    # pylint: disable=protected-access
-    d = _make_device()
+async def test_devices_sharing_one_common_schema_get_independent_schemas():
+    """Two devices built from one schema object, with a handler schema merged in by load_info:
+    the passed object stays intact and an edit to one device's schema does not reach the other."""
+    common_schema = load_common_schema()
+    pristine_schema = deepcopy(common_schema)
+    extra_schema = {"properties": {"extra_prop": {"type": "string"}}}
+    first = _make_device(
+        common_schema=common_schema,
+        extra_param_handlers=[_make_mock_param_handler(schema_return=extra_schema)],
+    )
+    second = _make_device(
+        address=DaliDeviceAddress(short=2, random=0x00),
+        common_schema=common_schema,
+        extra_param_handlers=[_make_mock_param_handler(schema_return=extra_schema)],
+    )
     driver = AsyncMock()
+    driver.send = AsyncMock(return_value=None)
+    driver.run_sequence = AsyncMock(return_value={})
+    for device in (first, second):
+        await device.initialize(driver)
+        await device.load_info(driver)
 
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as MockGMP:
-        mock_gmp_instance = _make_mock_param_handler()
-        MockGMP.return_value = mock_gmp_instance
+    first.schema["properties"]["name"]["title"] = "Edited"
 
-        await d.load_info(driver)
-
-    # schema should not be the same object as _common_schema
-    assert d.schema is not DaliDeviceBase._common_schema
-    assert d.schema["title"] == "test-schema"
+    assert common_schema == pristine_schema
+    assert "extra_prop" in first.schema["properties"]
+    assert second.schema["properties"]["name"] == pristine_schema["properties"]["name"]
 
 
 @pytest.mark.asyncio
@@ -386,6 +452,7 @@ async def test_load_info_uses_correct_short_address_for_read():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     mock_gmp_instance.read.assert_awaited_once_with(driver, GearShort(42), d.logger)
@@ -404,6 +471,7 @@ async def test_load_info_includes_custom_name_and_mqtt_id():
         mock_gmp_instance = _make_mock_param_handler()
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params["name"] == "Custom Name"
@@ -420,95 +488,73 @@ async def test_load_info_empty_params_dict_triggers_load():
         mock_gmp_instance = _make_mock_param_handler(read_return={"key": "val"})
         MockGMP.return_value = mock_gmp_instance
 
+        await d.initialize(driver)
         await d.load_info(driver)
 
     assert d.params.get("key") == "val"
     assert d.params["short_address"] == 1
 
 
-def _make_readable_alarm_control(control_id: str, query, value_formatter, title_formatter) -> MqttControlBase:
-    class _AlarmControl(MqttControlBase):
-        def is_readable(self) -> bool:
-            return True
-
-        def get_query(self, short_address):  # type: ignore[override]
-            del short_address
-            return query
-
-        def format_response(self, response) -> str:  # type: ignore[override]
-            return value_formatter(response)
-
-        def format_title(self, response):  # type: ignore[override]
-            return title_formatter(response)
-
-    return _AlarmControl(ControlInfo(control_id, ControlState(ControlMeta(control_type="alarm"), "0")))
+def test_pollable_requires_schedule_poll_at():
+    """The coordinator narrows a control to `Pollable` and then asks it to poll at a settle
+    moment, so the protocol has to require `schedule_poll_at`."""
+    assert "schedule_poll_at" in Pollable.__abstractmethods__
 
 
-def _make_readable_value_control(control_id, query, value_formatter) -> MqttControl:
-    return MqttControl(
-        control_info=ControlInfo(control_id, ControlState(ControlMeta(control_type="value"), "0")),
-        query_builder=lambda short_address, q=query: q,
-        value_formatter=value_formatter,
-    )
+async def _run_poll_tick(control, driver, address, now: float = 0.0) -> list:
+    """One poll tick of a single-query control, through the public `Pollable` entry point."""
+    step = control.next_poll_step(driver, address, 1, 1, now, logging.getLogger("test"))
+    assert step.poll_coroutine is not None
+    return await step.poll_coroutine()
 
 
 @pytest.mark.asyncio
-async def test_run_single_query_returns_error_when_response_is_none():
-    # pylint: disable=protected-access
-    control = _make_readable_value_control("c1", "Q1", lambda r: "formatted")
+async def test_run_single_query_reports_failure_when_response_is_none():
+    """Gear silence: the query goes out at the periodic-query priority and the read is
+    classified as failed, so the quantity's event carries no response."""
+    control = ErrorStatusControl()
     driver = AsyncMock()
     driver.send_commands = AsyncMock(return_value=[None])
 
-    res = await control._run_single_query(driver, GearShort(1))
+    events = await _run_poll_tick(control, driver, GearShort(1))
 
-    driver.send_commands.assert_awaited_once_with(["Q1"], BusTrafficSource.WB, FramePriority.PERIODIC_QUERY)
-    assert len(res) == 1
-    assert res[0].control_id == "c1"
-    assert res[0].value == ""
-    assert res[0].error == ControlError.READ
+    sent_commands, source, priority, _logger = driver.send_commands.await_args.args
+    assert isinstance(sent_commands[0], QueryStatus)
+    assert (source, priority) == (BusTrafficSource.WB, FramePriority.PERIODIC_QUERY)
+    assert events == [StatusRead(None, True)]
 
 
 @pytest.mark.asyncio
-async def test_poll_read_failure_yields_read_flag():
-    """A poll whose transport raises surfaces a ControlPollResult carrying the READ flag
-    (and empty value), so the caller publishes /meta/error=r."""
-    # pylint: disable=protected-access
-    control = _make_readable_value_control("c1", "Q1", lambda r: "formatted")
+async def test_poll_transport_error_reports_failure():
+    """A poll whose transport raises is the same failed read as gear silence: one event of
+    the polled quantity with `failed` set and no response to decode."""
+    control = ErrorStatusControl()
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=RuntimeError("bus down"))
 
-    res = await control._run_single_query(driver, GearShort(1))
+    events = await _run_poll_tick(control, driver, GearShort(1))
 
-    assert len(res) == 1
-    assert res[0].error == ControlError.READ
-    assert res[0].value == ""
+    assert events == [StatusRead(None, True)]
 
 
 @pytest.mark.asyncio
-async def test_run_single_query_returns_error_when_raw_value_is_none():
-    # pylint: disable=protected-access
-    formatter = MagicMock(return_value="formatted")
-    control = _make_readable_value_control("c2", "Q2", formatter)
+async def test_run_single_query_reports_failure_when_raw_value_is_none():
+    control = ErrorStatusControl()
     driver = AsyncMock()
 
     response = MagicMock()
     response.raw_value = None
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await control._run_single_query(driver, GearShort(1))
+    events = await _run_poll_tick(control, driver, GearShort(1))
 
-    assert len(res) == 1
-    assert res[0].control_id == "c2"
-    assert res[0].value == ""
-    assert res[0].error == ControlError.READ
-    formatter.assert_not_called()
+    assert events == [StatusRead(None, True)]
 
 
 @pytest.mark.asyncio
-async def test_run_single_query_returns_error_when_raw_value_has_error():
+async def test_run_single_query_reports_failure_when_raw_value_has_error():
     # pylint: disable=protected-access
-    formatter = MagicMock(return_value="formatted")
-    control = _make_readable_value_control("c3", "Q3", formatter)
+    control = ErrorStatusControl()
     driver = AsyncMock()
 
     response = MagicMock()
@@ -518,25 +564,16 @@ async def test_run_single_query_returns_error_when_raw_value_has_error():
     response.raw_value.error = True
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await control._run_single_query(driver, GearShort(1))
+    events = await _run_poll_tick(control, driver, GearShort(1))
 
-    assert len(res) == 1
-    assert res[0].control_id == "c3"
-    assert res[0].value == ""
-    assert res[0].error == ControlError.READ
-    formatter.assert_not_called()
+    assert events == [StatusRead(None, True)]
 
 
 @pytest.mark.asyncio
-async def test_run_single_query_formats_regular_control_value():
-    # pylint: disable=protected-access
-    formatter = MagicMock(return_value="77")
-    query_builder = MagicMock(return_value="Q_BRIGHT")
-    control = MqttControl(
-        control_info=ControlInfo("brightness", ControlState(ControlMeta(control_type="value"), "0")),
-        query_builder=query_builder,
-        value_formatter=formatter,
-    )
+async def test_run_single_query_carries_the_response_undecoded():
+    """A readable answer travels in the quantity's event as the bus returned it: the control
+    that owns the quantity decodes it in `notify`, not the transport."""
+    control = ReadableControl(ControlInfo("brightness", ControlState(ControlMeta("value"), "0")))
     driver = AsyncMock()
 
     response = MagicMock()
@@ -544,63 +581,139 @@ async def test_run_single_query_formats_regular_control_value():
     response.raw_value.error = False
     driver.send_commands = AsyncMock(return_value=[response])
 
-    res = await control._run_single_query(driver, GearShort(7))
+    events = await _run_poll_tick(control, driver, GearShort(7))
 
-    query_builder.assert_called_once_with(GearShort(7))
-    formatter.assert_called_once_with(response)
-    assert len(res) == 1
-    assert res[0].control_id == "brightness"
-    assert res[0].value == "77"
-    assert res[0].error == ControlError(0)
-    assert res[0].title is None
+    assert driver.send_commands.await_args.args[0] == ["Q_brightness"]
+    assert len(events) == 1
+    assert control.decoded_responses == [response]
 
 
 @pytest.mark.asyncio
-async def test_run_single_query_alarm_control_active_when_response_error_true():
-    # pylint: disable=protected-access
-    format_response = MagicMock(return_value="1")
-    format_title = MagicMock(return_value="Lamp failure")
-    control = _make_readable_alarm_control("alarm1", "Q_ALARM", format_response, format_title)
-    driver = AsyncMock()
+async def test_alarm_control_takes_value_and_title_from_its_read():
+    """An alarm control formats both its value and its `/meta` title out of the response it
+    is offered, so a read publishes the two together."""
+    control = ErrorStatusControl()
 
     response = MagicMock()
-    response.raw_value = MagicMock()
-    response.raw_value.error = False
     response.error = True
-    driver.send_commands = AsyncMock(return_value=[response])
+    response.ballast_status = False
+    response.lamp_failure = True
+    response.missing_short_address = False
 
-    res = await control._run_single_query(driver, GearShort(1))
-
-    assert len(res) == 1
-    assert res[0].control_id == "alarm1"
-    assert res[0].value == "1"
-    assert res[0].title == "Lamp failure"
-    assert res[0].error == ControlError(0)
-    format_response.assert_called_once_with(response)
+    assert control.notify(StatusRead(response, False)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == "1"
+    assert control.control_info.state.meta.title.en == "Lamp failure"
+    assert control.control_info.state.error == ControlError.NONE
 
 
 @pytest.mark.asyncio
-async def test_run_single_query_alarm_control_inactive_when_response_error_false_or_missing():
-    # pylint: disable=protected-access
-    format_response = MagicMock(return_value="0")
-    format_title = MagicMock(return_value="No alarms")
-    control = _make_readable_alarm_control("alarm2", "Q_ALARM2", format_response, format_title)
-    driver = AsyncMock()
+async def test_alarm_control_inactive_when_response_has_no_error():
+    control = ErrorStatusControl()
 
     response = MagicMock()
-    response.raw_value = MagicMock()
-    response.raw_value.error = False
-    if hasattr(response, "error"):
-        del response.error
-    driver.send_commands = AsyncMock(return_value=[response])
+    del response.error
 
-    res = await control._run_single_query(driver, GearShort(1))
+    assert control.notify(StatusRead(response, False)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == "0"
+    assert control.control_info.state.meta.title.en == "Ok"
 
-    assert len(res) == 1
-    assert res[0].control_id == "alarm2"
-    assert res[0].value == "0"
-    assert res[0].title == "No alarms"
-    assert res[0].error == ControlError(0)
+
+@pytest.mark.asyncio
+async def test_failed_read_errors_the_control_without_touching_its_value():
+    """A failed read leaves the last known value on the topic and raises `/meta/error=r`
+    instead of blanking it."""
+    control = ErrorStatusControl()
+    control.notify(StatusRead(MagicMock(error=False), False))
+
+    assert control.notify(StatusRead(None, True)) is NotifyResult.PUBLISH_STATE
+    assert control.control_info.state.value == "0"
+    assert control.control_info.state.error == ControlError.READ
+
+
+class _QuantityDevice(ConcreteDaliDevice):
+    """Device carrying the quantity controls handed to it, so a read event reaches them
+    through the real ``notify_all`` fan-out."""
+
+    def __init__(self, controls) -> None:
+        self._quantity_controls = list(controls)
+        super().__init__(
+            address=DaliDeviceAddress(short=1, random=0),
+            bus_id="bus",
+            default_name_prefix="Dev",
+            default_mqtt_id_part="d",
+            compat=DaliCommandsCompatibilityLayer(),
+            gtin_db=MagicMock(),
+            common_schema=load_common_schema(),
+        )
+        self.rebuild_mqtt_controls()
+
+    def _build_mqtt_controls(self):
+        return self._quantity_controls
+
+
+class _QuantityCase(NamedTuple):
+    """A quantity read: the event class that *is* the quantity, a bus answer of its own
+    response class, and the value its owning control formats out of it."""
+
+    event_class: type[QuantityRead]
+    control_id: str
+    response: Response
+    expected_value: str
+
+
+_QUANTITY_CASES = [
+    _QuantityCase(StatusRead, "error_status", QueryStatusResponse(BackwardFrame(1 << 1)), "1"),
+    _QuantityCase(
+        SwitchStatusRead,
+        LAST_ACTED,
+        SwitchingFunctionSwitchStatusResponse(BackwardFrame(0b1000)),  # bits 2-3 = 2: down switch on
+        "3",
+    ),
+    _QuantityCase(
+        ThermalGearProtectionRead,
+        "thermal_gear_protection",
+        ThermalGearFailureStatusResponse(BackwardFrame(1 << 5)),  # gear shutdown
+        "1",
+    ),
+    _QuantityCase(
+        ThermalLampProtectionRead,
+        "thermal_lamp_protection",
+        ThermalLampFailureStatusResponse(BackwardFrame(1 << 6)),  # lamp overload
+        "2",
+    ),
+    _QuantityCase(PowerSupplyRead, "integrated_power_supply", YesNoResponse(BackwardFrame(0xFF)), "1"),
+]
+
+
+@pytest.mark.parametrize("case", _QUANTITY_CASES, ids=lambda case: case.control_id)
+def test_quantity_read_applies_to_its_control_and_flags_failure(case):
+    """Every quantity control with a single MQTT representation on one device, both thermal
+    protections (DT16 gear, DT21 lamp) among them — two quantities read by the same command,
+    told apart only by the event class. Each read is taken by its owner alone: formatted on
+    success, raising `/meta/error=r` over the kept value on failure.
+    """
+    controls = [
+        ErrorStatusControl(),
+        LastActedControl(),
+        ThermalGearProtectionControl(),
+        ThermalLampProtectionControl(),
+        LoadSheddingConditionControl(),
+        IntegratedPowerSupplyControl(),
+    ]
+    device = _QuantityDevice(controls)
+    control = device.get_mqtt_control(case.control_id)
+    others = [c for c in controls if c is not control]
+
+    assert device.notify_all(case.event_class(case.response, False)) == [control]
+    assert control.control_info.state.value == case.expected_value
+    assert control.control_info.state.error == ControlError.NONE
+
+    assert device.notify_all(case.event_class(None, True)) == [control]
+    assert control.control_info.state.value == case.expected_value
+    assert control.control_info.state.error == ControlError.READ
+
+    assert all(other.control_info.state.value == "0" for other in others)
+    assert all(other.control_info.state.error == ControlError.NONE for other in others)
 
 
 def _build_ok_response():
@@ -612,21 +725,16 @@ def _build_ok_response():
 
 @pytest.mark.asyncio
 async def test_poll_controls_multiple_controls_and_queries_order():
+    """One tick of a three-control round: each control's query goes out in its own
+    `send_commands` (bulking is the driver's job) and the tick's events come back as one batch."""
     # pylint: disable=protected-access
     d = _make_device(mqtt_id="dev_multi")
-    c3_format = MagicMock(return_value="should_not_be_used")
     controls = [
-        _make_readable_value_control("regular", "Q1", MagicMock(return_value="11")),
-        _make_readable_alarm_control(
-            "alarm", "Q2", MagicMock(return_value="0"), MagicMock(return_value="Alarm text")
-        ),
-        _make_readable_value_control("bad", "Q3", c3_format),
+        ReadableControl(ControlInfo(control_id, ControlState(ControlMeta("value"), "0")))
+        for control_id in ("regular", "alarm", "bad")
     ]
-    r1 = _build_ok_response()
-    r2 = _build_ok_response()
-    r2.error = False
+    ok_responses = {"Q_regular": _build_ok_response(), "Q_alarm": _build_ok_response()}
 
-    # send_commands is called once per control; bulking happens in wbdali on a real bus.
     d._controls = {c.control_info.id: c for c in controls}
     d._pollables = list(controls)
     d._current_round = list(controls)
@@ -634,14 +742,13 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     for ctrl in controls:
         ctrl.schedule_next_periodic_poll(polled_at=0.0)
 
-    responses_per_call = {"Q1": [r1], "Q2": [r2], "Q3": [None]}
     issued_queries: list[str] = []
 
-    async def fake_send(cmds, _src=BusTrafficSource.WB, priority=None):
-        del priority
+    async def fake_send(cmds, _src=BusTrafficSource.WB, priority=None, logger=None):
+        del priority, logger
         assert len(cmds) == 1
         issued_queries.append(cmds[0])
-        return responses_per_call[cmds[0]]
+        return [ok_responses.get(cmds[0])]
 
     driver = AsyncMock()
     driver.send_commands = AsyncMock(side_effect=fake_send)
@@ -651,14 +758,12 @@ async def test_poll_controls_multiple_controls_and_queries_order():
     assert res_request.poll_coroutine is not None
     res = await res_request.poll_coroutine()
 
-    assert sorted(issued_queries) == ["Q1", "Q2", "Q3"]
-    by_id = {r.control_id: r for r in res}
-    assert by_id["regular"].value == "11"
-    assert by_id["alarm"].value == "0"
-    assert by_id["alarm"].title == "Alarm text"
-    assert by_id["bad"].value == ""
-    assert by_id["bad"].error == ControlError.READ
-    c3_format.assert_not_called()
+    assert sorted(issued_queries) == ["Q_alarm", "Q_bad", "Q_regular"]
+    assert len(res) == 3
+    decoded = {c.control_info.id: c.decoded_responses for c in controls}
+    assert decoded["regular"] == [ok_responses["Q_regular"]]
+    assert decoded["alarm"] == [ok_responses["Q_alarm"]]
+    assert decoded["bad"] == [None]  # no answer -> the read failed
 
 
 @pytest.mark.asyncio
@@ -710,16 +815,16 @@ async def test_short_address_change_writes_the_address_and_moves_the_auto_name()
     d.schema = {"type": "object"}
     driver = AsyncMock()
     driver.run_sequence.return_value = 9
+    logger_at_old_address = d.logger
 
     with patch("wb.mqtt_dali.common_dali_device.set_short_address_sequence") as make_sequence:
         await d.apply_parameters(
             driver, {"short_address": 9, "name": d.default_name, "mqtt_id": d.default_mqtt_id}
         )
 
-    make_sequence.assert_called_once_with(d._compat, 1, 9, d.logger)  # pylint: disable=protected-access
-    driver.run_sequence.assert_awaited_once_with(
-        make_sequence.return_value, priority=FramePriority.CONFIGURATION
-    )
+    make_sequence.assert_called_once_with(d.dali_commands, 1, 9, logger_at_old_address)
+    driver.run_sequence.assert_awaited_once_with(make_sequence.return_value, FramePriority.CONFIGURATION, ANY)
+    assert driver.run_sequence.await_args.args[2] is logger_at_old_address
     assert d.address.short == 9
     assert d.params["short_address"] == 9
     assert d.has_custom_name is False

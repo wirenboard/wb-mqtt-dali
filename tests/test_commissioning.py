@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from types import SimpleNamespace
 from typing import Optional, cast
 from unittest.mock import MagicMock, Mock
 
@@ -24,6 +25,7 @@ from dali.gear.general import (
     Withdraw,
 )
 
+from tests.test_commissioning_duplicates import FakeDevice, PerDeviceFakeDALIBus
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import (
     SILENT_COMPARE_ATTEMPTS,
@@ -32,10 +34,14 @@ from wb.mqtt_dali.commissioning import (
     CommissioningStage,
     ProgressReporter,
     SearchAddress,
+    SearchAddressWriter,
     _binary_search_local_progress,
 )
+from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDeviceAddress
 from wb.mqtt_dali.wbdali import WBDALIDriver
+
+from ._virtual_time import VirtualTimeTestCase
 
 # pylint: disable=unsupported-binary-operation
 
@@ -60,7 +66,7 @@ class MockResponse:  # pylint: disable=R0903
             self.raw_value.error = error
 
 
-class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
+class TestBinarySearchAddressFinder(VirtualTimeTestCase):
     async def test_find_device_at_exact_midpoint(self):
         """Test finding a device when it's exactly at the midpoint of the search range."""
         device_address = 0x800000
@@ -74,8 +80,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(addr):
             set_search_calls.append(addr)
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
         self.assertIn(0xFFFFFF, compare_calls)
@@ -93,8 +101,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
 
@@ -109,8 +119,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(addr):
             set_search_calls.append(addr)
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
         self.assertIn(device_address, set_search_calls)
@@ -124,25 +136,12 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertIsNone(result)
-
-    async def test_find_device_in_small_range(self):
-        """Test finding a device in a small address range (2 addresses)."""
-        device_address = 0x000010
-
-        async def mock_compare(addr):
-            return addr >= device_address
-
-        async def mock_set_search(_addr):
-            pass
-
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x00000F, 0x000011)
-
-        self.assertEqual(result, device_address)
 
     async def test_find_device_with_specific_address(self):
         """Test finding a device at a specific address and verify the binary search path."""
@@ -156,8 +155,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
         self.assertGreater(len(compare_calls), 2)
@@ -175,8 +176,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
         # For 24-bit address space, binary search should take ~24 comparisons max
@@ -192,19 +195,18 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
 
     async def test_only_the_check_repeats_an_address(self):
-        """A device at the top of the range makes the search walk `low` up to
-        `high - 1`, so the final check faces an address the loop has already
-        compared. It must not ask again: the search address has not changed
-        since, so the COMPARE would go out as a bare duplicate frame.
-
-        The check after the bisection does re-ask it, and those repeats tell a
-        lost answer from a real "no".
+        """The walk never asks an address twice — every probe carries a new prefix.
+        A device at the top of the range leaves every probe silent, and the check
+        below the find re-asks the walk's last probe: the repeats tell a lost answer
+        from a real "no".
         """
         device_address = 0xFFFFFF
         compare_calls = []
@@ -216,8 +218,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
         # The one below the find: the bisection's last step, then the confirmed silence.
@@ -225,10 +229,10 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         repeated = [addr for addr in set(compare_calls) if compare_calls.count(addr) > 1]
         self.assertCountEqual(repeated, [device_address - 1])
 
-    async def test_lower_bound_is_compared_when_search_never_moves_it(self):
-        """A device at the lower bound answers every COMPARE, so the search only
-        ever moves `high` and leaves the initial `low` untested. That one address
-        still has to be compared, otherwise the device is reported at `low + 1`.
+    async def test_lower_bound_is_compared_by_the_last_probe(self):
+        """A device at the lower bound answers every probe, so the walk converges
+        on `low` itself, and the last probe equals the result: the address is
+        confirmed by a real COMPARE, not inferred.
         """
         device_address = 0x000000
         compare_calls = []
@@ -240,11 +244,166 @@ class TestBinarySearchAddressFinder(unittest.IsolatedAsyncioTestCase):
         async def mock_set_search(_addr):
             pass
 
-        finder = BinarySearchAddressFinder(mock_compare, mock_set_search)
-        result = await finder.find_next_device(0x000000, 0xFFFFFF)
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
 
         self.assertEqual(result, device_address)
         self.assertIn(0x000000, compare_calls)
+
+    async def test_search_walks_high_then_medium_then_low_byte(self):
+        """The walk settles the address one byte at a time: the first eight probes
+        differ only in the high byte with the lower bytes all ones, the next eight
+        only in the medium byte, the last eight only in the low byte.
+        """
+        device_address = 0x123456
+        compare_calls = []
+
+        async def mock_compare(addr):
+            compare_calls.append(addr)
+            return addr >= device_address
+
+        async def mock_set_search(_addr):
+            pass
+
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(0x000000)
+
+        self.assertEqual(result, device_address)
+        # The initial "anyone left?" check, 24 probes, the confirmed silence below the find.
+        self.assertEqual(len(compare_calls), 1 + 24 + SILENT_COMPARE_ATTEMPTS)
+        probes = compare_calls[1:25]
+        for probe in probes[:8]:
+            self.assertEqual(probe & 0xFFFF, 0xFFFF, hex(probe))
+        for probe in probes[8:16]:
+            self.assertEqual(probe >> 16, device_address >> 16, hex(probe))
+            self.assertEqual(probe & 0xFF, 0xFF, hex(probe))
+        for probe in probes[16:]:
+            self.assertEqual(probe >> 8, device_address >> 8, hex(probe))
+
+    async def test_lower_bound_bits_are_not_compared_again(self):
+        """Where the lower bound holds a one the walk takes the bit without a probe —
+        a zero there would put the result under the bound. With the bound fixing the
+        whole high byte, the search fits in fewer COMPAREs than the 24 address bits.
+        """
+        low = 0xFF0000
+        device_address = 0xFF3456
+        compare_calls = []
+
+        async def mock_compare(addr):
+            compare_calls.append(addr)
+            return addr >= device_address
+
+        async def mock_set_search(_addr):
+            pass
+
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(low)
+
+        self.assertEqual(result, device_address)
+        self.assertLess(len(compare_calls), 24)
+
+    async def test_bound_bits_are_skipped_even_after_answered_probes(self):
+        """The bound's one-bits (19-16) come after four answered probes (bits 23-20),
+        so the skip has to survive answered probes, not just lead the walk. Exact
+        count: the initial check, 20 probes, the confirmed silence below the result.
+        """
+        low = 0x0F0000
+        device_address = 0x0F3456
+        compare_calls = []
+
+        async def mock_compare(addr):
+            compare_calls.append(addr)
+            return addr >= device_address
+
+        async def mock_set_search(_addr):
+            pass
+
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(low)
+
+        self.assertEqual(result, device_address)
+        self.assertEqual(len(compare_calls), 1 + 20 + SILENT_COMPARE_ATTEMPTS)
+
+    async def test_result_is_exact_when_lower_bound_equals_device_address(self):
+        """A device holding exactly the lower bound: the previous find carried a
+        duplicate random address, and after its WITHDRAW another holder still
+        answers there. The search reports the bound itself, not an address above.
+        """
+        device_address = 0x5A5A5A
+
+        async def mock_compare(addr):
+            return addr >= device_address
+
+        async def mock_set_search(_addr):
+            pass
+
+        finder = BinarySearchAddressFinder(
+            SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+        )
+        result = await finder.find_next_device(device_address)
+
+        self.assertEqual(result, device_address)
+
+    async def test_search_address_matches_result_on_return(self):
+        """The caller queries and withdraws by the search address on the bus, so at
+        return it must equal the result. Both outcomes of the last probe are covered:
+        an answer (even low bit, the result equals the probe) and silence (odd low
+        bit, the result is one above it).
+        """
+
+        async def find_with_tracked_bus_address(device_address):
+            bus_addresses = []  # every address put on the bus, by a probe or a bare set
+
+            async def mock_compare(addr):
+                bus_addresses.append(addr)
+                return addr >= device_address
+
+            async def mock_set_search(addr):
+                bus_addresses.append(addr)
+
+            finder = BinarySearchAddressFinder(
+                SimpleNamespace(compare=mock_compare, set_search_addr=mock_set_search)
+            )
+            return await finder.find_next_device(0x000000), bus_addresses[-1]
+
+        for device_address in (0x123456, 0x123457):
+            with self.subTest(device_address=hex(device_address)):
+                result, bus_address_at_return = await find_with_tracked_bus_address(device_address)
+                self.assertEqual(result, device_address)
+                self.assertEqual(bus_address_at_return, device_address)
+
+
+class TestSearchTraffic(VirtualTimeTestCase):
+    # Modelled over random addresses the walk costs 1.14-1.16 SETSEARCHADDR frames per
+    # COMPARE for eight devices (midpoint probes ran at about 2); the headroom absorbs
+    # address-layout luck without letting dirty probes back in.
+    SETSEARCHADDR_PER_COMPARE_BUDGET = 1.3
+
+    async def test_search_of_many_devices_stays_within_frame_budget(self):
+        """Commissioning of eight unaddressed devices with fixed random addresses,
+        on the fake bus that records every frame. The search finds the same devices
+        however the probes are chosen, so what catches a regression to dirty probes
+        is the ratio of SETSEARCHADDR to COMPARE frames put on the bus."""
+        randoms = [0x0B67A2, 0x2D93C1, 0x41F00D, 0x6F0A55, 0x8C4B1E, 0xA7D2E9, 0xC3387B, 0xE59D34]
+        bus = PerDeviceFakeDALIBus([FakeDevice(short=None, random=rand) for rand in randoms])
+
+        commissioning = Commissioning(bus, [])
+        await commissioning.smart_extend()
+
+        self.assertEqual(sorted(commissioning.found_devices.values()), randoms)
+        setsearchaddr_frames = sum(
+            isinstance(cmd, (SetSearchAddrH, SetSearchAddrM, SetSearchAddrL)) for cmd in bus.sent_commands
+        )
+        compare_frames = sum(isinstance(cmd, Compare) for cmd in bus.sent_commands)
+        self.assertLessEqual(setsearchaddr_frames / compare_frames, self.SETSEARCHADDR_PER_COMPARE_BUDGET)
 
 
 class FakeDALIBus:
@@ -263,7 +422,7 @@ class FakeDALIBus:
         self.search_addr = [None, None, None]
 
     async def send(
-        self, cmd, source=BusTrafficSource.WB, priority=None
+        self, cmd, source=BusTrafficSource.WB, priority=None, logger=None
     ):  # pylint: disable=R0911 disable=R0912 disable=R0915 disable=unused-argument
         # Handle QueryControlGearPresent
         if isinstance(cmd, QueryControlGearPresent):
@@ -392,7 +551,7 @@ class FakeDALIBus:
         return MockResponse(value=None)
 
     async def send_commands(
-        self, cmds, source=BusTrafficSource.WB, priority=None
+        self, cmds, source=BusTrafficSource.WB, priority=None, logger=None
     ):  # pylint: disable=unused-argument
         responses = []
         for cmd in cmds:
@@ -463,10 +622,10 @@ class TestCommissioning(unittest.TestCase):
 
     def test_set_search_addr(self):
         """Test setting search address."""
-        commissioning = Commissioning(self.mock_driver, [])
-        self.assertEqual(commissioning.last_search_addr, SearchAddress(None, None, None))
+        writer = SearchAddressWriter(self.mock_driver, DaliCommandsCompatibilityLayer())
+        self.assertEqual(writer.current, SearchAddress(None, None, None))
 
-        commands = list(commissioning._set_search_addr(0x123456))  # pylint: disable=W0212
+        commands = writer.commands(0x123456)
 
         self.assertEqual(len(commands), 3)
 
@@ -475,7 +634,16 @@ class TestCommissioning(unittest.TestCase):
         self.assertIsInstance(commands[2], SetSearchAddrL)
 
         expected_addr = SearchAddress(high=0x12, medium=0x34, low=0x56)
-        self.assertEqual(commissioning.last_search_addr, expected_addr)
+        self.assertEqual(writer.current, expected_addr)
+
+    def test_set_search_addr_sends_only_the_parts_that_changed(self):
+        """The remembered address is what keeps a bisection step cheap: a second address sharing
+        the high byte with the first costs two commands, and repeating an address costs none."""
+        writer = SearchAddressWriter(self.mock_driver, DaliCommandsCompatibilityLayer())
+        writer.commands(0x123456)
+
+        self.assertEqual(len(writer.commands(0x127856)), 1)
+        self.assertEqual(writer.commands(0x127856), [])
 
     def test_smart_extend_simple_case(self):
         """Test smart_extend with a simple case of two devices.
@@ -538,7 +706,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send_with_unaddressed(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=R0911 disable=unused-argument
                 sent_commands.append(cmd)
                 if isinstance(cmd, Compare):
@@ -637,7 +805,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def track_commands(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=unused-argument
                 sent_commands.append(cmd)
                 return await original_send(cmd, source, priority)
@@ -717,7 +885,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def track_commands(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=unused-argument
                 sent_commands.append(cmd)
                 return await original_send(cmd, source, priority)
@@ -940,7 +1108,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_boundary_send(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=R0911 disable=unused-argument
                 if isinstance(cmd, Compare):
                     if None not in fake_bus.search_addr:
@@ -1070,7 +1238,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def track_set_search(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=unused-argument
                 if isinstance(cmd, (SetSearchAddrH, SetSearchAddrM, SetSearchAddrL)):
                     set_search_calls.append(type(cmd).__name__)
@@ -1110,7 +1278,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=unused-argument
                 if isinstance(cmd, Withdraw):
                     # Simulate broken bus behavior: WITHDRAW has no effect,
@@ -1141,7 +1309,7 @@ class TestCommissioning(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=unused-argument
                 sent_commands.append(cmd)
                 if isinstance(cmd, Withdraw):
@@ -1283,7 +1451,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=unused-argument
                 if isinstance(cmd, Compare):
                     if None in fake_bus.search_addr:
@@ -1340,7 +1508,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
             original_send = fake_bus.send
 
             async def mock_send(
-                cmd, source=BusTrafficSource.WB, priority=None
+                cmd, source=BusTrafficSource.WB, priority=None, logger=None
             ):  # pylint: disable=R0911 disable=unused-argument
                 # Phantom unaddressed device: Compare/QueryShortAddress need to
                 # see it at `test_random`; VERIFY and follow-up QUERY must both
@@ -1386,7 +1554,7 @@ class TestCommissioningShortAddressFailure(unittest.TestCase):
         asyncio.run(run_test())
 
 
-class TestCommissioningAddDeviceEmission(unittest.IsolatedAsyncioTestCase):
+class TestCommissioningAddDeviceEmission(VirtualTimeTestCase):
     """``Commissioning._add_device`` is the single emission point for found
     devices. It must route through ``ProgressReporter.notify_device`` so that
     every successful discovery appears on the progress callback exactly once.

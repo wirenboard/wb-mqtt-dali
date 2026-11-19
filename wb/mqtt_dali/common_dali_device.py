@@ -1,14 +1,23 @@
 import asyncio
-import json
 import logging
-import os
 import random
 import uuid
+from abc import abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional, Protocol, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    NamedTuple,
+    Optional,
+    Protocol,
+    Sequence,
+    Union,
+    runtime_checkable,
+)
 
 import jsonschema
 from dali.address import Address
@@ -17,9 +26,11 @@ from dali.exceptions import MemoryLocationNotImplemented, ResponseError
 from dali.memory import info, location, oem
 from dali.memory.location import FlagValue
 
+from .bus_traffic import BusTrafficSource
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .device_publisher import ControlInfo
+from .events import BusEvent, QuantityRead
 from .gtin_db import DaliDatabase
 from .settings import SettingsParamBase, SettingsParamName
 from .short_address import set_short_address_sequence
@@ -27,11 +38,19 @@ from .utils import merge_json_schemas
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     check_query_response,
+    has_transmission_error,
     is_transmission_error_response,
     query_response,
     send_commands_with_retry,
 )
-from .wbmqtt import ControlError, TranslatedTitle
+from .wbmqtt import ControlMeta, is_alarm, value_is_retained
+
+
+class NotifyResult(Enum):
+    """What a control asks for after ``notify``."""
+
+    PUBLISH_STATE = "publish_state"  # my control_info.state is what should be on the wire now
+    NOTHING_TO_PUBLISH = "nothing_to_publish"  # not mine, or the value was refused
 
 
 class PropertyStartOrder(Enum):
@@ -45,6 +64,7 @@ class PropertyStartOrder(Enum):
     SPECIFIC = 600
     GROUPS = 700
     SCENES = 800
+    ON_OFF = 900
 
 
 def request_with_retry_sequence(cmd):
@@ -69,10 +89,6 @@ EVENT_RESYNC_BASE_INTERVAL = 300.0
 # Event controls jitter their re-sync interval by ±this fraction (re-drawn after each
 # poll) so devices don't re-sync in lockstep.
 _POLL_JITTER_FRACTION = 0.3
-# At service start, a pollable that opts in via `startup_reconfirm` re-reads once more at
-# this delay after its first poll, in case start caught a transition mid-fade. The pre-start
-# command (and its fade) is unknown, so this mirrors the default fade delay used for one.
-EVENT_STARTUP_RECONFIRM_DELAY = 6.0
 # Periodic status/alarm controls (error status, thermal failure status, demand-response
 # load shedding, integrated power supply) change rarely and are not event-driven, so they
 # are read on this fixed interval with no re-sync jitter.
@@ -82,18 +98,19 @@ PERIODIC_STATUS_POLL_INTERVAL = 120.0
 class EventPollSchedule:
     """Poll schedule mixed into pollables."""
 
+    # Marks a pollable whose value follows the device's fade (gets the startup reconfirm).
+    follows_device_fade: bool = False
+
     def __init__(
         self,
         poll_interval: float,
         randomize_poll_interval: bool,
-        startup_reconfirm: bool = False,
     ) -> None:
         # None means never polled: such a pollable is due immediately. Nothing sets it
         # back to None, so None is also how the first poll is recognised.
         self.next_due_at: Optional[float] = None
         self.randomize_poll_interval = randomize_poll_interval
         self._base_poll_interval = poll_interval
-        self._startup_reconfirm = startup_reconfirm
 
     def is_poll_due(self, now: float) -> bool:
         return self.next_due_at is None or now >= self.next_due_at
@@ -104,15 +121,8 @@ class EventPollSchedule:
         return max(0.0, self.next_due_at - now)
 
     def schedule_next_periodic_poll(self, polled_at: float) -> None:
-        """Account a poll made at ``polled_at`` and move the schedule on by one interval.
-
-        A first poll with `startup_reconfirm` set is pulled in to
-        `EVENT_STARTUP_RECONFIRM_DELAY` instead, never pushed out.
-        """
-        due = polled_at + self._next_interval()
-        if self.next_due_at is None and self._startup_reconfirm:
-            due = min(due, polled_at + EVENT_STARTUP_RECONFIRM_DELAY)
-        self.next_due_at = due
+        """Account a poll made at ``polled_at`` and move the schedule on by one interval."""
+        self.next_due_at = polled_at + self._next_interval()
 
     def schedule_poll_at(self, at: float) -> None:
         """Poll at ``at`` instead of on the periodic schedule; the most recent call wins."""
@@ -136,38 +146,28 @@ class MqttControlBase(EventPollSchedule):
 
     value_to_set: Optional[str] = None
 
-    # Set by the re-sync poll: True after a failed read, False after a successful one.
-    # Event sync suppresses prediction of this control's quantity while it stands, so a
-    # standing /meta/error=r doesn't flicker r <-> "" under live traffic.
-    read_error: bool = False
-
     def __init__(
         self,
         control_info: ControlInfo,
         poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
         randomize_poll_interval: bool = False,
-        startup_reconfirm: bool = False,
     ) -> None:
-        super().__init__(poll_interval, randomize_poll_interval, startup_reconfirm)
+        super().__init__(poll_interval, randomize_poll_interval)
         # the property value is used as default value for the control
         self.control_info = control_info
 
-    def is_readable(self) -> bool:
-        return False
+    def notify(self, event: BusEvent) -> NotifyResult:
+        """React to an event dispatched to every control of the device.
+
+        A control that reads itself schedules the confirming poll on ``event.settle_at`` before
+        any early exit: a refused value (standing read error, no threshold crossed) still needs
+        the re-read.
+        """
+        del event
+        return NotifyResult.NOTHING_TO_PUBLISH
 
     def is_writable(self) -> bool:
         return False
-
-    def get_query(self, short_address: Address) -> Optional[Command]:
-        del short_address
-
-    def format_response(self, response: Response) -> str:
-        del response
-        return ""
-
-    def format_title(self, response: Response) -> Union[str, TranslatedTitle]:
-        del response
-        return ""
 
     def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
         del short_address, value_to_set
@@ -176,15 +176,143 @@ class MqttControlBase(EventPollSchedule):
     def is_dirty(self) -> bool:
         return self.value_to_set is not None
 
+    def apply_command_result(self, value_to_set: str, responses: list[Response]) -> None:
+        """Hold a write error unless every frame of the command went out."""
+        del value_to_set
+        if has_transmission_error(responses):
+            self.control_info.state.set_write_error()
+        else:
+            self.control_info.state.clear_write_error()
+
+    # --- Private ---
+
+    def _apply_quantity_read(
+        self,
+        event: BusEvent,
+        quantity_event: type[QuantityRead],
+        format_value: Callable[[Response], str],
+    ) -> NotifyResult:
+        """Apply a read of a quantity this control is the only MQTT representation of."""
+        if not isinstance(event, quantity_event):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        if event.failed:
+            self.control_info.state.set_read_error()
+            return NotifyResult.PUBLISH_STATE
+        self.control_info.state.value = format_value(event.response)
+        self.control_info.state.clear_errors()
+        return NotifyResult.PUBLISH_STATE
+
+
+class MqttControl(MqttControlBase):
+    """A control configured by a command builder: it writes, and reads nothing.
+
+    A readable quantity has to be decoded into its event, so it gets its own class instead.
+    """
+
+    def __init__(
+        self,
+        control_info: ControlInfo,
+        commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
+        is_group_state_control: bool = False,
+    ) -> None:
+        super().__init__(control_info)
+        self.commands_builder = commands_builder
+        self.is_group_state_control = is_group_state_control
+
+    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
+        if self.commands_builder is not None:
+            return self.commands_builder(short_address, value_to_set)
+        return []
+
+    def is_writable(self) -> bool:
+        return self.commands_builder is not None
+
+
+ControlPollCoroutine = Callable[[], Awaitable[list[BusEvent]]]
+
+
+@dataclass
+class ControlsPollRequestResult:
+    has_more: bool
+    poll_coroutine: Optional[ControlPollCoroutine] = None
+    commands_count: int = 0
+
+
+@runtime_checkable
+class Pollable(Protocol):
+    """Structural interface for anything `DaliDeviceBase.poll_controls` rotates.
+
+    Naming this protocol among its bases is how a readable control or handler is meant to mark
+    itself, but `isinstance` matches structurally, so the method set is what actually decides.
+    The methods are abstract, so a missing one fails at construction.
+
+    The due moment is the implementation's own state, not a field of this
+    protocol; `is_poll_due` and `time_until_next_poll` are its two derivations.
+    Multi-tick state is encoded entirely by `has_more`.
+    """
+
+    @abstractmethod
+    def is_poll_due(self, now: float) -> bool:
+        """Whether the pollable is eligible for the next round."""
+
+    @abstractmethod
+    def time_until_next_poll(self, now: float) -> float:
+        """Seconds until the scheduled moment, never negative.
+
+        Not an eligibility answer: that is `is_poll_due`'s, and it may differ.
+        """
+
+    @abstractmethod
     def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
-        driver: "WBDALIDriver",
+        driver: Any,
         address: Address,
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
-    ) -> "ControlsPollRequestResult":
+        logger: logging.Logger,
+    ) -> ControlsPollRequestResult:
+        """Plan for the current tick: optional coroutine + command-cost + has_more.
+
+        ``has_more=True`` keeps the pollable at the head of the round for the
+        next tick. ``poll_coroutine=None`` means skip dispatch this tick.
+        """
+
+    @abstractmethod
+    def schedule_poll_at(self, at: float) -> None:
+        """Poll at ``at`` instead of on the periodic schedule; the most recent call wins."""
+
+    @abstractmethod
+    def cancel_pending_poll(self) -> None:
+        """Drop any in-flight multi-tick state. No-op for single-shot pollables."""
+
+
+class SingleQueryControl(MqttControlBase, Pollable):
+    """A control whose value is one query answered by one response.
+
+    The other readable shape, a multi-tick read (DT51 energy, DT8 colour), is a pollable of
+    its own.
+    """
+
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        control_info: ControlInfo,
+        query_builder: Callable[[Address], Command],
+        poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
+        randomize_poll_interval: bool = False,
+    ) -> None:
+        super().__init__(control_info, poll_interval, randomize_poll_interval)
+        self._query_builder = query_builder
+
+    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self,
+        driver: WBDALIDriver,
+        address: Address,
+        max_commands: int,
+        default_max_commands: int,
+        now: float,
+        logger: logging.Logger,
+    ) -> ControlsPollRequestResult:
         del default_max_commands
         if max_commands < 1:
             return ControlsPollRequestResult(has_more=True)
@@ -198,127 +326,35 @@ class MqttControlBase(EventPollSchedule):
     def cancel_pending_poll(self) -> None:
         pass
 
+    # --- Hooks for subclasses ---
+
+    def decode_response(self, response: Optional[Response]) -> BusEvent:
+        """The event this control's read produced; ``response`` is ``None`` when it failed."""
+        raise NotImplementedError
+
     # --- Private ---
 
     async def _run_single_query(
         self,
-        driver: "WBDALIDriver",
+        driver: WBDALIDriver,
         address: Address,
-        logger: Optional[logging.Logger] = None,
-    ) -> list["ControlPollResult"]:
+        logger: logging.Logger,
+    ) -> list[BusEvent]:
         try:
-            # pylint: disable-next=assignment-from-no-return
-            query = self.get_query(address)
-            responses = await send_commands_with_retry(driver, [query], priority=FramePriority.PERIODIC_QUERY)
+            query = self._query_builder(address)
+            responses = await send_commands_with_retry(
+                driver, [query], logger, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY
+            )
             response = responses[0]
             try:
                 check_query_response(response)
             except RuntimeError:
-                return [ControlPollResult(control_id=self.control_info.id, value="", error=ControlError.READ)]
+                return [self.decode_response(None)]
 
-            if self.control_info.state.meta.control_type == "alarm":
-                title = self.format_title(response)
-                value = self.format_response(response)
-                return [ControlPollResult(control_id=self.control_info.id, value=value, title=title)]
-
-            return [ControlPollResult(control_id=self.control_info.id, value=self.format_response(response))]
+            return [self.decode_response(response)]
         except Exception as e:  # pylint: disable=broad-exception-caught
-            if logger is not None:
-                logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
-            return [ControlPollResult(control_id=self.control_info.id, value="", error=ControlError.READ)]
-
-
-class MqttControl(MqttControlBase):
-    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        self,
-        control_info: ControlInfo,
-        query_builder: Optional[Callable[[Address], object]] = None,
-        value_formatter: Optional[Callable[[Response], str]] = None,
-        commands_builder: Optional[Callable[[Address, str], list[Command]]] = None,
-        is_group_state_control: bool = False,
-        poll_interval: float = EVENT_RESYNC_BASE_INTERVAL,
-        randomize_poll_interval: bool = False,
-    ) -> None:
-        super().__init__(control_info, poll_interval, randomize_poll_interval)
-        self.query_builder = query_builder
-        self.value_formatter = value_formatter
-        self.commands_builder = commands_builder
-        self.is_group_state_control = is_group_state_control
-
-    def get_query(self, short_address: Address) -> Optional[Command]:
-        if self.query_builder is not None:
-            return self.query_builder(short_address)
-        return None
-
-    def format_response(self, response: Response) -> str:
-        if self.value_formatter is not None:
-            return self.value_formatter(response)
-        return ""
-
-    def get_setup_commands(self, short_address: Address, value_to_set: str) -> list[Command]:
-        if self.commands_builder is not None:
-            return self.commands_builder(short_address, value_to_set)
-        return []
-
-    def is_readable(self) -> bool:
-        return self.query_builder is not None and self.value_formatter is not None
-
-    def is_writable(self) -> bool:
-        return self.commands_builder is not None
-
-
-@dataclass
-class ControlPollResult:
-    control_id: str
-    value: Optional[str] = None
-    error: ControlError = ControlError.NONE
-    title: Optional[Union[str, TranslatedTitle]] = None
-
-
-ControlPollCoroutine = Callable[[], Awaitable[list[ControlPollResult]]]
-
-
-@dataclass
-class ControlsPollRequestResult:
-    has_more: bool
-    poll_coroutine: Optional[ControlPollCoroutine] = None
-    commands_count: int = 0
-
-
-class Pollable(Protocol):
-    """Structural interface for anything `DaliDeviceBase.poll_controls` rotates.
-
-    The due moment is the implementation's own state, not a field of this
-    protocol; `is_poll_due` and `time_until_next_poll` are its two derivations.
-    Multi-tick state is encoded entirely by `has_more`.
-    """
-
-    def is_poll_due(self, now: float) -> bool:
-        """Whether the pollable is eligible for the next round."""
-
-    def time_until_next_poll(self, now: float) -> float:
-        """Seconds until the scheduled moment, never negative.
-
-        Not an eligibility answer: that is `is_poll_due`'s, and it may differ.
-        """
-
-    def next_poll_step(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        self,
-        driver: Any,
-        address: Address,
-        max_commands: int,
-        default_max_commands: int,
-        now: float,
-        logger: Optional[logging.Logger] = None,
-    ) -> ControlsPollRequestResult:
-        """Plan for the current tick: optional coroutine + command-cost + has_more.
-
-        ``has_more=True`` keeps the pollable at the head of the round for the
-        next tick. ``poll_coroutine=None`` means skip dispatch this tick.
-        """
-
-    def cancel_pending_poll(self) -> None:
-        """Drop any in-flight multi-tick state. No-op for single-shot pollables."""
+            logger.warning("Failed to poll control %s: %s", self.control_info.id, e)
+            return [self.decode_response(None)]
 
 
 @dataclass
@@ -327,11 +363,16 @@ class DaliDeviceAddress:
     random: int
 
 
-def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
+MemoryValueClass = type[location.MemoryValue]
+
+
+def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ):
+    """Read ``value_classes`` of the bank, or all of its values when ``value_classes`` is None."""
     for i in range(3):
         try:
             last_address = yield from bank.LastAddress.read(short_address)
@@ -345,10 +386,16 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
                 raise
     # Reading the last address also sets DTR1 appropriately
 
-    # Bank 0 has a useful value at address 0x02; all other banks
-    # use this for the lock/latch byte
-    start_address = 0x02 if bank.address == 0 else 0x03
-    commands_count = last_address - start_address + 1
+    if value_classes is None:
+        # Bank 0 has a useful value at address 0x02; all other banks
+        # use this for the lock/latch byte
+        start_address = 0x02 if bank.address == 0 else 0x03
+        end_address = last_address
+    else:
+        addresses = [loc.address for value in value_classes for loc in value.locations]
+        start_address = min(addresses)
+        end_address = min(max(addresses), last_address)
+    commands_count = end_address - start_address + 1
     raw_data = [None] * start_address
 
     first_unread_index = 0
@@ -391,7 +438,7 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
         )
 
     result = {}
-    for memory_value in bank.values:
+    for memory_value in bank.values if value_classes is None else value_classes:
         try:
             r = memory_value.from_list(raw_data)
         except MemoryLocationNotImplemented:
@@ -401,12 +448,14 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
     return result
 
 
-async def read_bank_as_dict(
+async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-    error_label: Optional[str] = None,
+    error_label: Optional[str],
+    logger: logging.Logger,
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ) -> dict[str, Any]:
     """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
 
@@ -416,7 +465,7 @@ async def read_bank_as_dict(
     """
     try:
         data = await driver.run_sequence(
-            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION
+            read_memory_bank(bank, short_address, compat, value_classes), FramePriority.CONFIGURATION, logger
         )
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
@@ -424,11 +473,13 @@ async def read_bank_as_dict(
     return {mv.name: parsed for mv, parsed in data.items() if not isinstance(parsed, FlagValue)}
 
 
-async def try_read_bank_as_dict(
+async def try_read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    logger: logging.Logger,
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ) -> Optional[dict[str, Any]]:
     """Like ``read_bank_as_dict`` but returns ``None`` instead of raising on bank failure.
 
@@ -436,7 +487,7 @@ async def try_read_bank_as_dict(
     can proceed without it.
     """
     try:
-        return await read_bank_as_dict(driver, bank, short_address, compat)
+        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger, value_classes)
     except RuntimeError:
         return None
 
@@ -464,12 +515,13 @@ _GTIN_START_ADDRESS = 0x03
 _GTIN_LENGTH = 6
 
 
-async def _read_gtin_from_bank(
+async def _read_gtin_from_bank(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank_address: int,
     gtin_value_cls,
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+    logger: logging.Logger,
 ) -> Optional[int]:
     """Read the 6 GTIN bytes from a single memory bank and decode them.
 
@@ -486,7 +538,9 @@ async def _read_gtin_from_bank(
         compat.DTR0(_GTIN_START_ADDRESS),
         *[compat.ReadMemoryLocation(short_address) for _ in range(_GTIN_LENGTH)],
     ]
-    responses = await send_commands_with_retry(driver, commands, priority=FramePriority.CONFIGURATION)
+    responses = await send_commands_with_retry(
+        driver, commands, logger, BusTrafficSource.WB, FramePriority.CONFIGURATION
+    )
     read_responses = responses[2:]
     raw_bytes: list[int] = []
     for response in read_responses:
@@ -508,6 +562,7 @@ async def read_gtin_fast(
     driver: WBDALIDriver,
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
+    logger: logging.Logger,
 ) -> Optional[int]:
     """Read the GTIN from bank 0, falling back to bank 1 only when necessary.
 
@@ -521,7 +576,9 @@ async def read_gtin_fast(
     absent"; all other driver errors propagate to the caller.
     """
     try:
-        gtin = await _read_gtin_from_bank(driver, info.BANK_0.address, info.GTIN, short_address, compat)
+        gtin = await _read_gtin_from_bank(
+            driver, info.BANK_0.address, info.GTIN, short_address, compat, logger
+        )
         if gtin is not None:
             return gtin
     except MemoryLocationNotImplemented:
@@ -529,7 +586,7 @@ async def read_gtin_fast(
 
     try:
         return await _read_gtin_from_bank(
-            driver, oem.BANK_1.address, oem.ManufacturerGTIN, short_address, compat
+            driver, oem.BANK_1.address, oem.ManufacturerGTIN, short_address, compat, logger
         )
     except MemoryLocationNotImplemented:
         return None
@@ -540,7 +597,7 @@ async def read_product_name(
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
     gtin_db: DaliDatabase,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
 ) -> Optional[str]:
     """Read the GTIN from memory banks and look up the product name.
 
@@ -549,40 +606,42 @@ async def read_product_name(
     Does not raise.
     """
     try:
-        gtin = await read_gtin_fast(driver, short_address, compat)
+        gtin = await read_gtin_fast(driver, short_address, compat, logger)
     except Exception as e:  # pylint: disable=broad-exception-caught
-        if logger is not None:
-            logger.warning(
-                "Failed to read memory banks for %s while looking up product name: %s",
-                short_address,
-                e,
-            )
+        logger.warning(
+            "Failed to read memory banks for %s while looking up product name: %s",
+            short_address,
+            e,
+        )
         return None
     if gtin is None:
-        if logger is not None:
-            logger.debug("No GTIN reported by device at %s; using default name", short_address)
+        logger.debug("No GTIN reported by device at %s; using default name", short_address)
         return None
     product_info = gtin_db.get_info_by_gtin(gtin)
     if product_info is None:
-        if logger is not None:
-            logger.debug(
-                "GTIN %s of device at %s not found in product database; using default name",
-                gtin,
-                short_address,
-            )
+        logger.debug(
+            "GTIN %s of device at %s not found in product database; using default name",
+            gtin,
+            short_address,
+        )
         return None
     return product_info.get("product_name")
 
 
+class MemoryFieldParam(NamedTuple):
+    name: str
+    to_json: Callable[[Any], Any] = lambda value: value
+
+
 class GeneralMemoryParams(SettingsParamBase):
     memory_fields_to_json_params = {
-        info.GTIN: "gtin",
-        info.FirmwareVersion: "firmware_version",
-        info.IdentificationNumber: "identification_number",
-        info.IdentifictionNumber_legacy: "identification_number",
-        info.HardwareVersion: "hardware_version",
-        oem.ManufacturerGTIN: "oem_gtin",
-        oem.LuminaireID: "oem_identification_number",
+        info.GTIN: MemoryFieldParam("gtin"),
+        info.FirmwareVersion: MemoryFieldParam("firmware_version"),
+        info.IdentificationNumber: MemoryFieldParam("identification_number", str),
+        info.IdentifictionNumber_legacy: MemoryFieldParam("identification_number", str),
+        info.HardwareVersion: MemoryFieldParam("hardware_version"),
+        oem.ManufacturerGTIN: MemoryFieldParam("oem_gtin"),
+        oem.LuminaireID: MemoryFieldParam("oem_identification_number", str),
     }
 
     def __init__(
@@ -594,9 +653,7 @@ class GeneralMemoryParams(SettingsParamBase):
         self._compat = compat
         self._gtin_db = gtin_db
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         res = {}
         try:
             try:
@@ -615,8 +672,14 @@ class GeneralMemoryParams(SettingsParamBase):
             self._update_info(
                 res,
                 await driver.run_sequence(
-                    read_memory_bank(bank0, short_address, self._compat),
+                    read_memory_bank(
+                        bank0,
+                        short_address,
+                        self._compat,
+                        [v for v in self.memory_fields_to_json_params if v.bank is bank0],
+                    ),
                     FramePriority.CONFIGURATION,
+                    logger,
                 ),
             )
         except MemoryLocationNotImplemented:
@@ -626,8 +689,14 @@ class GeneralMemoryParams(SettingsParamBase):
             self._update_info(
                 res,
                 await driver.run_sequence(
-                    read_memory_bank(oem.BANK_1, short_address, self._compat),
+                    read_memory_bank(
+                        oem.BANK_1,
+                        short_address,
+                        self._compat,
+                        [v for v in self.memory_fields_to_json_params if v.bank is oem.BANK_1],
+                    ),
                     FramePriority.CONFIGURATION,
+                    logger,
                 ),
             )
         except MemoryLocationNotImplemented:
@@ -650,25 +719,69 @@ class GeneralMemoryParams(SettingsParamBase):
             if value is not None:
                 if isinstance(value, int) and _is_empty_memory_int(value):
                     continue
-                dst[param] = value
+                dst[param.name] = param.to_json(value)
 
 
-DATA_DIR_ENV = "WB_MQTT_DALI_DATA_DIR"
-DEFAULT_DATA_DIR = "/usr/share/wb-mqtt-dali"
+@dataclass
+class InitializationResult:
+    parameter_handlers: list[SettingsParamBase]
+    group_parameter_handlers: list[SettingsParamBase]
+    mqtt_controls: list[MqttControlBase]
 
 
-def data_dir() -> str:
-    """Where the package's schemas and product data live; a host may relocate them."""
-    return os.environ.get(DATA_DIR_ENV, DEFAULT_DATA_DIR)
+def _value_fits_meta(value: Optional[str], meta: ControlMeta) -> bool:
+    if value is None:
+        return True
+    try:
+        numeric = float(value)
+    except ValueError:
+        return True
+    if meta.minimum is not None and numeric < meta.minimum:
+        return False
+    return meta.maximum is None or numeric <= meta.maximum
+
+
+def _carry_state_across_rebuild(old: Optional[MqttControlBase], new: MqttControlBase) -> None:
+    """Move the value, the error and an alarm's title from the control being replaced."""
+    if old is None:
+        return
+    if not value_is_retained(new.control_info.state.meta):
+        return
+    new.control_info.state.error = old.control_info.state.error
+    if not _value_fits_meta(old.control_info.state.value, new.control_info.state.meta):
+        return
+    new.control_info.state.value = old.control_info.state.value
+    if is_alarm(new.control_info.state.meta):
+        new.control_info.state.meta.title = old.control_info.state.meta.title
+
+
+def notify_controls(
+    controls: Iterable[MqttControlBase], event: BusEvent, logger: logging.Logger
+) -> list[MqttControlBase]:
+    """Dispatch ``event`` to each control; returns the ones that asked to be published.
+
+    One control raising must not truncate the fan-out: the rest would silently miss the event.
+    """
+    to_publish = []
+    for control in controls:
+        try:
+            if control.notify(event) is NotifyResult.PUBLISH_STATE:
+                to_publish.append(control)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Control %s failed to handle %s: %s",
+                control.control_info.id,
+                type(event).__name__,
+                exc,
+                # Our own bug: without the traceback, which branch blew up is unknowable.
+                exc_info=True,
+            )
+    return to_publish
 
 
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
-    _common_schema = {}
-
-    @classmethod
-    def set_common_schema(cls, schema: dict) -> None:
-        """Hand in the common device schema instead of reading it from the data dir."""
-        DaliDeviceBase._common_schema = schema
+    # Device logger name under the bus logger, followed by the short address, for a default mqtt_id.
+    logger_name_prefix: str = ""
 
     def __init__(
         self,
@@ -678,6 +791,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         default_mqtt_id_part: str,
         compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
         gtin_db: DaliDatabase,
+        common_schema: dict,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -685,8 +799,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         self.address = address
         self.params: dict = {}
         self.schema: dict = {}
-        self.logger = logging.getLogger()
         self.is_initialized = False
+
+        self._bus_logger = logging.getLogger()
+        self._initialization_failed = False
 
         self._bus_id = bus_id
         self._default_name_prefix = default_name_prefix
@@ -708,11 +824,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         self._compat = compat
 
-        if not self._common_schema:
-            schema_path = Path(data_dir()) / "schemas" / "common_device.schema.json"
-            with open(schema_path, "r", encoding="utf-8") as f:
-                DaliDeviceBase.set_common_schema(json.load(f))
-
+        self._common_schema = common_schema
         self._gtin_db = gtin_db
 
         self._initialize_lock = asyncio.Lock()
@@ -756,6 +868,11 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return f"{self._bus_id}_{self._default_mqtt_id_part}{self.address.short}"
 
     @property
+    def logger(self) -> logging.Logger:
+        name = self.mqtt_id if self.has_custom_mqtt_id else f"{self.logger_name_prefix}{self.address.short}"
+        return self._bus_logger.getChild(name)
+
+    @property
     def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
         return self._compat
 
@@ -763,12 +880,21 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         async with self._initialize_lock:
             if self.is_initialized:
                 return
-            [parameter_handlers, group_parameter_handlers] = await self._initialize_impl(driver)
-            parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
-            self._parameter_handlers = parameter_handlers
-            self._group_parameter_handlers = group_parameter_handlers
-            self.rebuild_mqtt_controls()
+            try:
+                initialization = await self._initialize_impl(driver)
+            except Exception as e:
+                if not self._initialization_failed:
+                    self.logger.warning("Failed to initialize device %s: %s", self.name, e)
+                self._initialization_failed = True
+                raise
+            initialization.parameter_handlers.insert(0, GeneralMemoryParams(self._compat, self._gtin_db))
+            self._parameter_handlers = initialization.parameter_handlers
+            self._group_parameter_handlers = initialization.group_parameter_handlers
+            self._install_mqtt_controls(initialization.mqtt_controls)
             self.is_initialized = True
+            if self._initialization_failed:
+                self.logger.info("Device %s initialized successfully after retry", self.name)
+            self._initialization_failed = False
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
         """Read every settings param and cache params/schema.
@@ -780,7 +906,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if self.params and not force_reload:
             return
 
-        await self.initialize(driver)
+        if not self.is_initialized:
+            raise RuntimeError(
+                f"Device {self.name} is not initialized. Call initialize() before loading info."
+            )
 
         params = {
             "short_address": self.address.short,
@@ -848,12 +977,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return ApplyResult(needs_mqtt_controls_refresh=needs_refresh)
 
     def rebuild_mqtt_controls(self) -> None:
-        self.reset_polling_state()
-        mqtt_controls = self._build_mqtt_controls()
-        self._controls.clear()
-        for control in mqtt_controls:
-            self._controls[control.control_info.id] = control
-        self._pollables = self._build_pollables()
+        previous = dict(self._controls)
+        self._install_mqtt_controls(self._build_mqtt_controls())
+        for control_id, control in self._controls.items():
+            _carry_state_across_rebuild(previous.get(control_id), control)
 
     def get_mqtt_controls(self) -> list[ControlInfo]:
         if not self.is_initialized:
@@ -864,6 +991,10 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
     def get_mqtt_control(self, control_id: str) -> Optional[MqttControlBase]:
         return self._controls.get(control_id)
+
+    def notify_all(self, event: BusEvent) -> list[MqttControlBase]:
+        """Dispatch ``event`` to every control; returns the ones that asked to be published."""
+        return notify_controls(self._controls.values(), event, self.logger)
 
     def get_group_state_controls(self) -> list[MqttControlBase]:
         if not self.is_initialized:
@@ -878,11 +1009,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await send_commands_with_retry(
+            responses = await send_commands_with_retry(
                 driver,
                 control.get_setup_commands(self._compat.getAddress(self.address.short), value),
                 self.logger,
             )
+            control.apply_command_result(value, responses)
 
     def poll_controls(
         self,
@@ -917,9 +1049,9 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if not coroutines:
             return ControlsPollRequestResult(has_more=bool(self._current_round))
 
-        async def _run_batch() -> list[ControlPollResult]:
+        async def _run_batch() -> list[BusEvent]:
             batches = await asyncio.gather(*[c() for c in coroutines])
-            results: list[ControlPollResult] = []
+            results: list[BusEvent] = []
             for batch in batches:
                 results.extend(batch)
             return results
@@ -962,7 +1094,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return controls_updated
 
     def set_logger(self, logger: logging.Logger) -> None:
-        self.logger = logger
+        """Set the bus logger the device's own logger is a child of."""
+        self._bus_logger = logger
 
     def get_group_parameter_handlers(self) -> list[SettingsParamBase]:
         return self._group_parameter_handlers
@@ -981,17 +1114,23 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         return []
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
+        """The control set the device should have now, built fresh: a rebuild calls this to pick up
+        meta the device's settings have moved since."""
         return []
 
-    def _build_pollables(self) -> list[Pollable]:
-        return [c for c in self._controls.values() if c.is_readable()]
+    def _build_pollables(self, mqtt_controls: list[MqttControlBase]) -> list[Pollable]:
+        return [c for c in mqtt_controls if isinstance(c, Pollable)]
 
-    async def _initialize_impl(
-        self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
+    async def _initialize_impl(self, driver: WBDALIDriver) -> InitializationResult:
         raise NotImplementedError()
 
     # --- Private ---
+
+    def _install_mqtt_controls(self, mqtt_controls: list[MqttControlBase]) -> None:
+        """Make the given set the device's control set, dropping whatever it had."""
+        self.reset_polling_state()
+        self._controls = {control.control_info.id: control for control in mqtt_controls}
+        self._pollables = self._build_pollables(mqtt_controls)
 
     def _refresh_round_snapshot(self, now: float) -> None:
         for pollable in self._pollables:
@@ -1010,7 +1149,8 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         if new_short_address != self.address.short:
             reported = await driver.run_sequence(
                 set_short_address_sequence(self._compat, self.address.short, new_short_address, self.logger),
-                priority=FramePriority.CONFIGURATION,
+                FramePriority.CONFIGURATION,
+                self.logger,
             )
             if reported == new_short_address:
                 self.address.short = new_short_address

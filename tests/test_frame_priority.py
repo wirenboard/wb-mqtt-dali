@@ -1,9 +1,9 @@
 """End-to-end coverage that each call path picks the right FramePriority.
 
-The driver builds the Modbus payload from per-command priority and publishes
-it via MQTT; tests parse the hex payload from the RPC envelope to recover the
+The driver builds the Modbus payload from per-command priority and hands it
+to its RPC client; tests parse the hex ``msg`` of each write to recover the
 priority bits actually placed on the wire. No private access to driver state
-is required beyond what existing tests already use — ``MockMqttClient.wait_for_publish``
+is required beyond what existing tests already use — ``FakePortLoadClient.wait_for_write``
 is the observability point.
 
 Priority bit layout (encoded register, bits [31..29]):
@@ -14,16 +14,13 @@ Priority bit layout (encoded register, bits [31..29]):
   PERIODIC_QUERY           = 5 -> 0xA0000000
 """
 
-# pylint: disable=redefined-outer-name
-
 import asyncio
-import json
+import contextlib
 import logging
-from typing import NamedTuple, Optional
+from typing import AsyncIterator, NamedTuple, Optional
 from unittest.mock import MagicMock
 
 import aiomqtt
-import pytest
 from dali.address import GearGroup, GearShort
 from dali.command import Command
 from dali.frame import ForwardFrame
@@ -44,15 +41,10 @@ from dali.gear.general import (
 )
 from dali.memory import info
 
-try:
-    from pytest_asyncio import fixture as pytest_asyncio_fixture
-except ImportError:  # pytest-asyncio < 0.17 (system Debian bullseye)
-    pytest_asyncio_fixture = pytest.fixture
-
 from tests.test_commissioning import FakeDALIBus
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.commissioning import Commissioning, check_presence
-from wb.mqtt_dali.common_dali_device import ControlInfo, MqttControl, read_memory_bank
+from wb.mqtt_dali.common_dali_device import ControlInfo, read_memory_bank
 from wb.mqtt_dali.dali_common_parameters import FadeTimeFadeRateParam
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import query_device_types_sequence
@@ -62,7 +54,9 @@ from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 from wb.mqtt_dali.wbdali_utils import send_commands_with_retry
 from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
-_RPC_LOAD_TOPIC = "/rpc/v1/wb-mqtt-serial/port/Load/{client_id}"
+from ._control_stubs import ReadableControl
+from ._fake_rpc_client import FakePortLoadClient
+from ._virtual_time import VirtualTimeTestCase
 
 _TEST_LOGGER = logging.getLogger("test_frame_priority")
 _TEST_LOGGER.setLevel(logging.CRITICAL + 1)
@@ -72,7 +66,6 @@ class _MockMqttClient:
     def __init__(self):
         self._client = MagicMock()
         self._client._client_id = "test-frame-priority-client"
-        self._messages = asyncio.Queue()
 
     async def __aenter__(self):
         return self
@@ -83,21 +76,11 @@ class _MockMqttClient:
     async def subscribe(self, topic):
         del topic
 
-    async def publish(self, topic, payload):
-        await self._messages.put((topic, payload))
+    async def unsubscribe(self, topic):
+        del topic
 
-    async def clear_publishes(self):
-        while not self._messages.empty():
-            await self._messages.get()
-
-    async def wait_for_publish(self, topic, timeout=1.0):
-        while True:
-            try:
-                published_topic, message = await asyncio.wait_for(self._messages.get(), timeout=timeout)
-                if published_topic == topic:
-                    return message
-            except asyncio.TimeoutError:
-                raise TimeoutError(f"Timeout waiting for publish to {topic}") from None
+    async def publish(self, topic, payload, qos=0, retain=False):
+        del topic, payload, qos, retain
 
 
 class _RecordedFrame(NamedTuple):
@@ -112,15 +95,14 @@ class _RecordedFrame(NamedTuple):
         return cls(raw=raw32, priority_value=(raw32 >> 29) & 0x7, frame_data=raw32 & 0x1FFFFFF)
 
 
-def _decode_payload(payload_str: str) -> list[_RecordedFrame]:
-    """Decode the wb-mqtt-serial RPC envelope and return a list of frames.
+def _decode_payload(params: dict) -> list[_RecordedFrame]:
+    """Decode the params of a wb-mqtt-serial port/Load write and return a list of frames.
 
-    The envelope's ``msg`` field is hex-encoded 16-bit Modbus registers in
+    The ``msg`` field is hex-encoded 16-bit Modbus registers in
     word-swapped order (little-endian word pair per 32-bit register, the same
     transformation ``WBDALIDriver._send_to_gateway`` applies on the way out).
     """
-    payload = json.loads(payload_str)
-    hex_msg = payload["params"]["msg"]
+    hex_msg = params["msg"]
     frames: list[_RecordedFrame] = []
     for i in range(0, len(hex_msg), 8):
         word_swapped = int(hex_msg[i : i + 8], 16)
@@ -161,17 +143,49 @@ def _simulate_reply_with_response(
     dispatcher._dispatch_message(message)  # pylint: disable=protected-access
 
 
-@pytest_asyncio_fixture
-async def initialized_driver():
-    mqtt_client = _MockMqttClient()
-    dispatcher = MQTTDispatcher(mqtt_client)
-    driver = WBDALIDriver(WBDALIConfig(), dispatcher, _TEST_LOGGER)
+def _new_driver() -> tuple[WBDALIDriver, FakePortLoadClient, MQTTDispatcher]:
+    rpc = FakePortLoadClient()
+    dispatcher = MQTTDispatcher(_MockMqttClient())
+    return WBDALIDriver(WBDALIConfig(), dispatcher, _TEST_LOGGER, rpc), rpc, dispatcher
+
+
+@contextlib.asynccontextmanager
+async def _initialized_driver(
+    driver: WBDALIDriver, rpc: FakePortLoadClient, dispatcher: MQTTDispatcher
+) -> AsyncIterator[None]:
     await driver.initialize()
-    await mqtt_client.clear_publishes()
+    rpc.clear()
+    await _pass_initial_queue_reset(driver, rpc, dispatcher)
     try:
-        yield driver, mqtt_client, dispatcher
+        yield
     finally:
         await driver.deinitialize()
+
+
+class _DriverTestCase(VirtualTimeTestCase):
+    """Each test gets an initialized driver whose queue reset has already gone out."""
+
+    def setUp(self) -> None:
+        self.driver, self.rpc, self.dispatcher = _new_driver()
+
+    async def asyncSetUp(self) -> None:
+        await self.enterAsyncContext(_initialized_driver(self.driver, self.rpc, self.dispatcher))
+
+
+async def _pass_initial_queue_reset(
+    driver: WBDALIDriver, rpc: FakePortLoadClient, dispatcher: MQTTDispatcher
+) -> None:
+    """Fill the whole queue once: the deferred pointer reset goes out and slot 0 is next."""
+    size = driver.config.queue_size
+    commands = [_MockCommand() for _ in range(size)]
+    fut = asyncio.create_task(
+        driver.send_commands(commands, BusTrafficSource.WB, FramePriority.AUTOMATIC, driver.logger)
+    )
+    await rpc.wait_for_write()
+    await rpc.wait_for_write()
+    for index in range(size):
+        _simulate_reply(dispatcher, driver.config, index)
+    await fut
 
 
 async def _cancel_background_tasks(*tasks: asyncio.Task) -> None:
@@ -187,7 +201,7 @@ async def _cancel_background_tasks(*tasks: asyncio.Task) -> None:
 
 async def _capture_one_batch(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     driver: WBDALIDriver,
-    mqtt_client: _MockMqttClient,
+    rpc: FakePortLoadClient,
     dispatcher: MQTTDispatcher,
     coro,
     expected_frames: int,
@@ -195,513 +209,509 @@ async def _capture_one_batch(  # pylint: disable=too-many-arguments,too-many-pos
 ) -> list[_RecordedFrame]:
     """Drive ``coro`` until one batch is published, reply to each slot and return parsed frames."""
     fut = asyncio.create_task(coro)
-    payload = await mqtt_client.wait_for_publish(topic=_RPC_LOAD_TOPIC.format(client_id=driver.rpc_client_id))
+    params = await rpc.wait_for_write()
     for index in range(expected_frames):
         if with_response:
             _simulate_reply_with_response(dispatcher, driver.config, index)
         else:
             _simulate_reply(dispatcher, driver.config, index)
     await fut
-    return _decode_payload(payload)
+    return _decode_payload(params)
 
 
 # --- Low-level: encoded priority bits ---
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "priority,expected_priority_bits",
-    [
-        (FramePriority.USER_ACTION, 2),
-        (FramePriority.CONFIGURATION, 3),
-        (FramePriority.AUTOMATIC, 4),
-        (FramePriority.PERIODIC_QUERY, 5),
-    ],
-)
-async def test_send_commands_priority_propagates_to_payload(
-    initialized_driver, priority, expected_priority_bits
-):
-    """Each FramePriority value reaches the encoded Modbus payload unchanged for a single-frame send."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver, mqtt_client, dispatcher, driver.send(_MockCommand(), priority=priority), 1
-    )
-    assert len(frames) == 1
-    assert frames[0].priority_value == expected_priority_bits
+class TestEncodedPriorityBits(VirtualTimeTestCase):
+    """Each subtest runs on its own freshly initialized driver."""
+
+    async def test_send_commands_priority_propagates_to_payload(self):
+        """Each FramePriority value reaches the encoded Modbus payload unchanged for a single-frame send."""
+        for priority, expected_priority_bits in [
+            (FramePriority.USER_ACTION, 2),
+            (FramePriority.CONFIGURATION, 3),
+            (FramePriority.AUTOMATIC, 4),
+            (FramePriority.PERIODIC_QUERY, 5),
+        ]:
+            with self.subTest(priority=priority):
+                driver, rpc, dispatcher = _new_driver()
+                async with _initialized_driver(driver, rpc, dispatcher):
+                    frames = await _capture_one_batch(
+                        driver,
+                        rpc,
+                        dispatcher,
+                        driver.send(_MockCommand(), BusTrafficSource.WB, priority, driver.logger),
+                        1,
+                    )
+                    assert len(frames) == 1
+                    assert frames[0].priority_value == expected_priority_bits
 
 
 # --- Caller-intent priority (first frame / single-frame) ---
 
 
-@pytest.mark.asyncio
-async def test_mqtt_level_write_uses_user_action_priority(initialized_driver):
-    """A control-topic-style DAPC write executed via ``send_commands_with_retry``
-    (the path taken by ``CommonDaliDevice.execute_control``) lands on the wire
-    with USER_ACTION priority."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        send_commands_with_retry(driver, [DAPC(GearShort(0), 128)]),
-        1,
-    )
-    assert len(frames) == 1
-    assert frames[0].priority_value == FramePriority.USER_ACTION.value
+class TestCallerIntentPriority(_DriverTestCase):
+    """The leading frame carries the priority of the calling path."""
 
+    async def test_mqtt_level_write_uses_user_action_priority(self):
+        """A control-topic-style DAPC write executed via ``send_commands_with_retry``
+        (the path taken by ``CommonDaliDevice.execute_control``) lands on the wire
+        with USER_ACTION priority."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            send_commands_with_retry(driver, [DAPC(GearShort(0), 128)], driver.logger),
+            1,
+        )
+        assert len(frames) == 1
+        assert frames[0].priority_value == FramePriority.USER_ACTION.value
 
-@pytest.mark.asyncio
-async def test_polling_loop_uses_periodic_query_priority(initialized_driver):
-    """An ``MqttControl`` polled through its public ``next_poll_step`` factory
-    (the entry-point that ``PollScheduler.poll`` invokes inside
-    ``_polling_loop``) sends its query at PERIODIC_QUERY priority. We exercise
-    the returned ``poll_coroutine`` so the assertion covers the actual on-wire
-    frame produced by the polling code path, not a stub."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    control = MqttControl(
-        control_info=ControlInfo(
-            id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))
-        ),
-        query_builder=QueryActualLevel,
-        value_formatter=lambda r: str(r.raw_value.as_integer if r.raw_value is not None else ""),
-    )
-    step = control.next_poll_step(
-        driver=driver,
-        address=GearShort(0),
-        max_commands=1,
-        default_max_commands=3,
-        now=0.0,
-    )
-    assert step.poll_coroutine is not None
-    frames = await _capture_one_batch(
-        driver, mqtt_client, dispatcher, step.poll_coroutine(), 1, with_response=True
-    )
-    assert len(frames) == 1
-    assert frames[0].priority_value == FramePriority.PERIODIC_QUERY.value
+    async def test_polling_loop_uses_periodic_query_priority(self):
+        """A readable control polled through its public ``next_poll_step`` factory
+        (the entry-point that ``PollScheduler.poll`` invokes inside
+        ``_polling_loop``) sends its query at PERIODIC_QUERY priority. We exercise
+        the returned ``poll_coroutine`` so the assertion covers the actual on-wire
+        frame produced by the polling code path, not a stub."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        control = ReadableControl(
+            ControlInfo(
+                id="level", state=ControlState(meta=ControlMeta(control_type="value", read_only=True))
+            ),
+            QueryActualLevel,
+        )
+        step = control.next_poll_step(driver, GearShort(0), 1, 3, 0.0, logging.getLogger("test"))
+        assert step.poll_coroutine is not None
+        frames = await _capture_one_batch(
+            driver, rpc, dispatcher, step.poll_coroutine(), 1, with_response=True
+        )
+        assert len(frames) == 1
+        assert frames[0].priority_value == FramePriority.PERIODIC_QUERY.value
 
+    async def test_parameter_write_uses_configuration_priority(self):
+        """A parameter handler ``write`` (here: ``FadeTimeFadeRateParam`` on a single
+        device, which sends DTR0+SetFadeTime+DTR0+SetFadeRate+QueryFadeTimeFadeRate)
+        starts with CONFIGURATION priority on the leading DTR0; subsequent frames
+        are auto-promoted to TRANSACTION_CONTINUATION by the DTR/EDT rules in
+        ``_send_commands_internal``."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        param = FadeTimeFadeRateParam()
+        observed: list[int] = []
+        publisher_task = asyncio.create_task(_collect_priorities(rpc, observed))
+        replier_task = asyncio.create_task(_keep_replying(dispatcher, driver.config))
+        try:
+            await param.write(driver, GearShort(0), {"fade_time": 4, "fade_rate": 3}, MagicMock())
+        finally:
+            await _cancel_background_tasks(publisher_task, replier_task)
+        assert observed, "no frames captured"
+        # First frame is always caller's CONFIGURATION; subsequent ones are
+        # TRANSACTION_CONTINUATION because each follows a DTR0 set or is a
+        # DTR-using setter/query.
+        assert observed[0] == FramePriority.CONFIGURATION.value
+        promoted = [p for p in observed[1:] if p == FramePriority.TRANSACTION_CONTINUATION.value]
+        assert promoted, f"expected continuations after first frame, got {observed}"
 
-@pytest.mark.asyncio
-async def test_parameter_write_uses_configuration_priority(initialized_driver):
-    """A parameter handler ``write`` (here: ``FadeTimeFadeRateParam`` on a single
-    device, which sends DTR0+SetFadeTime+DTR0+SetFadeRate+QueryFadeTimeFadeRate)
-    starts with CONFIGURATION priority on the leading DTR0; subsequent frames
-    are auto-promoted to TRANSACTION_CONTINUATION by the DTR/EDT rules in
-    ``_send_commands_internal``."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    param = FadeTimeFadeRateParam()
-    observed: list[int] = []
-    publisher_task = asyncio.create_task(_collect_priorities(mqtt_client, driver, observed))
-    replier_task = asyncio.create_task(_keep_replying(dispatcher, driver.config))
-    try:
-        await param.write(driver, GearShort(0), {"fade_time": 4, "fade_rate": 3}, MagicMock())
-    finally:
-        await _cancel_background_tasks(publisher_task, replier_task)
-    assert observed, "no frames captured"
-    # First frame is always caller's CONFIGURATION; subsequent ones are
-    # TRANSACTION_CONTINUATION because each follows a DTR0 set or is a
-    # DTR-using setter/query.
-    assert observed[0] == FramePriority.CONFIGURATION.value
-    promoted = [p for p in observed[1:] if p == FramePriority.TRANSACTION_CONTINUATION.value]
-    assert promoted, f"expected continuations after first frame, got {observed}"
+    async def test_parameter_read_in_ui_flow_uses_configuration_priority(self):
+        """``FadeTimeFadeRateParam.read`` — exercised end-to-end against the real
+        driver — emits a single ``QueryFadeTimeFadeRate`` at CONFIGURATION priority.
+        Asserts on the wire frame produced by the parameter handler itself, not on
+        the underlying retry helper."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        param = FadeTimeFadeRateParam()
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            param.read(driver, GearShort(0), MagicMock()),
+            1,
+            with_response=True,
+        )
+        assert len(frames) == 1
+        assert frames[0].priority_value == FramePriority.CONFIGURATION.value
 
+    async def test_apply_group_parameters_uses_configuration_priority(self):
+        """``handler.write`` on a group address (the layer exercised by
+        ``ApplicationController._apply_group_parameters_task``) starts with
+        CONFIGURATION on the first frame. The dtr-led frames that follow
+        auto-promote — but the *intent* priority of the batch is CONFIGURATION,
+        asserted on the leading DTR0."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        param = FadeTimeFadeRateParam()
+        observed: list[int] = []
+        publisher_task = asyncio.create_task(_collect_priorities(rpc, observed))
+        replier_task = asyncio.create_task(_keep_replying(dispatcher, driver.config))
+        try:
+            await param.write(driver, GearGroup(0), {"fade_time": 4, "fade_rate": 3}, MagicMock())
+        finally:
+            await _cancel_background_tasks(publisher_task, replier_task)
+        assert observed
+        assert observed[0] == FramePriority.CONFIGURATION.value
 
-@pytest.mark.asyncio
-async def test_parameter_read_in_ui_flow_uses_configuration_priority(initialized_driver):
-    """``FadeTimeFadeRateParam.read`` — exercised end-to-end against the real
-    driver — emits a single ``QueryFadeTimeFadeRate`` at CONFIGURATION priority.
-    Asserts on the wire frame produced by the parameter handler itself, not on
-    the underlying retry helper."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    param = FadeTimeFadeRateParam()
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        param.read(driver, GearShort(0), MagicMock()),
-        1,
-        with_response=True,
-    )
-    assert len(frames) == 1
-    assert frames[0].priority_value == FramePriority.CONFIGURATION.value
+    async def test_commissioning_uses_user_action_priority(self):
+        """Every leading frame in commissioning batches carries USER_ACTION priority.
+        Exercises ``check_presence`` — the public commissioning entry-point that
+        sends ``[Terminate, Initialise, SetSearchAddr×3, Compare]`` followed by a
+        trailing ``Terminate`` in finally. None of these declare DTR/EDT structure,
+        so every frame is a leading frame and must be USER_ACTION."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        observed: list[int] = []
+        publisher_task = asyncio.create_task(_collect_priorities(rpc, observed))
+        replier_task = asyncio.create_task(_keep_replying_no_response(dispatcher, driver.config))
+        try:
+            await check_presence(driver, dali2=False)
+        finally:
+            await _cancel_background_tasks(publisher_task, replier_task)
+        assert observed, "commissioning produced no frames"
+        non_continuation = [p for p in observed if p != FramePriority.TRANSACTION_CONTINUATION.value]
+        assert non_continuation, "all frames were continuations — unexpected"
+        assert all(p == FramePriority.USER_ACTION.value for p in non_continuation), non_continuation
 
+    async def test_commissioning_smart_extend_uses_user_action_priority(self):
+        """``Commissioning.smart_extend`` exercises the binary-search path —
+        ``QueryControlGearPresent``, ``QueryRandomAddress*``, ``SetSearchAddr*``,
+        ``Compare``, ``Initialise``, ``Randomise``, ``ProgramShortAddress``,
+        ``Withdraw``, ``Terminate``. Wraps ``FakeDALIBus`` to record the
+        ``priority`` argument on every ``send``/``send_commands`` call; asserts
+        every recorded priority is ``USER_ACTION``."""
+        inner = FakeDALIBus(devices={0: 0x123456, 1: 0x789ABC})
+        recorded: list[Optional[FramePriority]] = []
 
-@pytest.mark.asyncio
-async def test_apply_group_parameters_uses_configuration_priority(initialized_driver):
-    """``handler.write`` on a group address (the layer exercised by
-    ``ApplicationController._apply_group_parameters_task``) starts with
-    CONFIGURATION on the first frame. The dtr-led frames that follow
-    auto-promote — but the *intent* priority of the batch is CONFIGURATION,
-    asserted on the leading DTR0."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    param = FadeTimeFadeRateParam()
-    observed: list[int] = []
-    publisher_task = asyncio.create_task(_collect_priorities(mqtt_client, driver, observed))
-    replier_task = asyncio.create_task(_keep_replying(dispatcher, driver.config))
-    try:
-        await param.write(driver, GearGroup(0), {"fade_time": 4, "fade_rate": 3}, MagicMock())
-    finally:
-        await _cancel_background_tasks(publisher_task, replier_task)
-    assert observed
-    assert observed[0] == FramePriority.CONFIGURATION.value
+        class _RecordingBus:
+            async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
+                recorded.append(priority)
+                return await inner.send(cmd, source=source, priority=priority, logger=logger)
 
+            async def send_commands(self, cmds, source=BusTrafficSource.WB, priority=None, logger=None):
+                recorded.append(priority)
+                return await inner.send_commands(cmds, source=source, priority=priority, logger=logger)
 
-@pytest.mark.asyncio
-async def test_commissioning_uses_user_action_priority(initialized_driver):
-    """Every leading frame in commissioning batches carries USER_ACTION priority.
-    Exercises ``check_presence`` — the public commissioning entry-point that
-    sends ``[Terminate, Initialise, SetSearchAddr×3, Compare]`` followed by a
-    trailing ``Terminate`` in finally. None of these declare DTR/EDT structure,
-    so every frame is a leading frame and must be USER_ACTION."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    observed: list[int] = []
-    publisher_task = asyncio.create_task(_collect_priorities(mqtt_client, driver, observed))
-    replier_task = asyncio.create_task(_keep_replying_no_response(dispatcher, driver.config))
-    try:
-        await check_presence(driver, dali2=False)
-    finally:
-        await _cancel_background_tasks(publisher_task, replier_task)
-    assert observed, "commissioning produced no frames"
-    non_continuation = [p for p in observed if p != FramePriority.TRANSACTION_CONTINUATION.value]
-    assert non_continuation, "all frames were continuations — unexpected"
-    assert all(p == FramePriority.USER_ACTION.value for p in non_continuation), non_continuation
-
-
-@pytest.mark.asyncio
-async def test_commissioning_smart_extend_uses_user_action_priority():
-    """``Commissioning.smart_extend`` exercises the binary-search path —
-    ``QueryControlGearPresent``, ``QueryRandomAddress*``, ``SetSearchAddr*``,
-    ``Compare``, ``Initialise``, ``Randomise``, ``ProgramShortAddress``,
-    ``Withdraw``, ``Terminate``. Wraps ``FakeDALIBus`` to record the
-    ``priority`` argument on every ``send``/``send_commands`` call; asserts
-    every recorded priority is ``USER_ACTION``."""
-    inner = FakeDALIBus(devices={0: 0x123456, 1: 0x789ABC})
-    recorded: list[Optional[FramePriority]] = []
-
-    class _RecordingBus:
-        async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
-            recorded.append(priority)
-            return await inner.send(cmd, source=source, priority=priority)
-
-        async def send_commands(self, cmds, source=BusTrafficSource.WB, priority=None):
-            recorded.append(priority)
-            return await inner.send_commands(cmds, source=source, priority=priority)
-
-    commissioning = Commissioning(_RecordingBus(), [])
-    await commissioning.smart_extend()
-    assert recorded, "smart_extend produced no driver calls"
-    assert all(p == FramePriority.USER_ACTION for p in recorded), recorded
+        commissioning = Commissioning(_RecordingBus(), [])
+        await commissioning.smart_extend()
+        assert recorded, "smart_extend produced no driver calls"
+        assert all(p == FramePriority.USER_ACTION for p in recorded), recorded
 
 
 # --- Auto-promotion in _send_commands_internal ---
 
 
-@pytest.mark.asyncio
-async def test_first_frame_always_caller_priority(initialized_driver):
-    """Even when the batch starts with DTR0 (a DTR-set), frame 0 keeps the
-    caller's priority — auto-promotion only applies from frame 1 onward."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands([DTR0(5)], priority=FramePriority.CONFIGURATION),
-        1,
-    )
-    assert len(frames) == 1
-    assert frames[0].priority_value == FramePriority.CONFIGURATION.value
+class TestAutoPromotion(_DriverTestCase):
+    """Frames after the first auto-promote to TRANSACTION_CONTINUATION inside a transaction."""
 
+    async def test_first_frame_always_caller_priority(self):
+        """Even when the batch starts with DTR0 (a DTR-set), frame 0 keeps the
+        caller's priority — auto-promotion only applies from frame 1 onward."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands([DTR0(5)], BusTrafficSource.WB, FramePriority.CONFIGURATION, driver.logger),
+            1,
+        )
+        assert len(frames) == 1
+        assert frames[0].priority_value == FramePriority.CONFIGURATION.value
 
-@pytest.mark.asyncio
-async def test_dtr_chain_promotes_after_first(initialized_driver):
-    """``[DTR0, DTR1, DTR2]`` @ CONFIG produces priorities 3, 1, 1 — each DTR
-    after the first is preceded by another DTR set, so it auto-promotes."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands([DTR0(1), DTR1(2), DTR2(3)], priority=FramePriority.CONFIGURATION),
-        3,
-    )
-    assert [f.priority_value for f in frames] == [
-        FramePriority.CONFIGURATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-    ]
+    async def test_dtr_chain_promotes_after_first(self):
+        """``[DTR0, DTR1, DTR2]`` @ CONFIG produces priorities 3, 1, 1 — each DTR
+        after the first is preceded by another DTR set, so it auto-promotes."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [DTR0(1), DTR1(2), DTR2(3)], BusTrafficSource.WB, FramePriority.CONFIGURATION, driver.logger
+            ),
+            3,
+        )
+        assert [f.priority_value for f in frames] == [
+            FramePriority.CONFIGURATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+        ]
 
+    async def test_dtr_consumer_after_dtr_set_promoted(self):
+        """``[DTR0, SetFadeTime]`` @ CONFIG produces 3, 1 — SetFadeTime follows a DTR set."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [DTR0(5), SetFadeTime(GearShort(0))],
+                BusTrafficSource.WB,
+                FramePriority.CONFIGURATION,
+                driver.logger,
+            ),
+            2,
+        )
+        assert [f.priority_value for f in frames] == [
+            FramePriority.CONFIGURATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+        ]
 
-@pytest.mark.asyncio
-async def test_dtr_consumer_after_dtr_set_promoted(initialized_driver):
-    """``[DTR0, SetFadeTime]`` @ CONFIG produces 3, 1 — SetFadeTime follows a DTR set."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands([DTR0(5), SetFadeTime(GearShort(0))], priority=FramePriority.CONFIGURATION),
-        2,
-    )
-    assert [f.priority_value for f in frames] == [
-        FramePriority.CONFIGURATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-    ]
+    async def test_uses_dtr_promoted_regardless_of_prev(self):
+        """``[QueryColourValue, QueryContentDTR0]`` @ CONFIG → with EDT auto-prefix:
+        ``[EDT(8), QueryColourValue, QueryContentDTR0]``. QueryContentDTR0 has
+        ``uses_dtr0=True`` so it auto-promotes even though the previous frame
+        (QueryColourValue) is neither a DTR set nor EDT — covers the
+        ``commands[i].uses_dtr*`` arm. Mirrors ``dali_type8_tc.py:253``."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [QueryColourValue(GearShort(0)), QueryContentDTR0(GearShort(0))],
+                BusTrafficSource.WB,
+                FramePriority.CONFIGURATION,
+                driver.logger,
+            ),
+            3,
+            with_response=True,
+        )
+        # EDT(8) auto-inserted because QueryColourValue.devicetype == 8.
+        assert len(frames) == 3
+        assert [f.priority_value for f in frames] == [
+            FramePriority.CONFIGURATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+        ]
 
+    async def test_dt_cmd_after_auto_edt_promoted(self):
+        """A DT-typed command sent solo with USER_ACTION → EDT auto-inserted as
+        frame 0 at USER_ACTION; the DT command becomes frame 1 and auto-promotes
+        because it follows EnableDeviceType."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send(
+                QueryColourValue(GearShort(0)), BusTrafficSource.WB, FramePriority.USER_ACTION, driver.logger
+            ),
+            2,
+            with_response=True,
+        )
+        assert len(frames) == 2
+        assert frames[0].frame_data == EnableDeviceType(8).frame.as_integer
+        assert frames[0].priority_value == FramePriority.USER_ACTION.value
+        assert frames[1].priority_value == FramePriority.TRANSACTION_CONTINUATION.value
 
-@pytest.mark.asyncio
-async def test_uses_dtr_promoted_regardless_of_prev(initialized_driver):
-    """``[QueryColourValue, QueryContentDTR0]`` @ CONFIG → with EDT auto-prefix:
-    ``[EDT(8), QueryColourValue, QueryContentDTR0]``. QueryContentDTR0 has
-    ``uses_dtr0=True`` so it auto-promotes even though the previous frame
-    (QueryColourValue) is neither a DTR set nor EDT — covers the
-    ``commands[i].uses_dtr*`` arm. Mirrors ``dali_type8_tc.py:253``."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands(
-            [QueryColourValue(GearShort(0)), QueryContentDTR0(GearShort(0))],
-            priority=FramePriority.CONFIGURATION,
-        ),
-        3,
-        with_response=True,
-    )
-    # EDT(8) auto-inserted because QueryColourValue.devicetype == 8.
-    assert len(frames) == 3
-    assert [f.priority_value for f in frames] == [
-        FramePriority.CONFIGURATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-    ]
+    async def test_dtr_chain_with_edt_all_continuations(self):
+        """``[DTR0, DTR1, DTR2, StoreColourTemperatureTcLimit]`` @ CONFIG.
+        StoreColourTemperatureTcLimit is a DT8 command so EDT(8) is auto-inserted
+        before it. Expected priorities: 3, 1, 1, 1, 1 (one frame per command plus
+        the EDT prefix). Mirrors ``dali_type8_tc.py:340``."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [DTR0(0), DTR1(0), DTR2(0), StoreColourTemperatureTcLimit(GearShort(0))],
+                BusTrafficSource.WB,
+                FramePriority.CONFIGURATION,
+                driver.logger,
+            ),
+            5,
+        )
+        assert [f.priority_value for f in frames] == [
+            FramePriority.CONFIGURATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+        ]
 
+    async def test_read_memory_location_chain_promoted(self):
+        """``[DTR1, DTR0, RML, RML]`` @ PERIODIC_QUERY → 5, 1, 1, 1 — covers the
+        DT51 active-energy polling pattern in ``dali_type51_parameters.py``."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [
+                    DTR1(202),
+                    DTR0(0x05),
+                    ReadMemoryLocation(GearShort(0)),
+                    ReadMemoryLocation(GearShort(0)),
+                ],
+                BusTrafficSource.WB,
+                FramePriority.PERIODIC_QUERY,
+                driver.logger,
+            ),
+            4,
+            with_response=True,
+        )
+        assert [f.priority_value for f in frames] == [
+            FramePriority.PERIODIC_QUERY.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+        ]
 
-@pytest.mark.asyncio
-async def test_dt_cmd_after_auto_edt_promoted(initialized_driver):
-    """A DT-typed command sent solo with USER_ACTION → EDT auto-inserted as
-    frame 0 at USER_ACTION; the DT command becomes frame 1 and auto-promotes
-    because it follows EnableDeviceType."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send(QueryColourValue(GearShort(0))),
-        2,
-        with_response=True,
-    )
-    assert len(frames) == 2
-    assert frames[0].frame_data == EnableDeviceType(8).frame.as_integer
-    assert frames[0].priority_value == FramePriority.USER_ACTION.value
-    assert frames[1].priority_value == FramePriority.TRANSACTION_CONTINUATION.value
+    async def test_unrelated_commands_not_promoted(self):
+        """``[GoToLastActiveLevel, Off]`` @ USER_ACTION → 2, 2. An RPC batch of
+        plain control commands is not a transaction; no auto-promotion."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [GoToLastActiveLevel(GearShort(0)), Off(GearShort(1))],
+                BusTrafficSource.WB,
+                FramePriority.USER_ACTION,
+                driver.logger,
+            ),
+            2,
+        )
+        assert [f.priority_value for f in frames] == [
+            FramePriority.USER_ACTION.value,
+            FramePriority.USER_ACTION.value,
+        ]
 
-
-@pytest.mark.asyncio
-async def test_dtr_chain_with_edt_all_continuations(initialized_driver):
-    """``[DTR0, DTR1, DTR2, StoreColourTemperatureTcLimit]`` @ CONFIG.
-    StoreColourTemperatureTcLimit is a DT8 command so EDT(8) is auto-inserted
-    before it. Expected priorities: 3, 1, 1, 1, 1 (one frame per command plus
-    the EDT prefix). Mirrors ``dali_type8_tc.py:340``."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands(
-            [DTR0(0), DTR1(0), DTR2(0), StoreColourTemperatureTcLimit(GearShort(0))],
-            priority=FramePriority.CONFIGURATION,
-        ),
-        5,
-    )
-    assert [f.priority_value for f in frames] == [
-        FramePriority.CONFIGURATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-    ]
-
-
-@pytest.mark.asyncio
-async def test_read_memory_location_chain_promoted(initialized_driver):
-    """``[DTR1, DTR0, RML, RML]`` @ PERIODIC_QUERY → 5, 1, 1, 1 — covers the
-    DT51 active-energy polling pattern in ``dali_type51_parameters.py``."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands(
-            [
-                DTR1(202),
-                DTR0(0x05),
-                ReadMemoryLocation(GearShort(0)),
-                ReadMemoryLocation(GearShort(0)),
-            ],
-            priority=FramePriority.PERIODIC_QUERY,
-        ),
-        4,
-        with_response=True,
-    )
-    assert [f.priority_value for f in frames] == [
-        FramePriority.PERIODIC_QUERY.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-    ]
-
-
-@pytest.mark.asyncio
-async def test_unrelated_commands_not_promoted(initialized_driver):
-    """``[GoToLastActiveLevel, Off]`` @ USER_ACTION → 2, 2. An RPC batch of
-    plain control commands is not a transaction; no auto-promotion."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands([GoToLastActiveLevel(GearShort(0)), Off(GearShort(1))]),
-        2,
-    )
-    assert [f.priority_value for f in frames] == [
-        FramePriority.USER_ACTION.value,
-        FramePriority.USER_ACTION.value,
-    ]
-
-
-@pytest.mark.asyncio
-async def test_multi_segment_dtr_partial_promotion(initialized_driver):
-    """``[DTR0(s0), SetScene(0), DTR0(s1), SetScene(1)]`` @ CONFIG → 3, 1, 3, 1.
-    Documents the gap between segments in Scenes-write
-    (``dali_common_parameters.py:389``): SetScene does not declare
-    ``uses_dtr0`` so the second DTR0 is treated as the start of a fresh
-    segment rather than a continuation of the previous one."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    frames = await _capture_one_batch(
-        driver,
-        mqtt_client,
-        dispatcher,
-        driver.send_commands(
-            [
-                DTR0(0x80),
-                SetScene(GearShort(0), 0),
-                DTR0(0x81),
-                SetScene(GearShort(0), 1),
-            ],
-            priority=FramePriority.CONFIGURATION,
-        ),
-        4,
-    )
-    assert [f.priority_value for f in frames] == [
-        FramePriority.CONFIGURATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-        FramePriority.CONFIGURATION.value,
-        FramePriority.TRANSACTION_CONTINUATION.value,
-    ]
+    async def test_multi_segment_dtr_partial_promotion(self):
+        """``[DTR0(s0), SetScene(0), DTR0(s1), SetScene(1)]`` @ CONFIG → 3, 1, 3, 1.
+        Documents the gap between segments in Scenes-write
+        (``dali_common_parameters.py:389``): SetScene does not declare
+        ``uses_dtr0`` so the second DTR0 is treated as the start of a fresh
+        segment rather than a continuation of the previous one."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        frames = await _capture_one_batch(
+            driver,
+            rpc,
+            dispatcher,
+            driver.send_commands(
+                [
+                    DTR0(0x80),
+                    SetScene(GearShort(0), 0),
+                    DTR0(0x81),
+                    SetScene(GearShort(0), 1),
+                ],
+                BusTrafficSource.WB,
+                FramePriority.CONFIGURATION,
+                driver.logger,
+            ),
+            4,
+        )
+        assert [f.priority_value for f in frames] == [
+            FramePriority.CONFIGURATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+            FramePriority.CONFIGURATION.value,
+            FramePriority.TRANSACTION_CONTINUATION.value,
+        ]
 
 
 # --- run_sequence: each yield is a separate _send_commands_internal call ---
 
 
-@pytest.mark.asyncio
-async def test_run_sequence_query_device_types_caller_prio(initialized_driver):
-    """``query_device_types_sequence`` issues one ``QueryDeviceType`` followed by
-    a chain of ``QueryNextDeviceType`` driven by per-yield responses. Each yield
-    is a separate ``_send_commands_internal`` call, so every frame is i=0 in its
-    own call — caller's USER_ACTION priority, no cross-yield promotion.
-    Scripted response chain: first byte 255 (=> enter the loop), then a real
-    type code (5), then 254 (=> terminate), producing 3 outgoing frames."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    script = [(0x01, 255), (0x01, 5), (0x01, 254)]
-    observed: list[int] = []
-    pump_task = asyncio.create_task(
-        _pump_publishes_and_reply_scripted(mqtt_client, dispatcher, driver, script, observed)
-    )
-    try:
-        result = await driver.run_sequence(query_device_types_sequence(GearShort(0)))
-    finally:
-        await _cancel_background_tasks(pump_task)
-    assert result == [5]
-    assert observed == [FramePriority.USER_ACTION.value] * 3, observed
+class TestRunSequencePriority(_DriverTestCase):
+    """Each run_sequence yield is sent with the caller's priority on its leading frame."""
 
+    async def test_run_sequence_query_device_types_caller_prio(self):
+        """``query_device_types_sequence`` issues one ``QueryDeviceType`` followed by
+        a chain of ``QueryNextDeviceType`` driven by per-yield responses. Each yield
+        is a separate ``_send_commands_internal`` call, so every frame is i=0 in its
+        own call — caller's USER_ACTION priority, no cross-yield promotion.
+        Scripted response chain: first byte 255 (=> enter the loop), then a real
+        type code (5), then 254 (=> terminate), producing 3 outgoing frames."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        script = [(0x01, 255), (0x01, 5), (0x01, 254)]
+        observed: list[int] = []
+        pump_task = asyncio.create_task(
+            _pump_publishes_and_reply_scripted(rpc, dispatcher, driver, script, observed)
+        )
+        try:
+            result = await driver.run_sequence(
+                query_device_types_sequence(GearShort(0), logging.getLogger("test")),
+                FramePriority.USER_ACTION,
+                driver.logger,
+            )
+        finally:
+            await _cancel_background_tasks(pump_task)
+        assert result == [5]
+        assert observed == [FramePriority.USER_ACTION.value] * 3, observed
 
-@pytest.mark.asyncio
-async def test_run_sequence_read_memory_bank_caller_prio(initialized_driver):
-    """``read_memory_bank`` runs ``LastAddress.read`` (3 single-frame yields:
-    DTR1, DTR0, ReadMemoryLocation) and then 2 more yields (DTR0 + a list of
-    ReadMemoryLocation). Each yield is its own ``_send_commands_internal``
-    call — the leading frame of every batch is caller's CONFIGURATION priority.
-    Scripted to make ``LastAddress.read`` return 3 (so bank 0 has 2 readable
-    locations 2..3), then two RML data bytes back-to-back."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    script = [
-        (0x02, 0),  # DTR1 (LastAddress.read)
-        (0x02, 0),  # DTR0 (LastAddress.read)
-        (0x01, 3),  # ReadMemoryLocation -> last_address = 3
-        (0x02, 0),  # DTR0 (read_memory_bank start_address)
-        (0x01, 0xAA),  # RML[0]
-        (0x01, 0xBB),  # RML[1]
-    ]
-    observed: list[int] = []
-    pump_task = asyncio.create_task(
-        _pump_publishes_and_reply_scripted(
-            mqtt_client, dispatcher, driver, script, observed, batch_first_only=True
+    async def test_run_sequence_read_memory_bank_caller_prio(self):
+        """``read_memory_bank`` runs ``LastAddress.read`` (3 single-frame yields:
+        DTR1, DTR0, ReadMemoryLocation) and then 2 more yields (DTR0 + a list of
+        ReadMemoryLocation). Each yield is its own ``_send_commands_internal``
+        call — the leading frame of every batch is caller's CONFIGURATION priority.
+        Scripted to make ``LastAddress.read`` return 3 (so bank 0 has 2 readable
+        locations 2..3), then two RML data bytes back-to-back."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        script = [
+            (0x02, 0),  # DTR1 (LastAddress.read)
+            (0x02, 0),  # DTR0 (LastAddress.read)
+            (0x01, 3),  # ReadMemoryLocation -> last_address = 3
+            (0x02, 0),  # DTR0 (read_memory_bank start_address)
+            (0x01, 0xAA),  # RML[0]
+            (0x01, 0xBB),  # RML[1]
+        ]
+        observed: list[int] = []
+        pump_task = asyncio.create_task(
+            _pump_publishes_and_reply_scripted(
+                rpc, dispatcher, driver, script, observed, batch_first_only=True
+            )
         )
-    )
-    try:
-        await driver.run_sequence(
-            read_memory_bank(info.BANK_0, GearShort(0), DaliCommandsCompatibilityLayer()),
-            priority=FramePriority.CONFIGURATION,
-        )
-    finally:
-        await _cancel_background_tasks(pump_task)
-    assert observed, "no batches captured"
-    assert all(p == FramePriority.CONFIGURATION.value for p in observed), observed
+        try:
+            await driver.run_sequence(
+                read_memory_bank(info.BANK_0, GearShort(0), DaliCommandsCompatibilityLayer()),
+                FramePriority.CONFIGURATION,
+                driver.logger,
+            )
+        finally:
+            await _cancel_background_tasks(pump_task)
+        assert observed, "no batches captured"
+        assert all(p == FramePriority.CONFIGURATION.value for p in observed), observed
 
-
-@pytest.mark.asyncio
-async def test_run_sequence_query_colour_with_level_caller_prio(initialized_driver):
-    """``query_colour_with_level`` first batch is ``[QueryActualLevel, DTR0,
-    QueryColourValue]``. The driver auto-inserts ``EnableDeviceType(8)`` before
-    the DT8 ``QueryColourValue``, so 4 frames go on the wire. Replying with
-    MASK (255) as the colour-type makes the sequence early-return after one
-    batch — exactly one yield, so only one ``_send_commands_internal`` call.
-    Asserts the leading frame carries the caller's CONFIGURATION priority."""
-    driver, mqtt_client, dispatcher = initialized_driver
-    script = [
-        (0x01, 50),  # QueryActualLevel -> level=50
-        (0x01, 0),  # DTR0
-        (0x01, 0),  # auto-inserted EnableDeviceType(8)
-        (0x01, 255),  # QueryColourValue -> colour_type = MASK
-    ]
-    observed: list[int] = []
-    pump_task = asyncio.create_task(
-        _pump_publishes_and_reply_scripted(
-            mqtt_client, dispatcher, driver, script, observed, batch_first_only=True
+    async def test_run_sequence_query_colour_with_level_caller_prio(self):
+        """``query_colour_with_level`` first batch is ``[QueryActualLevel, DTR0,
+        QueryColourValue]``. The driver auto-inserts ``EnableDeviceType(8)`` before
+        the DT8 ``QueryColourValue``, so 4 frames go on the wire. Replying with
+        MASK (255) as the colour-type makes the sequence early-return after one
+        batch — exactly one yield, so only one ``_send_commands_internal`` call.
+        Asserts the leading frame carries the caller's CONFIGURATION priority."""
+        driver, rpc, dispatcher = self.driver, self.rpc, self.dispatcher
+        script = [
+            (0x01, 50),  # QueryActualLevel -> level=50
+            (0x01, 0),  # DTR0
+            (0x01, 0),  # auto-inserted EnableDeviceType(8)
+            (0x01, 255),  # QueryColourValue -> colour_type = MASK
+        ]
+        observed: list[int] = []
+        pump_task = asyncio.create_task(
+            _pump_publishes_and_reply_scripted(
+                rpc, dispatcher, driver, script, observed, batch_first_only=True
+            )
         )
-    )
-    try:
-        addr = GearShort(0)
-        await driver.run_sequence(
-            query_colour_with_level(addr, QueryActualLevel(addr), {}, ColourType.COLOUR_TEMPERATURE),
-            priority=FramePriority.CONFIGURATION,
-        )
-    finally:
-        await _cancel_background_tasks(pump_task)
-    assert observed, "no batches captured"
-    assert all(p == FramePriority.CONFIGURATION.value for p in observed), observed
+        try:
+            addr = GearShort(0)
+            await driver.run_sequence(
+                query_colour_with_level(addr, QueryActualLevel(addr), {}, ColourType.COLOUR_TEMPERATURE),
+                FramePriority.CONFIGURATION,
+                driver.logger,
+            )
+        finally:
+            await _cancel_background_tasks(pump_task)
+        assert observed, "no batches captured"
+        assert all(p == FramePriority.CONFIGURATION.value for p in observed), observed
 
 
 # --- Helpers shared by the multi-frame tests ---
 
 
-async def _collect_priorities(mqtt_client: _MockMqttClient, driver: WBDALIDriver, sink: list[int]) -> None:
+async def _collect_priorities(rpc: FakePortLoadClient, sink: list[int]) -> None:
     """Continuously decode published payloads and append every priority value
     seen into ``sink``. Cancelled by the test once the under-test coroutine
     completes."""
-    topic = _RPC_LOAD_TOPIC.format(client_id=driver.rpc_client_id)
     while True:
-        payload = await mqtt_client.wait_for_publish(topic=topic, timeout=2.0)
-        for frame in _decode_payload(payload):
+        for frame in _decode_payload(await rpc.wait_for_write(2.0)):
             sink.append(frame.priority_value)
 
 
@@ -732,7 +742,7 @@ async def _keep_replying_no_response(dispatcher: MQTTDispatcher, config: WBDALIC
 
 
 async def _pump_publishes_and_reply_scripted(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    mqtt_client: _MockMqttClient,
+    rpc: FakePortLoadClient,
     dispatcher: MQTTDispatcher,
     driver: WBDALIDriver,
     script: list[tuple[int, int]],
@@ -747,11 +757,10 @@ async def _pump_publishes_and_reply_scripted(  # pylint: disable=too-many-argume
     observe + reply between two coroutines would race for the same publish
     queue and lose messages; combining them keeps each publish on one thread.
     """
-    topic = _RPC_LOAD_TOPIC.format(client_id=driver.rpc_client_id)
     slot = 0
     script_index = 0
     while True:
-        decoded = _decode_payload(await mqtt_client.wait_for_publish(topic=topic, timeout=2.0))
+        decoded = _decode_payload(await rpc.wait_for_write(2.0))
         if batch_first_only:
             observed_priorities.append(decoded[0].priority_value)
         else:

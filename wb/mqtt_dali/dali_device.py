@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 from enum import IntEnum
 from typing import Optional
 
@@ -17,8 +18,10 @@ from dali.gear.general import (
 from .common_dali_device import (
     DaliDeviceAddress,
     DaliDeviceBase,
+    InitializationResult,
     MqttControlBase,
     Pollable,
+    notify_controls,
 )
 from .dali_common_parameters import (
     FadeTimeFadeRateParam,
@@ -56,10 +59,16 @@ from .dali_type49_parameters import Type49Parameters
 from .dali_type50_parameters import Type50Parameters
 from .dali_type51_parameters import Type51Parameters
 from .dali_type52_parameters import Type52Parameters
+from .events import BusEvent
 from .gtin_db import DaliDatabase
+from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
-from .wbdali import WBDALIDriver
+from .settle_clock import SettleBasis, SettleClock
+from .wbdali import FramePriority, WBDALIDriver
+from .wbdali_error_response import GatewayWriteSkipped, NoPowerOnBus, Overheat
 from .wbdali_utils import (
+    FramingError,
+    NoAnswerError,
     check_query_response,
     query_response,
     send_commands_with_retry,
@@ -90,20 +99,38 @@ class DaliDeviceType(IntEnum):
     DIAGNOSTICS_AND_MAINTENANCE = 52
 
 
-def request_with_retry_sequence(cmd):
+# The gateway reports these before the frame goes to the bus.
+UNSENT_ERRORS = (GatewayWriteSkipped, NoPowerOnBus, Overheat)
+
+
+def request_with_retry_sequence(cmd, retry_unsent_only: bool = False):
     """Helper function to perform a sequence with retries on failure"""
     last_error = "unknown error"
+    all_silent = True
     for _ in range(3):
         result = yield cmd
         try:
             check_query_response(result)
             return result
-        except RuntimeError as e:
+        except NoAnswerError as e:
             last_error = str(e)
-    raise RuntimeError(f"No response to {cmd} after 3 attempts; last error: {last_error}")
+        except FramingError as e:
+            if retry_unsent_only:
+                raise RuntimeError(f"Framing error in answer to {cmd}") from e
+            last_error = str(e)
+            all_silent = False
+        except RuntimeError as e:
+            if retry_unsent_only and not isinstance(result, UNSENT_ERRORS):
+                raise RuntimeError(f"Transmission error in answer to {cmd}: {e}") from e
+            last_error = str(e)
+            all_silent = False
+    message = f"No response to {cmd} after 3 attempts; last error: {last_error}"
+    if all_silent:
+        raise NoAnswerError(message)
+    raise RuntimeError(message)
 
 
-def query_device_types_sequence(addr: Address):
+def query_device_types_sequence(addr: Address, logger: logging.Logger):
     """Obtain a list of part 2xx device types supported by control gear"""
     r = yield from request_with_retry_sequence(QueryDeviceType(addr))
     if r.raw_value.as_integer < 254:
@@ -117,7 +144,19 @@ def query_device_types_sequence(addr: Address):
     last_seen = -1
     result = []
     while True:
-        r = yield from request_with_retry_sequence(QueryNextDeviceType(addr))
+        try:
+            r = yield from request_with_retry_sequence(QueryNextDeviceType(addr), retry_unsent_only=True)
+        except NoAnswerError:
+            if len(result) == 0:
+                raise
+            # Non-compliant gear may stay silent instead of answering 254 at the end of the list.
+            logger.warning(
+                "%s did not answer QueryNextDeviceType with 254 after device types %s; "
+                "taking them as the complete list",
+                addr,
+                result,
+            )
+            return result
         if r.raw_value.as_integer == 254:
             if len(result) == 0:
                 raise RuntimeError("No device types returned by QueryNextDeviceType")
@@ -128,18 +167,35 @@ def query_device_types_sequence(addr: Address):
         last_seen = r.raw_value.as_integer
 
 
+def _pollable_name(pollable: Pollable) -> str:
+    if isinstance(pollable, MqttControlBase):
+        return pollable.control_info.id
+    return type(pollable).__name__
+
+
 class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
+    logger_name_prefix = "dali_"
 
     def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         address: DaliDeviceAddress,
         bus_id: str,
         gtin_db: DaliDatabase,
+        common_schema: dict,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
+        on_off: Optional[OnOffConfig] = None,
     ) -> None:
         super().__init__(
-            address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
+            address,
+            bus_id,
+            "DALI",
+            "",
+            DaliCommandsCompatibilityLayer(),
+            gtin_db,
+            common_schema,
+            mqtt_id,
+            name,
         )
         self.types: list[int] = []
 
@@ -149,6 +205,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         self._dimming_curve_state = DimmingCurveState()
         self._groups_parameter = GroupsParam()
         self._fade_parameter = FadeTimeFadeRateParam()
+        self._on_off_param = OnOffSettingsParam(on_off)
         # Prediction-input owners shared with the settings page and the background
         # fetch (same instances), read by ActualLevelControl.apply.
         self._max_level_param = MaxLevelParam()
@@ -216,6 +273,11 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         """Owner of the tracked fade-time code (init + sniffed SetFadeTime)."""
         return self._fade_parameter
 
+    @property
+    def on_off_config(self) -> Optional[OnOffConfig]:
+        """``None`` when the device has no on/off block, so no on_off control."""
+        return self._on_off_param.config
+
     # --- Hooks for subclasses ---
 
     def get_common_mqtt_controls(self) -> list[MqttControlBase]:
@@ -227,16 +289,22 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         ]
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:
-        mqtt_controls: list[MqttControlBase] = [
-            ErrorStatusControl(),
-            ActualLevelControl(
-                self._dimming_curve_state,
-                max_level=self._max_level_param,
-                min_level=self._min_level_param,
-                scene_source=self._scene_level_source(),
-            ),
-            WantedLevelControl(self._dimming_curve_state),
-        ]
+        mqtt_controls: list[MqttControlBase] = [ErrorStatusControl()]
+        if self.on_off_config is not None:
+            mqtt_controls.append(
+                OnOffControl(self._on_off_param, self._dimming_curve_state, self._fade_parameter)
+            )
+        mqtt_controls.extend(
+            [
+                ActualLevelControl(
+                    self._dimming_curve_state,
+                    max_level=self._max_level_param,
+                    min_level=self._min_level_param,
+                    scene_source=self._scene_level_source(),
+                ),
+                WantedLevelControl(self._dimming_curve_state),
+            ]
+        )
         mqtt_controls.extend(make_controls())
         for type_handler in self._type_handlers:
             mqtt_controls.extend(type_handler.get_mqtt_controls())
@@ -244,16 +312,18 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
             control.control_info.state.meta.order = i
         return mqtt_controls
 
-    def _build_pollables(self) -> list[Pollable]:
-        readable_controls = [c for c in self._controls.values() if c.is_readable()]
+    def _build_pollables(self, mqtt_controls: list[MqttControlBase]) -> list[Pollable]:
+        readable_controls = [c for c in mqtt_controls if isinstance(c, Pollable)]
         return [*readable_controls, *self._standalone_pollables]
 
     async def _initialize_impl(  # pylint: disable=too-many-branches
         self, driver: WBDALIDriver
-    ) -> tuple[list[SettingsParamBase], list[SettingsParamBase]]:
+    ) -> InitializationResult:
         address = GearShort(self.address.short)
 
-        types = await driver.run_sequence(query_device_types_sequence(address))
+        types = await driver.run_sequence(
+            query_device_types_sequence(address, self.logger), FramePriority.USER_ACTION, self.logger
+        )
         if types is None:
             raise RuntimeError(
                 f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
@@ -329,6 +399,7 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
             parameter_handlers.extend([self._scenes_param, PowerOnLevelParam(), SystemFailureLevelParam()])
         for type_handler in self._type_handlers:
             parameter_handlers.extend(type_handler._parameters)  # pylint: disable=protected-access
+        parameter_handlers.append(self._on_off_param)
 
         # Group parameter handlers for group settings page in UI
         group_parameter_handlers: list[SettingsParamBase] = [
@@ -348,9 +419,61 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
                 if self._type8_handler is not None:
                     group_parameter_handlers.extend(self._type8_handler.get_group_parameters())
 
-        return (parameter_handlers, group_parameter_handlers)
+        # Built and read here: the set depends on what the type loop found on the bus.
+        mqtt_controls = self._build_mqtt_controls()
+        await self._read_initial_control_state(driver, mqtt_controls)
+        return InitializationResult(parameter_handlers, group_parameter_handlers, mqtt_controls)
 
     # --- Private ---
+
+    async def _read_initial_control_state(
+        self, driver: WBDALIDriver, mqtt_controls: list[MqttControlBase]
+    ) -> None:
+        """Read current state into the controls just built, before they are installed; never fatal."""
+        now = asyncio.get_running_loop().time()
+        address = self._compat.getAddress(self.address.short)
+        events: list[BusEvent] = []
+
+        async def drain(pollable: Pollable) -> None:
+            while True:
+                step = pollable.next_poll_step(driver, address, sys.maxsize, sys.maxsize, now, self.logger)
+                if step.poll_coroutine is None:
+                    return
+                events.extend(await step.poll_coroutine())
+                if not step.has_more:
+                    return
+
+        pollables = self._build_pollables(mqtt_controls)
+        outcomes = await asyncio.gather(*(drain(p) for p in pollables), return_exceptions=True)
+        reconfirm_at = self._startup_reconfirm_moment()
+        for pollable, outcome in zip(pollables, outcomes):
+            if isinstance(outcome, BaseException):
+                self.logger.warning(
+                    "Initial read of %s failed for %s: %s",
+                    _pollable_name(pollable),
+                    self.name,
+                    outcome,
+                    # Ordinary read failures never reach here, so this is our own bug.
+                    exc_info=outcome,
+                )
+                pollable.cancel_pending_poll()
+            elif reconfirm_at is not None and pollable.follows_device_fade:
+                pollable.schedule_poll_at(reconfirm_at)
+        # Dispatched like any other poll outcome, so the setpoints mirror what was read too.
+        for event in events:
+            notify_controls(mqtt_controls, event, self.logger)
+
+    def _startup_reconfirm_moment(self) -> Optional[float]:
+        """When to re-read what the fade moves, or None for gear whose fade time is zero.
+
+        A fade started before service start was never seen on the bus, so what the initial read
+        got can be mid-transition. Without a fade the gear is already at its level.
+        """
+        if self._fade_parameter.fade_time == 0:
+            return None
+        return asyncio.get_running_loop().time() + SettleClock().settle_for(
+            SettleBasis.FADE, self._fade_parameter.fade_time
+        )
 
     def _scene_level_source(self) -> Optional[SceneLevelSource]:
         # DT8 keeps scene levels on its colour scenes; other gear on ScenesParam.
@@ -363,7 +486,7 @@ async def legacy_identify_sequence(
     driver: WBDALIDriver,
     address: GearShort,
     setup_rgb: bool,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
 ) -> None:
 
     await send_with_retry(driver, Initialise(address=address.address), logger)

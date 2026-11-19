@@ -12,7 +12,6 @@ from .application_controller import (
     CommissioningStartResult,
     CommissioningState,
     CommissioningStatus,
-    DriverFactory,
 )
 from .common_dali_device import DaliDeviceAddress
 from .dali2_device import Dali2Device
@@ -20,17 +19,21 @@ from .dali_device import DaliDevice
 from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
 from .mqtt_dispatcher import MQTTDispatcher
-from .mqtt_rpc_client import rpc_call, wait_for_rpc_endpoint
+from .mqtt_rpc_client import MQTTRPCClient, rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
+from .on_off_control import on_off_config_from_json, on_off_config_to_json
 from .send_command import (
     CommandInfo,
     build_command_catalog,
     build_command_registry,
     parse_expression,
 )
+from .wbdali import WBDALIConfig, WBDALIDriver
 from .wbmqtt import remove_topics_by_driver
 
 DEFAULT_WEBSOCKET_PORT = 8080
+# How long the start waits for wb-mqtt-serial before reporting it missing; it waits on after that.
+WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S = 5.0
 MIN_WEBSOCKET_PORT = 1
 MAX_WEBSOCKET_PORT = 65535
 
@@ -38,6 +41,10 @@ MAX_WEBSOCKET_PORT = 65535
 def commissioning_topic(bus_uid: str) -> str:
     """Retained MQTT topic that carries commissioning state for a bus."""
     return f"/wb-dali/{bus_uid}/commissioning"
+
+
+class BusPollingError(Exception):
+    pass
 
 
 def check_short_address_conflict(
@@ -151,54 +158,76 @@ def check_mqtt_id_conflict(
                 raise ValueError(f"mqtt_id '{new_mqtt_id}' is already used by another device")
 
 
-def bus_from_json(  # pylint: disable=too-many-arguments, R0917
-    gateway_mqtt_device_id: str,
-    bus_index: int,
+# How a host builds a bus driver; see make_bus_driver for the controller's.
+DriverFactory = Callable[[str, int, MQTTDispatcher], WBDALIDriver]
+
+
+def make_bus_driver(
+    gateway_mqtt_device_id: str, bus_index: int, mqtt_dispatcher: MQTTDispatcher
+) -> WBDALIDriver:
+    """The controller's bus driver: wb-mqtt-serial in between, over the MQTT link."""
+    return WBDALIDriver(
+        WBDALIConfig(device_name=gateway_mqtt_device_id, bus=bus_index),
+        mqtt_dispatcher,
+        logging.getLogger(f"{gateway_mqtt_device_id}_bus_{bus_index}"),
+        MQTTRPCClient(),
+    )
+
+
+def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     data: dict,
     mqtt_dispatcher: MQTTDispatcher,
+    driver: WBDALIDriver,
     gtin_db: DaliDatabase,
-    driver_factory: Optional[DriverFactory] = None,
+    common_schema: dict,
+    on_polling_failure: Callable[[], None],
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
     dali2_devices: list[Dali2Device] = []
-    bus_uid = f"{gateway_mqtt_device_id}_bus_{bus_index}"
+    bus_uid = f"{driver.config.device_name}_bus_{driver.config.bus}"
     for dev_conf in data.get("devices", []):
         if dev_conf.get("dali2", False):
             device = Dali2Device(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
                 gtin_db,
+                common_schema,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
             )
             dali2_devices.append(device)
         else:
+            on_off_conf = dev_conf.get("on_off")
             device = DaliDevice(
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
                 gtin_db,
+                common_schema,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
+                on_off=on_off_config_from_json(on_off_conf) if on_off_conf is not None else None,
             )
             dali_devices.append(device)
 
     ap_conf = ApplicationControllerConfig(
-        gateway_mqtt_device_id,
-        bus_index,
         dali_devices,
         dali2_devices,
         data.get("bus_monitor_enabled", False),
         data.get("bus_monitor_syslog_enabled", False),
+        group_on_off={
+            group_conf["number"]: on_off_config_from_json(group_conf["on_off"])
+            for group_conf in data.get("groups", [])
+        },
     )
 
-    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db, driver_factory=driver_factory)
+    res = ApplicationController(ap_conf, mqtt_dispatcher, driver, gtin_db, common_schema, on_polling_failure)
     return res
 
 
 def bus_to_json(bus: ApplicationController) -> dict:
     return {
         "id": bus.uid,
-        "name": bus.bus_name,
+        "name": bus.bus_name.en,
         "devices": list(
             map(
                 lambda dev: {
@@ -209,6 +238,9 @@ def bus_to_json(bus: ApplicationController) -> dict:
                 bus.dali_devices + bus.dali2_devices,
             )
         ),
+        "groups": [
+            {"id": group.uid, "number": number} for number, group in sorted(bus.group_devices.items())
+        ],
         "commissioning": bus.commissioning_state.to_dict(),
         "bus_monitor_enabled": bus.bus_monitor_enabled,
         "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
@@ -223,18 +255,22 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         mqtt_dispatcher: MQTTDispatcher,
         config_path: str,
         gtin_db: DaliDatabase,
+        common_schema: dict,
         command_registry: Optional[Dict[str, CommandInfo]] = None,
         driver_factory: Optional[DriverFactory] = None,
     ) -> None:
+        """``driver_factory`` builds each bus driver; a host that owns the Modbus side hands in its own."""
         if command_registry is None:
             command_registry = build_command_registry()
-        self._driver_factory = driver_factory
+        self._driver_factory = driver_factory or make_bus_driver
         # Hosts that keep a copy of the config (the WASM editor persists it
         # across page loads) hear about every write here.
         self._config_listeners: list[Callable[[], None]] = []
         # Per bus: set while no commissioning run is in progress.
         self._commissioning_finished: Dict[str, asyncio.Event] = {}
         self.rpc_server = MQTTRPCServer("wb-mqtt-dali", mqtt_dispatcher)
+        self._finished = asyncio.Event()
+        self._bus_failed = False
         self.wb_dali_gateways: list[WbDaliGateway] = list(
             map(
                 lambda gw_conf: WbDaliGateway(
@@ -242,7 +278,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                     buses=list(
                         map(
                             lambda bus: bus_from_json(
-                                gw_conf["device_id"], bus[0], bus[1], mqtt_dispatcher, gtin_db, driver_factory
+                                bus[1],
+                                mqtt_dispatcher,
+                                self._driver_factory(gw_conf["device_id"], bus[0], mqtt_dispatcher),
+                                gtin_db,
+                                common_schema,
+                                self._on_bus_failure,
                             ),
                             enumerate(gw_conf.get("buses", []), 1),
                         )
@@ -261,10 +302,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         self._debug = config.get("debug", False)
 
         self._gtin_db = gtin_db
+        self._common_schema = common_schema
 
         self._command_registry = command_registry
 
-    async def start(self) -> None:
+    async def run(self) -> None:
+        """Serve until stop(); raise BusPollingError once the polling loop of any bus has died."""
         try:
             await remove_topics_by_driver(self._mqtt_dispatcher, "wb-mqtt-dali")
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -276,10 +319,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 "config",
                 "Load",
                 self._mqtt_dispatcher,
+                WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S,
             )
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logging.warning("wb-mqtt-serial RPC endpoint is not available: %s", e)
-            raise RuntimeError("Required RPC endpoint wb-mqtt-serial/config/Load is not available") from e
+        except TimeoutError:
+            logging.critical("RPC endpoint wb-mqtt-serial/config/Load is not available, waiting for it")
+            await wait_for_rpc_endpoint("wb-mqtt-serial", "config", "Load", self._mqtt_dispatcher, None)
+            logging.info("RPC endpoint wb-mqtt-serial/config/Load is available, starting")
 
         res = await asyncio.gather(
             *[gw.start() for gw in self.wb_dali_gateways],
@@ -371,8 +416,12 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
             "ListCommands",
             self.list_commands_rpc_handler,
         )
+        await self._finished.wait()
+        if self._bus_failed:
+            raise BusPollingError("Polling loop of a DALI bus failed")
 
     async def stop(self) -> None:
+        self._finished.set()
         await self.rpc_server.stop()
         await self._clear_commissioning_state_for_all_buses()
         res = await asyncio.gather(
@@ -382,6 +431,10 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         for r in res:
             if isinstance(r, Exception):
                 raise r
+
+    def _on_bus_failure(self) -> None:
+        self._bus_failed = True
+        self._finished.set()
 
     def _iter_buses(self):
         for gw in self.wb_dali_gateways:
@@ -393,7 +446,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         idle_payload = json.dumps(CommissioningState().to_dict())
         for bus in self._iter_buses():
             try:
-                await self._mqtt_dispatcher.client.publish(
+                await self._mqtt_dispatcher.publish(
                     commissioning_topic(bus.uid), idle_payload, qos=1, retain=True
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -402,7 +455,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     async def _clear_commissioning_state_for_all_buses(self) -> None:
         for bus in self._iter_buses():
             try:
-                await self._mqtt_dispatcher.client.publish(
+                await self._mqtt_dispatcher.publish(
                     commissioning_topic(bus.uid), payload=None, qos=1, retain=True
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -450,6 +503,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         if new_mqtt_id is not None and new_mqtt_id != device.mqtt_id:
             check_mqtt_id_conflict(self.wb_dali_gateways, device, new_mqtt_id)
         await bus.apply_parameters(device, new_params)
+        await self._save_configuration()
         return device.params
 
     async def rescan_bus_rpc_handler(self, params: dict):
@@ -477,7 +531,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
             async def _publish_and_save() -> None:
                 payload = json.dumps(state.to_dict())
                 try:
-                    await self._mqtt_dispatcher.client.publish(topic, payload, qos=1, retain=True)
+                    await self._mqtt_dispatcher.publish(topic, payload, qos=1, retain=True)
                 except Exception as exc:  # pylint: disable=broad-exception-caught
                     logging.error("Failed to publish commissioning state for bus %s: %s", bus_uid, exc)
                 if state.status == CommissioningStatus.COMPLETED:
@@ -542,12 +596,17 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         group_id = params.get("groupId")
         if group_id is None:
             raise ValueError("groupId parameter is required")
-        new_params = params.get("config", {})
+        new_params = dict(params.get("config", {}))
         bus, group_index = self._get_bus_and_group_index_by_id(group_id)
         if bus is None or group_index is None:
             raise ValueError(f"Group {group_id} not found")
         await bus.apply_group_parameters(group_index, new_params)
-        return {}
+        await self._save_configuration()
+        group_device = bus.group_devices.get(group_index)
+        if group_device is None:
+            # Empty config and schema: the write took the group away, the editor has no page left.
+            return {"config": {}, "schema": {}}
+        return {"config": group_device.params, "schema": group_device.schema}
 
     async def identify_device_rpc_handler(self, params: dict):
         device_id = params.get("deviceId")
@@ -655,17 +714,11 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     def _get_bus_and_group_index_by_id(
         self, group_id: str
     ) -> Tuple[Optional[ApplicationController], Optional[int]]:
-        bus_uid, sep, index_str = group_id.rpartition("_g")
-        if not sep:
-            return None, None
-        try:
-            group_index = int(index_str)
-        except ValueError:
-            return None, None
-        if not 0 <= group_index <= 15:
-            return None, None
-        bus = next((b for b in self._iter_buses() if b.uid == bus_uid), None)
-        return (bus, group_index) if bus is not None else (None, None)
+        for bus in self._iter_buses():
+            for number, group in bus.group_devices.items():
+                if group.uid == group_id:
+                    return bus, number
+        return None, None
 
     def _get_bus_and_device_by_id(
         self, device_id: str
@@ -679,6 +732,11 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
     async def _save_configuration(self) -> None:
         async with self._config_lock:
             self._write_configuration()
+
+    def _make_driver(self, gateway_mqtt_device_id: str, bus_index: int) -> WBDALIDriver:
+        # Looked up on demand: tests build gateways without __init__.
+        factory = getattr(self, "_driver_factory", make_bus_driver)
+        return factory(gateway_mqtt_device_id, bus_index, self._mqtt_dispatcher)
 
     def _write_configuration(self) -> None:
         save_configuration(self._config_path, self._debug, self.wb_dali_gateways)
@@ -751,12 +809,14 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 buses = []
                 bus_count = 3
                 for bus_index in range(1, bus_count + 1):
-                    apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
+                    apc_conf = ApplicationControllerConfig([], [])
                     apc = ApplicationController(
                         apc_conf,
                         self._mqtt_dispatcher,
+                        self._make_driver(did, bus_index),
                         self._gtin_db,
-                        driver_factory=getattr(self, "_driver_factory", None),
+                        self._common_schema,
+                        self._on_bus_failure,
                     )
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)
@@ -777,6 +837,24 @@ def get_dict_for_device_config(device: Union[DaliDevice, Dali2Device]) -> dict:
         res["mqtt_id"] = device.mqtt_id
     if device.has_custom_name:
         res["name"] = device.name
+    if isinstance(device, DaliDevice) and device.on_off_config is not None:
+        res["on_off"] = on_off_config_to_json(device.on_off_config)
+    return res
+
+
+def _get_dict_for_bus_config(bus: ApplicationController) -> dict:
+    res: dict = {
+        "devices": [get_dict_for_device_config(dev) for dev in bus.dali_devices + bus.dali2_devices],
+        "bus_monitor_enabled": bus.bus_monitor_enabled,
+        "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
+    }
+    groups = [
+        {"number": number, "on_off": on_off_config_to_json(device.on_off_config)}
+        for number, device in sorted(bus.group_devices.items())
+        if device.on_off_config is not None
+    ]
+    if groups:
+        res["groups"] = groups
     return res
 
 
@@ -797,17 +875,7 @@ def save_configuration(config_path: str, debug: bool, gateways: list[WbDaliGatew
                         "device_id": gw.uid,
                         "websocket_enabled": gw.websocket_enabled,
                         "websocket_port": gw.websocket_port,
-                        "buses": [
-                            {
-                                "devices": [
-                                    get_dict_for_device_config(dev)
-                                    for dev in bus.dali_devices + bus.dali2_devices
-                                ],
-                                "bus_monitor_enabled": bus.bus_monitor_enabled,
-                                "bus_monitor_syslog_enabled": bus.bus_monitor_syslog_enabled,
-                            }
-                            for bus in gw.buses
-                        ],
+                        "buses": [_get_dict_for_bus_config(bus) for bus in gw.buses],
                     }
                     for gw in gateways
                 ]

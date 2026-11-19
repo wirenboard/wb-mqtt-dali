@@ -5,11 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from wb.mqtt_dali.application_controller import PollScheduler
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    MqttControl,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, MqttControlBase
 from wb.mqtt_dali.dali_controls import ErrorStatusControl
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type8_parameters import ColourType, Type8Parameters
@@ -19,18 +15,15 @@ from wb.mqtt_dali.dali_type21_parameters import Type21Parameters
 from wb.mqtt_dali.dali_type49_parameters import Type49Parameters
 from wb.mqtt_dali.dali_type51_parameters import Type51Parameters
 from wb.mqtt_dali.device_publisher import ControlInfo
-from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
+from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-# pylint: disable-next=protected-access
-DaliDeviceBase._common_schema = {"title": "test-schema"}
+from ._common_schema import load_common_schema
+from ._control_stubs import ReadableControl
 
 
-def _readable_control(control_id: str, poll_interval=5.0) -> MqttControl:
-    return MqttControl(
-        control_info=ControlInfo(control_id, ControlState(ControlMeta(read_only=True), "0")),
-        query_builder=lambda addr, _id=control_id: f"Q_{_id}",
-        value_formatter=lambda resp: "v",
+def _readable_control(control_id: str, poll_interval=5.0) -> MqttControlBase:
+    return ReadableControl(
+        ControlInfo(control_id, ControlState(ControlMeta(read_only=True), "0")),
         poll_interval=poll_interval,
     )
 
@@ -43,6 +36,7 @@ def _make_dali_device(
         DaliDeviceAddress(short=short, random=0),
         "bus1",
         MagicMock(),
+        load_common_schema(),
         mqtt_id,
         None,
     )
@@ -190,8 +184,8 @@ async def test_polling_tick_budget_capped_at_three_commands():
 
     sent_per_call = []
 
-    async def fake_send(cmds, _source=None, priority=None):
-        del priority
+    async def fake_send(cmds, _source=None, priority=None, logger=None):
+        del priority, logger
         sent_per_call.append(list(cmds))
         return [_ok_response() for _ in cmds]
 
@@ -262,8 +256,8 @@ async def test_dt8_colour_step_consumes_whole_tick():
     scheduler = PollScheduler()
     scheduler.set_devices([dev_a, dev_b])
 
-    async def opening_batch_send(cmds, _src=None, priority=None):
-        del priority
+    async def opening_batch_send(cmds, _src=None, priority=None, logger=None):
+        del priority, logger
         # Last response carries the active colour type (RGBWAF = 0x80).
         responses = [_ok_response() for _ in cmds]
         responses[-1].raw_value.as_integer = ColourType.RGBWAF.value
@@ -298,7 +292,7 @@ async def test_failed_poll_still_advances_schedule():
 
     poll_results = await res.poll_coroutine()
     assert len(poll_results) == 1
-    assert poll_results[0].error == ControlError.READ
+    assert c.decoded_responses == [None]  # the transport rejected the answer
 
     assert c.next_due_at == 5.0
     assert not c.is_poll_due(4.9)
@@ -317,8 +311,8 @@ async def test_overdue_deadline_after_quiescent_does_not_burst_catch_up():
 
     sent_per_call = []
 
-    async def fake_send(cmds, _source=None, priority=None):
-        del priority
+    async def fake_send(cmds, _source=None, priority=None, logger=None):
+        del priority, logger
         sent_per_call.append(list(cmds))
         return [_ok_response() for _ in cmds]
 

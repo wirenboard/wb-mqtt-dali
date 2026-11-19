@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -70,7 +71,7 @@ async def test_read_returns_populated_fields(param, mock_driver):
     )
     mock_driver.run_sequence.return_value = raw
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
 
     info = result["luminaire_info"]
     assert info["year_of_manufacture"] == 24
@@ -90,7 +91,7 @@ async def test_read_skips_flag_values(param, mock_driver):
     raw = _make_raw({oem.CRI: 90})
     mock_driver.run_sequence.return_value = raw
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     info = result["luminaire_info"]
     assert "cri" in info
     assert "year_of_manufacture" not in info
@@ -102,7 +103,7 @@ async def test_read_includes_valid_gtin(param, mock_driver):
     raw = _make_raw({oem.YearOfManufacture: 2026})
     mock_driver.run_sequence.return_value = raw
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert result["luminaire_info"]["year_of_manufacture"] == 2026
 
 
@@ -112,7 +113,7 @@ async def test_read_skips_empty_string_fields(param, mock_driver):
     raw = _make_raw({oem.LuminaireColor: "", oem.LuminaireIdentification: "\x00\x00", oem.CRI: 80})
     mock_driver.run_sequence.return_value = raw
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert "luminaire_color" not in result["luminaire_info"]
     assert "luminaire_identification" not in result["luminaire_info"]
 
@@ -123,14 +124,14 @@ async def test_read_skips_cct_part209(param, mock_driver):
     raw = _make_raw({oem.CCT: "Part 209 implemented", oem.CRI: 80})
     mock_driver.run_sequence.return_value = raw
 
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert "cct" not in result["luminaire_info"]
 
 
 @pytest.mark.asyncio
 async def test_read_returns_empty_dict_when_no_fields(param, mock_driver):
     mock_driver.run_sequence.return_value = _make_raw({})
-    result = await param.read(mock_driver, short_address=1)
+    result = await param.read(mock_driver, 1, logging.getLogger("test"))
     assert result == {}
 
 
@@ -140,7 +141,7 @@ async def test_read_raises_on_bank_error(param, mock_driver):
 
     mock_driver.run_sequence.side_effect = ResponseError("framing error")
     with pytest.raises(RuntimeError, match="Failed to read DT50 memory bank"):
-        await param.read(mock_driver, short_address=1)
+        await param.read(mock_driver, 1, logging.getLogger("test"))
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +188,7 @@ def test_get_schema_has_ru_translations(param):
 
 @pytest.mark.asyncio
 async def test_write_returns_empty(param, mock_driver):
-    result = await param.write(mock_driver, short_address=1, value={"luminaire_info": {"cri": 99}})
+    result = await param.write(mock_driver, 1, {"luminaire_info": {"cri": 99}}, logging.getLogger("test"))
     assert result == {}
 
 

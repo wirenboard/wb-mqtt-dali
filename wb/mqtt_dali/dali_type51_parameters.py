@@ -18,11 +18,13 @@ from dali.memory.energy import (
     ApparentPower,
 )
 
+from .bus_traffic import BusTrafficSource
 from .common_dali_device import (
-    ControlPollResult,
     ControlsPollRequestResult,
     EventPollSchedule,
     MqttControlBase,
+    NotifyResult,
+    Pollable,
     PropertyStartOrder,
     read_bank_as_dict,
     try_read_bank_as_dict,
@@ -30,9 +32,11 @@ from .common_dali_device import (
 from .dali_compat import DaliCommandsCompatibilityLayer
 from .dali_parameters import TypeParameters
 from .device_publisher import ControlInfo
+from .events import ActiveEnergyRead, BusEvent
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbdali_utils import check_command_failed
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 # Bank 202 / 203 / 204 layout per IEC 62386-252:2023.
 # Energy (totalizer): scale at 0x04, six bytes at 0x05..0x0a.
@@ -126,17 +130,15 @@ class Type51EnergyParam(SettingsParamBase):
         self._has_apparent = False
         self._has_loadside = False
 
-    async def read(
-        self, driver: WBDALIDriver, short_address: Address, logger: Optional[logging.Logger] = None
-    ) -> dict:
-        del logger
-
+    async def read(self, driver: WBDALIDriver, short_address: Address, logger: logging.Logger) -> dict:
         active_data = await read_bank_as_dict(
             driver,
             BANK_202,
             short_address,
             self._compat,
-            error_label="DT51 memory bank 202",
+            "DT51 memory bank 202",
+            logger,
+            [ActiveEnergy, ActivePower],
         )
 
         self._has_apparent = False
@@ -146,7 +148,9 @@ class Type51EnergyParam(SettingsParamBase):
             _extract_energy_power(active_data, ActiveEnergy, ActivePower, "active_energy", "active_power")
         )
 
-        apparent_data = await try_read_bank_as_dict(driver, BANK_203, short_address, self._compat)
+        apparent_data = await try_read_bank_as_dict(
+            driver, BANK_203, short_address, self._compat, logger, [ApparentEnergy, ApparentPower]
+        )
         if apparent_data is not None:
             self._has_apparent = True
             fields.update(
@@ -155,7 +159,14 @@ class Type51EnergyParam(SettingsParamBase):
                 )
             )
 
-        loadside_data = await try_read_bank_as_dict(driver, BANK_204, short_address, self._compat)
+        loadside_data = await try_read_bank_as_dict(
+            driver,
+            BANK_204,
+            short_address,
+            self._compat,
+            logger,
+            [ActiveEnergyLoadside, ActivePowerLoadside],
+        )
         if loadside_data is not None:
             self._has_loadside = True
             fields.update(
@@ -247,8 +258,18 @@ class Type51EnergyParam(SettingsParamBase):
         }
 
 
+def _first_command_error(cmds: list, responses: list) -> Optional[RuntimeError]:
+    return next(
+        (err for err in (check_command_failed(c, r) for c, r in zip(cmds, responses)) if err is not None),
+        None,
+    )
+
+
 async def _read_active_scale(
-    driver: WBDALIDriver, short_address: Address, compat: DaliCommandsCompatibilityLayer
+    driver: WBDALIDriver,
+    short_address: Address,
+    compat: DaliCommandsCompatibilityLayer,
+    logger: logging.Logger,
 ) -> int:
     """Read the active-energy ROM scale factor (bank 202, addr 0x04)."""
     responses = await driver.send_commands(
@@ -257,7 +278,9 @@ async def _read_active_scale(
             compat.DTR0(_ENERGY_SCALE_ADDR),
             compat.ReadMemoryLocation(short_address),
         ],
-        priority=FramePriority.CONFIGURATION,
+        BusTrafficSource.WB,
+        FramePriority.CONFIGURATION,
+        logger,
     )
     response = responses[-1]
     if response.raw_value is None:
@@ -272,7 +295,7 @@ async def _read_active_scale(
 class _ActiveEnergyControl(MqttControlBase):
     """Read-only `value` control for the active-energy totalizer.
 
-    Has no `query_builder` — Type51Parameters owns the chunked polling. The
+    Has no query of its own — Type51Parameters owns the chunked polling. The
     control is registered so MQTT shows the field as soon as the device has
     initialized, even before the first cycle completes.
     """
@@ -287,16 +310,24 @@ class _ActiveEnergyControl(MqttControlBase):
                         title=TranslatedTitle("Active energy", "Активная энергия"),
                         read_only=True,
                         units="kWh",
-                    )
+                    ),
+                    "",
                 ),
             ),
         )
 
-    def is_readable(self) -> bool:
-        return False
+    def notify(self, event: BusEvent) -> NotifyResult:
+        if not isinstance(event, ActiveEnergyRead):
+            return NotifyResult.NOTHING_TO_PUBLISH
+        if event.failed:
+            self.control_info.state.set_read_error()
+            return NotifyResult.PUBLISH_STATE
+        self.control_info.state.value = f"{event.kwh:.3f}"
+        self.control_info.state.clear_errors()
+        return NotifyResult.PUBLISH_STATE
 
 
-class Type51Parameters(EventPollSchedule, TypeParameters):
+class Type51Parameters(EventPollSchedule, TypeParameters, Pollable):
     """DT51 (Energy reporting) integration.
 
     Owns:
@@ -328,15 +359,14 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
         self,
         driver: WBDALIDriver,
         short_address: GearShort,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> None:
         # Cache the ROM scale byte at init time so chunked cycles can decode
         # without re-reading it; in-cycle fallback covers init-time failures.
         try:
-            self._scale_byte = await _read_active_scale(driver, short_address, self._compat)
+            self._scale_byte = await _read_active_scale(driver, short_address, self._compat, logger)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            if logger is not None:
-                logger.info("DT51 scale factor not available yet for %s: %s", short_address, e)
+            logger.info("DT51 scale factor not available yet for %s: %s", short_address, e)
             self._scale_byte = None
 
     def get_mqtt_controls(self) -> list[MqttControlBase]:
@@ -366,9 +396,8 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
         max_commands: int,
         default_max_commands: int,
         now: float,
-        logger: Optional[logging.Logger] = None,
+        logger: logging.Logger,
     ) -> ControlsPollRequestResult:
-        del logger
         # DT51 chunks are 4 cmds and the default tick budget is 3 — overshoot
         # is allowed but only when no other commands have been issued this tick.
         if max_commands < default_max_commands:
@@ -383,17 +412,19 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
         if self._scale_byte is None and not progress.bytes_read:
             return ControlsPollRequestResult(
                 has_more=True,
-                poll_coroutine=lambda: self._do_scale_chunk(driver, address),
+                poll_coroutine=lambda: self._do_scale_chunk(driver, address, logger),
                 commands_count=4,
             )
         more_after_this = progress.next_chunk_index < (_ENERGY_DATA_LEN // _ENERGY_CHUNK_SIZE) - 1
         return ControlsPollRequestResult(
             has_more=more_after_this,
-            poll_coroutine=lambda: self._do_chunk(driver, address, progress),
+            poll_coroutine=lambda: self._do_chunk(driver, address, progress, logger),
             commands_count=4,
         )
 
-    async def _do_scale_chunk(self, driver: WBDALIDriver, address: Address) -> list[ControlPollResult]:
+    async def _do_scale_chunk(
+        self, driver: WBDALIDriver, address: Address, logger: logging.Logger
+    ) -> list[BusEvent]:
         # 4-cmd chunk reading scale at 0x04. The second ReadMemoryLocation advances
         # DTR0 past addr 0x05; its result is discarded and energy re-read next tick.
         cmds = [
@@ -403,14 +434,15 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
             self._compat.ReadMemoryLocation(address),
         ]
         try:
-            responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
-        except Exception:  # pylint: disable=broad-exception-caught
-            return self._fail_cycle()
-        scale_resp = responses[2]
-        raw = getattr(scale_resp, "raw_value", None)
-        if raw is None or getattr(raw, "error", False):
-            return self._fail_cycle()
-        self._scale_byte = raw.as_integer
+            responses = await driver.send_commands(
+                cmds, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY, logger
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return self._fail_cycle(cmds, e, logger)
+        error = _first_command_error(cmds[:3], responses[:3])
+        if error is not None:
+            return self._fail_cycle(cmds, error, logger)
+        self._scale_byte = responses[2].raw_value.as_integer
         return []
 
     async def _do_chunk(
@@ -418,7 +450,8 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
         driver: WBDALIDriver,
         address: Address,
         progress: _Type51EnergyReadProgress,
-    ) -> list[ControlPollResult]:
+        logger: logging.Logger,
+    ) -> list[BusEvent]:
         cmds = [
             self._compat.DTR1(BANK_202.address),
             self._compat.DTR0(progress.next_data_address),
@@ -426,42 +459,39 @@ class Type51Parameters(EventPollSchedule, TypeParameters):
             self._compat.ReadMemoryLocation(address),
         ]
         try:
-            responses = await driver.send_commands(cmds, priority=FramePriority.PERIODIC_QUERY)
-        except Exception:  # pylint: disable=broad-exception-caught
-            return self._fail_cycle()
+            responses = await driver.send_commands(
+                cmds, BusTrafficSource.WB, FramePriority.PERIODIC_QUERY, logger
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            return self._fail_cycle(cmds, e, logger)
 
-        read_responses = responses[-_ENERGY_CHUNK_SIZE:]
-        new_bytes: list = []
-        for response in read_responses:
-            raw = getattr(response, "raw_value", None)
-            if raw is None or getattr(raw, "error", False):
-                return self._fail_cycle()
-            new_bytes.append(raw.as_integer)
-
-        progress.bytes_read.extend(new_bytes)
+        error = _first_command_error(cmds, responses)
+        if error is not None:
+            return self._fail_cycle(cmds, error, logger)
+        progress.bytes_read.extend(
+            response.raw_value.as_integer for response in responses[-_ENERGY_CHUNK_SIZE:]
+        )
 
         if not progress.is_complete():
             return []
 
         return self._finish_cycle(progress.bytes_read)
 
-    def _fail_cycle(self) -> list[ControlPollResult]:
+    def _fail_cycle(self, cmds: list, error: Exception, logger: logging.Logger) -> list[BusEvent]:
+        logger.warning(
+            "Failed to poll control %s with %s: %s", _ACTIVE_ENERGY_CONTROL_ID, [str(c) for c in cmds], error
+        )
         self._read_progress = None
-        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)]
+        return [ActiveEnergyRead(None, True)]
 
-    def _finish_cycle(self, energy_bytes: list) -> list[ControlPollResult]:
+    def _finish_cycle(self, energy_bytes: list) -> list[BusEvent]:
         self._read_progress = None
         if self._scale_byte is None:
-            return [
-                ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)
-            ]
+            return [ActiveEnergyRead(None, True)]
         raw = bytes([self._scale_byte, *energy_bytes])
         check = ActiveEnergy.check_raw(raw)
         if check is not None:
             # MASK / TMASK / Invalid — surface as error so the UI is not misled.
-            return [
-                ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value="", error=ControlError.READ)
-            ]
+            return [ActiveEnergyRead(None, True)]
         value = ActiveEnergy.raw_to_value(raw)
-        kwh = float(value) / 1000.0
-        return [ControlPollResult(control_id=_ACTIVE_ENERGY_CONTROL_ID, value=f"{kwh:.3f}")]
+        return [ActiveEnergyRead(float(value) / 1000.0, False)]

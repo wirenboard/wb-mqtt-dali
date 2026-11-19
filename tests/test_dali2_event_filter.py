@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -78,7 +79,7 @@ async def test_event_filter_param_read_pushbutton_assembles_byte():
     driver.send.return_value = response
 
     short_address = DeviceShort(5)
-    result = await param.read(driver, short_address)
+    result = await param.read(driver, short_address, logging.getLogger("test"))
 
     driver.send.assert_awaited_once()
     sent_cmd = driver.send.await_args.args[0]
@@ -109,7 +110,7 @@ async def test_event_filter_param_read_raises_when_device_unresponsive(monkeypat
     monkeypatch.setattr("wb.mqtt_dali.dali2_type1_parameters.query_int", fake_query_int)
 
     with pytest.raises(RuntimeError):
-        await param.read(driver, DeviceShort(7))
+        await param.read(driver, DeviceShort(7), logging.getLogger("test"))
 
     assert param.value is None
 
@@ -123,7 +124,7 @@ async def test_event_filter_param_read_for_group_address_returns_empty_without_i
     param = EventFilterParam(InstanceNumber(0))
     driver = AsyncMock()
 
-    result = await param.read(driver, address)
+    result = await param.read(driver, address, logging.getLogger("test"))
 
     driver.send.assert_not_called()
     driver.send_commands.assert_not_called()
@@ -152,7 +153,7 @@ async def test_event_filter_param_write_packs_dtr0_and_sends_set_event_filter():
     driver.send_commands.return_value = [dtr_resp, set_resp, query_resp]
 
     short_address = DeviceShort(11)
-    result = await param.write(driver, short_address, new_value)
+    result = await param.write(driver, short_address, new_value, logging.getLogger("test"))
 
     driver.send_commands.assert_awaited_once()
     sent_commands = driver.send_commands.await_args.args[0]
@@ -183,7 +184,7 @@ async def test_event_filter_param_write_raises_when_readback_fails(monkeypatch):
 
     driver = AsyncMock()
     with pytest.raises(RuntimeError):
-        await param.write(driver, DeviceShort(11), new_value)
+        await param.write(driver, DeviceShort(11), new_value, logging.getLogger("test"))
 
     assert param.value == 0x00
 
@@ -196,7 +197,7 @@ async def test_event_filter_param_write_skips_when_value_unchanged():
 
     driver = AsyncMock()
 
-    result = await param.write(driver, DeviceShort(1), same_value)
+    result = await param.write(driver, DeviceShort(1), same_value, logging.getLogger("test"))
 
     assert result == {}
     driver.send.assert_not_called()
@@ -214,7 +215,7 @@ async def test_event_filter_param_write_for_group_address_is_noop(address):
     new_value = {"event_filter": _bits_from_mask(0xFF)}
 
     driver = AsyncMock()
-    result = await param.write(driver, address, new_value)
+    result = await param.write(driver, address, new_value, logging.getLogger("test"))
 
     assert result == {}
     driver.send.assert_not_called()
@@ -257,7 +258,7 @@ async def test_event_filter_param_write_round_trip_returns_actual_device_value()
     query_resp.raw_value.as_integer = actual_mask
     driver.send_commands.return_value = [dtr_resp, set_resp, query_resp]
 
-    result = await param.write(driver, DeviceShort(3), requested_value)
+    result = await param.write(driver, DeviceShort(3), requested_value, logging.getLogger("test"))
 
     assert param.value == actual_mask
     assert result == {"event_filter": _bits_from_mask(actual_mask)}

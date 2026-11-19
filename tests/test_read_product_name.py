@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +21,9 @@ async def test_read_product_name_returns_string_when_gtin_is_known():
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=8721103129109),
     ):
-        name = await read_product_name(driver, GearShort(5), DaliCommandsCompatibilityLayer(), gtin_db)
+        name = await read_product_name(
+            driver, GearShort(5), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        )
 
     assert name == "SuperLamp 100"
     gtin_db.get_info_by_gtin.assert_called_once_with(8721103129109)
@@ -39,7 +42,9 @@ async def test_read_product_name_uses_oem_gtin_when_primary_missing():
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=42),
     ):
-        name = await read_product_name(driver, GearShort(1), DaliCommandsCompatibilityLayer(), gtin_db)
+        name = await read_product_name(
+            driver, GearShort(1), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        )
 
     assert name == "OEM Lamp"
     gtin_db.get_info_by_gtin.assert_called_once_with(42)
@@ -54,7 +59,9 @@ async def test_read_product_name_returns_none_when_no_gtin():
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=None),
     ):
-        name = await read_product_name(driver, GearShort(2), DaliCommandsCompatibilityLayer(), gtin_db)
+        name = await read_product_name(
+            driver, GearShort(2), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        )
 
     assert name is None
     gtin_db.get_info_by_gtin.assert_not_called()
@@ -70,7 +77,9 @@ async def test_read_product_name_returns_none_when_gtin_unknown():
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=999),
     ):
-        name = await read_product_name(driver, GearShort(3), DaliCommandsCompatibilityLayer(), gtin_db)
+        name = await read_product_name(
+            driver, GearShort(3), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        )
 
     assert name is None
     gtin_db.get_info_by_gtin.assert_called_once_with(999)
@@ -107,6 +116,8 @@ async def test_read_product_name_returns_none_when_product_name_missing_from_ent
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=7),
     ):
-        name = await read_product_name(driver, GearShort(6), DaliCommandsCompatibilityLayer(), gtin_db)
+        name = await read_product_name(
+            driver, GearShort(6), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        )
 
     assert name is None

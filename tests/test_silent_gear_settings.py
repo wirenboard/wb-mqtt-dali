@@ -31,7 +31,7 @@ from dali.gear.general import (
 from dali.gear.led import QueryDimmingCurve, QueryFastFadeTime, SelectDimmingCurve
 
 from wb.mqtt_dali import common_dali_device
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.control_ids import ACTUAL_LEVEL
 from wb.mqtt_dali.control_ids import DAPC as DAPC_CONTROL
 from wb.mqtt_dali.control_ids import WANTED_LEVEL
@@ -39,13 +39,12 @@ from wb.mqtt_dali.dali_device import DaliDevice, DaliDeviceType
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveType
 from wb.mqtt_dali.gear.dimming_curve import QueryDimmingCurve as QueryType17DimmingCurve
 from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
-from wb.mqtt_dali.wbdali_error_response import NoTransmission
+from wb.mqtt_dali.wbdali_error_response import TransmissionFailed
 from wb.mqtt_dali.wbdali_utils import NoAnswerError
 
-_LOGGER_NAME = "test.silent_gear"
+from ._common_schema import load_common_schema
 
-# Prevent file system access in DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}  # pylint: disable=protected-access
+_LOGGER_NAME = "test.silent_gear"
 
 # What a fully conforming DT6 device answers. Group 1 and the linear curve are picked so a
 # silent gear (no groups, standard curve) cannot be mistaken for an answering one.
@@ -116,11 +115,11 @@ class _FakeGear:
         self.sent: list[Command] = []
         self._types_left: list[int] = []
 
-    async def send(self, cmd, source=None, priority=None) -> Response:
-        del source, priority
+    async def send(self, cmd, source=None, priority=None, logger=None) -> Response:
+        del source, priority, logger
         self.sent.append(cmd)
         if isinstance(cmd, self.gateway_error):
-            return NoTransmission()
+            return TransmissionFailed()
         if cmd.response is None:
             return Response(None)
         if isinstance(cmd, self.framing_error):
@@ -136,11 +135,11 @@ class _FakeGear:
         value = None if isinstance(cmd, self.silent) else self.answers.get(type(cmd))
         return None if value is None else BackwardFrame(value)
 
-    async def send_commands(self, cmds, source=None, priority=None) -> list[Response]:
-        return [await self.send(cmd, source, priority) for cmd in cmds]
+    async def send_commands(self, cmds, source=None, priority=None, logger=None) -> list[Response]:
+        return [await self.send(cmd, source, priority, logger) for cmd in cmds]
 
-    async def run_sequence(self, seq, priority=None, progress=None):
-        del priority, progress
+    async def run_sequence(self, seq, priority=None, logger=None):
+        del priority, logger
         response = None
         try:
             while True:
@@ -166,7 +165,12 @@ class _GearTestCase(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher.stop)
 
     def make_device(self) -> DaliDevice:
-        device = DaliDevice(DaliDeviceAddress(short=1, random=0x1235CF), bus_id="bus", gtin_db=MagicMock())
+        device = DaliDevice(
+            DaliDeviceAddress(short=1, random=0x1235CF),
+            bus_id="bus",
+            gtin_db=MagicMock(),
+            common_schema=load_common_schema(),
+        )
         device.set_logger(logging.getLogger(_LOGGER_NAME))
         return device
 

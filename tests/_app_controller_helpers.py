@@ -24,6 +24,12 @@ from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
 
+from ._common_schema import load_common_schema
+
+
+class LoopKiller(Exception):
+    """An error no production code expects, so nothing on the polling path handles it."""
+
 
 def make_loop_controller() -> ApplicationController:
     # pylint: disable=protected-access
@@ -49,6 +55,7 @@ def make_loop_controller() -> ApplicationController:
     controller._commissioning_state_cb = None
     controller._device_registry = DeviceRegistry()
     controller._group_devices_by_number = {}
+    controller._run_on_topic_handler = MagicMock()
     controller._device_publisher = AsyncMock()
     controller._event_sync = EventSyncCoordinator(
         publisher=controller._device_publisher,
@@ -56,6 +63,26 @@ def make_loop_controller() -> ApplicationController:
         group_devices_by_number=controller._group_devices_by_number,
         logger=controller.logger,
     )
+    return controller
+
+
+def make_group_controller(dali_devices, publisher) -> ApplicationController:
+    """Bare controller with only what the group-publish path touches.
+
+    `_refresh_group_virtual_devices` never looks at the broadcast device, so it is omitted.
+    """
+    # pylint: disable=protected-access
+    controller = ApplicationController.__new__(ApplicationController)
+    controller.uid = "bus_1"
+    controller.bus_name = "Bus 1"
+    controller.logger = logging.getLogger("test.group")
+    controller._run_on_topic_handler = MagicMock()
+    controller._device_publisher = publisher
+    controller._devices_by_mqtt_id = {}
+    controller._group_devices_by_number = {}
+    controller.dali_devices = list(dali_devices)
+    controller._device_registry = DeviceRegistry()
+    controller._device_registry.set_gear_devices(controller.dali_devices)
     return controller
 
 
@@ -75,8 +102,14 @@ def make_bare_gateway(
         mqtt_dispatcher=MagicMock(),
         config_path="",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
         command_registry=command_registry if command_registry is not None else build_command_registry(),
     )
+
+
+async def wait_until(condition) -> None:
+    while not condition():
+        await asyncio.sleep(0.001)
 
 
 async def stop_loop(controller: ApplicationController, task: asyncio.Task) -> None:

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Callable, Optional
+from typing import Optional
 
 OVERHEAT_COOLDOWN_S = 10.0
 OVERHEAT_RECOVERY_FIRST_INTERVAL_S = 1.0
@@ -12,12 +12,10 @@ class OverheatRateLimiter:
         cooldown_s: float = OVERHEAT_COOLDOWN_S,
         first_interval_s: float = OVERHEAT_RECOVERY_FIRST_INTERVAL_S,
         recovery_steps: int = OVERHEAT_RECOVERY_STEPS,
-        clock: Optional[Callable[[], float]] = None,
     ) -> None:
         self._cooldown_s = cooldown_s
         self._first_interval_s = first_interval_s
         self._recovery_steps = recovery_steps
-        self._clock = clock
 
         self._cooldown_until = 0.0
         self._recovery_step = -1
@@ -62,6 +60,4 @@ class OverheatRateLimiter:
         self._next_send_allowed = current + self.current_interval_s()
 
     def _now(self) -> float:
-        if self._clock is not None:
-            return self._clock()
         return asyncio.get_running_loop().time()

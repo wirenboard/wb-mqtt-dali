@@ -4,7 +4,6 @@ Silence is the negative answer to COMPARE, so a lost answer reads as "no device 
 `CompareFaults` injects the losses.
 """
 
-import unittest
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -21,6 +20,8 @@ from wb.mqtt_dali.commissioning import (
     BinarySearchAddressFinder,
     Commissioning,
 )
+
+from ._virtual_time import VirtualTimeTestCase
 
 TOP = 0xFFFFFF
 DEVICE_ADDR = 0x400000
@@ -65,7 +66,7 @@ class CompareFaults:
 
 
 class LossySearchProbe:
-    """The two callbacks the finder works through; the search address is not tracked here."""
+    """What the finder selects through; the search address is not tracked here."""
 
     def __init__(self, devices: Sequence[int], faults: Optional[CompareFaults] = None) -> None:
         self.devices = list(devices)
@@ -87,7 +88,7 @@ class LossyPerDeviceBus(PerDeviceFakeDALIBus):
         super().__init__(devices)
         self.faults = faults or CompareFaults()
 
-    async def send(self, cmd, source=BusTrafficSource.WB, priority=None):
+    async def send(self, cmd, source=BusTrafficSource.WB, priority=None, logger=None):
         response = await super().send(cmd, source, priority)
         if not isinstance(cmd, Compare):
             return response
@@ -96,15 +97,15 @@ class LossyPerDeviceBus(PerDeviceFakeDALIBus):
         return response
 
 
-class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
+class TestSearchSurvivesLostCompareAnswers(VirtualTimeTestCase):
     async def test_lost_terminating_compare_does_not_end_the_search(self):
         """The answer to the first COMPARE is lost — the one whose silence means "no devices
         left". The repeat gets through, so the pass goes on and finds the device."""
         probe = LossySearchProbe([DEVICE_ADDR], CompareFaults(lost=[Ask(TOP)]))
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
         with self.assertLogs("commissioning", "WARNING") as logs:
-            found = await finder.find_next_device(0, TOP)
+            found = await finder.find_next_device(0)
 
         self.assertEqual(found, DEVICE_ADDR)
 
@@ -122,9 +123,9 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         nobody holds. The device the search walked past answers below it, so the run reports
         it could not confirm the find."""
         probe = LossySearchProbe([DEVICE_ADDR], CompareFaults(lost=[Ask(FIRST_MIDPOINT)]))
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
-        found = await finder.find_next_device(0, TOP)
+        found = await finder.find_next_device(0)
 
         self.assertEqual(found, BinarySearchAddressFinder.UNCONFIRMED_ADDRESS)
         self.assertIn(FALSE_ADDR, probe.calls)
@@ -135,9 +136,9 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
         probe = LossySearchProbe(
             [DEVICE_ADDR], CompareFaults(lost=[Ask(FIRST_MIDPOINT), Ask(FALSE_ADDR - 1, 2)])
         )
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
-        found = await finder.find_next_device(0, TOP)
+        found = await finder.find_next_device(0)
 
         self.assertEqual(found, BinarySearchAddressFinder.UNCONFIRMED_ADDRESS)
         self.assertTrue(probe.faults.all_injected())
@@ -145,15 +146,15 @@ class TestSearchSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
     async def test_search_converged_at_zero_needs_no_lower_check(self):
         """A device at random address 0 leaves nothing to ask below it: no COMPARE at -1."""
         probe = LossySearchProbe([0])
-        finder = BinarySearchAddressFinder(probe.compare, probe.set_search_addr)
+        finder = BinarySearchAddressFinder(probe)
 
-        found = await finder.find_next_device(0, TOP)
+        found = await finder.find_next_device(0)
 
         self.assertEqual(found, 0)
         self.assertNotIn(-1, probe.calls)
 
 
-class TestCommissioningSurvivesLostCompareAnswers(unittest.IsolatedAsyncioTestCase):
+class TestCommissioningSurvivesLostCompareAnswers(VirtualTimeTestCase):
     async def test_no_program_short_address_when_the_check_fails(self):
         """A search that converged on an address nobody holds programs nothing there; the
         gear gets its short address from the next run."""

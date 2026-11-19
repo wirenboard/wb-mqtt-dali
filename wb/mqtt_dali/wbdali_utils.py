@@ -49,147 +49,137 @@ class NoAnswerError(RuntimeError):
     """
 
 
-class AsyncDeviceInstanceTypeMapper(DeviceInstanceTypeMapper):
-    # pylint: disable=too-many-locals, too-many-branches
-    """A version of DeviceInstanceTypeMapper taking advantage of
-    sending of multiple DALI commands in parallel
+class FramingError(RuntimeError):
+    """The gear answered, but the gateway could not decode the backward frame."""
+
+
+async def async_autodiscover(  # pylint: disable=too-many-locals, too-many-branches
+    mapper: DeviceInstanceTypeMapper,
+    driver,
+    addresses: int | tuple[int, int] | Iterable[int],
+    logger: logging.Logger,
+    priority: FramePriority = FramePriority.USER_ACTION,
+) -> None:
     """
+    An async function to scan a DALI bus for control device instances,
+    and query their types. Internally it uses asyncio.gather to wait for
+    completion of multiple DALI commands in parallel.
+    This information is stored within `mapper`,
+    for use in decoding "Device/Instance" event messages.
 
-    async def async_autodiscover(
-        self,
-        driver,
-        addresses: int | tuple[int, int] | Iterable[int] = (0, 63),
-        logger: Optional[logging.Logger] = None,
-        priority: FramePriority = FramePriority.USER_ACTION,
-    ) -> None:
-        """
-        An async function to scan a DALI bus for control device instances,
-        and query their types. Internally it uses asyncio.gather to wait for
-        completion of multiple DALI commands in parallel.
-        This information is stored within this AsyncDeviceInstanceTypeMapper,
-        for use in decoding "Device/Instance" event messages.
+    :param mapper: The DeviceInstanceTypeMapper to store the found instance types in.
+    :param driver: The async DALI driver to use for sending commands.
+    :param addresses: Specifier of which addresses to scan. Can
+    either be a single int, in which case all addresses from zero to that
+    value will be scanned; or can be a tuple in the form (start, end), in
+    which case all addresses between the provided values will be scanned;
+    or finally can be an iterable of ints in which case each address, in
+    the iterator will be scanned.
 
-        :param driver: The async DALI driver to use for sending commands.
-        :param addresses: Optional specifier of which addresses to scan. Can
-        either be a single int, in which case all addresses from zero to that
-        value will be scanned; or can be a tuple in the form (start, end), in
-        which case all addresses between the provided values will be scanned;
-        or finally can be an iterable of ints in which case each address, in
-        the iterator will be scanned.
+    Needs to be used through an appropriate driver for example:
+    ```
+    dev_inst_map = DeviceInstanceTypeMapper()
+    await async_autodiscover(dev_inst_map, driver, (0, 63), logger)
+    ```
+    instead of
+    ```
+    await driver.run_sequence(dev_inst_map.autodiscover())
+    ```
 
-        Needs to be used through an appropriate driver for example:
-        ```
-        dev_inst_map = AsyncDeviceInstanceTypeMapper()
-        await dev_inst_map.async_autodiscover(driver)
-        ```
-        instead of
-        ```
-        await driver.run_sequence(dev_inst_map.autodiscover())
-        ```
+    """
+    logging.debug("Starting autodiscover with addresses: %s", addresses)
 
-        """
-        logging.debug("Starting autodiscover with addresses: %s", addresses)
+    if isinstance(addresses, int):
+        addresses = list(range(0, addresses + 1))
+    elif isinstance(addresses, tuple) and len(addresses) == 2:
+        addresses = list(range(addresses[0], addresses[1] + 1))
 
-        if isinstance(addresses, int):
-            addresses = list(range(0, addresses + 1))
-        elif isinstance(addresses, tuple) and len(addresses) == 2:
-            addresses = list(range(addresses[0], addresses[1] + 1))
-
-        # Use quiescent mode to reduce bus contention from input devices
-        await send_with_retry(driver, StartQuiescentMode(DeviceBroadcast()), logger, priority=priority)
-        responses = await asyncio.gather(
-            *[
-                send_with_retry(
-                    driver,
-                    QueryDeviceStatus(device=DeviceShort(addr_int)),
-                    logger,
-                    priority=priority,
-                )
-                for addr_int in addresses
-            ],
-        )
-
-        queries = []
-        logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
-        for addr_int, rsp in zip(addresses, responses):
-            addr = DeviceShort(addr_int)
-            if check_bad_rsp(rsp):
-                continue
-            if isinstance(rsp, QueryDeviceStatusResponse):
-                # Make sure the status is OK
-                if rsp.short_address_is_mask or rsp.reset_state:
-                    continue
-            else:
-                # If the response isn't QueryDeviceStatusResponse then
-                # something is wrong
-                continue
-
-            # Find out how many instances the device has
-            queries.append(QueryNumberOfInstances(device=addr))
-
-        responses = await asyncio.gather(
-            *[send_with_retry(driver, q, logger, priority=priority) for q in queries]
-        )
-        enabled_queries = []
-        type_queries = []
-        for query, rsp in zip(queries, responses):
-            addr = query.destination
-
-            if check_bad_rsp(rsp):
-                continue
-            num_inst = rsp.value
-
-            # For each instance, check it is enabled and then query the type
-            for inst_int in range(num_inst):
-                inst = InstanceNumber(inst_int)
-
-                enabled_queries.append(QueryInstanceEnabled(device=addr, instance=inst))
-                type_queries.append(QueryInstanceType(device=addr, instance=inst))
-
-        responses = await asyncio.gather(
-            *[send_with_retry(driver, q, logger, priority=priority) for q in enabled_queries],
-            *[send_with_retry(driver, q, logger, priority=priority) for q in type_queries],
-        )
-
-        enabled_responses = responses[: len(enabled_queries)]
-        type_responses = responses[len(enabled_queries) :]
-
-        for query, enabled_rsp, type_rsp in zip(enabled_queries, enabled_responses, type_responses):
-            addr = query.destination
-            inst = query.instance
-            if check_bad_rsp(enabled_rsp):
-                continue
-            if not enabled_rsp.value:
-                # Skip if not enabled
-                continue
-
-            if check_bad_rsp(type_rsp):
-                continue
-
-            logging.debug("message=A²%d I%d type: %s", addr.address, inst.value, type_rsp.value)
-
-            # Add the type to the device/instance map
-            self.add_type(
-                short_address=addr,
-                instance_number=inst,
-                instance_type=type_rsp.value,
+    # Use quiescent mode to reduce bus contention from input devices
+    await send_with_retry(driver, StartQuiescentMode(DeviceBroadcast()), logger, priority=priority)
+    responses = await asyncio.gather(
+        *[
+            send_with_retry(
+                driver,
+                QueryDeviceStatus(device=DeviceShort(addr_int)),
+                logger,
+                priority=priority,
             )
-        await send_with_retry(driver, StopQuiescentMode(DeviceBroadcast()), logger, priority=priority)
+            for addr_int in addresses
+        ],
+    )
 
-    def update_mapping(self, short_address: int, new_short_address: int) -> None:
-        """Update the mapping for a device that has changed short address."""
-        if short_address in self._mapping:
-            self._mapping[new_short_address] = self._mapping.pop(short_address)
+    queries = []
+    logging.debug("QueryDeviceStatus responses: %s", zip(addresses, responses))
+    for addr_int, rsp in zip(addresses, responses):
+        addr = DeviceShort(addr_int)
+        if check_bad_rsp(rsp):
+            continue
+        if isinstance(rsp, QueryDeviceStatusResponse):
+            # Make sure the status is OK
+            if rsp.short_address_is_mask or rsp.reset_state:
+                continue
+        else:
+            # If the response isn't QueryDeviceStatusResponse then
+            # something is wrong
+            continue
 
-    def remove_short_address(self, short_address: int) -> None:
-        for key in [k for k in self._mapping if k[0] == short_address]:
-            self._mapping.pop(key, None)
+        # Find out how many instances the device has
+        queries.append(QueryNumberOfInstances(device=addr))
+
+    responses = await asyncio.gather(
+        *[send_with_retry(driver, q, logger, priority=priority) for q in queries]
+    )
+    enabled_queries = []
+    type_queries = []
+    for query, rsp in zip(queries, responses):
+        addr = query.destination
+
+        if check_bad_rsp(rsp):
+            continue
+        num_inst = rsp.value
+
+        # For each instance, check it is enabled and then query the type
+        for inst_int in range(num_inst):
+            inst = InstanceNumber(inst_int)
+
+            enabled_queries.append(QueryInstanceEnabled(device=addr, instance=inst))
+            type_queries.append(QueryInstanceType(device=addr, instance=inst))
+
+    responses = await asyncio.gather(
+        *[send_with_retry(driver, q, logger, priority=priority) for q in enabled_queries],
+        *[send_with_retry(driver, q, logger, priority=priority) for q in type_queries],
+    )
+
+    enabled_responses = responses[: len(enabled_queries)]
+    type_responses = responses[len(enabled_queries) :]
+
+    for query, enabled_rsp, type_rsp in zip(enabled_queries, enabled_responses, type_responses):
+        addr = query.destination
+        inst = query.instance
+        if check_bad_rsp(enabled_rsp):
+            continue
+        if not enabled_rsp.value:
+            # Skip if not enabled
+            continue
+
+        if check_bad_rsp(type_rsp):
+            continue
+
+        logging.debug("message=A²%d I%d type: %s", addr.address, inst.value, type_rsp.value)
+
+        # Add the type to the device/instance map
+        mapper.add_type(
+            short_address=addr,
+            instance_number=inst,
+            instance_type=type_rsp.value,
+        )
+    await send_with_retry(driver, StopQuiescentMode(DeviceBroadcast()), logger, priority=priority)
 
 
 async def query_int(
     driver: WBDALIDriver,
     cmd: Command,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> int:
     return (await query_response(driver, cmd, logger, priority)).raw_value.as_integer
@@ -198,22 +188,21 @@ async def query_int(
 async def query_response(
     driver: WBDALIDriver,
     cmd: Command,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> Response:
     last_error: Optional[RuntimeError] = None
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        resp = await driver.send(cmd, priority=priority)
+        resp = await driver.send(cmd, BusTrafficSource.WB, priority, logger)
         last_error = check_command_failed(cmd, resp)
         if last_error is not None:
-            if logger is not None:
-                logger.warning(
-                    "DALI send retry %d/%d for %s: %s",
-                    attempt,
-                    MAX_COMMAND_RETRIES,
-                    str(cmd),
-                    last_error,
-                )
+            logger.debug(
+                "DALI send retry %d/%d for %s: %s",
+                attempt,
+                MAX_COMMAND_RETRIES,
+                str(cmd),
+                last_error,
+            )
             continue
         return resp
     raise _query_failure_error(f"Error in response for {cmd}: {last_error}", [last_error])
@@ -222,23 +211,22 @@ async def query_response(
 async def query_responses(
     driver: WBDALIDriver,
     cmds: list[Command],
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Response]:
     last_error: Optional[RuntimeError] = None
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(cmds, BusTrafficSource.WB, priority)
+        responses = await driver.send_commands(cmds, BusTrafficSource.WB, priority, logger)
         for command, resp in zip(cmds, responses):
             last_error = check_command_failed(command, resp)
             if last_error is not None:
-                if logger is not None:
-                    logger.warning(
-                        "DALI send retry %d/%d for %s: %s",
-                        attempt,
-                        MAX_COMMAND_RETRIES,
-                        [str(cmd) for cmd in cmds],
-                        last_error,
-                    )
+                logger.debug(
+                    "DALI send retry %d/%d for %s: %s",
+                    attempt,
+                    MAX_COMMAND_RETRIES,
+                    [str(cmd) for cmd in cmds],
+                    last_error,
+                )
                 break
         if last_error is None:
             return responses
@@ -254,7 +242,7 @@ def check_query_response(resp: Optional[Response]) -> None:
         if raw_value is None:
             raise NoAnswerError("no response")
         if raw_value.error is True:
-            raise RuntimeError("framing error")
+            raise FramingError("framing error")
 
 
 def is_broadcast_or_group_address(addr: Address) -> bool:
@@ -296,8 +284,8 @@ def _query_failure_error(message: str, failures: Sequence[Optional[RuntimeError]
 async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
     driver: WBDALIDriver,
     commands: Sequence[Command],
-    batch_size: int = 1,
-    logger: Optional[logging.Logger] = None,
+    batch_size: int,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Optional[Response]]:
@@ -316,7 +304,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
     last_failed_reason: Optional[RuntimeError] = None
 
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(pending_commands, source, priority)
+        responses = await driver.send_commands(pending_commands, source, priority, logger)
 
         first_failed_pos: Optional[int] = None
         for pos, (index, cmd, resp) in enumerate(zip(pending_indexes, pending_commands, responses)):
@@ -339,15 +327,14 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
         pending_commands = pending_commands[first_failed_pos:]
         pending_indexes = pending_indexes[first_failed_pos:]
 
-        if logger is not None:
-            logger.warning(
-                "DALI batch retry-from-first %d/%d: failed at index %d (%s): %s",
-                attempt,
-                MAX_COMMAND_RETRIES,
-                last_failed_index,
-                str(last_failed_command),
-                last_failed_reason,
-            )
+        logger.debug(
+            "DALI batch retry-from-first %d/%d: failed at index %d (%s): %s",
+            attempt,
+            MAX_COMMAND_RETRIES,
+            last_failed_index,
+            str(last_failed_command),
+            last_failed_reason,
+        )
 
     raise _query_failure_error(
         "DALI batch retry-from-first failed after "
@@ -360,7 +347,7 @@ async def query_responses_retry_from_first_failed(  # pylint: disable=too-many-l
 async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
     driver: WBDALIDriver,
     commands: Sequence[Command],
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Optional[Response]]:
@@ -374,7 +361,7 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
     last_failed_reasons: dict[int, RuntimeError] = {}
 
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(pending_commands, source, priority)
+        responses = await driver.send_commands(pending_commands, source, priority, logger)
 
         next_pending_indexes: list[int] = []
         next_pending_commands: list[Command] = []
@@ -396,13 +383,12 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
         pending_indexes = next_pending_indexes
         pending_commands = next_pending_commands
 
-        if logger is not None:
-            logger.warning(
-                "DALI batch retry-only-failed %d/%d for %s",
-                attempt,
-                MAX_COMMAND_RETRIES,
-                [str(command) for command in commands],
-            )
+        logger.debug(
+            "DALI batch retry-only-failed %d/%d for %s",
+            attempt,
+            MAX_COMMAND_RETRIES,
+            [str(command) for command in commands],
+        )
 
     commands_str = [str(command) for command in commands]
     reasons = {index: str(failure) for index, failure in last_failed_reasons.items()}
@@ -416,39 +402,42 @@ async def query_responses_retry_only_failed(  # pylint: disable=too-many-locals
 async def send_with_retry(
     driver: WBDALIDriver,
     cmd: Command,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> Response:
     response: Response = Response(None)
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        response = await driver.send(cmd, source, priority)
+        response = await driver.send(cmd, source, priority, logger)
         if not is_transmission_error_response(response):
             return response
-        if logger is not None:
-            logger.warning(
-                "DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response
-            )
+        logger.debug("DALI send retry %d/%d for %s: %s", attempt, MAX_COMMAND_RETRIES, str(cmd), response)
+    logger.warning("DALI %s failed after %d attempts: %s", cmd, MAX_COMMAND_RETRIES, response)
     return response
 
 
 async def send_commands_with_retry(
     driver: WBDALIDriver,
     commands: Sequence[Command],
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger,
     source=BusTrafficSource.WB,
     priority: FramePriority = FramePriority.USER_ACTION,
 ) -> list[Response]:
     responses: list[Response] = []
     for attempt in range(1, MAX_COMMAND_RETRIES + 1):
-        responses = await driver.send_commands(commands, source, priority)
+        responses = await driver.send_commands(commands, source, priority, logger)
         if not has_transmission_error(responses):
             return responses
-        if logger is not None:
-            logger.warning(
-                "DALI send_commands retry %d/%d failed for %s",
-                attempt,
-                MAX_COMMAND_RETRIES,
-                [str(cmd) for cmd in commands],
-            )
+        logger.debug(
+            "DALI send_commands retry %d/%d failed for %s",
+            attempt,
+            MAX_COMMAND_RETRIES,
+            [str(cmd) for cmd in commands],
+        )
+    logger.warning(
+        "DALI %s failed after %d attempts: %s",
+        [str(cmd) for cmd in commands],
+        MAX_COMMAND_RETRIES,
+        next(resp for resp in responses if is_transmission_error_response(resp)),
+    )
     return responses

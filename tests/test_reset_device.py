@@ -12,7 +12,7 @@ from wb.mqtt_dali.application_controller import (
     ApplicationController,
     ApplicationControllerState,
 )
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
@@ -22,10 +22,8 @@ from wb.mqtt_dali.wbdali import BusDeviceInstanceTypeMapper, FramePriority
 from wb.mqtt_dali.wbdali_utils import MASK
 
 from ._app_controller_helpers import make_bare_gateway, wait_until
+from ._common_schema import load_common_schema
 from ._virtual_time import VirtualTimeTestCase
-
-# Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 def _make_bare_controller():
@@ -40,6 +38,7 @@ def _make_bare_controller():
     controller._dev = AsyncMock()
     controller._dev_inst_map = MagicMock(mapping={})
     controller._gtin_db = MagicMock()
+    controller._common_schema = load_common_schema()
     controller._device_publisher = AsyncMock()
     controller._device_publisher.has_device = MagicMock(return_value=False)
     controller._init_scheduler = MagicMock(
@@ -56,7 +55,14 @@ def _make_bare_controller():
 
 
 def _make_initialized_dali_device(short=5, random=0x123456, mqtt_id=None, name=None):
-    device = DaliDevice(DaliDeviceAddress(short=short, random=random), "gw_bus_1", MagicMock(), mqtt_id, name)
+    device = DaliDevice(
+        DaliDeviceAddress(short=short, random=random),
+        "gw_bus_1",
+        MagicMock(),
+        load_common_schema(),
+        mqtt_id,
+        name,
+    )
     # mark as initialized so the test doesn't need to mock the DALI bus reads
     device.is_initialized = True
     device.types = []
@@ -65,7 +71,12 @@ def _make_initialized_dali_device(short=5, random=0x123456, mqtt_id=None, name=N
 
 def _make_initialized_dali2_device(short=3, random=0xABCDEF, mqtt_id=None, name=None):
     device = Dali2Device(
-        DaliDeviceAddress(short=short, random=random), "gw_bus_1", MagicMock(), mqtt_id, name
+        DaliDeviceAddress(short=short, random=random),
+        "gw_bus_1",
+        MagicMock(),
+        load_common_schema(),
+        mqtt_id,
+        name,
     )
     device.is_initialized = True
     return device

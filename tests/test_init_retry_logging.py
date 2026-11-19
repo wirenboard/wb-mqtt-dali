@@ -6,7 +6,7 @@ import json
 import logging
 import unittest
 from typing import List, Optional
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock
 
 import aiomqtt
 
@@ -20,6 +20,7 @@ from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 
 from ._broker_link_helpers import RecordingClient
+from ._common_schema import load_common_schema
 from ._on_off_helpers import BusScript, ReplyStatus, ScriptedGatewayClient
 from ._virtual_time import VirtualTimeTestCase
 from .test_device_init_retry import _make_publisher
@@ -65,9 +66,9 @@ async def _cancel(task: asyncio.Task) -> None:
 
 
 def _make_device(device_class, short: int, mqtt_id: Optional[str] = None):
-    # The common settings schema is read from the installed package; tests get a stub.
-    with patch("wb.mqtt_dali.common_dali_device.open", mock_open(read_data='{"title": "test"}'), create=True):
-        device = device_class(DaliDeviceAddress(short=short, random=0), BUS_UID, MagicMock(), mqtt_id)
+    device = device_class(
+        DaliDeviceAddress(short=short, random=0), BUS_UID, MagicMock(), load_common_schema(), mqtt_id
+    )
     device.set_logger(BUS_LOGGER)
     return device
 

@@ -2,13 +2,12 @@ from unittest.mock import MagicMock
 
 from dali.address import DeviceBroadcast, GearBroadcast, GearGroup, GearShort
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 
-# Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
 
 class _Gear(DaliDevice):
@@ -19,7 +18,7 @@ class _Gear(DaliDevice):
     """
 
     def __init__(self, short: int, groups=()) -> None:
-        super().__init__(DaliDeviceAddress(short=short, random=0), "bus", MagicMock())
+        super().__init__(DaliDeviceAddress(short=short, random=0), "bus", MagicMock(), load_common_schema())
         self._member_groups = set(groups)
 
     @property
@@ -28,7 +27,7 @@ class _Gear(DaliDevice):
 
 
 def _dali2(short: int) -> Dali2Device:
-    return Dali2Device(DaliDeviceAddress(short=short, random=0), "bus", MagicMock())
+    return Dali2Device(DaliDeviceAddress(short=short, random=0), "bus", MagicMock(), load_common_schema())
 
 
 def test_resolve_short_present_and_absent():

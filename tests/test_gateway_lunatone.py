@@ -24,6 +24,7 @@ from wb.mqtt_dali.gateway import (
 )
 
 from ._app_controller_helpers import make_bare_gateway
+from ._common_schema import load_common_schema
 
 
 def _bare_bus(uid: str) -> ApplicationController:
@@ -72,7 +73,7 @@ def test_legacy_config_loads_and_ignores_per_bus_websocket_keys():
     mqtt_dispatcher = MagicMock()
     gtin_db = MagicMock()
 
-    bus = bus_from_json("gw1", 1, bus_data, mqtt_dispatcher, gtin_db, MagicMock())
+    bus = bus_from_json("gw1", 1, bus_data, mqtt_dispatcher, gtin_db, load_common_schema(), MagicMock())
 
     # Bus has no `websocket_config` attribute anymore; only the gateway has settings.
     assert not hasattr(bus, "websocket_config")
@@ -95,7 +96,7 @@ def test_gateway_constructor_reads_gateway_level_websocket_keys():
         ]
     }
     with patch("wb.mqtt_dali.gateway.MQTTRPCServer"):
-        svc = Gateway(config, MagicMock(), "/tmp/cfg.json", MagicMock())
+        svc = Gateway(config, MagicMock(), "/tmp/cfg.json", MagicMock(), load_common_schema())
 
     assert len(svc.wb_dali_gateways) == 2
     assert svc.wb_dali_gateways[0].uid == "gw1"
@@ -123,7 +124,7 @@ def test_gateway_ignores_legacy_per_bus_websocket_keys_in_config():
         ]
     }
     with patch("wb.mqtt_dali.gateway.MQTTRPCServer"):
-        svc = Gateway(config, MagicMock(), "/tmp/cfg.json", MagicMock())
+        svc = Gateway(config, MagicMock(), "/tmp/cfg.json", MagicMock(), load_common_schema())
 
     gw = svc.wb_dali_gateways[0]
     assert gw.websocket_enabled is False
@@ -353,7 +354,7 @@ async def test_set_bus_rpc_ignores_legacy_websocket_keys():
 
 def _service_with_real_bus(bus_data: dict) -> tuple[Gateway, ApplicationController]:
     """Build a `Gateway` wrapping one real `ApplicationController` from JSON."""
-    bus = bus_from_json("gw1", 1, bus_data, MagicMock(), MagicMock(), MagicMock())
+    bus = bus_from_json("gw1", 1, bus_data, MagicMock(), MagicMock(), load_common_schema(), MagicMock())
     svc = _make_gateway_service([WbDaliGateway(uid="gw1", buses=[bus])])
     return svc, bus
 
@@ -380,14 +381,22 @@ async def test_set_bus_enables_syslog_flag():
 def test_bus_to_json_exposes_syslog_flag():
     """`bus_to_json` (bus status) surfaces the syslog flag from the config."""
     bus = bus_from_json(
-        "gw1", 1, {"devices": [], "bus_monitor_syslog_enabled": True}, MagicMock(), MagicMock(), MagicMock()
+        "gw1",
+        1,
+        {"devices": [], "bus_monitor_syslog_enabled": True},
+        MagicMock(),
+        MagicMock(),
+        load_common_schema(),
+        MagicMock(),
     )
     assert bus_to_json(bus)["bus_monitor_syslog_enabled"] is True
 
 
 def test_syslog_flag_defaults_false():
     """A bus config without the key leaves the syslog flag off everywhere."""
-    bus = bus_from_json("gw1", 1, {"devices": []}, MagicMock(), MagicMock(), MagicMock())
+    bus = bus_from_json(
+        "gw1", 1, {"devices": []}, MagicMock(), MagicMock(), load_common_schema(), MagicMock()
+    )
     assert bus.bus_monitor_syslog_enabled is False
     assert bus_to_json(bus)["bus_monitor_syslog_enabled"] is False
 

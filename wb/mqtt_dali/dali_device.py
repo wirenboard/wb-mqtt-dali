@@ -181,12 +181,21 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         address: DaliDeviceAddress,
         bus_id: str,
         gtin_db: DaliDatabase,
+        common_schema: dict,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
         on_off: Optional[OnOffConfig] = None,
     ) -> None:
         super().__init__(
-            address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
+            address,
+            bus_id,
+            "DALI",
+            "",
+            DaliCommandsCompatibilityLayer(),
+            gtin_db,
+            common_schema,
+            mqtt_id,
+            name,
         )
         self.types: list[int] = []
 

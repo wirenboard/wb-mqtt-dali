@@ -15,7 +15,6 @@ from wb.mqtt_dali.application_controller import (
 from wb.mqtt_dali.common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
     DaliDeviceAddress,
-    DaliDeviceBase,
 )
 from wb.mqtt_dali.control_ids import ACTUAL_LEVEL, ON_OFF, SET_RGB, WANTED_LEVEL
 from wb.mqtt_dali.dali_device import DaliDevice
@@ -29,10 +28,9 @@ from wb.mqtt_dali.on_off_control import (
 )
 
 from ._broker_link_helpers import Inbox
+from ._common_schema import load_common_schema
 from ._on_off_helpers import BusScript, ReplyStatus, ScriptedBus, ScriptedGatewayClient
 from ._virtual_time import VirtualTimeTestCase
-
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 ADDR = GearShort(5)
 OTHER_ADDR = GearShort(6)
@@ -149,6 +147,7 @@ class _FlakyBus(ScriptedBus):
             ApplicationControllerConfig("gw1", 1, lights, [], group_on_off=group_on_off or {}),
             self.dispatcher,
             MagicMock(),
+            load_common_schema(),
             MagicMock(),
         )
         await self.start(bus)
@@ -163,6 +162,7 @@ def _light(short: int, on_off: Optional[OnOffConfig]) -> DaliDevice:
         DaliDeviceAddress(short, 0x123456 + short),
         "gw1_bus_1",
         MagicMock(),
+        load_common_schema(),
         on_off=on_off,
     )
 

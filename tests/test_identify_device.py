@@ -7,11 +7,11 @@ from dali.device.general import IdentifyDevice as DeviceIdentifyDevice
 from dali.gear.general import IdentifyDevice as GearIdentifyDevice
 from dali.gear.general import RecallMaxLevel, RecallMinLevel
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_device import DaliDevice
 
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
 
 def make_version_response(version_byte):
@@ -24,11 +24,13 @@ def make_version_response(version_byte):
 
 
 def make_dali_device():
-    return DaliDevice(DaliDeviceAddress(short=5, random=0x123456), "bus_1", MagicMock())
+    return DaliDevice(DaliDeviceAddress(short=5, random=0x123456), "bus_1", MagicMock(), load_common_schema())
 
 
 def make_dali2_device():
-    return Dali2Device(DaliDeviceAddress(short=3, random=0xABCDEF), "bus_1", MagicMock())
+    return Dali2Device(
+        DaliDeviceAddress(short=3, random=0xABCDEF), "bus_1", MagicMock(), load_common_schema()
+    )
 
 
 @pytest.mark.asyncio

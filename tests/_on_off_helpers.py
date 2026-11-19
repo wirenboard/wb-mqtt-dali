@@ -29,6 +29,7 @@ from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import WBDALIConfig
 
 from ._broker_link_helpers import Publish, RecordingClient
+from ._common_schema import load_common_schema
 
 # Non-zero query answers: QueryDeviceType 254 = "no extended device types",
 # QueryVersionNumber 2 = modern gear (non-legacy memory bank layout), fade time/rate 0x01 =
@@ -261,7 +262,15 @@ class ScriptedBus:
     async def start_bus(self, data: dict) -> ApplicationController:
         """Build a bus from its config entry over this gateway and start it."""
         return await self.start(
-            bus_from_json(self._gateway_id, self._bus_index, data, self.dispatcher, MagicMock(), MagicMock())
+            bus_from_json(
+                self._gateway_id,
+                self._bus_index,
+                data,
+                self.dispatcher,
+                MagicMock(),
+                load_common_schema(),
+                MagicMock(),
+            )
         )
 
     async def write(self, device_id: str, control_id: str, payload: str) -> None:

@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import random
 import uuid
@@ -7,7 +6,6 @@ from abc import abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import (
     Any,
     Awaitable,
@@ -782,7 +780,6 @@ def notify_controls(
 
 
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
-    _common_schema = {}
     # Device logger name under the bus logger, followed by the short address, for a default mqtt_id.
     logger_name_prefix: str = ""
 
@@ -794,6 +791,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         default_mqtt_id_part: str,
         compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
         gtin_db: DaliDatabase,
+        common_schema: dict,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -826,11 +824,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         self._compat = compat
 
-        if not self._common_schema:
-            schema_path = Path("/usr/share/wb-mqtt-dali/schemas/common_device.schema.json")
-            with open(schema_path, "r", encoding="utf-8") as f:
-                self._common_schema = json.load(f)
-
+        self._common_schema = common_schema
         self._gtin_db = gtin_db
 
         self._initialize_lock = asyncio.Lock()

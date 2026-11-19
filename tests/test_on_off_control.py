@@ -23,7 +23,7 @@ from dali.gear.general import (
     Up,
 )
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase, Pollable
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, Pollable
 from wb.mqtt_dali.control_ids import ACTUAL_LEVEL, ON_OFF
 from wb.mqtt_dali.dali_common_parameters import FadeTimeFadeRateParam
 from wb.mqtt_dali.dali_device import DaliDevice
@@ -45,10 +45,9 @@ from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 from wb.mqtt_dali.wbmqtt import ControlError
 
+from ._common_schema import load_common_schema
 from ._on_off_helpers import BusScript, ScriptedBus, frames, group_settings
 from ._virtual_time import VirtualTimeTestCase
-
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 ADDR = GearShort(5)
 GROUP_ADDR = GearGroup(3)
@@ -98,7 +97,9 @@ def _names(commands) -> list:
 
 
 def _make_dali_device(on_off=None) -> DaliDevice:
-    device = DaliDevice(DaliDeviceAddress(5, 0x123456), "gw_bus_1", MagicMock(), on_off=on_off)
+    device = DaliDevice(
+        DaliDeviceAddress(5, 0x123456), "gw_bus_1", MagicMock(), load_common_schema(), on_off=on_off
+    )
     device.rebuild_mqtt_controls()
     return device
 
@@ -107,7 +108,13 @@ class _MemberDevice(DaliDevice):
     """Gear member of a group: real gear, so dispatch and the group mirror work as they ship."""
 
     def __init__(self, short=5, groups=(3,), on_off=None, fade_code=None):
-        super().__init__(DaliDeviceAddress(short=short, random=0), "gw_bus_1", MagicMock(), on_off=on_off)
+        super().__init__(
+            DaliDeviceAddress(short=short, random=0),
+            "gw_bus_1",
+            MagicMock(),
+            load_common_schema(),
+            on_off=on_off,
+        )
         self.mqtt_id = f"dev-{short}"
         self.name = f"member {short}"
         self._test_groups = set(groups)

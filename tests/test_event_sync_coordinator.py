@@ -40,7 +40,7 @@ from dali.gear.general import (
 )
 
 from wb.mqtt_dali.colour_sequence_tracker import ColourSequenceTracker
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_controls import (
     ActualLevelControl,
@@ -85,14 +85,11 @@ from wb.mqtt_dali.virtual_devices import (
 from wb.mqtt_dali.wbdali_utils import MASK, MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
+from ._common_schema import load_common_schema
 from ._virtual_time import VirtualTimeEventLoop, VirtualTimeTestCase
 
 NOW = 1000.0
 RESYNC_INTERVAL = 300.0
-
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-# pylint: disable-next=protected-access
-DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
 class _SceneStub:  # pylint: disable=too-few-public-methods
@@ -110,7 +107,7 @@ class _TestGearDevice(DaliDevice):
     """
 
     def __init__(self, short: int, controls, groups=(), dt8_handler=None) -> None:
-        super().__init__(DaliDeviceAddress(short=short, random=0), "bus", MagicMock())
+        super().__init__(DaliDeviceAddress(short=short, random=0), "bus", MagicMock(), load_common_schema())
         self.mqtt_id = f"dev-{short}"
         self.name = f"dev{short}"
         self._test_controls = list(controls)
@@ -1091,7 +1088,7 @@ class TestDali2InputEvents(_CoordinatorTestCase):
         """The DALI-2 leg of the dispatch, end to end over a real publisher: an occupancy event
         reaches a real Dali2Device and costs exactly one message -- movement0, the only control
         whose value moved (occupied0 took it unchanged, and there is no gear group to mirror)."""
-        device = Dali2Device(DaliDeviceAddress(short=7, random=0), "bus", MagicMock())
+        device = Dali2Device(DaliDeviceAddress(short=7, random=0), "bus", MagicMock(), load_common_schema())
         device.add_instance(0, occupancy.instance_type)
         device.rebuild_mqtt_controls()
         device.is_initialized = True

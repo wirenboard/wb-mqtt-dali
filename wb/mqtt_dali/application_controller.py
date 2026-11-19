@@ -401,11 +401,12 @@ async def publish_device(
 
 
 class ApplicationController:  # pylint: disable=too-many-instance-attributes, too-many-public-methods
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments, R0917
         self,
         config: ApplicationControllerConfig,
         mqtt_dispatcher: MQTTDispatcher,
         gtin_db: DaliDatabase,
+        common_schema: dict,
         on_polling_failure: Callable[[], None],
     ) -> None:
         self.uid = f"{config.gateway_mqtt_device_id}_bus_{config.bus}"
@@ -458,6 +459,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         }
 
         self._gtin_db = gtin_db
+        self._common_schema = common_schema
 
         self._tasks_queue: asyncio.Queue[ApplicationControllerTask] = asyncio.Queue()
 
@@ -881,6 +883,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 DaliDeviceAddress(device.address.short, device.address.random),
                 self.uid,
                 self._gtin_db,
+                self._common_schema,
                 mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
                 name=device.name if device.has_custom_name else None,
                 on_off=device.on_off_config,
@@ -890,6 +893,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
                 DaliDeviceAddress(device.address.short, device.address.random),
                 self.uid,
                 self._gtin_db,
+                self._common_schema,
                 mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
                 name=device.name if device.has_custom_name else None,
             )
@@ -1107,7 +1111,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         all_names = await self._resolve_initial_names(all_addresses, compat)
 
         return [
-            device_cls(addr, self.uid, self._gtin_db, name=name)
+            device_cls(addr, self.uid, self._gtin_db, self._common_schema, name=name)
             for addr, name in zip(all_addresses, all_names)
         ]
 

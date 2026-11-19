@@ -47,6 +47,7 @@ from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
+from ._common_schema import load_common_schema
 from ._control_stubs import ReadableControl
 
 
@@ -645,9 +646,6 @@ def test_colour_value_schema_tracks_user_limits_live():
 
 # --- Helpers for rebuild_mqtt_controls / ApplyResult / sync_controls_after_broadcast ---
 
-# Prevent file system access in DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}  # pylint: disable=protected-access
-
 
 class _TestDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
     """Concrete subclass that implements _build_mqtt_controls for testing."""
@@ -672,6 +670,7 @@ def _make_device(**kwargs):
         "default_mqtt_id_part": "d",
         "compat": DaliCommandsCompatibilityLayer(),
         "gtin_db": MagicMock(),
+        "common_schema": load_common_schema(),
     }
     defaults.update(kwargs)
     return _TestDevice(**defaults)

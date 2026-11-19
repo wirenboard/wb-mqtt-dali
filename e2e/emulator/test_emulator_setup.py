@@ -14,13 +14,14 @@ PORT = {
     "devices": [{"device_type": "WB-DALI", "slave_id": "5"}],
 }
 DALI_CONFIG = {"gateways": [{"device_id": "wb-dali_5", "buses": [{"devices": [{"short": 3, "random": 30}]}]}]}
+DEVICES_STATE = {"1": {"gear": {"3": {"model": "default_gear"}}}}
 
 
 class SerialConfigTest(unittest.TestCase):
     def test_serial_config_section_is_kept_but_for_the_path(self):
         """Only the gateway's port is installed, unchanged but for the pty path."""
         other = {"path": "/dev/ttyRS485-2", "devices": [{"device_type": "WB-MSW v.4", "slave_id": "11"}]}
-        profile = profile_from_configs({"ports": [other, PORT]}, DALI_CONFIG, {})
+        profile = profile_from_configs({"ports": [other, PORT]}, DALI_CONFIG, DEVICES_STATE)
         config = build_serial_config(profile)
         self.assertEqual(len(config["ports"]), 1)
         port = config["ports"][0]

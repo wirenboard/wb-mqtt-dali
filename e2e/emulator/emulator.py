@@ -15,7 +15,7 @@ from pathlib import Path
 # Puts the checkout root on sys.path when run as a script; pylint does not see the script directory.
 import checkout_path  # pylint: disable=import-error,unused-import
 
-from e2e.emulator.dali_fakes import ControlDevice, DaliBus, EmulatedGear
+from e2e.emulator.dali_fakes import ControlDevice, DaliBus, make_gear
 from e2e.emulator.installation_profile import (
     GATEWAY_DEVICE_TYPE,
     InstallationProfile,
@@ -40,7 +40,7 @@ log = logging.getLogger("emulator")
 class Emulator:  # pylint: disable=too-few-public-methods
     def __init__(self, profile: InstallationProfile, templates_dir: Path) -> None:
         dali_buses = [
-            DaliBus([EmulatedGear(g) for g in bus.gear] + [ControlDevice(d) for d in bus.control_devices])
+            DaliBus([make_gear(g) for g in bus.gear] + [ControlDevice(d) for d in bus.control_devices])
             for bus in profile.buses
         ]
         self.gateway = EmulatedWbDali(

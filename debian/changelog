@@ -1,3 +1,11 @@
+wb-mqtt-dali (1.43.0) stable; urgency=medium
+
+  * Devices that are found by search but do not support DALI commands, such
+    as Helvar Digidim 311 sensors, are no longer published in MQTT with
+    errors and are rechecked once an hour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 17:23:44 +0500
+
 wb-mqtt-dali (1.42.3) stable; urgency=medium
 
   * Internal refactoring and tests, no changes for users

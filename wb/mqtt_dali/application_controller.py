@@ -20,7 +20,7 @@ from .common_dali_device import DaliDeviceAddress, Pollable, read_product_name
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_device import Dali2Device
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_device import DaliDevice
+from .dali_device import DaliDevice, HelvarDigidimError
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .device_registry import DeviceRegistry
@@ -352,7 +352,7 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
     logger: logging.Logger,
     current_time: float,
 ) -> bool:
-    """Try to initialize device. Publish on success or error. Returns True on success."""
+    """Try to initialize device; publish it unless it does not support DALI. Returns True on success."""
     mqtt_id = device.mqtt_id
     try:
         await device.initialize(driver)
@@ -362,6 +362,11 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
         scheduler.record_success(mqtt_id)
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
+        if isinstance(e, HelvarDigidimError):
+            scheduler.record_helvar(mqtt_id, current_time)
+            if publisher.has_device(mqtt_id):
+                await publisher.remove_device(mqtt_id)
+            return False
         scheduler.record_failure(mqtt_id, current_time)
         if device.is_initialized:
             logger.warning("Failed to publish device %s: %s", device.name, e)
@@ -687,7 +692,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         ) or old_mqtt_id != new_mqtt_id
         if needs_republish:
             await self._republish_device(old_mqtt_id, device)
-        else:
+        elif self._device_publisher.has_device(old_mqtt_id):
             await self._device_publisher.set_device_title(old_mqtt_id, device.name)
 
         if old_short_address != device.address.short:

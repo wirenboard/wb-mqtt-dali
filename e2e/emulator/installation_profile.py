@@ -26,20 +26,26 @@ class Parity(enum.Enum):
 class GearModel(enum.Enum):
     PLAIN = "plain"
     ENERGY = "energy"
+    HELVAR_311 = "helvar_311"
 
 
 @dataclass(frozen=True)
 class GearProduct:
     model: GearModel
-    gtin: int
+    gtin: Optional[int]
 
 
-# Product names wb-mqtt-dali derives from these GTINs via products.csv.
+# The `model` of a gear in devices-state.json. wb-mqtt-dali derives the same product names from these
+# GTINs via products.csv; Helvar 311 and default_gear have no GTIN.
 KNOWN_GEAR_PRODUCTS = {
     "OTI DALI 15/220-240/1A0 NFC": GearProduct(GearModel.ENERGY, 6937186107749),
     "BK-DCL010S-AHA0700ADN": GearProduct(GearModel.PLAIN, 6971571384049),
     "DC MINI JOLLY DALI BI": GearProduct(GearModel.PLAIN, 8010703381377),
+    "Helvar 311": GearProduct(GearModel.HELVAR_311, None),
+    "default_gear": GearProduct(GearModel.PLAIN, None),
 }
+GEAR_STATE_KEYS = frozenset({"model", "groups"})
+CONTROL_DEVICE_STATE_KEYS = frozenset({"instance_types"})
 DEFAULT_INSTANCE_TYPES = (1,)
 
 
@@ -233,43 +239,64 @@ def _bus_from_dali_config(data: dict, state: dict, number: int) -> BusProfile:
     entries = data.get("devices", [])
     gear_entries = [e for e in entries if not e.get("dali2", False)]
     device_entries = [e for e in entries if e.get("dali2", False)]
-    groups = _device_state(state, "gear", gear_entries, number)
-    instances = _device_state(state, "control_devices", device_entries, number)
+    gear_states = _device_state(state, "gear", gear_entries, number, GEAR_STATE_KEYS)
+    device_states = _device_state(state, "control_devices", device_entries, number, CONTROL_DEVICE_STATE_KEYS)
     gear = []
     for entry in gear_entries:
-        product = KNOWN_GEAR_PRODUCTS.get(_product_name(entry))
+        short = int(entry["short"])
+        gear_state = gear_states.get(short, {})
+        product = _gear_product(gear_state, number, short)
         gear.append(
             GearSpec(
-                address=int(entry["short"]),
+                address=short,
                 random_address=int(entry["random"]),
-                model=product.model if product else GearModel.PLAIN,
-                groups=frozenset(groups.get(int(entry["short"]), ())),
-                gtin=product.gtin if product else None,
+                model=product.model,
+                groups=frozenset(int(g) for g in gear_state.get("groups", [])),
+                gtin=product.gtin,
             )
         )
     devices = [
         ControlDeviceSpec(
             address=int(entry["short"]),
             random_address=int(entry["random"]),
-            instance_types=instances.get(int(entry["short"]), DEFAULT_INSTANCE_TYPES),
+            instance_types=tuple(
+                int(t)
+                for t in device_states.get(int(entry["short"]), {}).get(
+                    "instance_types", DEFAULT_INSTANCE_TYPES
+                )
+            ),
         )
         for entry in device_entries
     ]
     return BusProfile(gear=tuple(gear), control_devices=tuple(devices))
 
 
-def _device_state(state: dict, kind: str, entries: list[dict], number: int) -> dict[int, tuple[int, ...]]:
-    """Short address -> values of one `kind` of a bus; every address must be such a device in the config."""
-    values = {int(short): tuple(int(v) for v in items) for short, items in state.get(kind, {}).items()}
+def _device_state(
+    state: dict, kind: str, entries: list[dict], number: int, keys: frozenset[str]
+) -> dict[int, dict]:
+    """Short address -> entry of one `kind` of a bus; every address must be such a device in the config."""
+    values = {int(short): item for short, item in state.get(kind, {}).items()}
     if unknown := set(values) - {int(e["short"]) for e in entries}:
         raise ValueError(
             f"{DEVICES_STATE_FILE}: bus {number} {kind} {sorted(unknown)} are not in {DALI_CONFIG_FILE}"
         )
+    for short, item in values.items():
+        where = f"{DEVICES_STATE_FILE}: bus {number} {kind} {short}"
+        if not isinstance(item, dict):
+            raise ValueError(f"{where}: expected an object")
+        if unknown_keys := set(item) - keys:
+            raise ValueError(f"{where}: unknown keys {sorted(unknown_keys)}")
     return values
 
 
-def _product_name(entry: dict) -> str:
-    """`"<product> <short>"` is how wb-mqtt-dali names gear it identified; the suffix is dropped."""
-    name = str(entry.get("name", ""))
-    suffix = f" {entry['short']}"
-    return name[: -len(suffix)] if name.endswith(suffix) else name
+def _gear_product(gear_state: dict, number: int, short: int) -> GearProduct:
+    """Every gear needs an entry with a known `model`."""
+    where = f"{DEVICES_STATE_FILE}: bus {number} gear {short}"
+    if "model" not in gear_state:
+        raise ValueError(f"{where}: no model, known: {sorted(KNOWN_GEAR_PRODUCTS)}")
+    product = KNOWN_GEAR_PRODUCTS.get(gear_state["model"])
+    if product is None:
+        raise ValueError(
+            f"{where}: unknown model {gear_state['model']!r}, known: {sorted(KNOWN_GEAR_PRODUCTS)}"
+        )
+    return product

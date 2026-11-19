@@ -18,7 +18,7 @@ import jsonschema
 from dali.address import GearGroup, GearShort
 from dali.gear.general import DTR0, SetMinLevel
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.config_validator import validate_config
 from wb.mqtt_dali.control_ids import ON_OFF
 from wb.mqtt_dali.dali_device import DaliDevice
@@ -38,6 +38,7 @@ from wb.mqtt_dali.on_off_control import (
     on_off_editor_schema,
 )
 
+from ._common_schema import load_common_schema
 from ._on_off_helpers import (
     BusScript,
     ScriptedBus,
@@ -46,8 +47,6 @@ from ._on_off_helpers import (
     group_settings,
 )
 from ._virtual_time import VirtualTimeTestCase
-
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 def _schema_path() -> Path:
@@ -247,6 +246,7 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
             },
             MagicMock(),
             MagicMock(),
+            load_common_schema(),
             MagicMock(),
         )
         gateway = WbDaliGateway(uid="gw1", buses=[bus])
@@ -267,6 +267,7 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
             {"devices": [{"short": 5, "random": 123, "dali2": True, "on_off": VALID_ON_OFF}]},
             MagicMock(),
             MagicMock(),
+            load_common_schema(),
             MagicMock(),
         )
         self.assertEqual(len(bus.dali2_devices), 1)
@@ -301,6 +302,7 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path="",
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -331,6 +333,7 @@ class OnOffPersistenceTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path="",
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -368,6 +371,7 @@ class OnOffDeviceEditorTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path="",
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -432,6 +436,7 @@ class OnOffDeviceEditorTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path="",
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -458,11 +463,10 @@ class OnOffDeviceEditorTest(VirtualTimeTestCase):
     async def test_device_schema_generation_exposes_on_off_block(self):
         """OnOffSettingsParam is one of the device's parameter handlers, so load_info merges
         its editor schema into the GetDevice schema instead of the block being hand-merged."""
-        with patch.object(DaliDeviceBase, "_common_schema", {"type": "object", "properties": {}}):
-            device = DaliDevice(DaliDeviceAddress(6, 0x654321), "gw_bus_1", MagicMock())
-            driver = ScriptedDriver()
-            await device.initialize(driver)
-            await device.load_info(driver, force_reload=True)
+        device = DaliDevice(DaliDeviceAddress(6, 0x654321), "gw_bus_1", MagicMock(), load_common_schema())
+        driver = ScriptedDriver()
+        await device.initialize(driver)
+        await device.load_info(driver, force_reload=True)
         self.assertIn("on_off", device.schema["properties"])
 
 
@@ -502,6 +506,7 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path=config_path,
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -560,6 +565,7 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path=config_path,
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -608,6 +614,7 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path="",
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])
@@ -639,6 +646,7 @@ class OnOffGroupEditorTest(VirtualTimeTestCase):
                     mqtt_dispatcher=harness.dispatcher,
                     config_path="",
                     gtin_db=MagicMock(),
+                    common_schema=load_common_schema(),
                     command_registry={},
                 )
                 bus = await harness.start(gateway.wb_dali_gateways[0].buses[0])

@@ -33,7 +33,7 @@ from wb.mqtt_dali.commissioning import (
     CommissioningResult,
     CommissioningStage,
 )
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDevice
@@ -51,11 +51,9 @@ from ._app_controller_helpers import (
     wait_until,
 )
 from ._broker_link_helpers import RecordingClient
+from ._common_schema import load_common_schema
 
 # pylint: disable=duplicate-code
-
-# Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-methods
@@ -77,6 +75,7 @@ def _make_bare_controller():
     controller.logger = logging.getLogger("test")
     controller._dev = AsyncMock()
     controller._gtin_db = MagicMock()
+    controller._common_schema = load_common_schema()
     controller._devices_by_mqtt_id = {}
     controller._init_scheduler = MagicMock()
     controller._init_scheduler.remove = MagicMock()
@@ -1536,7 +1535,9 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
             dali_devices=[],
             dali2_devices=[],
         )
-        controller = ApplicationController(config, MagicMock(), MagicMock(), MagicMock())
+        controller = ApplicationController(
+            config, MagicMock(), MagicMock(), load_common_schema(), MagicMock()
+        )
 
         with pytest.raises(RuntimeError, match="broker down"):
             await controller.start()
@@ -1567,7 +1568,7 @@ def _bus_with_device(device, on_polling_failure, dispatcher: MQTTDispatcher) -> 
         dali_devices=[device],
         dali2_devices=[],
     )
-    return ApplicationController(config, dispatcher, MagicMock(), on_polling_failure)
+    return ApplicationController(config, dispatcher, MagicMock(), load_common_schema(), on_polling_failure)
 
 
 def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
@@ -1602,7 +1603,7 @@ async def test_dali2_short_address_change_moves_instance_types_to_new_address(ac
         dali_devices=[],
         dali2_devices=[device],
     )
-    bus = ApplicationController(config, acking_dispatcher, MagicMock(), MagicMock())
+    bus = ApplicationController(config, acking_dispatcher, MagicMock(), load_common_schema(), MagicMock())
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=0, instance_type=1)
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=1, instance_type=3)
 
@@ -1718,6 +1719,7 @@ def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[Appl
         {"devices": [], "bus_monitor_enabled": monitor, "bus_monitor_syslog_enabled": syslog},
         dispatcher,
         MagicMock(),
+        load_common_schema(),
         MagicMock(),
     )
     return bus, dispatcher

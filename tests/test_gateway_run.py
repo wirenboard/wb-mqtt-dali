@@ -5,17 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiomqtt
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceBase
 from wb.mqtt_dali.gateway import BusPollingError, Gateway
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
 
 from ._app_controller_helpers import LoopKiller, wait_until
 from ._broker_link_helpers import RecordingClient
+from ._common_schema import load_common_schema
 from ._on_off_helpers import BusScript, ScriptedGatewayClient
 from ._virtual_time import VirtualTimeTestCase
-
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 _LAST_ENDPOINT_MARKER = "/rpc/v1/wb-mqtt-dali/Bus/ListCommands"
 
@@ -28,7 +26,14 @@ class GatewayRunTests(VirtualTimeTestCase):
         self.client.fail("publish", "/devices/gw_bus_1_5/meta", LoopKiller())
         self.dispatcher = MQTTDispatcher(self.client)
         config = {"gateways": [{"device_id": "gw", "buses": [{"devices": [{"short": 5, "random": 123}]}]}]}
-        self.gateway = Gateway(config, self.dispatcher, "/nonexistent.conf", MagicMock(), command_registry={})
+        self.gateway = Gateway(
+            config=config,
+            mqtt_dispatcher=self.dispatcher,
+            config_path="/nonexistent.conf",
+            gtin_db=MagicMock(),
+            common_schema=load_common_schema(),
+            command_registry={},
+        )
         self.dispatch_task: Optional[asyncio.Task] = None
 
     async def asyncSetUp(self):
@@ -74,7 +79,9 @@ class GatewayWaitForWbMqttSerialTests(VirtualTimeTestCase):
         dispatch_task = asyncio.create_task(dispatcher.run())
         self.addCleanup(dispatch_task.cancel)
         config = {"gateways": [{"device_id": "gw", "buses": [{"devices": []}]}]}
-        gateway = Gateway(config, dispatcher, "/nonexistent.conf", MagicMock(), command_registry={})
+        gateway = Gateway(
+            config, dispatcher, "/nonexistent.conf", MagicMock(), load_common_schema(), command_registry={}
+        )
 
         with patch("wb.mqtt_dali.gateway.WB_MQTT_SERIAL_RPC_WAIT_BEFORE_REPORT_S", 0.01), patch(
             "wb.mqtt_dali.gateway.remove_topics_by_driver", AsyncMock()

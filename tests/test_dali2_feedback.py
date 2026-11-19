@@ -27,7 +27,7 @@ from dali.device.general import (
 )
 from dali.frame import BackwardFrame
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device, InstanceParameters, InstanceTypeParam
 from wb.mqtt_dali.dali2_type32_parameters import (
     pack_feedback_timing,
@@ -50,10 +50,9 @@ from wb.mqtt_dali.send_command import (
     parse_expression,
 )
 
-# pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
-# Prevent file system access in DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}
+# pylint: disable=protected-access
 
 
 # Capability bits per IEC 62386-332:2017 Table 1
@@ -90,6 +89,7 @@ def _bare_dali2_device(short: int = 1) -> Dali2Device:
         DaliDeviceAddress(short=short, random=0x123456),
         bus_id="bus_test",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
     )
 
 

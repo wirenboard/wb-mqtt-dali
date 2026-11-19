@@ -148,7 +148,9 @@ class TestDefaultServiceReconnect(unittest.IsolatedAsyncioTestCase):
 
         with patch("wb.mqtt_dali.main.load_config", return_value={}), patch(
             "wb.mqtt_dali.main.DaliDatabase", return_value=object()
-        ), patch("wb.mqtt_dali.main.MQTTDispatcher", return_value=dispatcher), patch(
+        ), patch("wb.mqtt_dali.main.load_common_device_schema", return_value={}), patch(
+            "wb.mqtt_dali.main.MQTTDispatcher", return_value=dispatcher
+        ), patch(
             "wb.mqtt_dali.main.RECONNECT_DELAY_S", 0.001
         ), signals.patch_loop():
             stopper = asyncio.create_task(send_sigterm())

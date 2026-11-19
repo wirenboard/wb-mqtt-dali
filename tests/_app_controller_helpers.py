@@ -24,6 +24,8 @@ from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import Gateway
 from wb.mqtt_dali.send_command import CommandInfo, build_command_registry
 
+from ._common_schema import load_common_schema
+
 
 class LoopKiller(Exception):
     """An error no production code expects, so nothing on the polling path handles it."""
@@ -100,6 +102,7 @@ def make_bare_gateway(
         mqtt_dispatcher=MagicMock(),
         config_path="",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
         command_registry=command_registry if command_registry is not None else build_command_registry(),
     )
 

@@ -162,6 +162,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
     data: dict,
     mqtt_dispatcher: MQTTDispatcher,
     gtin_db: DaliDatabase,
+    common_schema: dict,
     on_polling_failure: Callable[[], None],
 ) -> ApplicationController:
     dali_devices: list[DaliDevice] = []
@@ -173,6 +174,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
                 gtin_db,
+                common_schema,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
             )
@@ -183,6 +185,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
                 DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
                 bus_uid,
                 gtin_db,
+                common_schema,
                 dev_conf.get("mqtt_id"),
                 dev_conf.get("name"),
                 on_off=on_off_config_from_json(on_off_conf) if on_off_conf is not None else None,
@@ -202,7 +205,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
         },
     )
 
-    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db, on_polling_failure)
+    res = ApplicationController(ap_conf, mqtt_dispatcher, gtin_db, common_schema, on_polling_failure)
     return res
 
 
@@ -237,6 +240,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         mqtt_dispatcher: MQTTDispatcher,
         config_path: str,
         gtin_db: DaliDatabase,
+        common_schema: dict,
         command_registry: Optional[Dict[str, CommandInfo]] = None,
     ) -> None:
         if command_registry is None:
@@ -256,6 +260,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                                 bus[1],
                                 mqtt_dispatcher,
                                 gtin_db,
+                                common_schema,
                                 self._on_bus_failure,
                             ),
                             enumerate(gw_conf.get("buses", []), 1),
@@ -275,6 +280,7 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
         self._debug = config.get("debug", False)
 
         self._gtin_db = gtin_db
+        self._common_schema = common_schema
 
         self._command_registry = command_registry
 
@@ -731,7 +737,11 @@ class Gateway:  # pylint: disable=too-many-instance-attributes
                 for bus_index in range(1, bus_count + 1):
                     apc_conf = ApplicationControllerConfig(did, bus_index, [], [])
                     apc = ApplicationController(
-                        apc_conf, self._mqtt_dispatcher, self._gtin_db, self._on_bus_failure
+                        apc_conf,
+                        self._mqtt_dispatcher,
+                        self._gtin_db,
+                        self._common_schema,
+                        self._on_bus_failure,
                     )
                     buses.append(apc)
                 gw = WbDaliGateway(uid=did, buses=buses)

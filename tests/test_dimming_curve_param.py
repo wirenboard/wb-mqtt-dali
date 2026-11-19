@@ -12,11 +12,7 @@ import pytest
 
 from wb.mqtt_dali import dali_device as _dd
 from wb.mqtt_dali import settings as _settings
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    PropertyStartOrder,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, PropertyStartOrder
 from wb.mqtt_dali.dali_common_parameters import GroupsParam
 from wb.mqtt_dali.dali_device import DaliDevice, DaliDeviceType
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
@@ -28,20 +24,9 @@ from wb.mqtt_dali.dali_type17_parameters import (
     Type17Parameters,
 )
 
+from ._common_schema import load_common_schema
+
 # pylint: disable=redefined-outer-name
-
-
-@pytest.fixture(autouse=True)
-def _stub_common_schema(monkeypatch):
-    # Prevent file system access in DaliDeviceBase.__init__ by providing a
-    # non-empty common schema. monkeypatch restores the original value after
-    # each test so we don't leak state into other tests in the same process.
-    monkeypatch.setattr(
-        DaliDeviceBase,
-        "_common_schema",
-        {"title": "test-schema", "properties": {}},
-        raising=False,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +190,7 @@ def _make_dali_device(short: int = 1) -> DaliDevice:
         DaliDeviceAddress(short=short, random=0x123456),
         bus_id="bus_test",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
     )
 
 

@@ -22,7 +22,6 @@ from wb.mqtt_dali.common_dali_device import (
     PERIODIC_STATUS_POLL_INTERVAL,
     ControlsPollRequestResult,
     DaliDeviceAddress,
-    DaliDeviceBase,
     EventPollSchedule,
     MqttControl,
     MqttControlBase,
@@ -52,9 +51,7 @@ from wb.mqtt_dali.events import BusEvent, ColourChanged, EventSource
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 from ._app_controller_helpers import make_group_controller
-
-# Prevent file-system access in DaliDeviceBase.__init__ (repo-wide test hack).
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}  # pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
 _LOGGER = logging.getLogger("test.init_control_state")
 
@@ -89,6 +86,7 @@ def _make_stub_device(controls_factory, short=1, extra_pollables=()):
         address=DaliDeviceAddress(short=short, random=0x00),
         bus_id="bus",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
     )
 
 

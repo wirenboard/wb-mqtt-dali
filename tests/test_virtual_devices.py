@@ -20,12 +20,7 @@ from dali.gear.colour import tc_kelvin_mirek
 from dali.gear.general import DAPC
 
 from wb.mqtt_dali.application_controller import ApplicationController
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    MqttControlBase,
-    Pollable,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, MqttControlBase, Pollable
 from wb.mqtt_dali.dali_controls import (
     ActualLevelControl,
     DapcControl,
@@ -54,13 +49,11 @@ from wb.mqtt_dali.virtual_devices import (
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
+from ._common_schema import load_common_schema
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-# pylint: disable-next=protected-access
-DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 _MOCK_MQTT_ID_COUNTER = itertools.count(1)
 _MOCK_SHORT_ADDRESS_COUNTER = itertools.count(1)
@@ -1370,7 +1363,9 @@ class _GroupMemberDevice(DaliDevice):
     """
 
     def __init__(self, group_number: int, short_address: int = 1) -> None:
-        super().__init__(DaliDeviceAddress(short=short_address, random=0), "bus_1", MagicMock())
+        super().__init__(
+            DaliDeviceAddress(short=short_address, random=0), "bus_1", MagicMock(), load_common_schema()
+        )
         self._member_groups = {group_number}
         self.is_initialized = True
         self.rebuild_mqtt_controls()

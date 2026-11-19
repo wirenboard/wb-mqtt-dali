@@ -11,13 +11,13 @@ import logging
 import pytest
 from dali.address import GearShort
 from dali.gear.general import DAPC, QueryActualLevel
-
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.sim.broker import Broker, Client
 from wb.mqtt_dali.sim.scenario import build_network, default_scenario, serial_config
 from wb.mqtt_dali.sim.serial_service import FakeWbMqttSerial
-from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
+from wb.mqtt_dali.wbdali import FramePriority, WBDALIConfig, WBDALIDriver
 
 MODULE = "wb-mdali_1"
 
@@ -37,7 +37,10 @@ class _Stack:  # pylint: disable=too-many-instance-attributes
         self.dispatcher = MQTTDispatcher(self.client)
         self.dispatcher_task = None
         self.driver = WBDALIDriver(
-            WBDALIConfig(device_name=MODULE, bus=1), self.dispatcher, logging.getLogger("test.sim")
+            WBDALIConfig(device_name=MODULE, bus=1),
+            self.dispatcher,
+            logging.getLogger("test.sim"),
+            MQTTRPCClient(),
         )
 
     async def __aenter__(self) -> "_Stack":
@@ -59,11 +62,17 @@ class _Stack:  # pylint: disable=too-many-instance-attributes
         self.network.stop()
 
 
+def _as_user(stack: _Stack) -> tuple:
+    return BusTrafficSource.WB, FramePriority.USER_ACTION, stack.driver.logger
+
+
 @pytest.mark.asyncio
 async def test_the_daemons_driver_gets_answers_from_simulated_gear():
     async with _Stack() as stack:
-        await asyncio.wait_for(stack.driver.send(DAPC(GearShort(0), 128)), 5.0)
-        response = await asyncio.wait_for(stack.driver.send(QueryActualLevel(GearShort(0))), 5.0)
+        await asyncio.wait_for(stack.driver.send(DAPC(GearShort(0), 128), *_as_user(stack)), 5.0)
+        response = await asyncio.wait_for(
+            stack.driver.send(QueryActualLevel(GearShort(0)), *_as_user(stack)), 5.0
+        )
         assert response.value == 128
 
 
@@ -75,7 +84,7 @@ async def test_a_batch_of_queries_is_answered_slot_by_slot():
             QueryActualLevel(GearShort(1)),
             QueryActualLevel(GearShort(9)),
         ]
-        responses = await asyncio.wait_for(stack.driver.send_commands(commands), 5.0)
+        responses = await asyncio.wait_for(stack.driver.send_commands(commands, *_as_user(stack)), 5.0)
         assert [r.value for r in responses[:2]] == [0, 0]
         # Nothing lives at short address 9 in the default scenario.
         assert responses[2].raw_value is None

@@ -32,6 +32,10 @@ DALI_CONFIG = {
         }
     ],
 }
+DEVICES_STATE = {
+    "1": {"gear": {"3": {"model": "default_gear"}}},
+    "2": {"gear": {"0": {"model": "default_gear"}}},
+}
 
 
 class ExpectedDevicesTest(unittest.TestCase):
@@ -55,7 +59,7 @@ class ExpectedDevicesTest(unittest.TestCase):
 class DaliConfigDebugTest(unittest.TestCase):
     def test_debug_is_dropped_from_a_profile_dali_config(self):
         """The profile's wb-mqtt-dali config is installed as is but for `debug`."""
-        profile = profile_from_configs({"ports": [PORT]}, DALI_CONFIG, {})
+        profile = profile_from_configs({"ports": [PORT]}, DALI_CONFIG, DEVICES_STATE)
         self.assertEqual(build_dali_config(profile), {"gateways": DALI_CONFIG["gateways"]})
         self.assertTrue(profile.dali_config["debug"])
 

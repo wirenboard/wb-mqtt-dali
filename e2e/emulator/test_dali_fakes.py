@@ -35,6 +35,19 @@ def respond(bus: DaliBus, cmd: Command) -> Response:
     return cmd.response(backward) if cmd.response else Response(backward)
 
 
+def answer(bus: DaliBus, cmd: Command):
+    """The raw backward frame of ``cmd`` on the fake bus, None when nothing answers."""
+    return bus.transact(cmd.frame).backward
+
+
+def select_gear(bus: DaliBus, random_address: int) -> None:
+    for cmd, value in zip(
+        (gear_general.SetSearchAddrH, gear_general.SetSearchAddrM, gear_general.SetSearchAddrL),
+        random_address.to_bytes(3, "big"),
+    ):
+        answer(bus, cmd(value))
+
+
 def run_sequence(bus: DaliBus, sequence):
     """Runs a wb-mqtt-dali command sequence on the fake bus the way the driver does."""
     response = None

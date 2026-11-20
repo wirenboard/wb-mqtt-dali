@@ -1,5 +1,6 @@
 # DALI devices of the emulated buses: python-dali's fake Gear with the queries wb-mqtt-dali
-# polls added, an energy-reporting (bank 202) gear model, and a DALI-2 control device fake.
+# polls added, an energy-reporting (bank 202) gear model, a Helvar 311 sensor that ignores DALI
+# commands, and a DALI-2 control device fake.
 
 from __future__ import annotations
 
@@ -109,7 +110,11 @@ class EmulatedGear(fakes.Gear):
         self.system_failure_level = 254
 
     def send(self, cmd: Command) -> Optional[int]:
+        if isinstance(cmd, gear_general.Randomise) and not self.initialising:
+            return None
         answer = super().send(cmd)
+        if isinstance(cmd, gear_general.QueryShortAddress):
+            return self._query_short_address_answer()
         if answer is not None or not self.valid_address(cmd):
             return answer
         if isinstance(cmd, gear_general.QueryStatus):
@@ -123,6 +128,27 @@ class EmulatedGear(fakes.Gear):
         if LED_DEVICE_TYPE in self.devicetypes:
             answers.update({led.QueryDimmingCurve: STANDARD_DIMMING_CURVE, led.QueryFastFadeTime: 0})
         return answers.get(type(cmd))
+
+    # --- Private ---
+
+    def _query_short_address_answer(self) -> Optional[int]:
+        # Withdrawn gear still answers: WITHDRAW mutes COMPARE only.
+        if not self.initialising or self.randomaddr != self.searchaddr:
+            return None
+        return MASK if self.shortaddr is None else (self.shortaddr << 1) | 1
+
+
+class Helvar311Gear(EmulatedGear):
+    """Takes part in the search; of the addressed commands answers QUERY CONTROL GEAR only."""
+
+    def send(self, cmd: Command) -> Optional[int]:
+        if hasattr(cmd, "destination") and not isinstance(cmd, gear_general.QueryControlGearPresent):
+            return None
+        return super().send(cmd)
+
+
+def make_gear(spec: GearSpec) -> EmulatedGear:
+    return Helvar311Gear(spec) if spec.model == GearModel.HELVAR_311 else EmulatedGear(spec)
 
 
 @dataclass

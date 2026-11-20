@@ -26,7 +26,8 @@ wb-mqtt-serial работает с эмулятором вместо реаль�
     есть новые события, ответы шин 2 и 3 ждут следующих чтений. Discrete и coil идут после
     holding — на железе это не проверялось.
 - **DALI-устройства** — `dali.tests.fakes.Gear` с ответами на запросы инициализации и опроса
-  wb-mqtt-dali, и свой фейк control device (random address, поиск и адресация, instances).
+  wb-mqtt-dali и на QUERY SHORT ADDRESS при поиске; RANDOMISE gear принимает только после
+  INITIALISE, как настоящий, и свой фейк control device (random address, поиск и адресация, instances).
   Одновременный ответ нескольких устройств даёт битый обратный кадр.
 - **Соседи** — регистры по шаблону wb-mqtt-serial (объекты с `address`, без `reg_type` — holding)
   плюс служебные регистры WB. Из нескольких шаблонов одного `device_type` берётся тот же, что у
@@ -39,19 +40,27 @@ wb-mqtt-serial работает с эмулятором вместо реаль�
 | Файл | Что берётся |
 | --- | --- |
 | `wb-mqtt-serial.conf` | порт с единственным `WB-DALI`: скорость линии, slave id шлюза, соседи (`device_type`, slave id) |
-| `wb-mqtt-dali.conf` | шины `wb-dali_<slave id>`: адреса, random address, имена gear (по имени — модель), `dali2: true` — control device |
-| `devices-state.json` | шина (с 1) → `gear`: адрес → группы, `control_devices`: адрес → типы instances |
+| `wb-mqtt-dali.conf` | шины `wb-dali_<slave id>`: адреса, random address, `dali2: true` — control device; имена эмулятору безразличны |
+| `devices-state.json` | шина (с 1) → `gear`: адрес → `{"model": ..., "groups": [...]}`, `control_devices`: адрес → `{"instance_types": [...]}` |
 
 ```json
-{"1": {"gear": {"0": [3, 4]}, "control_devices": {"0": [1, 2, 3, 4]}}}
+{"1": {"gear": {"0": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [3, 4]}, "6": {"model": "Helvar 311"}},
+       "control_devices": {"0": {"instance_types": [1, 2, 3, 4]}}}}
 ```
 
-Gear без записи — без групп, control device — с instances `[1]`. Запись об устройстве или шине,
-которых нет в `wb-mqtt-dali.conf`, — ошибка.
+У каждого gear из `wb-mqtt-dali.conf` должна быть запись с `model`; `groups` по умолчанию пустые.
+Control device без записи — с instances `[1]`. Gear без записи или без `model`, неизвестная модель, лишний ключ, запись
+об устройстве или шине, которых нет в `wb-mqtt-dali.conf`, — ошибка при загрузке профиля.
 
-Модели gear по имени: OTI DALI 15/220-240/1A0 NFC (device types 6, 50, 51, 52, банки 1, 202,
-205–207, DT6), BK-DCL010S-AHA0700ADN, DC MINI JOLLY DALI BI; без имени — gear без GTIN и device
-types.
+Модели gear (`model`):
+
+| Модель | Что эмулируется |
+| --- | --- |
+| OTI DALI 15/220-240/1A0 NFC | GTIN, device types 6, 50, 51, 52, банки 1, 202, 205–207, DT6 |
+| BK-DCL010S-AHA0700ADN | GTIN; на QUERY DEVICE TYPE отвечает 254 — только общие команды части 102, без настроек LED и энергии. Упрощение: по `products.csv` у продукта DT6 и банки 251–253 |
+| DC MINI JOLLY DALI BI | GTIN; на QUERY DEVICE TYPE отвечает 254, как BK-DCL010S-AHA0700ADN. Упрощение: по `products.csv` у продукта DT6 и банк 251 |
+| Helvar 311 | датчик без GTIN: участвует в поиске и отвечает на QUERY SHORT ADDRESS, из адресных команд — только на QUERY CONTROL GEAR |
+| default_gear | без GTIN; на QUERY DEVICE TYPE отвечает 254 — простой светильник части 102: яркость, группы, сцены, фейд, без настроек типа устройства |
 
 ## Подготовка эмулятора
 

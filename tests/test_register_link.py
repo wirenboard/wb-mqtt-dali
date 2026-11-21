@@ -317,6 +317,9 @@ class _Listener:
     def on_monitor_slot(self, raw):
         self.slots.append((raw >> 48) & 0xFFFF)
 
+    def on_monitor_message(self, message):
+        pass
+
     def on_gateway_error_payload(self, payload):
         pass
 

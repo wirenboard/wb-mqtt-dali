@@ -773,6 +773,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
         """A bus monitor ring slot from the link."""
         self._bus_monitor_frame_handler.handle_raw(raw)
 
+    def on_monitor_message(self, message: aiomqtt.Message) -> None:
+        """A bus monitor ring slot as wb-mqtt-serial published it (the MQTT link)."""
+        self._bus_monitor_frame_handler.handle(message)
+
     def on_reply(  # pylint: disable=too-many-return-statements, too-many-branches, too-many-statements
         self, resp_pointer: int, resp: Optional[int]
     ) -> None:

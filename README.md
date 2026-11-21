@@ -425,6 +425,7 @@ flowchart TD
 import asyncio, logging
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.sim import Broker, Client, FakeWbMqttSerial, build_network, default_scenario, serial_config
+from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCClient
 from wb.mqtt_dali.wbdali import WBDALIConfig, WBDALIDriver
 
 async def main():
@@ -436,7 +437,9 @@ async def main():
     async with Client(broker, "wb-mqtt-dali") as client:
         dispatcher = MQTTDispatcher(client)
         task = asyncio.create_task(dispatcher.run())
-        driver = WBDALIDriver(WBDALIConfig(device_name="wb-mdali_1", bus=1), dispatcher, logging.getLogger("sim"))
+        driver = WBDALIDriver(
+            WBDALIConfig(device_name="wb-mdali_1", bus=1), dispatcher, logging.getLogger("sim"), MQTTRPCClient()
+        )
         await driver.initialize()
         ...
 ```

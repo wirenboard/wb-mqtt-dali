@@ -84,7 +84,10 @@ class GatewayListener(Protocol):
         """The reply register of queue slot ``resp_pointer`` holds ``resp`` (None: unreadable)."""
 
     def on_monitor_slot(self, raw: int) -> None:
-        """A bus monitor ring slot holds a new value."""
+        """A bus monitor ring slot holds a new value (read from the registers)."""
+
+    def on_monitor_message(self, message: aiomqtt.Message) -> None:
+        """wb-mqtt-serial published a bus monitor ring slot, as is: retained, empty or garbled included."""
 
     def on_gateway_error_payload(self, payload: str) -> None:
         """wb-mqtt-serial's ``/meta/error`` for the module changed."""
@@ -275,20 +278,10 @@ class MqttSerialLink:
             self._listener.on_reply(index, value)
 
     def _on_monitor_message(self, message: aiomqtt.Message) -> None:
-        if message.retain or not message.payload:
-            return
-        try:
-            raw = get_int_payload(message)
-        except ValueError as exc:
-            self.logger.error(
-                "Failed to parse bus monitor payload '%s' from topic '%s': %s",
-                message.payload,
-                message.topic,
-                exc,
-            )
-            return
+        # Filtering (retained, empty, unparsable) stays with the driver's handler,
+        # where main's tests pin it.
         if self._listener is not None:
-            self._listener.on_monitor_slot(raw)
+            self._listener.on_monitor_message(message)
 
     def _on_meta_error_message(self, message: aiomqtt.Message) -> None:
         try:

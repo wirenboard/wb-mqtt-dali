@@ -90,7 +90,7 @@ class _CountingReadsClient(FakePortLoadClient):
         return await super().call(driver, service, method, params, timeout_s)
 
 
-class TestWBDALIDriver(VirtualTimeTestCase):
+class TestWBDALIDriver(VirtualTimeTestCase):  # pylint: disable=too-many-public-methods
     def setUp(self):
         self.config = WBDALIConfig()
         self.mock_mqtt_client = MockMqttClient()

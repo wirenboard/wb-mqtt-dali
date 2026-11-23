@@ -30,7 +30,7 @@ from e2e.emulator.template_device import (
 )
 from e2e.emulator.wbdali_gateway import EmulatedWbDali
 
-GATEWAY_FW_VERSION = "1.2.3"
+GATEWAY_FW_VERSION = "1.3.0"
 # wb-mqtt-serial looks the gateway's firmware up in the release by this signature.
 GATEWAY_FW_SIGNATURE = "dali3G15"
 

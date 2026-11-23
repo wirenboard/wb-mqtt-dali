@@ -16,6 +16,7 @@ from wb.mqtt_dali.common_dali_device import (
     InitializationResult,
     NotifyResult,
     Pollable,
+    initial_device_name,
 )
 from wb.mqtt_dali.control_ids import LAST_ACTED
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
@@ -1083,3 +1084,39 @@ async def test_apply_parameters_propagates_write_error_and_does_not_apply_common
     h1.write.assert_awaited_once()
     h2.write.assert_not_awaited()
     d._apply_common_parameters.assert_not_awaited()
+
+
+def test_initial_device_name_is_product_name_and_short_when_gtin_is_known():
+    gtin_db = MagicMock()
+    gtin_db.get_info_by_gtin.return_value = {
+        "brand_name": "Acme",
+        "product_name": "SuperLamp 100",
+    }
+
+    name = initial_device_name(gtin_db, 8721103129109, 5, logging.getLogger("test"))
+
+    assert name == "SuperLamp 100 5"
+    gtin_db.get_info_by_gtin.assert_called_once_with(8721103129109)
+
+
+def test_initial_device_name_is_none_when_no_gtin():
+    gtin_db = MagicMock()
+
+    assert initial_device_name(gtin_db, None, 2, logging.getLogger("test")) is None
+    gtin_db.get_info_by_gtin.assert_not_called()
+
+
+def test_initial_device_name_is_none_when_gtin_unknown():
+    gtin_db = MagicMock()
+    gtin_db.get_info_by_gtin.return_value = None
+
+    assert initial_device_name(gtin_db, 999, 3, logging.getLogger("test")) is None
+    gtin_db.get_info_by_gtin.assert_called_once_with(999)
+
+
+def test_initial_device_name_is_none_when_product_name_missing_from_entry():
+    gtin_db = MagicMock()
+    # The database entry has no product_name field (e.g., malformed row)
+    gtin_db.get_info_by_gtin.return_value = {"brand_name": "X"}
+
+    assert initial_device_name(gtin_db, 7, 6, logging.getLogger("test")) is None

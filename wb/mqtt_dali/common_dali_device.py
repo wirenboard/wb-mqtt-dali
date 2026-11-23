@@ -37,13 +37,19 @@ from .short_address import set_short_address_sequence
 from .utils import merge_json_schemas
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
+    MASK,
     check_query_response,
     has_transmission_error,
     is_transmission_error_response,
     query_response,
     send_commands_with_retry,
+    send_with_retry,
 )
 from .wbmqtt import ControlMeta, is_alarm, value_is_retained
+
+# A device is allowed to ignore commands until 300 ms after Reset started
+# (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
+RESET_SETTLE_TIME_S = 0.35
 
 
 class NotifyResult(Enum):
@@ -592,40 +598,45 @@ async def read_gtin_fast(
         return None
 
 
-async def read_product_name(
+async def read_gtin_or_none(
     driver: WBDALIDriver,
     short_address: Address,
     compat: Union[Dali2CommandsCompatibilityLayer, DaliCommandsCompatibilityLayer],
-    gtin_db: DaliDatabase,
     logger: logging.Logger,
-) -> Optional[str]:
-    """Read the GTIN from memory banks and look up the product name.
-
-    Returns the product_name string if the GTIN is found in the database, or
-    None on any failure (missing banks, unreadable bus, unknown GTIN).
-    Does not raise.
-    """
+) -> Optional[int]:
+    """`read_gtin_fast` that logs a failure and returns None instead of raising."""
     try:
         gtin = await read_gtin_fast(driver, short_address, compat, logger)
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.warning(
-            "Failed to read memory banks for %s while looking up product name: %s",
+            "Failed to read the GTIN of %s: %s",
             short_address,
             e,
         )
         return None
     if gtin is None:
-        logger.debug("No GTIN reported by device at %s; using default name", short_address)
+        logger.debug("No GTIN reported by device at %s", short_address)
+    return gtin
+
+
+def initial_device_name(
+    gtin_db: DaliDatabase, gtin: Optional[int], short_address: int, logger: logging.Logger
+) -> Optional[str]:
+    """`"{product_name} {short}"` for a GTIN found in `gtin_db`, else None for the default name."""
+    if gtin is None:
         return None
     product_info = gtin_db.get_info_by_gtin(gtin)
     if product_info is None:
         logger.debug(
-            "GTIN %s of device at %s not found in product database; using default name",
+            "GTIN %s of device at short address %d not found in product database; using default name",
             gtin,
             short_address,
         )
         return None
-    return product_info.get("product_name")
+    product_name = product_info.get("product_name")
+    if product_name is None:
+        return None
+    return f"{product_name} {short_address}"
 
 
 class MemoryFieldParam(NamedTuple):
@@ -875,6 +886,27 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
     @property
     def dali_commands(self) -> Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer]:
         return self._compat
+
+    async def reset_settings(self, driver: WBDALIDriver) -> None:
+        """DALI RESET; the short address stays."""
+        await send_with_retry(driver, self.dali_commands.Reset(self.address.short), self.logger)
+        await asyncio.sleep(RESET_SETTLE_TIME_S)
+
+    async def reset(self, driver: WBDALIDriver) -> None:
+        """Reset settings and clear the short address; a device that keeps it is only warned about."""
+        await self.reset_settings(driver)
+        reported = await driver.run_sequence(
+            set_short_address_sequence(self.dali_commands, self.address.short, MASK, self.logger),
+            FramePriority.USER_ACTION,
+            self.logger,
+        )
+        if reported != MASK:
+            self.logger.warning(
+                "Short address %d not cleared, the device reports %s and stays on the bus; "
+                "removing it from the configuration anyway, run a device search to pick it up",
+                self.address.short,
+                reported,
+            )
 
     async def initialize(self, driver: WBDALIDriver) -> None:
         async with self._initialize_lock:

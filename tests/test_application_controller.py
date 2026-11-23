@@ -35,7 +35,6 @@ from wb.mqtt_dali.commissioning import (
 )
 from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
-from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.device_registry import DeviceRegistry
 from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
@@ -70,13 +69,15 @@ class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-
         assert getattr(controller, "_get_active_group_numbers")() == [0, 1, 2]
 
 
-def _make_bare_controller():
+def _make_bare_controller(gtin_db=None):
     # pylint: disable=protected-access
     controller = ApplicationController.__new__(ApplicationController)
     controller.uid = "gw_bus_1"
     controller.logger = logging.getLogger("test")
     controller._dev = AsyncMock()
-    controller._gtin_db = MagicMock()
+    # No gear answers the Helvar identification.
+    controller._dev.send_commands.side_effect = lambda cmds, *_args, **_kwargs: [Response(None) for _ in cmds]
+    controller._gtin_db = gtin_db or MagicMock()
     controller._common_schema = load_common_schema()
     controller._devices_by_mqtt_id = {}
     controller._init_scheduler = MagicMock()
@@ -100,78 +101,23 @@ def _make_bare_controller():
     return controller
 
 
-@pytest.mark.asyncio
-async def test_resolve_initial_names_formats_known_product():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    compat = DaliCommandsCompatibilityLayer()
-    addresses = [DaliDeviceAddress(short=3, random=0x1234)]
-
-    with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value="LED Driver"),
-    ):
-        names = await controller._resolve_initial_names(addresses, compat)
-
-    assert names == ["LED Driver 3"]
-
-
-@pytest.mark.asyncio
-async def test_resolve_initial_names_returns_none_for_unknown_product():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    compat = DaliCommandsCompatibilityLayer()
-    addresses = [DaliDeviceAddress(short=7, random=0x22)]
-
-    with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value=None),
-    ):
-        names = await controller._resolve_initial_names(addresses, compat)
-
-    assert names == [None]
-
-
-@pytest.mark.asyncio
-async def test_resolve_initial_names_returns_none_on_exception():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    compat = DaliCommandsCompatibilityLayer()
-    addresses = [DaliDeviceAddress(short=2, random=0x00)]
-
-    with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(side_effect=RuntimeError("bus down")),
-    ):
-        names = await controller._resolve_initial_names(addresses, compat)
-
-    assert names == [None]
-
-
-@pytest.mark.asyncio
-async def test_resolve_initial_names_handles_empty_input():
-    # pylint: disable=protected-access
-    controller = _make_bare_controller()
-    compat = DaliCommandsCompatibilityLayer()
-
-    with patch("wb.mqtt_dali.application_controller.read_product_name") as mock_rpn:
-        names = await controller._resolve_initial_names([], compat)
-        mock_rpn.assert_not_called()
-
-    assert names == []
+def _gtin_db_with(product_name):
+    gtin_db = MagicMock()
+    gtin_db.get_info_by_gtin.return_value = {"product_name": product_name}
+    return gtin_db
 
 
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
     # pylint: disable=protected-access
-    controller = _make_bare_controller()
+    controller = _make_bare_controller(_gtin_db_with("Acme Lamp"))
 
     new_addr = DaliDeviceAddress(short=5, random=0xABCD)
     commissioning_result = CommissioningResult(new=[new_addr])
 
     with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value="Acme Lamp"),
+        "wb.mqtt_dali.application_controller.read_gtin_or_none",
+        new=AsyncMock(return_value=12345),
     ):
         await controller._update_dali_devices(commissioning_result)
 
@@ -185,14 +131,16 @@ async def test_update_dali_devices_sets_custom_name_for_new_with_known_gtin():
 @pytest.mark.asyncio
 async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
     # pylint: disable=protected-access
-    controller = _make_bare_controller()
+    gtin_db = MagicMock()
+    gtin_db.get_info_by_gtin.return_value = None
+    controller = _make_bare_controller(gtin_db)
 
     new_addr = DaliDeviceAddress(short=8, random=0x01)
     commissioning_result = CommissioningResult(new=[new_addr])
 
     with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value=None),
+        "wb.mqtt_dali.application_controller.read_gtin_or_none",
+        new=AsyncMock(return_value=12345),
     ):
         await controller._update_dali_devices(commissioning_result)
 
@@ -205,7 +153,7 @@ async def test_update_dali_devices_uses_default_name_for_unknown_gtin():
 @pytest.mark.asyncio
 async def test_update_dali_devices_sets_custom_name_for_changed_device():
     # pylint: disable=protected-access
-    controller = _make_bare_controller()
+    controller = _make_bare_controller(_gtin_db_with("Replacement Driver"))
 
     # Simulate a previously-known device at short 2 that is now a replacement
     old_device = SimpleNamespace(
@@ -221,8 +169,8 @@ async def test_update_dali_devices_sets_custom_name_for_changed_device():
     commissioning_result = CommissioningResult(changed=[changed])
 
     with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value="Replacement Driver"),
+        "wb.mqtt_dali.application_controller.read_gtin_or_none",
+        new=AsyncMock(return_value=12345),
     ):
         await controller._update_dali_devices(commissioning_result)
 
@@ -238,14 +186,14 @@ async def test_update_dali_devices_sets_custom_name_for_changed_device():
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
     # pylint: disable=protected-access
-    controller = _make_bare_controller()
+    controller = _make_bare_controller(_gtin_db_with("Sensor Pro"))
 
     new_addr = DaliDeviceAddress(short=4, random=0x55)
     commissioning_result = CommissioningResult(new=[new_addr])
 
     with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value="Sensor Pro"),
+        "wb.mqtt_dali.application_controller.read_gtin_or_none",
+        new=AsyncMock(return_value=12345),
     ):
         await controller._update_dali2_devices(commissioning_result)
 
@@ -259,7 +207,7 @@ async def test_update_dali2_devices_sets_custom_name_for_new_with_known_gtin():
 @pytest.mark.asyncio
 async def test_update_dali2_devices_sets_custom_name_for_changed_device():
     # pylint: disable=protected-access
-    controller = _make_bare_controller()
+    controller = _make_bare_controller(_gtin_db_with("Replacement Sensor"))
 
     # Simulate a previously-known DALI-2 device at short 6 that is now a replacement
     old_device = SimpleNamespace(
@@ -275,8 +223,8 @@ async def test_update_dali2_devices_sets_custom_name_for_changed_device():
     commissioning_result = CommissioningResult(changed=[changed])
 
     with patch(
-        "wb.mqtt_dali.application_controller.read_product_name",
-        new=AsyncMock(return_value="Replacement Sensor"),
+        "wb.mqtt_dali.application_controller.read_gtin_or_none",
+        new=AsyncMock(return_value=12345),
     ):
         await controller._update_dali2_devices(commissioning_result)
 
@@ -860,7 +808,7 @@ class TestReadDeviceInfoProgress:
             "wb.mqtt_dali.application_controller.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ), patch(
-            "wb.mqtt_dali.application_controller.read_product_name",
+            "wb.mqtt_dali.application_controller.read_gtin_or_none",
             new=AsyncMock(return_value=None),
         ):
             mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)
@@ -903,7 +851,7 @@ class TestReadDeviceInfoProgress:
             "wb.mqtt_dali.application_controller.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ), patch(
-            "wb.mqtt_dali.application_controller.read_product_name",
+            "wb.mqtt_dali.application_controller.read_gtin_or_none",
             new=AsyncMock(return_value=None),
         ):
             mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)
@@ -951,7 +899,7 @@ class TestReadDeviceInfoProgress:
             "wb.mqtt_dali.application_controller.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ), patch(
-            "wb.mqtt_dali.application_controller.read_product_name",
+            "wb.mqtt_dali.application_controller.read_gtin_or_none",
             new=AsyncMock(return_value=None),
         ), patch(
             "wb.mqtt_dali.application_controller.try_initialize_device",
@@ -1010,7 +958,7 @@ class TestReadDeviceInfoProgress:
             "wb.mqtt_dali.application_controller.asyncio.sleep",
             new=AsyncMock(return_value=None),
         ), patch(
-            "wb.mqtt_dali.application_controller.read_product_name",
+            "wb.mqtt_dali.application_controller.read_gtin_or_none",
             new=AsyncMock(return_value=None),
         ):
             mock_cls.side_effect = self._make_commissioning_factory(res_dali, res_dali2)

@@ -9,12 +9,16 @@ except ImportError:
 from typing import Optional
 
 import aiomqtt
+from dali.address import GearShort
 from dali.command import Command, Response
 from dali.frame import BackwardFrame, ForwardFrame
+from dali.gear.general import DTR0
 
 from wb.mqtt_dali.bus_traffic import BusTrafficItem, BusTrafficSource
+from wb.mqtt_dali.helvar.digidim import ExtendedDtrMsb, ReadE2
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.wbdali import (
+    MODBUS_READ_HOLDING_REGISTERS,
     FramePriority,
     WBDALIConfig,
     WBDALIDriver,
@@ -68,6 +72,22 @@ class MockResponse(Response):
         super().__init__(frame)
         self.frame = frame
         self.data = frame.as_integer if frame else None
+
+
+class _CountingReadsClient(FakePortLoadClient):
+    """Counts register reads and yields before answering, as a real RPC call does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads = 0
+
+    async def call(  # pylint: disable=too-many-arguments, too-many-positional-arguments
+        self, driver: str, service: str, method: str, params: dict, timeout_s: float
+    ):
+        if params["function"] == MODBUS_READ_HOLDING_REGISTERS:
+            self.reads += 1
+            await asyncio.sleep(0)
+        return await super().call(driver, service, method, params, timeout_s)
 
 
 class TestWBDALIDriver(VirtualTimeTestCase):
@@ -155,6 +175,60 @@ class TestWBDALIDriver(VirtualTimeTestCase):
         self.simulate_timeout_response_from_gateway(0)
         result = (await fut)[0]
         self.assertIsNone(result.raw_value)
+
+    async def test_batch_with_ff17_is_not_sent(self):
+        """Gateway firmware 1.2.3 does not send FF17: a batch with an FF17 frame is not written
+        to the gateway and every frame of it fails."""
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
+        await self.prepare_driver(driver)
+        responses = await driver.send_commands(
+            [DTR0(0), ExtendedDtrMsb(0), ReadE2(GearShort(1))],
+            BusTrafficSource.WB,
+            FramePriority.CONFIGURATION,
+            driver.logger,
+        )
+        self.assertTrue(all(isinstance(response, WbGatewayTransmissionError) for response in responses))
+        self.assertEqual(self.rpc.pending_writes(), 0)
+
+    async def test_concurrent_ff17_batches_read_gateway_firmware_once(self):
+        """Two FF17 batches sent at once before the firmware is known: one firmware read, both fail."""
+        self.rpc = _CountingReadsClient()
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
+        await self.prepare_driver(driver)
+        self.rpc.reads = 0
+        batches = await asyncio.gather(
+            *(
+                driver.send_commands(
+                    [ReadE2(GearShort(short))],
+                    BusTrafficSource.WB,
+                    FramePriority.CONFIGURATION,
+                    driver.logger,
+                )
+                for short in (1, 2)
+            )
+        )
+        self.assertEqual(self.rpc.reads, 1)
+        self.assertTrue(all(isinstance(r, WbGatewayTransmissionError) for batch in batches for r in batch))
+
+    async def test_first_batch_with_ff17_is_sent_from_firmware_1_3_0(self):
+        """Gateway firmware 1.3.0, an FF17 batch is the first after start: the queue is reset and the
+        batch is written with the FF17 frame in it."""
+        self.rpc.firmware_version = "1.3.0"
+        driver = WBDALIDriver(self.config, self.mock_mqtt_dispatcher, self.mock_logger, self.rpc)
+        await driver.initialize()
+        self.rpc.clear()
+        command = ReadE2(GearShort(1))
+        fut = asyncio.gather(
+            driver.send_commands([command], BusTrafficSource.WB, FramePriority.CONFIGURATION, driver.logger)
+        )
+
+        await self.rpc.wait_for_write()  # the deferred queue reset
+        params = await self.rpc.wait_for_write()
+        self.simulate_timeout_response_from_gateway(0)
+        await fut
+
+        reg = encode_frame_for_modbus(command.frame, False, FramePriority.CONFIGURATION)
+        self.assertEqual(params["msg"], f"{((reg & 0xFFFF) << 16) | (reg >> 16):08x}")
 
     async def test_send_command_with_response(self):
         """Test sending a command that expects a response."""

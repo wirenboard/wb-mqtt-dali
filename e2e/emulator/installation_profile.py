@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import enum
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from wb.mqtt_dali.helvar_device import HELVAR_321_GTIN, HelvarFirmware
 
 SERIAL_CONFIG_FILE = "wb-mqtt-serial.conf"
 DALI_CONFIG_FILE = "wb-mqtt-dali.conf"
@@ -27,6 +30,8 @@ class GearModel(enum.Enum):
     PLAIN = "plain"
     ENERGY = "energy"
     HELVAR_311 = "helvar_311"
+    HELVAR_321 = "helvar_321"
+    HELVAR_312 = "helvar_312"
 
 
 @dataclass(frozen=True)
@@ -42,11 +47,29 @@ KNOWN_GEAR_PRODUCTS = {
     "BK-DCL010S-AHA0700ADN": GearProduct(GearModel.PLAIN, 6971571384049),
     "DC MINI JOLLY DALI BI": GearProduct(GearModel.PLAIN, 8010703381377),
     "Helvar 311": GearProduct(GearModel.HELVAR_311, None),
+    "Helvar 321": GearProduct(GearModel.HELVAR_321, None),
+    "Helvar 312": GearProduct(GearModel.HELVAR_312, None),
     "default_gear": GearProduct(GearModel.PLAIN, None),
 }
-GEAR_STATE_KEYS = frozenset({"model", "groups"})
-CONTROL_DEVICE_STATE_KEYS = frozenset({"instance_types"})
+HELVAR_GEAR_MODELS = frozenset({GearModel.HELVAR_311, GearModel.HELVAR_321, GearModel.HELVAR_312})
+GEAR_STATE_KEYS = frozenset({"model", "groups", "firmware"})
+CONTROL_DEVICE_STATE_KEYS = frozenset({"model", "instance_types"})
 DEFAULT_INSTANCE_TYPES = (1,)
+HELVAR_FIRMWARE_PATTERN = re.compile(r"(\d+)\.(\d{2})")
+HELVAR_FIRMWARE_PART_MAX = 0xFF
+HELVAR_312_GTIN = 5030797003125
+
+
+@dataclass(frozen=True)
+class ControlDeviceProduct:
+    gtin: int
+    instance_types: tuple[int, ...]
+
+
+# The `model` of a control device in devices-state.json; without one the fake's own bank 0 GTIN.
+KNOWN_CONTROL_DEVICE_PRODUCTS = {
+    "Helvar 321": ControlDeviceProduct(HELVAR_321_GTIN, (3, 4)),
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +79,8 @@ class GearSpec:
     model: GearModel
     groups: frozenset[int]
     gtin: Optional[int] = None
+    # None: the Helvar model's own version.
+    helvar_firmware: Optional[HelvarFirmware] = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +88,8 @@ class ControlDeviceSpec:
     address: int
     random_address: int
     instance_types: tuple[int, ...]
+    # Bank 0 GTIN; None keeps the fake's own.
+    gtin: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -234,7 +261,9 @@ def bus_device_ids(dali_config: dict, device_id: str) -> list[str]:
     return [f"{device_id}_bus_{number}_broadcast" for number in range(1, len(buses) + 1)]
 
 
-def _bus_from_dali_config(data: dict, state: dict, number: int) -> BusProfile:
+def _bus_from_dali_config(  # pylint: disable=too-many-locals
+    data: dict, state: dict, number: int
+) -> BusProfile:
     """Gear and control devices of a wb-mqtt-dali config bus with their devices-state.json entries."""
     entries = data.get("devices", [])
     gear_entries = [e for e in entries if not e.get("dali2", False)]
@@ -253,21 +282,27 @@ def _bus_from_dali_config(data: dict, state: dict, number: int) -> BusProfile:
                 model=product.model,
                 groups=frozenset(int(g) for g in gear_state.get("groups", [])),
                 gtin=product.gtin,
+                helvar_firmware=_helvar_firmware(gear_state, product.model, number, short),
             )
         )
-    devices = [
-        ControlDeviceSpec(
-            address=int(entry["short"]),
-            random_address=int(entry["random"]),
-            instance_types=tuple(
-                int(t)
-                for t in device_states.get(int(entry["short"]), {}).get(
-                    "instance_types", DEFAULT_INSTANCE_TYPES
-                )
-            ),
+    devices = []
+    for entry in device_entries:
+        short = int(entry["short"])
+        device_state = device_states.get(short, {})
+        device_product = _control_device_product(device_state, number, short)
+        default_instance_types = (
+            DEFAULT_INSTANCE_TYPES if device_product is None else device_product.instance_types
         )
-        for entry in device_entries
-    ]
+        devices.append(
+            ControlDeviceSpec(
+                address=short,
+                random_address=int(entry["random"]),
+                instance_types=tuple(
+                    int(t) for t in device_state.get("instance_types", default_instance_types)
+                ),
+                gtin=None if device_product is None else device_product.gtin,
+            )
+        )
     return BusProfile(gear=tuple(gear), control_devices=tuple(devices))
 
 
@@ -298,5 +333,32 @@ def _gear_product(gear_state: dict, number: int, short: int) -> GearProduct:
     if product is None:
         raise ValueError(
             f"{where}: unknown model {gear_state['model']!r}, known: {sorted(KNOWN_GEAR_PRODUCTS)}"
+        )
+    return product
+
+
+def _helvar_firmware(gear_state: dict, model: GearModel, number: int, short: int) -> Optional[HelvarFirmware]:
+    """`firmware`: a "major.minor" string with two minor digits, Helvar models only."""
+    if "firmware" not in gear_state:
+        return None
+    where = f"{DEVICES_STATE_FILE}: bus {number} gear {short}"
+    if model not in HELVAR_GEAR_MODELS:
+        raise ValueError(f"{where}: firmware is for Helvar models only")
+    value = gear_state["firmware"]
+    match = HELVAR_FIRMWARE_PATTERN.fullmatch(value) if isinstance(value, str) else None
+    firmware = None if match is None else HelvarFirmware(int(match[1]), int(match[2]))
+    if firmware is None or firmware.major > HELVAR_FIRMWARE_PART_MAX:
+        raise ValueError(f'{where}: firmware {value!r} is not a string like "6.08"')
+    return firmware
+
+
+def _control_device_product(device_state: dict, number: int, short: int) -> Optional[ControlDeviceProduct]:
+    if "model" not in device_state:
+        return None
+    product = KNOWN_CONTROL_DEVICE_PRODUCTS.get(device_state["model"])
+    if product is None:
+        raise ValueError(
+            f"{DEVICES_STATE_FILE}: bus {number} control_devices {short}: unknown model "
+            f"{device_state['model']!r}, known: {sorted(KNOWN_CONTROL_DEVICE_PRODUCTS)}"
         )
     return product

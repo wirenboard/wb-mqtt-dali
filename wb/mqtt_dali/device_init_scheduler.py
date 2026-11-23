@@ -4,7 +4,6 @@ from typing import Optional
 INIT_RETRY_INITIAL_DELAY = 5.0
 INIT_RETRY_MULTIPLIER = 2.0
 INIT_RETRY_MAX_DELAY = 60.0
-UNSUPPORTED_DEVICE_RETRY_DELAY_S = 3600.0
 
 
 @dataclass
@@ -56,13 +55,6 @@ class DeviceInitScheduler:
             INIT_RETRY_MAX_DELAY,
         )
         state.next_retry_time = current_time + state.retry_delay
-
-    def record_helvar(self, mqtt_id: str, current_time: float) -> None:
-        state = self._pending.get(mqtt_id)
-        if state is None:
-            return
-        state.retry_delay = UNSUPPORTED_DEVICE_RETRY_DELAY_S
-        state.next_retry_time = current_time + UNSUPPORTED_DEVICE_RETRY_DELAY_S
 
     def clear(self) -> None:
         self._pending.clear()

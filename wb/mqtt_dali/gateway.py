@@ -17,6 +17,7 @@ from .dali2_device import Dali2Device
 from .dali_device import DaliDevice
 from .fake_lunatone_iot import run_websocket
 from .gtin_db import DaliDatabase
+from .helvar_device import HelvarDigidimSensor
 from .mqtt_dispatcher import MQTTDispatcher
 from .mqtt_rpc_client import MQTTRPCClient, rpc_call, wait_for_rpc_endpoint
 from .mqtt_rpc_server import MQTTRPCServer
@@ -168,6 +169,26 @@ def make_bus_driver(
     )
 
 
+def dali_device_from_json(
+    dev_conf: dict, bus_uid: str, gtin_db: DaliDatabase, common_schema: dict
+) -> DaliDevice:
+    address = DaliDeviceAddress(dev_conf["short"], dev_conf["random"])
+    mqtt_id = dev_conf.get("mqtt_id")
+    name = dev_conf.get("name")
+    if dev_conf.get("helvar_digidim", False):
+        return HelvarDigidimSensor(address, bus_uid, gtin_db, common_schema, mqtt_id, name)
+    on_off_conf = dev_conf.get("on_off")
+    return DaliDevice(
+        address,
+        bus_uid,
+        gtin_db,
+        common_schema,
+        mqtt_id,
+        name,
+        on_off=on_off_config_from_json(on_off_conf) if on_off_conf is not None else None,
+    )
+
+
 def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     data: dict,
     mqtt_dispatcher: MQTTDispatcher,
@@ -191,17 +212,7 @@ def bus_from_json(  # pylint: disable=too-many-arguments, too-many-positional-ar
             )
             dali2_devices.append(device)
         else:
-            on_off_conf = dev_conf.get("on_off")
-            device = DaliDevice(
-                DaliDeviceAddress(dev_conf["short"], dev_conf["random"]),
-                bus_uid,
-                gtin_db,
-                common_schema,
-                dev_conf.get("mqtt_id"),
-                dev_conf.get("name"),
-                on_off=on_off_config_from_json(on_off_conf) if on_off_conf is not None else None,
-            )
-            dali_devices.append(device)
+            dali_devices.append(dali_device_from_json(dev_conf, bus_uid, gtin_db, common_schema))
 
     ap_conf = ApplicationControllerConfig(
         dali_devices,
@@ -767,6 +778,8 @@ def get_dict_for_device_config(device: Union[DaliDevice, Dali2Device]) -> dict:
     }
     if isinstance(device, Dali2Device):
         res["dali2"] = True
+    if isinstance(device, HelvarDigidimSensor):
+        res["helvar_digidim"] = True
     if device.has_custom_mqtt_id:
         res["mqtt_id"] = device.mqtt_id
     if device.has_custom_name:

@@ -1,3 +1,13 @@
+wb-mqtt-dali (1.44.0) stable; urgency=medium
+
+  * Helvar Digidim 311 and 321 sensors are configured in the editor with
+    WB-DALI firmware 1.3.0 or newer; in MQTT a sensor only shows whether it
+    answers, a 321 is no longer added as a DALI-2 device
+  * Devices that answer device search but not DALI queries are shown with
+    errors again instead of being hidden
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 20 Nov 2026 12:47:15 +0500
+
 wb-mqtt-dali (1.43.0) stable; urgency=medium
 
   * Devices that are found by search but do not support DALI commands, such

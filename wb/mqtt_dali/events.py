@@ -91,6 +91,11 @@ class StatusRead(QuantityRead):
 
 
 @dataclass(frozen=True)
+class GearPresentRead(QuantityRead):
+    """QUERY CONTROL GEAR PRESENT (Helvar Digidim ``error_status``)."""
+
+
+@dataclass(frozen=True)
 class SwitchStatusRead(QuantityRead):
     """DT7 switching-function status (``last_acted``)."""
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, List, Optional, Sequence, Union
@@ -96,6 +97,30 @@ _GATEWAY_CONDITION_BY_STATUS = {
 }
 
 
+class GatewayFrameSize(Enum):
+    """Frame size code in bits [27..25] of the WB-DALI send register."""
+
+    FF16 = 0
+    FF24 = 1
+    FF25 = 2
+    FF17 = 3
+
+
+GATEWAY_FRAME_SIZE_BY_BIT_LENGTH: dict[int, GatewayFrameSize] = {
+    16: GatewayFrameSize.FF16,
+    17: GatewayFrameSize.FF17,
+    24: GatewayFrameSize.FF24,
+    25: GatewayFrameSize.FF25,
+}
+
+
+# Older WB-DALI firmware sends the low 16 bits of an FF17 frame as FF16.
+FF17_MIN_GATEWAY_FIRMWARE = (1, 3, 0)
+GATEWAY_FIRMWARE_VERSION_REGISTER = 250
+GATEWAY_FIRMWARE_VERSION_REGISTERS = 16
+MODBUS_READ_HOLDING_REGISTERS = 3
+
+
 class FramePriority(Enum):
     """DALI forward-frame priority per IEC 62386-103:2022 §9.14.1.
 
@@ -159,6 +184,7 @@ BUS_MONITOR_RESYNC_AFTER_FRAMES_BEHIND = BUS_MONITOR_RING_SIZE
 # Frame sizes a DALI bus can carry: FF16 (IEC 62386-102), FF24 (IEC 62386-103),
 # FF25 (proprietary), FF17 (proprietary, Helvar), BF8.
 FORWARD_FRAME_BIT_LENGTHS = frozenset((16, 17, 24, 25))
+FF17_BIT_LENGTH = 17
 BACKWARD_FRAME_BIT_LENGTH = 8
 
 # Forward-frame sizes `dali.command.from_frame` can decode; FF17 and FF25 have no decoding.
@@ -575,7 +601,7 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FrameP
 
     Format:
     [24..0]   - frame data, up to 25 bits, right-aligned
-    [27..25]  - frame size: 0=FF16, 1=FF24, 2=FF25
+    [27..25]  - frame size: 0=FF16, 1=FF24, 2=FF25, 3=FF17
     [28]      - send twice flag
     [31..29]  - priority: 0=no send, 1-5=priority level
 
@@ -594,16 +620,11 @@ def encode_frame_for_modbus(dali_frame: Frame, sendtwice: bool, priority: FrameP
     result = frame_int & 0x1FFFFFF
 
     # Bits [27..25] - frame size
-    if frame_len == 16:
-        frame_size = 0
-    elif frame_len == 24:
-        frame_size = 1
-    elif frame_len == 25:
-        frame_size = 2
-    else:
+    frame_size = GATEWAY_FRAME_SIZE_BY_BIT_LENGTH.get(frame_len)
+    if frame_size is None:
         raise ValueError(f"Unsupported frame length: {frame_len}")
 
-    result |= (frame_size & 0x7) << 25
+    result |= (frame_size.value & 0x7) << 25
 
     # Bit [28] - send twice
     if sendtwice:
@@ -662,6 +683,10 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
 
         # The index of the next item to send to the gateway, used for bus monitor tracking
         self._send_queue_item_index = 0
+
+        # None until read from the gateway after a queue reset.
+        self._gateway_sends_ff17: Optional[bool] = None
+        self._gateway_firmware_read_lock = asyncio.Lock()
 
         self._meta_error_topic = f"/devices/{self.config.device_name}/meta/error"
         # Broker session in which wb-mqtt-serial reported the gateway unreachable; None once withdrawn.
@@ -791,6 +816,7 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             if self._queue_mirror.any_reply_timed_out:
                 self.logger.warning("Gateway did not reply, queue reset")
             self._queue_mirror.on_pointer_reset()
+            self._gateway_sends_ff17 = None
         return result
 
     @property
@@ -1327,6 +1353,12 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
                 self.bus_traffic.notify_command(cmd.frame, response, source, self._send_queue_item_index)
                 self._send_queue_item_index += 1
             return [GatewayUnavailable() for _ in commands]
+        if any(len(cmd.frame) == FF17_BIT_LENGTH for cmd in commands):
+            async with self._gateway_firmware_read_lock:
+                if self._gateway_sends_ff17 is None:
+                    self._gateway_sends_ff17 = await self._read_gateway_sends_ff17()
+            if not self._gateway_sends_ff17:
+                return [WbGatewayTransmissionError() for _ in commands]
         commands_to_send = []
         for cmd in commands:
             if cmd.devicetype != 0:
@@ -1364,6 +1396,28 @@ class WBDALIDriver:  # pylint: disable=too-many-instance-attributes
             i += 1
 
         return filtered_responses
+
+    async def _read_gateway_sends_ff17(self) -> Optional[bool]:
+        """None if the read failed, to read again with the next FF17 batch."""
+        params = {
+            "device_id": self.config.device_name,
+            "function": MODBUS_READ_HOLDING_REGISTERS,
+            "address": GATEWAY_FIRMWARE_VERSION_REGISTER,
+            "count": GATEWAY_FIRMWARE_VERSION_REGISTERS,
+            "total_timeout": WB_MQTT_SERIAL_PORT_LOAD_TOTAL_TIMEOUT_MS,
+            "format": "HEX",
+        }
+        try:
+            result = await self._rpc_client.call(
+                "wb-mqtt-serial", "port", "Load", params, PORT_LOAD_ACK_TIMEOUT_S
+            )
+        except MQTTRPCError:
+            return None
+        # One ASCII character per register, e.g. "1.2.3".
+        match = re.match(
+            r"(\d+)\.(\d+)\.(\d+)", bytes.fromhex(result["response"])[1::2].decode("ascii", "replace")
+        )
+        return match is not None and tuple(map(int, match.groups())) >= FF17_MIN_GATEWAY_FIRMWARE
 
 
 def _is_dtr_set(cmd: Command) -> bool:

@@ -982,7 +982,7 @@ async def test_group_publishes_member_current_state_on_create():
 
     await ctrl._refresh_group_virtual_devices()
 
-    group = ctrl._group_devices_by_number[1]
+    group = ctrl.group_devices[1]
     assert group.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
     assert _published_controls(ctrl._device_publisher)[ACTUAL_LEVEL] == "50.000"
     assert _published_errors(ctrl._device_publisher)[ACTUAL_LEVEL] == ControlError.NONE
@@ -1015,7 +1015,7 @@ async def test_group_prefers_a_known_candidate_over_an_errored_one():
 
     await ctrl._refresh_group_virtual_devices()
 
-    group = ctrl._group_devices_by_number[1]
+    group = ctrl.group_devices[1]
     assert group.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "42.000"
     assert _published_controls(ctrl._device_publisher)[ACTUAL_LEVEL] == "42.000"
     assert _published_errors(ctrl._device_publisher)[ACTUAL_LEVEL] == ControlError.NONE
@@ -1032,16 +1032,14 @@ async def test_group_rebuild_preserves_current_state():
     known_member = _make_member(uid="uid-2", mqtt_id="d2", short=2, level_value="50.000")
     ctrl = _make_group_controller([valueless_member, known_member])
     await ctrl._refresh_group_virtual_devices()
-    assert (
-        ctrl._group_devices_by_number[1].get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
-    )
+    assert ctrl.group_devices[1].get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
 
     # Force a rebuild: a capability change (dimming curve) replaces the group device.
     valueless_member.dimming_curve_type = DimmingCurveType.LINEAR
     known_member.dimming_curve_type = DimmingCurveType.LINEAR
     await ctrl._refresh_group_virtual_devices()
 
-    rebuilt = ctrl._group_devices_by_number[1]
+    rebuilt = ctrl.group_devices[1]
     assert rebuilt.capabilities.dimming_curve_type == DimmingCurveType.LINEAR
     assert rebuilt.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
 
@@ -1061,7 +1059,7 @@ async def test_group_setpoints_seeded_from_the_state_source_member():
 
     await ctrl._refresh_group_virtual_devices()
 
-    group = ctrl._group_devices_by_number[1]
+    group = ctrl.group_devices[1]
     assert group.get_mqtt_control(WANTED_LEVEL).control_info.state.value == "50"
     assert _published_controls(ctrl._device_publisher)[WANTED_LEVEL] == "50"
 
@@ -1076,7 +1074,7 @@ async def test_group_setpoint_without_a_member_value_keeps_default():
 
     await ctrl._refresh_group_virtual_devices()
 
-    setpoint = ctrl._group_devices_by_number[1].get_mqtt_control(WANTED_LEVEL)
+    setpoint = ctrl.group_devices[1].get_mqtt_control(WANTED_LEVEL)
     assert setpoint.control_info.state.value == "0"
     assert setpoint.control_info.state.error == ControlError.NONE
     assert _published_errors(ctrl._device_publisher)[WANTED_LEVEL] == ControlError.NONE

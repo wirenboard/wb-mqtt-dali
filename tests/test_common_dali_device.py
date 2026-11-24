@@ -798,8 +798,7 @@ async def test_apply_parameters_does_not_call_load_info_when_params_present():
     d._apply_common_parameters = AsyncMock()
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, {"mqtt_id": "abc"})
+    await d.apply_parameters(driver, {"mqtt_id": "abc"})
 
     d.load_info.assert_not_awaited()
     d._apply_common_parameters.assert_awaited_once_with(driver, {"mqtt_id": "abc"})
@@ -949,8 +948,7 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     driver = AsyncMock()
     new_values = {"any": "value"}
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, new_values)
+    await d.apply_parameters(driver, new_values)
 
     h1.write.assert_awaited_once_with(driver, GearShort(33), new_values, d.logger)
     h2.write.assert_awaited_once_with(driver, GearShort(33), new_values, d.logger)
@@ -1006,8 +1004,7 @@ async def test_apply_parameters_full_instance_value_keeps_other_instances():
     new_values = {k: dict(v) for k, v in full_params.items()}
     new_values["instance0"]["event_priority"] = 5
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, new_values)
+    await d.apply_parameters(driver, new_values)
 
     assert d.params["instance0"]["event_priority"] == 5
     # Unmentioned field of instance0 survives (the handler returned the full value).
@@ -1029,8 +1026,7 @@ async def test_apply_parameters_calls_apply_common_even_with_no_handlers():
     driver = AsyncMock()
     new_values = {"short_address": 2}
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, new_values)
+    await d.apply_parameters(driver, new_values)
 
     d._apply_common_parameters.assert_awaited_once_with(driver, new_values)
 
@@ -1076,9 +1072,8 @@ async def test_apply_parameters_propagates_write_error_and_does_not_apply_common
     d._apply_common_parameters = AsyncMock()
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        with pytest.raises(RuntimeError, match="write failed"):
-            await d.apply_parameters(driver, {"name": "n"})
+    with pytest.raises(RuntimeError, match="write failed"):
+        await d.apply_parameters(driver, {"name": "n"})
 
     h1.write.assert_awaited_once()
     h2.write.assert_not_awaited()

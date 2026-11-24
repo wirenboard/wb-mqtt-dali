@@ -184,7 +184,7 @@ class TestDevice(MockMqttTestCase):
         assert device._base_topic == "/devices/test_device"
         assert device._device_title.en == "Test Device"
         assert device._driver_name == "test_driver"
-        assert len(device._controls) == 0
+        assert len(device.control_ids) == 0
 
         assert self.mock_client.publish.call_count >= 1
         meta_calls = [
@@ -206,7 +206,7 @@ class TestDevice(MockMqttTestCase):
         meta = ControlMeta(title="Test Control", control_type="switch", order=1)
         await device.create_control("ctrl1", meta, "1")
 
-        assert "ctrl1" in device._controls
+        assert "ctrl1" in device.control_ids
         assert device._controls["ctrl1"].value == "1"
         assert device._controls["ctrl1"].meta.title.en == "Test Control"
         assert device._controls["ctrl1"].meta.control_type == "switch"
@@ -568,7 +568,6 @@ class TestDevice(MockMqttTestCase):
         assert device._controls["ctrl1"].error == ControlError(0)
 
     async def test_remove_control(self):
-        # pylint: disable=protected-access
         device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -578,7 +577,7 @@ class TestDevice(MockMqttTestCase):
 
         await device.remove_control("ctrl1")
 
-        assert "ctrl1" not in device._controls
+        assert "ctrl1" not in device.control_ids
         assert self.mock_client.publish.call_count == 3
         self.mock_client.publish.assert_any_call(
             "/devices/test_device/controls/ctrl1", None, qos=1, retain=True
@@ -615,7 +614,6 @@ class TestDevice(MockMqttTestCase):
         self.mock_client.publish.assert_not_called()
 
     async def test_remove_device(self):
-        # pylint: disable=protected-access
         device = Device(self.mock_dispatcher, "test_device", "test_driver", "Test Device")
         await device.initialize()
 
@@ -627,7 +625,7 @@ class TestDevice(MockMqttTestCase):
 
         await device.remove_device()
 
-        assert len(device._controls) == 0
+        assert len(device.control_ids) == 0
         assert self.mock_client.publish.call_count >= 5
 
     async def test_publish_control_meta_full(self):
@@ -768,11 +766,10 @@ class TestRetainHack(MockMqttTestCase):
             self.mock_dispatcher.client.unsubscribe.assert_called()
 
     async def test_retain_hack_timeout(self):
-        with patch("wb.mqtt_dali.wbmqtt.random.random", return_value=0.54321):
-            with self.assertLogs(level=logging.WARNING) as logs:
-                await retain_hack(self.mock_dispatcher, timeout=1)
+        with self.assertLogs(level=logging.WARNING) as logs:
+            await retain_hack(self.mock_dispatcher, timeout=1)
 
-            assert "Retain hack timeout" in "\n".join(logs.output)
+        assert "Retain hack timeout" in "\n".join(logs.output)
 
 
 class TestRemoveTopicsByDriver(MockMqttTestCase):
@@ -844,7 +841,7 @@ class TestIntegration(MockMqttTestCase):
         await device.create_control("switch", meta1, "0")
         await device.create_control("brightness", meta2, "50")
 
-        assert len(device._controls) == 2
+        assert len(device.control_ids) == 2
 
         await device.set_control_value("switch", "1")
         await device.set_control_value("brightness", "75")
@@ -853,11 +850,11 @@ class TestIntegration(MockMqttTestCase):
         assert device._controls["brightness"].value == "75"
 
         await device.remove_control("brightness")
-        assert len(device._controls) == 1
-        assert "brightness" not in device._controls
+        assert len(device.control_ids) == 1
+        assert "brightness" not in device.control_ids
 
         await device.remove_device()
-        assert len(device._controls) == 0
+        assert len(device.control_ids) == 0
 
 
 class TestMakeMqttClient(VirtualTimeTestCase):

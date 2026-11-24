@@ -460,7 +460,7 @@ class TestPublishCommissioningState:
         controller._publish_commissioning_state()
         assert len(received) == 1
         # Callback got an independent snapshot, not the internal state object.
-        assert received[0] is not controller._commissioning_state
+        assert received[0] is not controller.commissioning_state
         assert received[0].status == CommissioningStatus.QUERY_SHORT_ADDRESSES
         assert received[0].progress == 10
         # Sync path does not schedule a one-shot task.
@@ -511,7 +511,7 @@ class TestStartCommissioning:
         controller = _make_commissioning_controller()
         result = await controller.start_commissioning(on_state_changed=lambda _s: None)
         assert result is CommissioningStartResult.STARTED
-        assert controller._commissioning_state.status == CommissioningStatus.QUEUED
+        assert controller.commissioning_state.status == CommissioningStatus.QUEUED
         # One task enqueued
         assert controller._tasks_queue.qsize() == 1
         task = controller._tasks_queue.get_nowait()
@@ -550,9 +550,9 @@ class TestCancelCommissioning:
         # Task is queued but worker hasn't promoted it to _current_commissioning_task yet.
         cancelled = await controller.cancel_commissioning()
         assert cancelled is True
-        assert controller._commissioning_state.status == CommissioningStatus.CANCELLED
+        assert controller.commissioning_state.status == CommissioningStatus.CANCELLED
         # CANCELLED semantics: devices=[], no apply, bus lists untouched.
-        assert not controller._commissioning_state.devices
+        assert not controller.commissioning_state.devices
         controller._apply_commissioning_results.assert_not_awaited()
         assert controller.dali_devices == original_dali
         assert controller.dali2_devices == original_dali2
@@ -638,10 +638,10 @@ class TestCommissioningTaskTerminalBranches:
             mock_cls.side_effect = _make_commissioning
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.COMPLETED
-        assert controller._commissioning_state.progress == 100
-        assert controller._commissioning_state.finished_at is not None
-        assert controller._commissioning_state.devices == [dali1_device, dali2_device]
+        assert controller.commissioning_state.status == CommissioningStatus.COMPLETED
+        assert controller.commissioning_state.progress == 100
+        assert controller.commissioning_state.finished_at is not None
+        assert controller.commissioning_state.devices == [dali1_device, dali2_device]
         controller._apply_commissioning_results.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -670,8 +670,8 @@ class TestCommissioningTaskTerminalBranches:
         ):
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.FAILED
-        assert controller._commissioning_state.error == "bus offline"
+        assert controller.commissioning_state.status == CommissioningStatus.FAILED
+        assert controller.commissioning_state.error == "bus offline"
         # Neither phase started, so _apply_commissioning_results not called and devices untouched.
         controller._apply_commissioning_results.assert_not_awaited()
         # Bus device lists are untouched.
@@ -717,11 +717,11 @@ class TestCommissioningTaskTerminalBranches:
             mock_cls.side_effect = _make_commissioning
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.FAILED
-        assert controller._commissioning_state.error == "DALI-2 phase failed"
-        assert controller._commissioning_state.finished_at is not None
+        assert controller.commissioning_state.status == CommissioningStatus.FAILED
+        assert controller.commissioning_state.error == "DALI-2 phase failed"
+        assert controller.commissioning_state.finished_at is not None
         # devices summary on FAILED reflects the untouched device list.
-        assert controller._commissioning_state.devices == [dali1_device]
+        assert controller.commissioning_state.devices == [dali1_device]
         # Atomic: a sub-scan failure aborts before any result (including the
         # successful DALI1 scan) is applied.
         controller._apply_commissioning_results.assert_not_awaited()
@@ -758,9 +758,9 @@ class TestCommissioningTaskTerminalBranches:
             mock_cls.side_effect = _make_commissioning
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.COMPLETED
-        assert controller._commissioning_state.progress == 100
-        assert controller._commissioning_state.error is None
+        assert controller.commissioning_state.status == CommissioningStatus.COMPLETED
+        assert controller.commissioning_state.progress == 100
+        assert controller.commissioning_state.error is None
         controller._apply_commissioning_results.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -809,11 +809,11 @@ class TestCommissioningTaskTerminalBranches:
             with pytest.raises(asyncio.CancelledError):
                 await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.CANCELLED
-        assert controller._commissioning_state.finished_at is not None
+        assert controller.commissioning_state.status == CommissioningStatus.CANCELLED
+        assert controller.commissioning_state.finished_at is not None
         # CANCELLED semantics: devices=None (published as null), no apply,
         # and bus device lists are left untouched.
-        assert not controller._commissioning_state.devices
+        assert not controller.commissioning_state.devices
         controller._apply_commissioning_results.assert_not_awaited()
         assert controller.dali_devices == original_dali
         assert controller.dali2_devices == original_dali2

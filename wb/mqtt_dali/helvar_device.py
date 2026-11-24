@@ -371,32 +371,40 @@ def _event_command(action: Optional[e2.Action]) -> EventCommand:
     return _COMMAND_BY_ACTION_CLASS[type(action)]
 
 
-def _target_from_form(form_value: dict) -> e2.Target:
-    target = EventTarget(form_value["target"])
-    if target is EventTarget.ADDRESS:
-        return e2.ShortAddress(form_value["address"])
-    if target is EventTarget.GROUP:
-        return e2.Group(form_value["group"])
-    return e2.Broadcast()
+def _takes_fade_time(command: EventCommand) -> bool:
+    if command in (
+        *_FADED_ACTION_CLASS_BY_COMMAND,
+        *_SCENE_ACTION_CLASS_BY_COMMAND,
+        EventCommand.DIRECT_LEVEL,
+    ):
+        return True
+    return command.name in e2.FixedCommand.__members__ and e2.FixedCommand[command.name].takes_fade_time
+
+
+def _fade_time_from_form(form_value: dict) -> Optional[int]:
+    return None if form_value["fade_time"] == FADE_TIME_USE_DEVICE else form_value["fade_time"]
 
 
 def _action_from_form(form_value: dict) -> Optional[e2.Action]:
     command = EventCommand(form_value["command"])
-    fade_time = None if form_value["fade_time"] == FADE_TIME_USE_DEVICE else form_value["fade_time"]
     if command is EventCommand.UNRECOGNISED:
         return None
     if command is EventCommand.SCENE_TOGGLE and form_value["scene"] not in e2.SceneToggle.SCENES:
         raise ValueError(f"Scene {form_value['scene']} cannot be toggled, only {e2.SceneToggle.SCENES}")
     if command in _SCENE_ACTION_CLASS_BY_COMMAND:
-        return _SCENE_ACTION_CLASS_BY_COMMAND[command](fade_time=fade_time, scene=form_value["scene"])
+        return _SCENE_ACTION_CLASS_BY_COMMAND[command](
+            fade_time=_fade_time_from_form(form_value), scene=form_value["scene"]
+        )
     if command is EventCommand.DIRECT_LEVEL:
-        return e2.DirectLevel(fade_time=fade_time, level=form_value["level"])
+        return e2.DirectLevel(fade_time=_fade_time_from_form(form_value), level=form_value["level"])
     if command in _FADED_ACTION_CLASS_BY_COMMAND:
-        return _FADED_ACTION_CLASS_BY_COMMAND[command](fade_time=fade_time)
+        return _FADED_ACTION_CLASS_BY_COMMAND[command](fade_time=_fade_time_from_form(form_value))
     if command in _UNFADED_ACTION_CLASS_BY_COMMAND:
         return _UNFADED_ACTION_CLASS_BY_COMMAND[command]()
     fixed_command = e2.FixedCommand[command.name]
-    return e2.FixedAction(fixed_command, fade_time if fixed_command.takes_fade_time else None)
+    if fixed_command.takes_fade_time:
+        return e2.FixedAction(fixed_command, _fade_time_from_form(form_value))
+    return e2.FixedAction(fixed_command)
 
 
 @dataclass(frozen=True)
@@ -408,6 +416,8 @@ class _SettingField:
     title: TranslatedTitle
     available: Callable[[HelvarIdentity], bool] = _any_model
     description: Optional[TranslatedTitle] = None
+    # json-editor `options.dependencies`: the field is shown only when these fields have these values.
+    shown_when: Optional[dict[str, Any]] = None
 
     def to_form(self, image: DigidimImage) -> Any:
         return image[self.memory]
@@ -494,7 +504,13 @@ class _EventField(_SettingField):
         }
 
     def to_image(self, image: DigidimImage, form_value: Any) -> None:
-        target = _target_from_form(form_value)
+        target_kind = EventTarget(form_value["target"])
+        if target_kind is EventTarget.ADDRESS:
+            target: e2.Target = e2.ShortAddress(form_value["address"])
+        elif target_kind is EventTarget.GROUP:
+            target = e2.Group(form_value["group"])
+        else:
+            target = e2.Broadcast()
         image[self.memory] = e2.Event(target, _action_from_form(form_value), _responds_to_groups(target))
 
     def form_property(self, order: int, image: DigidimImage) -> dict:
@@ -609,6 +625,7 @@ _SETTING_FIELDS: tuple[_SettingField, ...] = (
         DigidimE2.CONSTANT_LIGHT_EVENT,
         TranslatedTitle("Constant light lamps", "Светильники для поддержания освещённости"),
         _is_321,
+        shown_when={"constant_light": True},
         offers_ramp=True,
     ),
     _EventField(
@@ -721,23 +738,33 @@ def _enum_property(title: str, order: int, values: list, titles: list[str], grid
     }
 
 
+def _shown_when(form_property: dict, dependencies: dict[str, Any]) -> dict:
+    return {**form_property, "options": {**form_property.get("options", {}), "dependencies": dependencies}}
+
+
 def _event_property(title: str, order: int, commands: list[EventCommand]) -> dict:
+    scene_commands = [command.value for command in commands if command in _SCENE_ACTION_CLASS_BY_COMMAND]
+    faded_commands = [command.value for command in commands if _takes_fade_time(command)]
     return {
         "type": "object",
         "title": title,
         "format": "card",
         "propertyOrder": order,
-        "required": ["target", "address", "group", "command", "scene", "level", "fade_time"],
+        "required": ["target", "command"],
         "properties": {
             "target": _enum_property(
                 "Target",
                 1,
                 [target.value for target in EventTarget],
                 [_TARGET_TITLES[target].en for target in EventTarget],
-                grid_columns=12,
             ),
-            "address": _integer_property("Short address", 2, 0, MAX_SHORT_ADDRESS),
-            "group": _integer_property("Group", 3, 0, GROUPS_TOTAL - 1),
+            "address": _shown_when(
+                _integer_property("Short address", 2, 0, MAX_SHORT_ADDRESS),
+                {"target": EventTarget.ADDRESS.value},
+            ),
+            "group": _shown_when(
+                _integer_property("Group", 3, 0, GROUPS_TOTAL - 1), {"target": EventTarget.GROUP.value}
+            ),
             "command": _enum_property(
                 "Command",
                 4,
@@ -745,16 +772,25 @@ def _event_property(title: str, order: int, commands: list[EventCommand]) -> dic
                 [_COMMAND_TITLES[command].en for command in commands],
                 grid_columns=12,
             ),
-            "scene": _enum_property(
-                "Scene", 5, list(range(SCENES_TOTAL)), [str(scene) for scene in range(SCENES_TOTAL)]
+            "scene": _shown_when(
+                _enum_property(
+                    "Scene", 5, list(range(SCENES_TOTAL)), [str(scene) for scene in range(SCENES_TOTAL)]
+                ),
+                {"command": scene_commands},
             ),
-            "level": _integer_property(_LEVEL_TITLE.en, 6, 0, MASK - 1),
+            "level": _shown_when(
+                _integer_property(_LEVEL_TITLE.en, 6, 0, MASK - 1),
+                {"command": EventCommand.DIRECT_LEVEL.value},
+            ),
             "fade_time": {
-                **_enum_property(
-                    "Fade Time, s",
-                    7,
-                    [FADE_TIME_USE_DEVICE, *range(FADE_TIME_CODE_MAX + 1)],
-                    [_FADE_TIME_NOT_SET_TITLE.en, *FADE_TIME_ENUM_TITLES],
+                **_shown_when(
+                    _enum_property(
+                        "Fade Time, s",
+                        7,
+                        [FADE_TIME_USE_DEVICE, *range(FADE_TIME_CODE_MAX + 1)],
+                        [_FADE_TIME_NOT_SET_TITLE.en, *FADE_TIME_ENUM_TITLES],
+                    ),
+                    {"command": faded_commands},
                 ),
                 "description": _FADE_TIME_HINT.en,
             },
@@ -819,6 +855,8 @@ class HelvarSettings:
         for field in self._fields:
             if field.description is not None:
                 properties[field.key]["description"] = field.description.en
+            if field.shown_when is not None:
+                properties[field.key] = _shown_when(properties[field.key], field.shown_when)
         return properties
 
 

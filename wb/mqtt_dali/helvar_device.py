@@ -402,9 +402,9 @@ def _action_from_form(form_value: dict) -> Optional[e2.Action]:
     if command in _UNFADED_ACTION_CLASS_BY_COMMAND:
         return _UNFADED_ACTION_CLASS_BY_COMMAND[command]()
     fixed_command = e2.FixedCommand[command.name]
-    if fixed_command.takes_fade_time:
-        return e2.FixedAction(fixed_command, _fade_time_from_form(form_value))
-    return e2.FixedAction(fixed_command)
+    return e2.FixedAction(
+        fixed_command, _fade_time_from_form(form_value) if fixed_command.takes_fade_time else None
+    )
 
 
 @dataclass(frozen=True)

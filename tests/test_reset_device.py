@@ -104,11 +104,9 @@ class ResetDeviceSettingsTest(VirtualTimeTestCase):
             return MagicMock(raw_value=MagicMock(error=False))
 
         initialize_mock = AsyncMock()
-        with patch(
-            "wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send
-        ), patch.object(DaliDevice, "initialize", initialize_mock), patch(
-            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
-        ) as publish_mock:
+        with patch("wb.mqtt_dali.common_dali_device.send_with_retry", side_effect=fake_send), patch.object(
+            DaliDevice, "initialize", initialize_mock
+        ), patch("wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()) as publish_mock:
             await controller._reset_device_settings_task(device)
 
         # Reset is sent on the bus
@@ -145,11 +143,9 @@ class ResetDeviceSettingsTest(VirtualTimeTestCase):
             return MagicMock(raw_value=MagicMock(error=False))
 
         initialize_mock = AsyncMock()
-        with patch(
-            "wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send
-        ), patch.object(Dali2Device, "initialize", initialize_mock), patch(
-            "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
-        ):
+        with patch("wb.mqtt_dali.common_dali_device.send_with_retry", side_effect=fake_send), patch.object(
+            Dali2Device, "initialize", initialize_mock
+        ), patch("wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()):
             await controller._reset_device_settings_task(device)
 
         assert any(isinstance(c, DeviceReset) for c in sent_commands)
@@ -177,7 +173,7 @@ class ResetDeviceSettingsTest(VirtualTimeTestCase):
         load_info_mock = AsyncMock()
         initialize_mock = AsyncMock()
         with patch(
-            "wb.mqtt_dali.application_controller.send_with_retry",
+            "wb.mqtt_dali.common_dali_device.send_with_retry",
             new=AsyncMock(return_value=MagicMock(raw_value=MagicMock(error=False))),
         ), patch.object(DaliDevice, "initialize", initialize_mock), patch.object(
             DaliDevice, "load_info", load_info_mock
@@ -199,7 +195,7 @@ class ResetDeviceSettingsTest(VirtualTimeTestCase):
 
         initialize_mock = AsyncMock()
         with patch(
-            "wb.mqtt_dali.application_controller.send_with_retry",
+            "wb.mqtt_dali.common_dali_device.send_with_retry",
             new=AsyncMock(side_effect=RuntimeError("bus down")),
         ), patch.object(DaliDevice, "initialize", initialize_mock), patch(
             "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
@@ -221,7 +217,7 @@ class ResetDeviceSettingsTest(VirtualTimeTestCase):
         controller._devices_by_mqtt_id[device.mqtt_id] = device
 
         with patch(
-            "wb.mqtt_dali.application_controller.send_with_retry",
+            "wb.mqtt_dali.common_dali_device.send_with_retry",
             new=AsyncMock(return_value=MagicMock(raw_value=MagicMock(error=False))),
         ), patch.object(DaliDevice, "initialize", AsyncMock(side_effect=RuntimeError("init failed"))), patch(
             "wb.mqtt_dali.application_controller.publish_device", new=AsyncMock()
@@ -261,8 +257,8 @@ class ResetDeviceTest(VirtualTimeTestCase):
 
         controller._dev.run_sequence.return_value = MASK
 
-        with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
-            "wb.mqtt_dali.application_controller.set_short_address_sequence"
+        with patch("wb.mqtt_dali.common_dali_device.send_with_retry", side_effect=fake_send), patch(
+            "wb.mqtt_dali.common_dali_device.set_short_address_sequence"
         ) as make_sequence:
             await controller._reset_device_task(device)
 
@@ -308,8 +304,8 @@ class ResetDeviceTest(VirtualTimeTestCase):
 
         controller._dev.run_sequence.return_value = MASK
 
-        with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
-            "wb.mqtt_dali.application_controller.set_short_address_sequence"
+        with patch("wb.mqtt_dali.common_dali_device.send_with_retry", side_effect=fake_send), patch(
+            "wb.mqtt_dali.common_dali_device.set_short_address_sequence"
         ) as make_sequence:
             await controller._reset_device_task(device)
 
@@ -339,8 +335,8 @@ class ResetDeviceTest(VirtualTimeTestCase):
         controller._devices_by_mqtt_id[device.mqtt_id] = device
         controller._dev.run_sequence.return_value = device.address.short
 
-        with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
-            with self.assertLogs("test", logging.WARNING) as logs:
+        with patch("wb.mqtt_dali.common_dali_device.send_with_retry", new=AsyncMock()):
+            with self.assertLogs(device.logger, logging.WARNING) as logs:
                 await controller._reset_device_task(device)
 
         assert controller.dali_devices == []
@@ -358,7 +354,7 @@ class ResetDeviceTest(VirtualTimeTestCase):
         controller._devices_by_mqtt_id[device.mqtt_id] = device
         controller._dev.run_sequence.side_effect = RuntimeError("Gateway did not accept")
 
-        with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
+        with patch("wb.mqtt_dali.common_dali_device.send_with_retry", new=AsyncMock()):
             with pytest.raises(RuntimeError, match="Gateway did not accept"):
                 await controller._reset_device_task(device)
 

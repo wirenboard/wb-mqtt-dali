@@ -1,6 +1,6 @@
 # DALI devices of the emulated buses: python-dali's fake Gear with the queries wb-mqtt-dali
-# polls added, an energy-reporting (bank 202) gear model, a Helvar 311 sensor that ignores DALI
-# commands, and a DALI-2 control device fake.
+# polls added, an energy-reporting (bank 202) gear model, Helvar Digidim sensors that ignore DALI
+# commands but take Helvar 17-bit ones, and a DALI-2 control device fake.
 
 from __future__ import annotations
 
@@ -21,8 +21,23 @@ from dali.memory.energy import BANK_202
 from dali.memory.maintenance import BANK_207
 from dali.tests import fakes
 
-from e2e.emulator.installation_profile import ControlDeviceSpec, GearModel, GearSpec
+from e2e.emulator.installation_profile import (
+    HELVAR_312_GTIN,
+    ControlDeviceSpec,
+    GearModel,
+    GearSpec,
+)
 from wb.mqtt_dali.device import absolute_input_device, general_purpose_sensor
+from wb.mqtt_dali.helvar.digidim import (
+    EnableWriteE2,
+    QueryMajorVersion,
+    QueryMinorVersion,
+    ReadE2,
+    WriteE2,
+)
+from wb.mqtt_dali.helvar.e2 import E2_SIZE
+from wb.mqtt_dali.helvar_device import HELVAR_321_GTIN, HelvarFirmware
+from wb.mqtt_dali.wbdali import FF17_BIT_LENGTH
 
 YES = 0xFF
 MASK = 0xFF
@@ -45,6 +60,34 @@ DEFAULT_HYSTERESIS = 5
 DEFAULT_HYSTERESIS_MIN = 10
 PUSHBUTTON_EVENT_PRIORITY = 3
 DEFAULT_EVENT_PRIORITY = 4
+HELVAR_E2_GTIN = slice(0x00, 0x07)
+HELVAR_E2_SERIAL = slice(0x07, 0x0A)
+HELVAR_E2_SETTINGS = slice(0x10, 0x30)
+# E2 of a live 311 with firmware 6.08.
+HELVAR_311_E2 = bytes.fromhex(
+    """
+    50 30 79 70 03 11 80 15 db b4 01 0a ff 81 ff 06
+    ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+    07 03 06 82 01 00 f9 00 08 04 08 00 00 00 ff ff
+    02 00 ff 1f 00 00 80 04 ff 1f 00 00 80 04 ff 1d
+    00 00 80 04 ff 1e 00 00 84 00 ff fe 00 00 00 04
+    ff 06 00 00 81 04 ff 10 00 00 81 04 ff 11 00 00
+    81 04 ff 12 00 00 81 04 ff 13 00 00 81 04 ff 14
+    00 00 81 04 ff 15 00 00 81 04 ff 16 00 00 81 04
+    ff 17 00 00 00 04 ff 00 00 00 00 04 ff 10 00 00
+    03 00 ff 1f 00 00 85 00 ff 01 00 00 85 00 ff 02
+    00 00
+    """
+    + " ff" * 0x5C
+    + " 02 06"
+)
+# Factory defaults of E2 0x10-0x2F for 320, 321, 322, 330.
+HELVAR_32X_SETTINGS = bytes.fromhex(
+    """
+    ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+    09 3c 06 82 01 fb fb 00 08 04 08 00 00 00 ff ff
+    """
+)
 INSTANCE_TYPE_MODULES: dict[int, ModuleType] = {
     pushbutton.instance_type: pushbutton,
     absolute_input_device.instance_type: absolute_input_device,
@@ -138,17 +181,98 @@ class EmulatedGear(fakes.Gear):
         return MASK if self.shortaddr is None else (self.shortaddr << 1) | 1
 
 
+def _helvar_word(cmd: Command) -> int:
+    """The first 16 bits of an FF17 frame, as `send_helvar` gets them."""
+    return cmd.frame.as_integer >> 1
+
+
+def helvar_gtin_bcd(gtin: int) -> bytes:
+    """E2 bytes 0-6: the 13 GTIN digits as BCD, the low nibble of byte 6 zero."""
+    return bytes.fromhex(f"{gtin:013d}0")
+
+
 class Helvar311Gear(EmulatedGear):
-    """Takes part in the search; of the addressed commands answers QUERY CONTROL GEAR only."""
+    """Takes part in the search; of the addressed 16-bit commands answers QUERY CONTROL GEAR only.
+    Helvar 17-bit commands: version, E2 read and write at DTR0, which advances by one."""
+
+    default_firmware = HelvarFirmware(6, 8)
+    factory_e2 = HELVAR_311_E2
+
+    def __init__(self, spec: GearSpec) -> None:
+        super().__init__(spec)
+        self.firmware = spec.helvar_firmware or self.default_firmware
+        self._e2 = bytearray(self.factory_e2)
+        self._e2[HELVAR_E2_SERIAL] = spec.random_address.to_bytes(3, "big")
+        self._write_e2_enabled = False
 
     def send(self, cmd: Command) -> Optional[int]:
+        self._write_e2_enabled = False
         if hasattr(cmd, "destination") and not isinstance(cmd, gear_general.QueryControlGearPresent):
             return None
         return super().send(cmd)
 
+    @property
+    def e2(self) -> bytes:
+        return bytes(self._e2)
+
+    def send_helvar(self, word: int) -> Optional[int]:
+        """A 17-bit frame; `word` is its first 16 bits. Enable Write E2 holds for the next frame only."""
+        write_enabled, self._write_e2_enabled = self._write_e2_enabled, False
+        if word >> 8 == _helvar_word(WriteE2(0)) >> 8:
+            if write_enabled:
+                self._e2[self.dtr0] = word & 0xFF
+                self._advance_e2_address()
+            return None
+        if self.shortaddr is None:
+            return None
+        short = address.GearShort(self.shortaddr)
+        if word == _helvar_word(EnableWriteE2(short)):
+            self._write_e2_enabled = True
+            return None
+        if word == _helvar_word(ReadE2(short)):
+            value = self._e2[self.dtr0]
+            self._advance_e2_address()
+            return value
+        versions = {
+            _helvar_word(QueryMajorVersion(short)): self.firmware.major,
+            _helvar_word(QueryMinorVersion(short)): self.firmware.minor,
+        }
+        return versions.get(word)
+
+    # --- Private ---
+
+    def _advance_e2_address(self) -> None:
+        self.dtr0 = (self.dtr0 + 1) % E2_SIZE
+
+
+class Helvar321Gear(Helvar311Gear):
+    """The 321 in the control gear space: the 311 image with its own GTIN and factory settings."""
+
+    default_firmware = HelvarFirmware(10, 41)
+    factory_e2 = (
+        helvar_gtin_bcd(HELVAR_321_GTIN)
+        + HELVAR_311_E2[HELVAR_E2_GTIN.stop : HELVAR_E2_SETTINGS.start]
+        + HELVAR_32X_SETTINGS
+        + HELVAR_311_E2[HELVAR_E2_SETTINGS.stop :]
+    )
+
+
+class Helvar312Gear(Helvar311Gear):
+    """A Digidim model wb-mqtt-dali does not support: the 311 image with the 312 GTIN."""
+
+    default_firmware = HelvarFirmware(6, 47)
+    factory_e2 = helvar_gtin_bcd(HELVAR_312_GTIN) + HELVAR_311_E2[HELVAR_E2_GTIN.stop :]
+
+
+HELVAR_GEAR_CLASSES: dict[GearModel, type[Helvar311Gear]] = {
+    GearModel.HELVAR_311: Helvar311Gear,
+    GearModel.HELVAR_321: Helvar321Gear,
+    GearModel.HELVAR_312: Helvar312Gear,
+}
+
 
 def make_gear(spec: GearSpec) -> EmulatedGear:
-    return Helvar311Gear(spec) if spec.model == GearModel.HELVAR_311 else EmulatedGear(spec)
+    return HELVAR_GEAR_CLASSES.get(spec.model, EmulatedGear)(spec)
 
 
 @dataclass
@@ -163,6 +287,10 @@ class ControlDevice(fakes.Device):
 
     def __init__(self, spec: ControlDeviceSpec) -> None:
         super().__init__(shortaddr=address.DeviceShort(spec.address))
+        if spec.gtin is not None:
+            self.memory_banks[0].contents[GTIN_ADDRESS : GTIN_ADDRESS + GTIN_LENGTH] = list(
+                spec.gtin.to_bytes(GTIN_LENGTH, "big")
+            )
         self._instances = [fakes.Device.Instance(inst_type=t, scheme=0) for t in spec.instance_types]
         self.random_address = spec.random_address
         self.device_groups = 0
@@ -256,18 +384,25 @@ class BusReply:
 
 
 class DaliBus(fakes.Bus):
-    """Delivers 16- and 24-bit forward frames; `EnableDeviceType` applies to the next 16-bit frame."""
+    """Delivers 16- and 24-bit forward frames; `EnableDeviceType` applies to the next 16-bit frame.
+    17-bit frames reach Helvar models only and leave everything else untouched."""
 
     def __init__(self, devices: list[Union[EmulatedGear, ControlDevice]]) -> None:
         super().__init__(devices)
         self._device_type = 0
 
     def transact(self, forward: frame.ForwardFrame) -> BusReply:
-        device_type = self._device_type if len(forward) == 16 else 0
-        cmd = Command.from_frame(forward, devicetype=device_type)
-        if len(forward) == 16:
-            self._device_type = cmd.param if isinstance(cmd, gear_general.EnableDeviceType) else 0
-        answers = [a for a in (device.send(cmd) for device in self.gear) if a is not None]
+        if len(forward) == FF17_BIT_LENGTH:
+            # The 17th bit is the last one sent, the least significant.
+            word = forward.as_integer >> 1
+            replies = [d.send_helvar(word) for d in self.gear if isinstance(d, Helvar311Gear)]
+        else:
+            device_type = self._device_type if len(forward) == 16 else 0
+            cmd = Command.from_frame(forward, devicetype=device_type)
+            if len(forward) == 16:
+                self._device_type = cmd.param if isinstance(cmd, gear_general.EnableDeviceType) else 0
+            replies = [device.send(cmd) for device in self.gear]
+        answers = [a for a in replies if a is not None]
         if not answers:
             return BusReply(None, False)
         return BusReply(answers[0] & 0xFF, len(answers) > 1)

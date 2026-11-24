@@ -3,14 +3,13 @@
 import logging
 import unittest
 from typing import List
-from unittest.mock import MagicMock
 
 from dali.address import GearBroadcast, GearShort
 from dali.command import Response
 from dali.frame import BackwardFrame
 from dali.gear.general import Off, QueryActualLevel, RecallMaxLevel
 
-from wb.mqtt_dali.common_dali_device import read_product_name
+from wb.mqtt_dali.common_dali_device import read_gtin_or_none
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.settings import BooleanSettingsParam, SettingsParamName
 from wb.mqtt_dali.wbdali_error_response import NoPowerOnBus
@@ -106,32 +105,32 @@ class TestCommandRetryLogging(unittest.IsolatedAsyncioTestCase):
         self.assertIn("no power on bus", warnings[0])
 
     async def test_gtin_read_failing_every_attempt_leaves_the_retry_and_the_operation_messages(self):
-        """The GTIN batch gets no power on every attempt: the retry WARNING, then read_product_name's."""
+        """The GTIN batch gets no power on every attempt: the retry WARNING, then read_gtin_or_none's."""
         driver = _ScriptedDriver([NoPowerOnBus()] * 24)
 
         with self.assertLogs(SENDER_LOGGER, logging.DEBUG) as logs:
-            name = await read_product_name(
-                driver, GearShort(5), DaliCommandsCompatibilityLayer(), MagicMock(), SENDER_LOGGER
+            gtin = await read_gtin_or_none(
+                driver, GearShort(5), DaliCommandsCompatibilityLayer(), SENDER_LOGGER
             )
 
-        self.assertIsNone(name)
+        self.assertIsNone(gtin)
         warnings = _above_debug(logs.records)
         self.assertEqual(len(warnings), 2)
         self.assertIn("failed after 3 attempts", warnings[0])
-        self.assertIn("looking up product name", warnings[1])
+        self.assertIn("Failed to read the GTIN", warnings[1])
         self.assertIn("no power on bus", warnings[1].lower())
 
     async def test_silent_gtin_bank_is_read_once(self):
-        """The gear answers no GTIN read: the batch is not retried, and read_product_name gives up
+        """The gear answers no GTIN read: the batch is not retried, and read_gtin_or_none gives up
         with its own WARNING only."""
         driver = _ScriptedDriver([Response(None)] * 24)
 
         with self.assertLogs(SENDER_LOGGER, logging.DEBUG) as logs:
-            name = await read_product_name(
-                driver, GearShort(5), DaliCommandsCompatibilityLayer(), MagicMock(), SENDER_LOGGER
+            gtin = await read_gtin_or_none(
+                driver, GearShort(5), DaliCommandsCompatibilityLayer(), SENDER_LOGGER
             )
 
-        self.assertIsNone(name)
+        self.assertIsNone(gtin)
         self.assertEqual(driver.sent_count, 8)
         self.assertEqual(len(_above_debug(logs.records)), 1)
 

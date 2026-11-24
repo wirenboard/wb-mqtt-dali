@@ -3,10 +3,16 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Any, Callable, Coroutine, Mapping, Optional, Type, Union
+from typing import Any, Callable, Coroutine, Mapping, Optional, Union
 
 import aiomqtt
-from dali.address import DeviceBroadcast, DeviceShort, GearBroadcast, InstanceNumber
+from dali.address import (
+    DeviceBroadcast,
+    DeviceShort,
+    GearBroadcast,
+    GearShort,
+    InstanceNumber,
+)
 from dali.command import Command, Response, YesNoResponse, from_frame
 from dali.device.general import StartQuiescentMode, StopQuiescentMode, _Event
 from dali.exceptions import ResponseError
@@ -16,11 +22,16 @@ from dali.gear.general import EnableDeviceType
 from .asyncio_utils import OneShotTasks
 from .bus_traffic import BusTrafficItem, BusTrafficSource
 from .commissioning import Commissioning, CommissioningResult, CommissioningStage
-from .common_dali_device import DaliDeviceAddress, Pollable, read_product_name
+from .common_dali_device import (
+    DaliDeviceAddress,
+    Pollable,
+    initial_device_name,
+    read_gtin_or_none,
+)
 from .dali2_compat import Dali2CommandsCompatibilityLayer
 from .dali2_device import Dali2Device
 from .dali_compat import DaliCommandsCompatibilityLayer
-from .dali_device import DaliDevice, HelvarDigidimError
+from .dali_device import DaliDevice
 from .device_init_scheduler import DeviceInitScheduler
 from .device_publisher import DeviceChange, DeviceInfo, DevicePublisher, MessageCallback
 from .device_registry import DeviceRegistry
@@ -28,6 +39,7 @@ from .event_sync_coordinator import EventSyncCoordinator
 from .events import BusEvent, Dali2InputEvent
 from .fetch_scheduler import SettingsFetchScheduler
 from .gtin_db import DaliDatabase
+from .helvar_device import HELVAR_321_GTIN, HelvarDigidimSensor, identify_helvar
 from .mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher, get_str_payload
 from .on_off_control import OnOffConfig, gear_params_only
 from .send_command import format_command_expression
@@ -48,10 +60,6 @@ from .wbdali_utils import (
     send_with_retry,
 )
 from .wbmqtt import ControlError, PublishPolicy, TranslatedTitle, is_pushbutton
-
-# A device is allowed to ignore commands until 300 ms after Reset started
-# (IEC 62386-102:2022 11.4.2, IEC 62386-103:2022 11.5.2), plus 50 ms of margin.
-RESET_SETTLE_TIME_S = 0.35
 
 
 class ApplicationControllerState(Enum):
@@ -216,6 +224,11 @@ def _count_devices_to_init(result: Optional[CommissioningResult]) -> int:
     return len(result.new) + len(result.changed)
 
 
+def _addresses_to_create(result: CommissioningResult) -> list[DaliDeviceAddress]:
+    """Addresses of changed and new devices, which get fresh device objects."""
+    return [d.new for d in result.changed] + result.new
+
+
 @dataclass
 class ApplicationControllerConfig:
     dali_devices: list[DaliDevice]
@@ -352,7 +365,7 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
     logger: logging.Logger,
     current_time: float,
 ) -> bool:
-    """Try to initialize device; publish it unless it does not support DALI. Returns True on success."""
+    """Try to initialize device. Publish on success or error. Returns True on success."""
     mqtt_id = device.mqtt_id
     try:
         await device.initialize(driver)
@@ -362,11 +375,6 @@ async def try_initialize_device(  # pylint: disable=too-many-arguments, R0917
         scheduler.record_success(mqtt_id)
         return True
     except Exception as e:  # pylint: disable=broad-exception-caught
-        if isinstance(e, HelvarDigidimError):
-            scheduler.record_helvar(mqtt_id, current_time)
-            if publisher.has_device(mqtt_id):
-                await publisher.remove_device(mqtt_id)
-            return False
         scheduler.record_failure(mqtt_id, current_time)
         if device.is_initialized:
             logger.warning("Failed to publish device %s: %s", device.name, e)
@@ -865,28 +873,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             await self._update_dali2_devices(res_dali2, on_device_initialized)
 
     async def _reset_device_settings_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), device.logger)
-        await asyncio.sleep(RESET_SETTLE_TIME_S)
+        await device.reset_settings(self._dev)
 
-        if isinstance(device, DaliDevice):
-            new_device = DaliDevice(
-                DaliDeviceAddress(device.address.short, device.address.random),
-                self.uid,
-                self._gtin_db,
-                self._common_schema,
-                mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
-                name=device.name if device.has_custom_name else None,
-                on_off=device.on_off_config,
-            )
-        else:
-            new_device = Dali2Device(
-                DaliDeviceAddress(device.address.short, device.address.random),
-                self.uid,
-                self._gtin_db,
-                self._common_schema,
-                mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
-                name=device.name if device.has_custom_name else None,
-            )
+        new_device = type(device)(
+            DaliDeviceAddress(device.address.short, device.address.random),
+            self.uid,
+            self._gtin_db,
+            self._common_schema,
+            mqtt_id=device.mqtt_id if device.has_custom_mqtt_id else None,
+            name=device.name if device.has_custom_name else None,
+            **({"on_off": device.on_off_config} if isinstance(device, DaliDevice) else {}),
+        )
         new_device.uid = device.uid
         new_device.set_logger(self.logger)
 
@@ -937,20 +934,7 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
         return results
 
     async def _reset_device_task(self, device: Union[DaliDevice, Dali2Device]) -> None:
-        await send_with_retry(self._dev, device.dali_commands.Reset(device.address.short), device.logger)
-        await asyncio.sleep(RESET_SETTLE_TIME_S)
-        reported = await self._dev.run_sequence(
-            set_short_address_sequence(device.dali_commands, device.address.short, MASK, device.logger),
-            FramePriority.USER_ACTION,
-            device.logger,
-        )
-        if reported != MASK:
-            self.logger.warning(
-                "Short address %d not cleared, the device reports %s and stays on the bus; "
-                "removing it from the configuration anyway, run a device search to pick it up",
-                device.address.short,
-                reported,
-            )
+        await device.reset(self._dev)
         await self._remove_device(device)
 
     async def _remove_device(self, device: Union[DaliDevice, Dali2Device]) -> None:
@@ -1047,63 +1031,63 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
             for d in (self.dali_devices + self.dali2_devices)
         ]
 
-    async def _resolve_initial_names(
-        self,
-        addresses: list[DaliDeviceAddress],
-        compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-    ) -> list[Optional[str]]:
-        """Read product names for the given DALI addresses and build initial device names.
-
-        Returns a list with the same length as `addresses`; each entry is either
-        a string `"{product_name} {short}"` or None (on any read/lookup failure).
-        """
-        if not addresses:
-            return []
-        product_names = await asyncio.gather(
-            *[
-                read_product_name(
-                    self._dev,
-                    compat.getAddress(addr.short),
-                    compat,
-                    self._gtin_db,
-                    self.logger,
-                )
-                for addr in addresses
-            ],
-            return_exceptions=True,
+    async def _make_commissioned_gear(self, address: DaliDeviceAddress) -> DaliDevice:
+        """A Digidim sensor if gear without a GTIN passes the Helvar check, else ordinary gear."""
+        gtin = await read_gtin_or_none(
+            self._dev, GearShort(address.short), DaliCommandsCompatibilityLayer(), self.logger
         )
-        res: list[Optional[str]] = []
-        for addr, product_name in zip(addresses, product_names):
-            if isinstance(product_name, BaseException):
-                self.logger.warning(
-                    "Failed to resolve product name for short %d: %s",
-                    addr.short,
-                    product_name,
+        if gtin is None:
+            try:
+                identity = await identify_helvar(self._dev, GearShort(address.short), self.logger)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                self.logger.warning("Failed to check gear %d for Helvar: %s", address.short, e)
+                identity = None
+            if identity is not None:
+                return HelvarDigidimSensor(
+                    address,
+                    self.uid,
+                    self._gtin_db,
+                    self._common_schema,
+                    name=f"{identity.model} {address.short}",
                 )
-                res.append(None)
-            elif product_name is None:
-                res.append(None)
-            else:
-                res.append(f"{product_name} {addr.short}")
-        return res
+        return DaliDevice(
+            address,
+            self.uid,
+            self._gtin_db,
+            self._common_schema,
+            name=initial_device_name(self._gtin_db, gtin, address.short, self.logger),
+        )
 
-    async def _build_commissioned_devices(
-        self,
-        commissioning_result: CommissioningResult,
-        compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
-        device_cls: Union[Type[DaliDevice], Type[Dali2Device]],
-    ) -> list:
-        """Construct DaliDevice/Dali2Device instances for changed and new addresses,
-        resolving initial names from GTIN where possible.
-        """
-        changed_addresses = [d.new for d in commissioning_result.changed]
-        all_addresses = changed_addresses + commissioning_result.new
-        all_names = await self._resolve_initial_names(all_addresses, compat)
-
-        return [
-            device_cls(addr, self.uid, self._gtin_db, self._common_schema, name=name)
-            for addr, name in zip(all_addresses, all_names)
-        ]
+    async def _make_commissioned_control_device(self, address: DaliDeviceAddress) -> Optional[Dali2Device]:
+        """None for a Helvar 321: its DALI-2 side is incomplete, so its short address is cleared."""
+        compat = Dali2CommandsCompatibilityLayer()
+        gtin = await read_gtin_or_none(self._dev, DeviceShort(address.short), compat, self.logger)
+        if gtin != HELVAR_321_GTIN:
+            return Dali2Device(
+                address,
+                self.uid,
+                self._gtin_db,
+                self._common_schema,
+                name=initial_device_name(self._gtin_db, gtin, address.short, self.logger),
+            )
+        try:
+            reported = await self._dev.run_sequence(
+                set_short_address_sequence(compat, address.short, MASK, self.logger),
+                FramePriority.CONFIGURATION,
+                self.logger,
+            )
+        except RuntimeError as exc:
+            self.logger.warning(
+                "Helvar 321 at DALI-2 address %d: address not cleared: %s", address.short, exc
+            )
+            return None
+        if reported == MASK:
+            self.logger.info("Helvar 321 at DALI-2 address %d: address cleared", address.short)
+        else:
+            self.logger.warning(
+                "Helvar 321 at DALI-2 address %d: address not cleared, reports %s", address.short, reported
+            )
+        return None
 
     async def _update_dali_devices(
         self,
@@ -1112,8 +1096,8 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     ) -> None:
         unchanged_devices = [d for d in self.dali_devices if d.address in commissioning_result.unchanged]
 
-        created_devices = await self._build_commissioned_devices(
-            commissioning_result, DaliCommandsCompatibilityLayer(), DaliDevice
+        created_devices = await asyncio.gather(
+            *[self._make_commissioned_gear(addr) for addr in _addresses_to_create(commissioning_result)]
         )
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {
@@ -1148,9 +1132,17 @@ class ApplicationController:  # pylint: disable=too-many-instance-attributes, to
     ) -> None:
         unchanged_devices = [d for d in self.dali2_devices if d.address in commissioning_result.unchanged]
 
-        created_devices = await self._build_commissioned_devices(
-            commissioning_result, Dali2CommandsCompatibilityLayer(), Dali2Device
+        made = await asyncio.gather(
+            *[
+                self._make_commissioned_control_device(addr)
+                for addr in _addresses_to_create(commissioning_result)
+            ]
         )
+        created_devices = [device for device in made if device is not None]
+        if on_device_initialized is not None:
+            # A skipped Helvar 321 counts as read.
+            for _ in range(made.count(None)):
+                on_device_initialized()
         new_dali2_devices = unchanged_devices + created_devices
 
         removed_short_addresses: set[int] = {d.old_short for d in commissioning_result.changed} | {

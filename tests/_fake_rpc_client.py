@@ -3,13 +3,16 @@ from typing import Optional
 
 from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher
 from wb.mqtt_dali.mqtt_rpc_server import RpcResult
+from wb.mqtt_dali.wbdali import MODBUS_READ_HOLDING_REGISTERS
 
 
 class FakePortLoadClient:
-    """Acknowledges every call; with `error` set, or the link down, a call fails unrecorded."""
+    """Acknowledges every write and answers a read with `firmware_version`; with `error` set, or the
+    link down, a call fails unrecorded."""
 
     def __init__(self) -> None:
         self.error: Optional[Exception] = None
+        self.firmware_version = "1.2.3"
         self._mqtt_dispatcher: Optional[MQTTDispatcher] = None
         self._writes: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -27,6 +30,8 @@ class FakePortLoadClient:
             raise self.error
         if self._mqtt_dispatcher is not None and not self._mqtt_dispatcher.connected:
             raise BrokerDisconnectedError("Broker disconnected")
+        if params["function"] == MODBUS_READ_HOLDING_REGISTERS:
+            return {"response": "".join(f"{ord(char):04x}" for char in self.firmware_version)}
         self._writes.put_nowait(params)
         return {"response": ""}
 

@@ -2,14 +2,14 @@
 
 import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from dali.address import GearShort
 from dali.exceptions import MemoryLocationNotImplemented
 from dali.gear.general import DTR0, DTR1, QueryVersionNumber, ReadMemoryLocation
 
-from wb.mqtt_dali.common_dali_device import read_gtin_fast, read_product_name
+from wb.mqtt_dali.common_dali_device import read_gtin_fast, read_gtin_or_none
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 
 
@@ -208,21 +208,18 @@ async def test_read_gtin_fast_raises_when_bank_0_has_partial_response():
     assert 1 not in dtr1_banks
 
 
-# -------- 6. Integration: read_product_name now uses read_gtin_fast --------
+# -------- 6. Integration: read_gtin_or_none uses read_gtin_fast --------
 @pytest.mark.asyncio
-async def test_read_product_name_delegates_to_read_gtin_fast():
+async def test_read_gtin_or_none_delegates_to_read_gtin_fast():
     driver = AsyncMock()
-    gtin_db = MagicMock()
-    gtin_db.get_info_by_gtin.return_value = {"product_name": "FastLamp"}
 
     with patch(
         "wb.mqtt_dali.common_dali_device.read_gtin_fast",
         new=AsyncMock(return_value=8721103129109),
     ) as fast_spy:
-        name = await read_product_name(
-            driver, GearShort(7), DaliCommandsCompatibilityLayer(), gtin_db, logging.getLogger("test")
+        gtin = await read_gtin_or_none(
+            driver, GearShort(7), DaliCommandsCompatibilityLayer(), logging.getLogger("test")
         )
 
-    assert name == "FastLamp"
+    assert gtin == 8721103129109
     fast_spy.assert_awaited_once()
-    gtin_db.get_info_by_gtin.assert_called_once_with(8721103129109)

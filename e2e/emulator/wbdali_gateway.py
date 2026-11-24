@@ -13,14 +13,20 @@ from dali.frame import ForwardFrame
 from e2e.emulator.dali_fakes import DaliBus
 from e2e.emulator.installation_profile import TimingProfile
 from e2e.emulator.template_device import DeviceTemplate, RegisterKind, TemplateDevice
-from wb.mqtt_dali.wbdali import GatewayReplyStatus, WBDALIConfig
+from wb.mqtt_dali.wbdali import (
+    FF17_BIT_LENGTH,
+    GATEWAY_FRAME_SIZE_BY_BIT_LENGTH,
+    GatewayReplyStatus,
+    WBDALIConfig,
+)
 
 DRIVER = WBDALIConfig()
 # The driver subscribes to the replies over MQTT and defines no register for them.
 REPLIES_REGISTER = 1500
 BUS_STATE_DISCRETE = 1000
 BUS_POWERED_DISCRETE = 1020
-FRAME_BITS_BY_SIZE_CODE = {0: 16, 1: 24, 2: 25}
+FRAME_BITS_BY_SIZE_CODE = {size.value: bits for bits, size in GATEWAY_FRAME_SIZE_BY_BIT_LENGTH.items()}
+DALI_BIT_MS = 1000 / 1200
 NO_SEND_PRIORITY = 0
 
 
@@ -168,9 +174,11 @@ class GatewayBus:
         self._on_completed(self, execution.slot)
 
     def _forward_s(self, frame: SlotFrame) -> float:
-        return self._timing.delay_s(
-            self._timing.forward_16_ms if len(frame.frame) == 16 else self._timing.forward_24_ms
-        )
+        if len(frame.frame) == 16:
+            return self._timing.delay_s(self._timing.forward_16_ms)
+        if len(frame.frame) == FF17_BIT_LENGTH:
+            return self._timing.delay_s(self._timing.forward_16_ms + DALI_BIT_MS)
+        return self._timing.delay_s(self._timing.forward_24_ms)
 
 
 class EmulatedWbDali(TemplateDevice):

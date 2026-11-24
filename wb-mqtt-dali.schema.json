@@ -80,6 +80,11 @@
                     "title": "DALI 2 Device",
                     "default": false
                 },
+                "helvar_digidim": {
+                    "type": "boolean",
+                    "title": "Helvar Digidim Device",
+                    "default": false
+                },
                 "mqtt_id": {
                     "type": "string",
                     "title": "MQTT ID",

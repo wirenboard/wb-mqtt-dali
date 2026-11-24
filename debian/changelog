@@ -1,3 +1,9 @@
+wb-mqtt-dali (1.43.2) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 24 Nov 2026 12:02:47 +0500
+
 wb-mqtt-dali (1.43.1) stable; urgency=medium
 
   * Tests only, no changes for users

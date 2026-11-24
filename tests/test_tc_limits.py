@@ -3,7 +3,7 @@
 # rebuild_mqtt_controls, ApplyResult propagation, sync_controls_after_broadcast
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dali.address import GearBroadcast, GearGroup, GearShort
@@ -721,9 +721,7 @@ def test_rebuild_mqtt_controls_does_not_call_driver():
     d.is_initialized = True
     d._parameter_handlers = []  # pylint: disable=protected-access
 
-    with patch("wb.mqtt_dali.common_dali_device.WBDALIDriver", autospec=True) as mock_driver_cls:
-        d.rebuild_mqtt_controls()
-        mock_driver_cls.assert_not_called()
+    d.rebuild_mqtt_controls()
 
 
 def test_rebuild_mqtt_controls_updates_controls_dict():

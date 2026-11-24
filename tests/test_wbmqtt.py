@@ -182,7 +182,7 @@ class TestDevice(MockMqttTestCase):
         await device.initialize()
 
         assert device._base_topic == "/devices/test_device"
-        assert device._device_title.en == "Test Device"
+        assert device.title.en == "Test Device"
         assert device._driver_name == "test_driver"
         assert len(device.control_ids) == 0
 

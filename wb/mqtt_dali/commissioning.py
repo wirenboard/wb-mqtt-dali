@@ -479,6 +479,19 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
 
         return shorts_with_random_address_conflicts
 
+    def _stuck_search_error(self, low: int, found_addr: int) -> RuntimeError:
+        if found_addr == BinarySearchAddressFinder.UNCONFIRMED_ADDRESS:
+            return RuntimeError(
+                f"Binary search stuck above 0x{low:06x}: "
+                f"{FAILED_SEARCHES_BEFORE_GIVING_UP} searches in a row found nothing new"
+            )
+        shorts = [short for short, rand in self.found_devices.items() if rand == found_addr]
+        short_part = f" (short address {shorts[0]})" if shorts else ""
+        return RuntimeError(
+            f"Binary search stuck: the device at random address 0x{found_addr:06x}{short_part} "
+            "keeps answering the search"
+        )
+
     def _poll_confirmed_config_short(self, rand_addr: int) -> Optional[int]:
         """On a random address conflict, decide which device keeps its
         addresses. If exactly one config device holds this random address and
@@ -645,11 +658,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                     else:
                         failed_searches += 1
                         if failed_searches >= FAILED_SEARCHES_BEFORE_GIVING_UP:
-                            raise RuntimeError(
-                                f"Binary search stuck above 0x{low:06x}: "
-                                f"{FAILED_SEARCHES_BEFORE_GIVING_UP} searches in a row "
-                                "found nothing new"
-                            )
+                            raise self._stuck_search_error(low, found_rand_addr)
 
                     if found_rand_addr == BinarySearchAddressFinder.UNCONFIRMED_ADDRESS:
                         continue
@@ -822,11 +831,7 @@ class Commissioning:  # pylint: disable=too-many-instance-attributes
                 else:
                     failed_searches += 1
                     if failed_searches >= FAILED_SEARCHES_BEFORE_GIVING_UP:
-                        raise RuntimeError(
-                            f"Binary search stuck above 0x{low:06x}: "
-                            f"{FAILED_SEARCHES_BEFORE_GIVING_UP} searches in a row "
-                            "found nothing new"
-                        )
+                        raise self._stuck_search_error(low, found_addr)
 
                 if found_addr == BinarySearchAddressFinder.UNCONFIRMED_ADDRESS:
                     continue

@@ -259,7 +259,7 @@ class ResetDeviceTest(VirtualTimeTestCase):
             sent.append(command)
             return MagicMock(raw_value=MagicMock(error=False))
 
-        controller._dev.run_sequence.return_value = MASK
+        controller.driver.run_sequence.return_value = MASK
 
         with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
             "wb.mqtt_dali.application_controller.set_short_address_sequence"
@@ -270,7 +270,7 @@ class ResetDeviceTest(VirtualTimeTestCase):
         # cleared by the verified addressing sequence, not by a bare SET SHORT ADDRESS
         make_sequence.assert_called_once()
         assert make_sequence.call_args.args[1:3] == (device.address.short, MASK)
-        controller._dev.run_sequence.assert_awaited_once_with(
+        controller.driver.run_sequence.assert_awaited_once_with(
             make_sequence.return_value, FramePriority.USER_ACTION, ANY
         )
         # device removed from active configuration
@@ -306,7 +306,7 @@ class ResetDeviceTest(VirtualTimeTestCase):
             sent.append(command)
             return MagicMock(raw_value=MagicMock(error=False))
 
-        controller._dev.run_sequence.return_value = MASK
+        controller.driver.run_sequence.return_value = MASK
 
         with patch("wb.mqtt_dali.application_controller.send_with_retry", side_effect=fake_send), patch(
             "wb.mqtt_dali.application_controller.set_short_address_sequence"
@@ -337,7 +337,7 @@ class ResetDeviceTest(VirtualTimeTestCase):
         device = _make_initialized_dali_device()
         controller.dali_devices = [device]
         controller._devices_by_mqtt_id[device.mqtt_id] = device
-        controller._dev.run_sequence.return_value = device.address.short
+        controller.driver.run_sequence.return_value = device.address.short
 
         with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
             with self.assertLogs("test", logging.WARNING) as logs:
@@ -356,7 +356,7 @@ class ResetDeviceTest(VirtualTimeTestCase):
         device = _make_initialized_dali_device()
         controller.dali_devices = [device]
         controller._devices_by_mqtt_id[device.mqtt_id] = device
-        controller._dev.run_sequence.side_effect = RuntimeError("Gateway did not accept")
+        controller.driver.run_sequence.side_effect = RuntimeError("Gateway did not accept")
 
         with patch("wb.mqtt_dali.application_controller.send_with_retry", new=AsyncMock()):
             with pytest.raises(RuntimeError, match="Gateway did not accept"):
@@ -386,23 +386,21 @@ class ResetStateCheckTest(VirtualTimeTestCase):
     """The public reset calls refuse to run before the controller is ready."""
 
     async def test_reset_device_settings_raises_when_not_ready(self):
-        # pylint: disable=protected-access
         controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
         device = _make_initialized_dali_device()
 
         with pytest.raises(RuntimeError):
             await controller.reset_device_settings(device)
         # No bus traffic was attempted
-        controller._dev.send.assert_not_called()
+        controller.driver.send.assert_not_called()
 
     async def test_reset_device_raises_when_not_ready(self):
-        # pylint: disable=protected-access
         controller = _make_controller_with_state(ApplicationControllerState.UNINITIALIZED)
         device = _make_initialized_dali_device()
 
         with pytest.raises(RuntimeError):
             await controller.reset_device(device)
-        controller._dev.send.assert_not_called()
+        controller.driver.send.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

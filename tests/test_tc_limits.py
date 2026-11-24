@@ -735,7 +735,7 @@ def test_rebuild_mqtt_controls_updates_controls_dict():
 
     d.rebuild_mqtt_controls()
 
-    controls = d._controls  # pylint: disable=protected-access
+    controls = [control.id for control in d.get_mqtt_controls()]
     assert "ctrl_x" in controls
     assert "ctrl_y" in controls
     assert len(controls) == 2
@@ -783,8 +783,7 @@ async def test_apply_parameters_returns_refresh_true_when_handler_with_flag_retu
     d._apply_common_parameters = AsyncMock()  # pylint: disable=protected-access
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        result = await d.apply_parameters(driver, {"any": "value"})
+    result = await d.apply_parameters(driver, {"any": "value"})
 
     assert isinstance(result, ApplyResult)
     assert result.needs_mqtt_controls_refresh is True
@@ -805,8 +804,7 @@ async def test_apply_parameters_returns_refresh_false_when_handler_with_flag_ret
     d._apply_common_parameters = AsyncMock()  # pylint: disable=protected-access
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        result = await d.apply_parameters(driver, {"any": "value"})
+    result = await d.apply_parameters(driver, {"any": "value"})
 
     assert isinstance(result, ApplyResult)
     assert result.needs_mqtt_controls_refresh is False
@@ -827,8 +825,7 @@ async def test_apply_parameters_returns_refresh_false_when_handler_without_flag(
     d._apply_common_parameters = AsyncMock()  # pylint: disable=protected-access
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        result = await d.apply_parameters(driver, {"any": "value"})
+    result = await d.apply_parameters(driver, {"any": "value"})
 
     assert result.needs_mqtt_controls_refresh is False
 

@@ -46,7 +46,7 @@ class TestMQTTDispatcher(VirtualTimeTestCase):
 
         await self.dispatcher.subscribe("test/topic", callback)
 
-        assert "test/topic" in self.dispatcher._subscriptions  # pylint: disable=W0212
+        assert "test/topic" in self.dispatcher.get_subscribed_topics()
         assert callback in self.dispatcher._subscriptions["test/topic"]  # pylint: disable=W0212
         self.mock_client.subscribe.assert_called_once_with("test/topic")
 
@@ -85,7 +85,7 @@ class TestMQTTDispatcher(VirtualTimeTestCase):
 
         await self.dispatcher.unsubscribe("test/topic")
 
-        assert "test/topic" not in self.dispatcher._subscriptions  # pylint: disable=W0212
+        assert "test/topic" not in self.dispatcher.get_subscribed_topics()
         self.mock_client.unsubscribe.assert_called_once_with("test/topic")
 
     async def test_clear_subscriptions(self):
@@ -97,7 +97,7 @@ class TestMQTTDispatcher(VirtualTimeTestCase):
 
         await self.dispatcher.clear_subscriptions()
 
-        assert len(self.dispatcher._subscriptions) == 0  # pylint: disable=W0212
+        assert len(self.dispatcher.get_subscribed_topics()) == 0
         assert self.mock_client.unsubscribe.call_count == 2
 
     async def test_dispatch_message(self):
@@ -191,11 +191,11 @@ class TestMQTTDispatcher(VirtualTimeTestCase):
 
         await asyncio.gather(*[self.dispatcher.subscribe(f"topic{i}", callbacks[i]) for i in range(10)])
 
-        assert len(self.dispatcher._subscriptions) == 10  # pylint: disable=W0212
+        assert len(self.dispatcher.get_subscribed_topics()) == 10
 
         await asyncio.gather(*[self.dispatcher.unsubscribe(f"topic{i}") for i in range(10)])
 
-        assert len(self.dispatcher._subscriptions) == 0  # pylint: disable=W0212
+        assert len(self.dispatcher.get_subscribed_topics()) == 0
 
     def test_client_id(self):
         assert self.dispatcher.client_id == "test-client-id"

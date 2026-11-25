@@ -1,3 +1,10 @@
+wb-mqtt-dali (1.43.3) stable; urgency=medium
+
+  * If the device search fails because one device keeps answering it, the error now shows
+    that device's random address and short address.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 24 Nov 2026 18:26:30 +0500
+
 wb-mqtt-dali (1.43.2) stable; urgency=medium
 
   * Tests only, no changes for users

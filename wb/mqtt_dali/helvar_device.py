@@ -172,6 +172,15 @@ _FADE_TIME_HINT = TranslatedTitle(
     "Датчик перепишет этим значением время изменения яркости в настройках адресатов события, "
     "и оно там останется",
 )
+_FOLLOWS_GROUP_TITLE = TranslatedTitle("Follow commands to the group", "Следить за командами в группу")
+_FOLLOWS_GROUP_HINT = TranslatedTitle(
+    "The sensor reacts to commands other devices send to this group, such as presence signals from "
+    "neighbouring sensors. With several sensors of one group set so, their traffic can take up the "
+    "whole bus",
+    "Датчик реагирует на команды, которые другие устройства отправляют в эту группу, например на сигналы "
+    "присутствия от соседних датчиков. Если так настроить несколько датчиков одной группы, их обмен "
+    "может занять всю шину",
+)
 _TARGET_TITLES = {
     EventTarget.ADDRESS: TranslatedTitle("short address", "короткий адрес"),
     EventTarget.GROUP: TranslatedTitle("group", "группа"),
@@ -308,6 +317,8 @@ _EVENT_TRANSLATIONS = {
         for title in (
             _FADE_TIME_NOT_SET_TITLE,
             _FADE_TIME_HINT,
+            _FOLLOWS_GROUP_TITLE,
+            _FOLLOWS_GROUP_HINT,
             *_TARGET_TITLES.values(),
             *_COMMAND_TITLES.values(),
         )
@@ -490,13 +501,14 @@ class _EventField(_SettingField):
 
     def to_form(self, image: DigidimImage) -> dict:
         event = image[self.memory]
-        # Responds to Groups other than the target group make it an unrecognised command.
-        action = event.action if event.responds_to_groups == _responds_to_groups(event.target) else None
+        # Responds to Groups other than none or the target group make it an unrecognised command.
+        action = event.action if event.responds_to_groups in (0, _responds_to_groups(event.target)) else None
         fade_time = getattr(action, "fade_time", None)
         return {
             "target": _TARGET_BY_CLASS[type(event.target)].value,
             "address": getattr(event.target, "address", 0),
             "group": getattr(event.target, "group", 0),
+            "follows_group": event.responds_to_groups != 0,
             "command": _event_command(action).value,
             "scene": getattr(action, "scene", 0),
             "level": getattr(action, "level", 0),
@@ -511,7 +523,8 @@ class _EventField(_SettingField):
             target = e2.Group(form_value["group"])
         else:
             target = e2.Broadcast()
-        image[self.memory] = e2.Event(target, _action_from_form(form_value), _responds_to_groups(target))
+        responds_to_groups = _responds_to_groups(target) if form_value["follows_group"] else 0
+        image[self.memory] = e2.Event(target, _action_from_form(form_value), responds_to_groups)
 
     def form_property(self, order: int, image: DigidimImage) -> dict:
         shown = EventCommand(self.to_form(image)["command"])
@@ -750,7 +763,7 @@ def _event_property(title: str, order: int, commands: list[EventCommand]) -> dic
         "title": title,
         "format": "card",
         "propertyOrder": order,
-        "required": ["target", "command"],
+        "required": ["target", "follows_group", "command"],
         "properties": {
             "target": _enum_property(
                 "Target",
@@ -765,28 +778,34 @@ def _event_property(title: str, order: int, commands: list[EventCommand]) -> dic
             "group": _shown_when(
                 _integer_property("Group", 3, 0, GROUPS_TOTAL - 1), {"target": EventTarget.GROUP.value}
             ),
+            "follows_group": {
+                **_shown_when(
+                    _switch_property(_FOLLOWS_GROUP_TITLE.en, 4), {"target": EventTarget.GROUP.value}
+                ),
+                "description": _FOLLOWS_GROUP_HINT.en,
+            },
             "command": _enum_property(
                 "Command",
-                4,
+                5,
                 [command.value for command in commands],
                 [_COMMAND_TITLES[command].en for command in commands],
                 grid_columns=12,
             ),
             "scene": _shown_when(
                 _enum_property(
-                    "Scene", 5, list(range(SCENES_TOTAL)), [str(scene) for scene in range(SCENES_TOTAL)]
+                    "Scene", 6, list(range(SCENES_TOTAL)), [str(scene) for scene in range(SCENES_TOTAL)]
                 ),
                 {"command": scene_commands},
             ),
             "level": _shown_when(
-                _integer_property(_LEVEL_TITLE.en, 6, 0, MASK - 1),
+                _integer_property(_LEVEL_TITLE.en, 7, 0, MASK - 1),
                 {"command": EventCommand.DIRECT_LEVEL.value},
             ),
             "fade_time": {
                 **_shown_when(
                     _enum_property(
                         "Fade Time, s",
-                        7,
+                        8,
                         [FADE_TIME_USE_DEVICE, *range(FADE_TIME_CODE_MAX + 1)],
                         [_FADE_TIME_NOT_SET_TITLE.en, *FADE_TIME_ENUM_TITLES],
                     ),

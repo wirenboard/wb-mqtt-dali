@@ -119,11 +119,12 @@ def _dtr_frame(e2_address: int) -> tuple[int, int]:
 
 def _event(target: str, command: str, **fields: int) -> dict:
     """An event field of the form; address, group, scene and level default to 0, the fade time to
-    «do not change»."""
+    «do not change», following the group to off."""
     return {
         "target": target,
         "address": 0,
         "group": 0,
+        "follows_group": False,
         "command": command,
         "scene": 0,
         "level": 0,
@@ -787,7 +788,9 @@ class HelvarSettingsTest(_EditorTestCase):
                 (config["presence_sensor"], config["constant_light"], config["presence_test_mode"]),
                 (True, True, True),
             )
-            self.assertEqual(config["presence_on_event"], _event("group", "scene", group=9, scene=3))
+            self.assertEqual(
+                config["presence_on_event"], _event("group", "scene", group=9, scene=3, follows_group=True)
+            )
             self.assertEqual(
                 config["presence_min_event"], _event("address", "recall_min", address=6, fade_time=7)
             )
@@ -934,7 +937,9 @@ class HelvarSettingsTest(_EditorTestCase):
                     "deviceId": device_id,
                     "config": {
                         **form,
-                        "presence_on_event": _event("group", "direct_level", group=2, level=100),
+                        "presence_on_event": _event(
+                            "group", "direct_level", group=2, level=100, follows_group=True
+                        ),
                         "presence_off_event": _event("broadcast", "disable_panel"),
                     },
                 }
@@ -942,7 +947,10 @@ class HelvarSettingsTest(_EditorTestCase):
 
             self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("00 10 84 64 00 04"))
             self.assertEqual(sensor.e2[PRESENCE_OFF : PRESENCE_OFF + 6], bytes.fromhex("08 00 ff 8e 00 00"))
-            self.assertEqual(reply["presence_on_event"], _event("group", "direct_level", group=2, level=100))
+            self.assertEqual(
+                reply["presence_on_event"],
+                _event("group", "direct_level", group=2, level=100, follows_group=True),
+            )
             self.assertEqual(reply["presence_off_event"], _event("broadcast", "disable_panel"))
 
     async def test_get_device_of_321_offers_ramp_only_for_constant_light(self):
@@ -1058,7 +1066,12 @@ class HelvarSettingsTest(_EditorTestCase):
                     "deviceId": device_id,
                     "config": {
                         **form,
-                        "presence_on_event": {**form["presence_on_event"], "target": "group", "group": 2},
+                        "presence_on_event": {
+                            **form["presence_on_event"],
+                            "target": "group",
+                            "group": 2,
+                            "follows_group": True,
+                        },
                     },
                 }
             )
@@ -1070,6 +1083,71 @@ class HelvarSettingsTest(_EditorTestCase):
                 [frame for frame in _sensor_frames(driver) if frame[0] == 16],
                 [_dtr_frame(PRESENCE_ON + 2), _dtr_frame(PRESENCE_ON + 5)],
             )
+
+    async def test_get_device_shows_group_event_not_following_the_group(self):
+        """Presence On to group 2 with empty Responds to Groups: GetDevice shows its command with
+        following the group off."""
+        sensor = _Sensor(e2=_image(e2_36=bytes.fromhex("80 04 85 1f 00 00")))
+        driver = _HelvarBusDriver(sensor)
+        async with running_bus(_bus_data(_sensor_entry()), driver) as (bus, _client):
+            gateway = _make_gateway(bus, self.config_path)
+
+            reply = await gateway.get_device_rpc_handler({"deviceId": bus.dali_devices[0].uid})
+
+            self.assertEqual(
+                reply["config"]["presence_on_event"],
+                _event("group", "scene", group=2, scene=15, fade_time=4, follows_group=False),
+            )
+
+    async def test_set_device_turns_following_the_group_off(self):
+        """Presence On to group 2 following it: SetDevice turning following off clears only the
+        Responds to Groups byte of group 2."""
+        sensor = _Sensor(e2=_image(e2_36=bytes.fromhex("80 04 85 1f 00 04")))
+        driver = _HelvarBusDriver(sensor)
+        async with running_bus(_bus_data(_sensor_entry()), driver) as (bus, _client):
+            gateway = _make_gateway(bus, self.config_path)
+            device_id = bus.dali_devices[0].uid
+            form = (await gateway.get_device_rpc_handler({"deviceId": device_id}))["config"]
+            driver.sent.clear()
+
+            await gateway.set_device_rpc_handler(
+                {
+                    "deviceId": device_id,
+                    "config": {
+                        **form,
+                        "presence_on_event": {**form["presence_on_event"], "follows_group": False},
+                    },
+                }
+            )
+
+            self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("8004851f0000"))
+            self.assertEqual(
+                [frame for frame in _sensor_frames(driver) if frame[0] == 16], [_dtr_frame(PRESENCE_ON + 5)]
+            )
+
+    async def test_set_device_clears_responds_to_groups_of_address_target(self):
+        """Presence On to group 2 following it: SetDevice moving it to address 6 with following on
+        writes empty Responds to Groups."""
+        sensor = _Sensor(e2=_image(e2_36=bytes.fromhex("80 04 85 1f 00 04")))
+        driver = _HelvarBusDriver(sensor)
+        async with running_bus(_bus_data(_sensor_entry()), driver) as (bus, _client):
+            gateway = _make_gateway(bus, self.config_path)
+            device_id = bus.dali_devices[0].uid
+            form = (await gateway.get_device_rpc_handler({"deviceId": device_id}))["config"]
+
+            await gateway.set_device_rpc_handler(
+                {
+                    "deviceId": device_id,
+                    "config": {
+                        **form,
+                        "presence_on_event": _event(
+                            "address", "scene", address=6, scene=15, fade_time=4, follows_group=True
+                        ),
+                    },
+                }
+            )
+
+            self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("80040d1f0000"))
 
     async def test_set_device_keeps_out_of_range_bytes_of_unchanged_fields(self):
         """On time 0 (shown 60 s) and scene store delay 64 (shown 25 s): SetDevice changing Exit delay

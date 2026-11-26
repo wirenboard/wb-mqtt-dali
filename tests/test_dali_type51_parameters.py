@@ -19,17 +19,16 @@ from dali.memory.energy import (
 )
 from dali.memory.location import FlagValue
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type51_parameters import Type51EnergyParam, Type51Parameters
 from wb.mqtt_dali.events import ActiveEnergyRead
 from wb.mqtt_dali.wbdali_error_response import NoPowerOnBus
 from wb.mqtt_dali.wbmqtt import ControlError
 
-# pylint: disable=redefined-outer-name
+from ._common_schema import load_common_schema
 
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
+# pylint: disable=redefined-outer-name
 
 
 def _ok_byte_response(value: int):
@@ -271,7 +270,9 @@ async def _initialize_dt51_device(scale_byte: Optional[int]) -> DaliDevice:
     driver.run_sequence = AsyncMock(side_effect=fake_run_sequence)
     driver.send_commands = AsyncMock(side_effect=fake_send_commands)
 
-    dev = DaliDevice(DaliDeviceAddress(short=3, random=0), "bus1", MagicMock(), None, None)
+    dev = DaliDevice(
+        DaliDeviceAddress(short=3, random=0), "bus1", MagicMock(), load_common_schema(), None, None
+    )
     await dev.initialize(driver)
     return dev
 

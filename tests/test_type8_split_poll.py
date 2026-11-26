@@ -14,7 +14,6 @@ from wb.mqtt_dali.application_controller import PollScheduler
 from wb.mqtt_dali.common_dali_device import (
     EVENT_RESYNC_BASE_INTERVAL,
     DaliDeviceAddress,
-    DaliDeviceBase,
     MqttControlBase,
     NotifyResult,
 )
@@ -33,10 +32,8 @@ from wb.mqtt_dali.events import ColourChanged, EventSource
 from wb.mqtt_dali.wbdali_utils import MASK
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
+from ._common_schema import load_common_schema
 from ._control_stubs import ReadableControl
-
-# pylint: disable-next=protected-access
-DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
 def _readable_control(control_id: str, poll_interval=None) -> MqttControlBase:
@@ -85,7 +82,7 @@ def _whole_cycle_failure(colour_type: ColourType) -> ColourChanged:
     colour type, whichever subbatch it was that ran out of retries."""
     return ColourChanged(
         {component: None for component in COMPONENTS_BY_COLOUR_TYPE[colour_type]},
-        EventSource.READ,
+        source=EventSource.READ,
         failed=True,
     )
 
@@ -112,8 +109,8 @@ async def test_scene_colour_keeps_masked_component():
 
     assert components == {ColourComponent.RED: 1, ColourComponent.GREEN: 2, ColourComponent.BLUE: 3}
     white = CurrentWhiteControl()
-    white.notify(ColourChanged({ColourComponent.WHITE: 200}, EventSource.READ))  # known current white
-    scene_event = ColourChanged(components, EventSource.OBSERVED)
+    white.notify(ColourChanged({ColourComponent.WHITE: 200}, source=EventSource.READ))  # known current white
+    scene_event = ColourChanged(components, source=EventSource.OBSERVED)
     assert white.notify(scene_event) is NotifyResult.NOTHING_TO_PUBLISH
     assert white.control_info.state.value == "200"
 
@@ -124,6 +121,7 @@ def _make_dali_device(short=1, controls=None, type8_handler=None) -> DaliDevice:
         DaliDeviceAddress(short=short, random=0),
         "bus1",
         MagicMock(),
+        load_common_schema(),
         None,
         None,
     )
@@ -208,7 +206,7 @@ async def test_type8_colour_poll_split_into_subbatches():
                 ColourComponent.BLUE: 30,
                 ColourComponent.WHITE: 40,
             },
-            EventSource.READ,
+            source=EventSource.READ,
         )
     ]
 
@@ -830,7 +828,7 @@ class _ColourControlsDevice(DaliDevice):
 
     def __init__(self, handler: Type8Parameters) -> None:
         self._colour_handler = handler
-        super().__init__(DaliDeviceAddress(short=1, random=0), "bus1", MagicMock())
+        super().__init__(DaliDeviceAddress(short=1, random=0), "bus1", MagicMock(), load_common_schema())
         self.rebuild_mqtt_controls()
 
     def _build_mqtt_controls(self) -> list[MqttControlBase]:

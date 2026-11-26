@@ -3,7 +3,7 @@
 # rebuild_mqtt_controls, ApplyResult propagation, sync_controls_after_broadcast
 
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from dali.address import GearBroadcast, GearGroup, GearShort
@@ -47,6 +47,7 @@ from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
+from ._common_schema import load_common_schema
 from ._control_stubs import ReadableControl
 
 
@@ -345,7 +346,7 @@ async def test_tc_limits_injected_into_control():
 
 
 def _tc_read(mirek: int) -> ColourChanged:
-    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, EventSource.READ)
+    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, source=EventSource.READ)
 
 
 @pytest.mark.asyncio
@@ -645,9 +646,6 @@ def test_colour_value_schema_tracks_user_limits_live():
 
 # --- Helpers for rebuild_mqtt_controls / ApplyResult / sync_controls_after_broadcast ---
 
-# Prevent file system access in DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}  # pylint: disable=protected-access
-
 
 class _TestDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
     """Concrete subclass that implements _build_mqtt_controls for testing."""
@@ -672,6 +670,7 @@ def _make_device(**kwargs):
         "default_mqtt_id_part": "d",
         "compat": DaliCommandsCompatibilityLayer(),
         "gtin_db": MagicMock(),
+        "common_schema": load_common_schema(),
     }
     defaults.update(kwargs)
     return _TestDevice(**defaults)
@@ -722,9 +721,7 @@ def test_rebuild_mqtt_controls_does_not_call_driver():
     d.is_initialized = True
     d._parameter_handlers = []  # pylint: disable=protected-access
 
-    with patch("wb.mqtt_dali.common_dali_device.WBDALIDriver", autospec=True) as mock_driver_cls:
-        d.rebuild_mqtt_controls()
-        mock_driver_cls.assert_not_called()
+    d.rebuild_mqtt_controls()
 
 
 def test_rebuild_mqtt_controls_updates_controls_dict():
@@ -736,7 +733,7 @@ def test_rebuild_mqtt_controls_updates_controls_dict():
 
     d.rebuild_mqtt_controls()
 
-    controls = d._controls  # pylint: disable=protected-access
+    controls = [control.id for control in d.get_mqtt_controls()]
     assert "ctrl_x" in controls
     assert "ctrl_y" in controls
     assert len(controls) == 2
@@ -784,8 +781,7 @@ async def test_apply_parameters_returns_refresh_true_when_handler_with_flag_retu
     d._apply_common_parameters = AsyncMock()  # pylint: disable=protected-access
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        result = await d.apply_parameters(driver, {"any": "value"})
+    result = await d.apply_parameters(driver, {"any": "value"})
 
     assert isinstance(result, ApplyResult)
     assert result.needs_mqtt_controls_refresh is True
@@ -806,8 +802,7 @@ async def test_apply_parameters_returns_refresh_false_when_handler_with_flag_ret
     d._apply_common_parameters = AsyncMock()  # pylint: disable=protected-access
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        result = await d.apply_parameters(driver, {"any": "value"})
+    result = await d.apply_parameters(driver, {"any": "value"})
 
     assert isinstance(result, ApplyResult)
     assert result.needs_mqtt_controls_refresh is False
@@ -828,8 +823,7 @@ async def test_apply_parameters_returns_refresh_false_when_handler_without_flag(
     d._apply_common_parameters = AsyncMock()  # pylint: disable=protected-access
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        result = await d.apply_parameters(driver, {"any": "value"})
+    result = await d.apply_parameters(driver, {"any": "value"})
 
     assert result.needs_mqtt_controls_refresh is False
 

@@ -1,0 +1,69 @@
+{
+    "1": {
+        "gear": {
+            "0": {"model": "DC MINI JOLLY DALI BI", "groups": [10]},
+            "1": {"model": "DC MINI JOLLY DALI BI", "groups": [11]}
+        }
+    },
+    "2": {
+        "gear": {
+            "0": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [3]},
+            "1": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [3]},
+            "2": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [3]},
+            "3": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [3]},
+            "4": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [5]},
+            "5": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [6]},
+            "6": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [5]},
+            "7": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [7]},
+            "8": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [7]},
+            "9": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [7]},
+            "10": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [5]},
+            "11": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [6]},
+            "12": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [6]},
+            "13": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [6]},
+            "14": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [5]},
+            "15": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [7]},
+            "16": {"model": "default_gear", "groups": [9]},
+            "17": {"model": "default_gear", "groups": [8]},
+            "18": {"model": "default_gear", "groups": [9]},
+            "19": {"model": "default_gear", "groups": [9]},
+            "20": {"model": "default_gear", "groups": [4]},
+            "21": {"model": "default_gear", "groups": [9]},
+            "22": {"model": "default_gear", "groups": [8]},
+            "23": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [9]},
+            "24": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [9]},
+            "25": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [4]},
+            "26": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [9]},
+            "27": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [9]}
+        }
+    },
+    "3": {
+        "gear": {
+            "0": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "1": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "2": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "3": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "4": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "5": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "6": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "7": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "8": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "9": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "10": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "11": {"model": "BK-DCL010S-AHA0700ADN", "groups": [2]},
+            "12": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "13": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "14": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "15": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "16": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "17": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "18": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "19": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [0]},
+            "20": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "21": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "22": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "23": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]},
+            "24": {"model": "OTI DALI 15/220-240/1A0 NFC", "groups": [1]}
+        }
+    }
+}

@@ -11,7 +11,7 @@ from dali.command import Command
 from dali.frame import ForwardFrame
 
 from wb.mqtt_dali.bus_traffic import BusTrafficSource
-from wb.mqtt_dali.gateway import Gateway, bus_from_json
+from wb.mqtt_dali.gateway import Gateway, bus_from_json, make_bus_driver
 from wb.mqtt_dali.mqtt_dispatcher import MQTTDispatcher
 from wb.mqtt_dali.mqtt_rpc_client import MQTTRPCCallTimeoutError
 from wb.mqtt_dali.wbdali import FramePriority
@@ -19,6 +19,7 @@ from wb.mqtt_dali.wbdali_error_response import GatewayUnavailable
 
 from ._app_controller_helpers import wait_until
 from ._broker_link_helpers import Publish, RecordingClient
+from ._common_schema import load_common_schema
 
 _LAST_ENDPOINT_MARKER = "/rpc/v1/wb-mqtt-dali/Bus/ListCommands"
 
@@ -62,7 +63,14 @@ class GatewayRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.client = RecordingClient()
         self.dispatcher = MQTTDispatcher(self.client)
         config = {"gateways": [{"device_id": "gw", "buses": [{"devices": []}, {"devices": []}]}]}
-        self.gateway = Gateway(config, self.dispatcher, "/nonexistent.conf", MagicMock(), command_registry={})
+        self.gateway = Gateway(
+            config,
+            self.dispatcher,
+            "/nonexistent.conf",
+            MagicMock(),
+            load_common_schema(),
+            command_registry={},
+        )
         self.run_task: Optional[asyncio.Task] = None
 
     async def asyncSetUp(self):
@@ -131,7 +139,14 @@ class BusStartDuringOutageTests(unittest.IsolatedAsyncioTestCase):
         client = RecordingClient()
         dispatcher = MQTTDispatcher(client)
         dispatcher.connection_lost()
-        bus = bus_from_json("gw", 1, {"devices": []}, dispatcher, MagicMock(), MagicMock())
+        bus = bus_from_json(
+            {"devices": []},
+            dispatcher,
+            make_bus_driver("gw", 1, dispatcher),
+            MagicMock(),
+            load_common_schema(),
+            MagicMock(),
+        )
 
         await bus.start()
 

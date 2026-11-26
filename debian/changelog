@@ -1,10 +1,109 @@
-wb-mqtt-dali (1.40.3) stable; urgency=medium
+wb-mqtt-dali (1.43.4) stable; urgency=medium
 
   * Update LICENSE: Wiren Board as the copyright holder,
     2025 as the first publication year, use restricted to Wiren Board equipment
   * Fill debian/copyright in the DEP-5 format
 
- -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Thu, 12 Nov 2026 14:40:07 +0300
+ -- Ekaterina Volkova <ekaterina.volkova@wirenboard.com>  Thu, 26 Nov 2026 18:18:28 +0300
+
+wb-mqtt-dali (1.43.3) stable; urgency=medium
+
+  * If the device search fails because one device keeps answering it, the error now shows
+    that device's random address and short address.
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 24 Nov 2026 18:26:30 +0500
+
+wb-mqtt-dali (1.43.2) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 24 Nov 2026 12:02:47 +0500
+
+wb-mqtt-dali (1.43.1) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 24 Nov 2026 11:04:49 +0500
+
+wb-mqtt-dali (1.43.0) stable; urgency=medium
+
+  * Devices that are found by search but do not support DALI commands, such
+    as Helvar Digidim 311 sensors, are no longer published in MQTT with
+    errors and are rechecked once an hour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 17:23:44 +0500
+
+wb-mqtt-dali (1.42.3) stable; urgency=medium
+
+  * Internal refactoring and tests, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 16:32:21 +0500
+
+wb-mqtt-dali (1.42.2) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 15:56:43 +0500
+
+wb-mqtt-dali (1.42.1) stable; urgency=medium
+
+  * If the common device settings schema file is missing or damaged, the
+    service stops at startup with an error in the log instead of restarting
+    endlessly
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 19 Nov 2026 14:36:49 +0500
+
+wb-mqtt-dali (1.42.0) stable; urgency=medium
+
+  * Device settings open faster: only the part of a device memory bank that
+    holds the shown values is read, not the whole bank. Devices with long
+    manufacturer data in their memory banks gain the most
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 18 Nov 2026 15:33:16 +0500
+
+wb-mqtt-dali (1.41.5) stable; urgency=medium
+
+  * Tests only, no changes for users
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Wed, 18 Nov 2026 12:54:44 +0500
+
+wb-mqtt-dali (1.41.4) stable; urgency=medium
+
+  * When a command to a device or group fails, its control now shows a write
+    error and the slider returns to the last known value instead of sticking on
+    the sent one
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 17 Nov 2026 16:40:00 +0500
+
+wb-mqtt-dali (1.41.3) stable; urgency=medium
+
+  * Manufacturer and model are no longer described in the device settings schema; their values are still reported and shown in the web UI as before
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Tue, 17 Nov 2026 16:13:57 +0500
+
+wb-mqtt-dali (1.41.2) stable; urgency=medium
+
+  * Code restructuring, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 13 Nov 2026 17:23:55 +0500
+
+wb-mqtt-dali (1.41.1) stable; urgency=medium
+
+  * Large installation e2e test added, no changes in behaviour
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Fri, 13 Nov 2026 15:24:30 +0500
+
+wb-mqtt-dali (1.41.0) stable; urgency=medium
+
+  * Device parameters show correct values after a controller reboot or a wb-mqtt-serial restart
+  * Commands on a busy bus get their answer instead of "no response from gateway"
+  * Device search finds every device type (and its controls) on a noisy bus
+  * A cancelled operation stops sending its commands to the bus
+  * The journal stays free of "There are N pending publish calls" warnings at startup
+  * When the serial port is busy or wb-mqtt-serial fails, SendCommand and the bus monitor say
+    "gateway write skipped: serial port busy" / "gateway write failed"
+
+ -- Petr Krasnoshchekov <petr.krasnoshchekov@wirenboard.com>  Thu, 12 Nov 2026 15:23:08 +0500
 
 wb-mqtt-dali (1.40.2) stable; urgency=medium
 

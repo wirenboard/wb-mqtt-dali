@@ -24,28 +24,6 @@
         "grid_columns": 6
       }
     },
-    "brand_name": {
-      "type": "string",
-      "title": "Brand Name",
-      "propertyOrder": 3,
-      "options": {
-        "grid_columns": 6,
-        "wb": {
-          "read_only": true
-        }
-      }
-    },
-    "product_name": {
-      "type": "string",
-      "title": "Product Name",
-      "propertyOrder": 4,
-      "options": {
-        "grid_columns": 6,
-        "wb": {
-          "read_only": true
-        }
-      }
-    },
     "short_address": {
       "type": "number",
       "title": "Short Address",
@@ -82,9 +60,7 @@
       "Random Address": "Случайный адрес",
       "Device name": "Название устройства",
       "MQTT id of the device": "Идентификатор устройства в MQTT",
-      "Used as part of the topic": "Используется как часть топика в MQTT",
-      "Brand Name": "Производитель",
-      "Product Name": "Модель"
+      "Used as part of the topic": "Используется как часть топика в MQTT"
     }
   }
 }

@@ -22,7 +22,7 @@ from wb.mqtt_dali.application_controller import (
     ApplicationControllerTaskType,
 )
 from wb.mqtt_dali.commissioning import CommissioningResult
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali_common_parameters import (
     SCENES_FETCH_CHUNK,
     SCENES_TOTAL,
@@ -43,9 +43,7 @@ from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.settings import SettingsParamBase, SettingsParamName
 
 from ._app_controller_helpers import make_loop_controller, stop_loop
-
-# Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
 _LOGGER = logging.getLogger("test.fetch")
 
@@ -301,7 +299,9 @@ async def test_fetch_refreshed_after_commissioning():
 async def test_fade_read_during_initialization():
     """initialize() reads fade time/rate on the bus alongside groups, before any load_info, so the
     value is available right after the device comes up."""
-    device = DaliDevice(DaliDeviceAddress(short=5, random=0x10), "gw_bus_1", MagicMock())
+    device = DaliDevice(
+        DaliDeviceAddress(short=5, random=0x10), "gw_bus_1", MagicMock(), load_common_schema()
+    )
     driver = AsyncMock()
     driver.run_sequence = AsyncMock(return_value=[])  # no part-2xx device types
     driver.send_commands = AsyncMock(return_value=[_query_response(0), _query_response(0)])
@@ -342,7 +342,9 @@ async def test_fetch_added_when_device_initializes():
     controller._run_on_topic_handler = MagicMock()
     controller._refresh_group_virtual_devices = AsyncMock()
     controller._refresh_broadcast_device = AsyncMock()
-    device = DaliDevice(DaliDeviceAddress(short=5, random=0x10), "gw_bus_1", MagicMock())
+    device = DaliDevice(
+        DaliDeviceAddress(short=5, random=0x10), "gw_bus_1", MagicMock(), load_common_schema()
+    )
     controller._devices_by_mqtt_id = {device.mqtt_id: device}
 
     with patch("wb.mqtt_dali.application_controller.try_initialize_device", AsyncMock(return_value=True)):
@@ -493,7 +495,9 @@ def _removal_controller():
     controller._device_publisher = AsyncMock()
     controller._refresh_group_virtual_devices = AsyncMock()
     controller._refresh_broadcast_device = AsyncMock()
-    device = DaliDevice(DaliDeviceAddress(short=5, random=0x10), "gw_bus_1", MagicMock())
+    device = DaliDevice(
+        DaliDeviceAddress(short=5, random=0x10), "gw_bus_1", MagicMock(), load_common_schema()
+    )
     controller.dali_devices = [device]
     controller._devices_by_mqtt_id = {device.mqtt_id: device}
     return controller, device

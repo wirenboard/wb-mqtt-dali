@@ -18,6 +18,7 @@ from wb.mqtt_dali.wbdali_error_response import TransmissionFailed
 
 from ._broker_link_helpers import RecordingClient
 from ._fake_rpc_client import FakePortLoadClient
+from ._port_load_helpers import wait_for_batch_write
 from ._virtual_time import VirtualTimeTestCase
 
 BUS_LOGGER_NAME = "wb-dali_1_bus_1"
@@ -91,7 +92,7 @@ class TestBusStateLogging(VirtualTimeTestCase):
                     _MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, self.device_logger
                 )
             )
-            await self.rpc.wait_for_write()
+            await wait_for_batch_write(self.rpc)
             self.client.messages.deliver(aiomqtt.Message(topic, "0", 0, False, 0, None))
             await asyncio.sleep(0.05)
             self.assertFalse(task.done())
@@ -188,7 +189,7 @@ class TestBusStateLogging(VirtualTimeTestCase):
         task = asyncio.create_task(
             self.driver.send(_MockCommand(), BusTrafficSource.WB, FramePriority.USER_ACTION, logger)
         )
-        await self.rpc.wait_for_write()
+        await wait_for_batch_write(self.rpc)
         if status_word is not None:
             topic = (
                 f"/devices/{self.driver.config.device_name}/controls/bus_1_bulk_send_reply_{self._next_slot}"

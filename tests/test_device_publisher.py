@@ -121,7 +121,7 @@ class TestDevicePublisher:
     @pytest.mark.asyncio
     async def test_initialization(self, publisher):
         # pylint: disable=protected-access
-        assert len(publisher._devices) == 0
+        assert len(publisher.get_device_ids()) == 0
         assert len(publisher._control_handlers) == 0
         assert publisher._initialized is False
 
@@ -136,7 +136,6 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_add_device(self, publisher):
-        # pylint: disable=protected-access
         device_info = DeviceInfo(
             "dev1",
             "Device 1",
@@ -147,7 +146,6 @@ class TestDevicePublisher:
 
         await publisher.add_device(device_info)
 
-        assert "dev1" in publisher._devices
         assert publisher.has_device("dev1")
 
     @pytest.mark.asyncio
@@ -156,9 +154,9 @@ class TestDevicePublisher:
         device_info = DeviceInfo("dev1")
         await publisher.add_device(device_info)
 
-        assert "dev1" in publisher._devices
+        assert publisher.has_device("dev1")
         device = publisher._devices["dev1"]
-        assert device._device_title is None
+        assert device.title is None
 
     @pytest.mark.asyncio
     async def test_add_device_duplicate(self, publisher):
@@ -170,14 +168,13 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_remove_device(self, publisher):
-        # pylint: disable=protected-access
         device_info = DeviceInfo("dev1", "Device 1")
 
         await publisher.add_device(device_info)
-        assert "dev1" in publisher._devices
+        assert publisher.has_device("dev1")
 
         await publisher.remove_device("dev1")
-        assert "dev1" not in publisher._devices
+        assert not publisher.has_device("dev1")
 
     @pytest.mark.asyncio
     async def test_remove_nonexistent_device(self, publisher):
@@ -186,7 +183,6 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_rebuild_with_changes(self, publisher):
-        # pylint: disable=protected-access
         initial_devices = [
             DeviceInfo("dev1", "Device 1"),
             DeviceInfo("dev2", "Device 2"),
@@ -202,9 +198,9 @@ class TestDevicePublisher:
 
         await publisher.rebuild(changes)
 
-        assert "dev1" not in publisher._devices
-        assert "dev2" in publisher._devices
-        assert "dev3" in publisher._devices
+        assert not publisher.has_device("dev1")
+        assert publisher.has_device("dev2")
+        assert publisher.has_device("dev3")
 
     @pytest.mark.asyncio
     async def test_set_control_value(self, publisher, mock_client):
@@ -407,7 +403,7 @@ class TestDevicePublisher:
         await publisher.register_control_handler("dev1", "ctrl1", callback)
         await publisher.cleanup()
 
-        assert len(publisher._devices) == 0
+        assert len(publisher.get_device_ids()) == 0
         assert len(publisher._control_handlers) == 0
         assert publisher._initialized is False
 
@@ -419,7 +415,6 @@ class TestDevicePublisher:
 
     @pytest.mark.asyncio
     async def test_concurrent_operations(self, publisher):
-        # pylint: disable=protected-access
         device_infos = [
             DeviceInfo(
                 f"dev{i}",
@@ -433,11 +428,11 @@ class TestDevicePublisher:
 
         await asyncio.gather(*[publisher.add_device(info) for info in device_infos])
 
-        assert len(publisher._devices) == 10
+        assert len(publisher.get_device_ids()) == 10
 
         await asyncio.gather(*[publisher.remove_device(f"dev{i}") for i in range(10)])
 
-        assert len(publisher._devices) == 0
+        assert len(publisher.get_device_ids()) == 0
 
     @pytest.mark.asyncio
     async def test_remove_device_removes_handlers(self, publisher):

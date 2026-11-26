@@ -20,12 +20,7 @@ from dali.gear.colour import tc_kelvin_mirek
 from dali.gear.general import DAPC
 
 from wb.mqtt_dali.application_controller import ApplicationController
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    MqttControlBase,
-    Pollable,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, MqttControlBase, Pollable
 from wb.mqtt_dali.dali_controls import (
     ActualLevelControl,
     DapcControl,
@@ -54,13 +49,11 @@ from wb.mqtt_dali.virtual_devices import (
 from wb.mqtt_dali.wbdali_utils import MASK_2BYTES
 from wb.mqtt_dali.wbmqtt import ControlError
 
+from ._common_schema import load_common_schema
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-# pylint: disable-next=protected-access
-DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 _MOCK_MQTT_ID_COUNTER = itertools.count(1)
 _MOCK_SHORT_ADDRESS_COUNTER = itertools.count(1)
@@ -530,7 +523,7 @@ class TestRefreshGroupVirtualDevices:
 
         await ctrl._refresh_group_virtual_devices()
 
-        assert 1 in ctrl._group_devices_by_number
+        assert 1 in ctrl.group_devices
         ctrl._device_publisher.add_device.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -545,7 +538,7 @@ class TestRefreshGroupVirtualDevices:
 
         await ctrl._refresh_group_virtual_devices()
 
-        assert 2 not in ctrl._group_devices_by_number
+        assert 2 not in ctrl.group_devices
         ctrl._device_publisher.remove_device.assert_any_await("bus_1_group_02")
 
     @pytest.mark.asyncio
@@ -609,7 +602,7 @@ class TestRefreshGroupVirtualDevices:
 
         await ctrl._refresh_group_virtual_devices()
 
-        group_device = ctrl._group_devices_by_number[3]
+        group_device = ctrl.group_devices[3]
         control_ids = {c.id for c in group_device.get_mqtt_controls()}
         assert "set_colour_temperature" in control_ids
 
@@ -628,7 +621,7 @@ class TestRefreshGroupVirtualDevices:
 
         ctrl._device_publisher.remove_device.assert_awaited_once()
         ctrl._device_publisher.add_device.assert_awaited_once()
-        rebuilt = ctrl._group_devices_by_number[1]
+        rebuilt = ctrl.group_devices[1]
         assert rebuilt.capabilities.dimming_curve_type == DimmingCurveType.LINEAR
 
 
@@ -655,7 +648,7 @@ class TestGroupStateControlComposition:
 
         await ctrl._refresh_group_virtual_devices()
 
-        assert "actual_level" in _control_ids_of(ctrl._group_devices_by_number[1])
+        assert "actual_level" in _control_ids_of(ctrl.group_devices[1])
 
     @pytest.mark.asyncio
     async def test_group_has_no_state_controls_when_no_members_initialized(self):
@@ -664,7 +657,7 @@ class TestGroupStateControlComposition:
 
         await ctrl._refresh_group_virtual_devices()
 
-        ctrl_ids = _control_ids_of(ctrl._group_devices_by_number[1])
+        ctrl_ids = _control_ids_of(ctrl.group_devices[1])
         assert "actual_level" not in ctrl_ids
         assert "current_rgb" not in ctrl_ids
         assert "current_white" not in ctrl_ids
@@ -675,7 +668,7 @@ class TestGroupStateControlComposition:
         plain = _make_device(groups=[1], mqtt_id="plain")
         ctrl = _make_controller(dali_devices=[plain])
         await ctrl._refresh_group_virtual_devices()
-        plain_only_ids = _control_ids_of(ctrl._group_devices_by_number[1])
+        plain_only_ids = _control_ids_of(ctrl.group_devices[1])
         assert "current_colour_temperature" not in plain_only_ids
 
         tc = _make_device(
@@ -692,7 +685,7 @@ class TestGroupStateControlComposition:
         _add_device(ctrl, tc)
         await ctrl._refresh_group_virtual_devices()
 
-        with_tc_ids = _control_ids_of(ctrl._group_devices_by_number[1])
+        with_tc_ids = _control_ids_of(ctrl.group_devices[1])
         assert "current_colour_temperature" in with_tc_ids
 
     @pytest.mark.asyncio
@@ -700,7 +693,7 @@ class TestGroupStateControlComposition:
         plain = _make_device(groups=[1], mqtt_id="plain")
         ctrl = _make_controller(dali_devices=[plain])
         await ctrl._refresh_group_virtual_devices()
-        plain_only_ids = _control_ids_of(ctrl._group_devices_by_number[1])
+        plain_only_ids = _control_ids_of(ctrl.group_devices[1])
         assert "current_rgb" not in plain_only_ids
         assert "current_white" not in plain_only_ids
 
@@ -708,7 +701,7 @@ class TestGroupStateControlComposition:
         _add_device(ctrl, rgb)
         await ctrl._refresh_group_virtual_devices()
 
-        with_rgb_ids = _control_ids_of(ctrl._group_devices_by_number[1])
+        with_rgb_ids = _control_ids_of(ctrl.group_devices[1])
         assert "current_rgb" in with_rgb_ids
         assert "current_white" in with_rgb_ids
 
@@ -719,7 +712,7 @@ class TestGroupStateControlComposition:
 
         await ctrl._refresh_group_virtual_devices()
 
-        assert "error_status" not in _control_ids_of(ctrl._group_devices_by_number[1])
+        assert "error_status" not in _control_ids_of(ctrl.group_devices[1])
 
     def test_group_excludes_non_group_eligible_readonly_controls(self):
         eligible = ActualLevelControl(DimmingCurveState())
@@ -755,7 +748,7 @@ class TestGroupStateCandidates:
 
         await ctrl._refresh_group_virtual_devices()
 
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
         assert source is not None
         assert source.candidates_for("actual_level") == ("uid-1",)
 
@@ -779,7 +772,7 @@ class TestGroupStateCandidates:
 
         await ctrl._refresh_group_virtual_devices()
 
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
         assert set(source.candidates_for("actual_level")) == {"uid-1", "uid-2"}
         assert source.candidates_for("current_colour_temperature") == ("uid-2",)
 
@@ -793,7 +786,7 @@ class TestGroupStateCandidates:
 
         await ctrl._refresh_group_virtual_devices()
 
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
         assert set(source.candidates_for("actual_level")) == {"uid-1", "uid-2"}
         assert source.candidates_for("current_rgb") == ("uid-2",)
         assert source.candidates_for("current_white") == ("uid-2",)
@@ -819,7 +812,7 @@ class TestGroupStateSourceSemantics:
     async def test_group_pins_first_successful_candidate_as_source(self):
         ctrl, d1, _ = self._build_group_with_two_actual_level_candidates()
         await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
 
         action = source.record_answer(d1.uid, "actual_level", success=True)
 
@@ -830,7 +823,7 @@ class TestGroupStateSourceSemantics:
     async def test_group_publishes_source_polls_only(self):
         ctrl, d1, d2 = self._build_group_with_two_actual_level_candidates()
         await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
 
         source.record_answer(d1.uid, "actual_level", success=True)
         action_success = source.record_answer(d2.uid, "actual_level", success=True)
@@ -845,7 +838,7 @@ class TestGroupStateSourceSemantics:
     async def test_group_repins_on_next_successful_poll_after_source_error(self):
         ctrl, d1, d2 = self._build_group_with_two_actual_level_candidates()
         await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
 
         source.record_answer(d1.uid, "actual_level", success=True)
         unpin_action = source.record_answer(d1.uid, "actual_level", success=False)
@@ -862,7 +855,7 @@ class TestGroupStateSourceSemantics:
     async def test_group_does_not_emit_err_when_some_candidate_not_polled_yet(self):
         ctrl, d1, _ = self._build_group_with_two_actual_level_candidates()
         await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
 
         action = source.record_answer(d1.uid, "actual_level", success=False)
 
@@ -873,7 +866,7 @@ class TestGroupStateSourceSemantics:
     async def test_group_emits_err_only_when_every_candidate_last_polled_with_error(self):
         ctrl, d1, d2 = self._build_group_with_two_actual_level_candidates()
         await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
 
         source.record_answer(d1.uid, "actual_level", success=False)
         assert not source.is_err_set("actual_level")
@@ -887,7 +880,7 @@ class TestGroupStateSourceSemantics:
     async def test_group_clears_err_on_next_successful_candidate_poll(self):
         ctrl, d1, d2 = self._build_group_with_two_actual_level_candidates()
         await self._refresh(ctrl)
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
 
         source.record_answer(d1.uid, "actual_level", success=False)
         source.record_answer(d2.uid, "actual_level", success=False)
@@ -921,7 +914,7 @@ class TestGroupRebuildOnStateSetChange:
 
         cast(AsyncMock, ctrl._device_publisher.remove_device).assert_awaited_once()
         cast(AsyncMock, ctrl._device_publisher.add_device).assert_awaited_once()
-        ids = _control_ids_of(ctrl._group_devices_by_number[1])
+        ids = _control_ids_of(ctrl.group_devices[1])
         assert {"current_rgb", "current_white"} <= ids
 
     @pytest.mark.asyncio
@@ -931,7 +924,7 @@ class TestGroupRebuildOnStateSetChange:
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
         ctrl = _make_controller(dali_devices=[d1, d2])
         await ctrl._refresh_group_virtual_devices()
-        device_before = ctrl._group_devices_by_number[1]
+        device_before = ctrl.group_devices[1]
         source_before = device_before.state_source
         assert set(source_before.candidates_for("actual_level")) == {"uid-1", "uid-2"}
         cast(MagicMock, ctrl._device_publisher).reset_mock()
@@ -940,7 +933,7 @@ class TestGroupRebuildOnStateSetChange:
 
         await ctrl._refresh_group_virtual_devices()
 
-        device_after = ctrl._group_devices_by_number[1]
+        device_after = ctrl.group_devices[1]
         # Same device instance — no rebuild, no publisher activity
         assert device_after is device_before
         cast(AsyncMock, ctrl._device_publisher.remove_device).assert_not_awaited()
@@ -979,7 +972,7 @@ class TestGroupCandidateInPlaceUpdate:
         d1 = _make_device(groups=[1], mqtt_id="d1", short_address=1, uid="uid-1")
         ctrl = _make_controller(dali_devices=[d1])
         await ctrl._refresh_group_virtual_devices()
-        device_before = ctrl._group_devices_by_number[1]
+        device_before = ctrl.group_devices[1]
         cast(MagicMock, ctrl._device_publisher).reset_mock()
 
         # Add another initialized member with the same state-control set.
@@ -988,7 +981,7 @@ class TestGroupCandidateInPlaceUpdate:
 
         await ctrl._refresh_group_virtual_devices()
 
-        device_after = ctrl._group_devices_by_number[1]
+        device_after = ctrl.group_devices[1]
         assert device_after is device_before
         cast(AsyncMock, ctrl._device_publisher.remove_device).assert_not_awaited()
         cast(AsyncMock, ctrl._device_publisher.add_device).assert_not_awaited()
@@ -998,7 +991,7 @@ class TestGroupCandidateInPlaceUpdate:
         d1 = _make_device(groups=[1], mqtt_id="d1", short_address=1, uid="uid-1")
         ctrl = _make_controller(dali_devices=[d1])
         await ctrl._refresh_group_virtual_devices()
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
         # Drive d1 to a SUCCESS status to make the surviving entry distinguishable.
         source.record_answer("uid-1", "actual_level", success=True)
         assert source._state["actual_level"].candidate_statuses["uid-1"] == CandidatePollStatus.SUCCESS
@@ -1017,7 +1010,7 @@ class TestGroupCandidateInPlaceUpdate:
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
         ctrl = _make_controller(dali_devices=[d1, d2])
         await ctrl._refresh_group_virtual_devices()
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
         # Pin d1 as the source.
         source.record_answer("uid-1", "actual_level", success=True)
         assert source.pinned_source("actual_level") == "uid-1"
@@ -1036,7 +1029,7 @@ class TestGroupCandidateInPlaceUpdate:
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
         ctrl = _make_controller(dali_devices=[d1, d2])
         await ctrl._refresh_group_virtual_devices()
-        source = ctrl._group_devices_by_number[1].state_source
+        source = ctrl.group_devices[1].state_source
         source.record_answer("uid-1", "actual_level", success=True)
         assert source.pinned_source("actual_level") == "uid-1"
 
@@ -1076,7 +1069,7 @@ class TestGroupCandidateInPlaceUpdate:
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
         ctrl = _make_controller(dali_devices=[d1, d2])
         await ctrl._refresh_group_virtual_devices()
-        device_before = ctrl._group_devices_by_number[1]
+        device_before = ctrl.group_devices[1]
         source = device_before.state_source
         # Pin d1 as the source via a successful poll.
         source.record_answer("uid-1", "actual_level", success=True)
@@ -1088,7 +1081,7 @@ class TestGroupCandidateInPlaceUpdate:
 
         await ctrl._refresh_group_virtual_devices()
 
-        device_after = ctrl._group_devices_by_number[1]
+        device_after = ctrl.group_devices[1]
         # Group device is the same instance; no publish/remove happened.
         assert device_after is device_before
         cast(AsyncMock, ctrl._device_publisher.remove_device).assert_not_awaited()
@@ -1109,7 +1102,7 @@ class TestGroupCandidateInPlaceUpdate:
         d2 = _make_device(groups=[1], mqtt_id="d2", short_address=2, uid="uid-2")
         ctrl = _make_controller(dali_devices=[d1, d2])
         await ctrl._refresh_group_virtual_devices()
-        device_before = ctrl._group_devices_by_number[1]
+        device_before = ctrl.group_devices[1]
         source = device_before.state_source
         # Pin d1 as the source via a successful poll.
         source.record_answer("uid-1", "actual_level", success=True)
@@ -1121,7 +1114,7 @@ class TestGroupCandidateInPlaceUpdate:
 
         await ctrl._refresh_group_virtual_devices()
 
-        device_after = ctrl._group_devices_by_number[1]
+        device_after = ctrl.group_devices[1]
         assert device_after is device_before
         cast(AsyncMock, ctrl._device_publisher.remove_device).assert_not_awaited()
         cast(AsyncMock, ctrl._device_publisher.add_device).assert_not_awaited()
@@ -1221,7 +1214,7 @@ def _group_value(group: GroupVirtualDevice, control_id: str) -> Optional[str]:
 
 
 def _read(raw_level: Optional[int] = 120, failed: bool = False) -> LevelChanged:
-    return LevelChanged(raw_level, EventSource.READ, failed=failed)
+    return LevelChanged(raw_level, source=EventSource.READ, failed=failed)
 
 
 class TestGroupTakesMemberAnswer:
@@ -1317,6 +1310,47 @@ class TestGroupTakesMemberAnswer:
             assert first == second, control_id
 
 
+class TestGroupSetpointWriteError:
+    """``w`` on a group setpoint, after the leading member's read pinned it."""
+
+    @staticmethod
+    def _group_with_write_error(m1, m2) -> GroupVirtualDevice:
+        group = _group_of(m1, m2)
+        group.notify_all(_read(120), m1)
+        group.get_mqtt_control("wanted_level").control_info.state.set_write_error()
+        return group
+
+    def test_read_of_the_leading_member_clears_it(self):
+        """The leading member is read: ``w`` on the group setpoint is cleared."""
+        m1, m2 = _member(1), _member(2)
+        group = self._group_with_write_error(m1, m2)
+
+        group.notify_all(_read(120), m1)
+
+        assert group.get_mqtt_control("wanted_level").control_info.state.error is ControlError.NONE
+
+    def test_prediction_for_the_leading_member_keeps_it(self):
+        """A sniffed command to the leading member moves the group setpoint, ``w`` stays."""
+        m1, m2 = _member(1), _member(2)
+        group = self._group_with_write_error(m1, m2)
+        shown = _group_value(group, "wanted_level")
+
+        group.notify_all(LevelChanged(254, source=EventSource.OBSERVED), m1)
+
+        state = group.get_mqtt_control("wanted_level").control_info.state
+        assert state.value != shown
+        assert state.error is ControlError.WRITE
+
+    def test_read_of_another_member_keeps_it(self):
+        """A member the group does not take its value from is read: ``w`` stays."""
+        m1, m2 = _member(1), _member(2)
+        group = self._group_with_write_error(m1, m2)
+
+        group.notify_all(_read(60), m2)
+
+        assert group.get_mqtt_control("wanted_level").control_info.state.error is ControlError.WRITE
+
+
 # ---------------------------------------------------------------------------
 # Group mirror fed by the event path
 # ---------------------------------------------------------------------------
@@ -1329,7 +1363,9 @@ class _GroupMemberDevice(DaliDevice):
     """
 
     def __init__(self, group_number: int, short_address: int = 1) -> None:
-        super().__init__(DaliDeviceAddress(short=short_address, random=0), "bus_1", MagicMock())
+        super().__init__(
+            DaliDeviceAddress(short=short_address, random=0), "bus_1", MagicMock(), load_common_schema()
+        )
         self._member_groups = {group_number}
         self.is_initialized = True
         self.rebuild_mqtt_controls()
@@ -1359,14 +1395,14 @@ async def test_group_state_records_member_failure_from_event():
         logger=logging.getLogger("test"),
     )
 
-    await mirror.notify_poll_event(member, LevelChanged(120, EventSource.READ))
+    await mirror.notify_poll_event(member, LevelChanged(120, source=EventSource.READ))
 
     member_value = member.get_mqtt_control("actual_level").control_info.state.value
     publisher.publish_control_state.assert_any_await(
         group_device.mqtt_id, "actual_level", member_value, ControlError.NONE, ANY
     )
 
-    await mirror.notify_poll_event(member, LevelChanged(None, EventSource.READ, failed=True))
+    await mirror.notify_poll_event(member, LevelChanged(None, source=EventSource.READ, failed=True))
 
     publisher.publish_control_state.assert_any_await(
         group_device.mqtt_id, "actual_level", member_value, ControlError.READ, ANY

@@ -36,7 +36,7 @@ from .events import ActiveEnergyRead, BusEvent
 from .settings import SettingsParamBase, SettingsParamName
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import check_command_failed
-from .wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
+from .wbmqtt import ControlMeta, ControlState, TranslatedTitle
 
 # Bank 202 / 203 / 204 layout per IEC 62386-252:2023.
 # Energy (totalizer): scale at 0x04, six bytes at 0x05..0x0a.
@@ -138,6 +138,7 @@ class Type51EnergyParam(SettingsParamBase):
             self._compat,
             "DT51 memory bank 202",
             logger,
+            [ActiveEnergy, ActivePower],
         )
 
         self._has_apparent = False
@@ -147,7 +148,9 @@ class Type51EnergyParam(SettingsParamBase):
             _extract_energy_power(active_data, ActiveEnergy, ActivePower, "active_energy", "active_power")
         )
 
-        apparent_data = await try_read_bank_as_dict(driver, BANK_203, short_address, self._compat, logger)
+        apparent_data = await try_read_bank_as_dict(
+            driver, BANK_203, short_address, self._compat, logger, [ApparentEnergy, ApparentPower]
+        )
         if apparent_data is not None:
             self._has_apparent = True
             fields.update(
@@ -156,7 +159,14 @@ class Type51EnergyParam(SettingsParamBase):
                 )
             )
 
-        loadside_data = await try_read_bank_as_dict(driver, BANK_204, short_address, self._compat, logger)
+        loadside_data = await try_read_bank_as_dict(
+            driver,
+            BANK_204,
+            short_address,
+            self._compat,
+            logger,
+            [ActiveEnergyLoadside, ActivePowerLoadside],
+        )
         if loadside_data is not None:
             self._has_loadside = True
             fields.update(
@@ -310,10 +320,10 @@ class _ActiveEnergyControl(MqttControlBase):
         if not isinstance(event, ActiveEnergyRead):
             return NotifyResult.NOTHING_TO_PUBLISH
         if event.failed:
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
         self.control_info.state.value = f"{event.kwh:.3f}"
-        self.control_info.state.error = ControlError.NONE
+        self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
 

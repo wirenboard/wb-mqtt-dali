@@ -33,7 +33,7 @@ from wb.mqtt_dali.commissioning import (
     CommissioningResult,
     CommissioningStage,
 )
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress
 from wb.mqtt_dali.dali2_device import Dali2Device
 from wb.mqtt_dali.dali_compat import DaliCommandsCompatibilityLayer
 from wb.mqtt_dali.dali_device import DaliDevice
@@ -42,6 +42,7 @@ from wb.mqtt_dali.event_sync_coordinator import EventSyncCoordinator
 from wb.mqtt_dali.fetch_scheduler import SettingsFetchScheduler
 from wb.mqtt_dali.gateway import bus_from_json
 from wb.mqtt_dali.mqtt_dispatcher import BrokerDisconnectedError, MQTTDispatcher
+from wb.mqtt_dali.wbdali import WBDALIConfig
 from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 
 from ._app_controller_helpers import (
@@ -51,11 +52,10 @@ from ._app_controller_helpers import (
     wait_until,
 )
 from ._broker_link_helpers import RecordingClient
+from ._bus_doubles import FakeWBDALIDriver
+from ._common_schema import load_common_schema
 
 # pylint: disable=duplicate-code
-
-# Prevent file system access inside DaliDeviceBase.__init__
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 class TestApplicationControllerVirtualGroups:  # pylint: disable=too-few-public-methods
@@ -77,6 +77,7 @@ def _make_bare_controller():
     controller.logger = logging.getLogger("test")
     controller._dev = AsyncMock()
     controller._gtin_db = MagicMock()
+    controller._common_schema = load_common_schema()
     controller._devices_by_mqtt_id = {}
     controller._init_scheduler = MagicMock()
     controller._init_scheduler.remove = MagicMock()
@@ -459,7 +460,7 @@ class TestPublishCommissioningState:
         controller._publish_commissioning_state()
         assert len(received) == 1
         # Callback got an independent snapshot, not the internal state object.
-        assert received[0] is not controller._commissioning_state
+        assert received[0] is not controller.commissioning_state
         assert received[0].status == CommissioningStatus.QUERY_SHORT_ADDRESSES
         assert received[0].progress == 10
         # Sync path does not schedule a one-shot task.
@@ -510,7 +511,7 @@ class TestStartCommissioning:
         controller = _make_commissioning_controller()
         result = await controller.start_commissioning(on_state_changed=lambda _s: None)
         assert result is CommissioningStartResult.STARTED
-        assert controller._commissioning_state.status == CommissioningStatus.QUEUED
+        assert controller.commissioning_state.status == CommissioningStatus.QUEUED
         # One task enqueued
         assert controller._tasks_queue.qsize() == 1
         task = controller._tasks_queue.get_nowait()
@@ -549,9 +550,9 @@ class TestCancelCommissioning:
         # Task is queued but worker hasn't promoted it to _current_commissioning_task yet.
         cancelled = await controller.cancel_commissioning()
         assert cancelled is True
-        assert controller._commissioning_state.status == CommissioningStatus.CANCELLED
+        assert controller.commissioning_state.status == CommissioningStatus.CANCELLED
         # CANCELLED semantics: devices=[], no apply, bus lists untouched.
-        assert not controller._commissioning_state.devices
+        assert not controller.commissioning_state.devices
         controller._apply_commissioning_results.assert_not_awaited()
         assert controller.dali_devices == original_dali
         assert controller.dali2_devices == original_dali2
@@ -637,10 +638,10 @@ class TestCommissioningTaskTerminalBranches:
             mock_cls.side_effect = _make_commissioning
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.COMPLETED
-        assert controller._commissioning_state.progress == 100
-        assert controller._commissioning_state.finished_at is not None
-        assert controller._commissioning_state.devices == [dali1_device, dali2_device]
+        assert controller.commissioning_state.status == CommissioningStatus.COMPLETED
+        assert controller.commissioning_state.progress == 100
+        assert controller.commissioning_state.finished_at is not None
+        assert controller.commissioning_state.devices == [dali1_device, dali2_device]
         controller._apply_commissioning_results.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -669,8 +670,8 @@ class TestCommissioningTaskTerminalBranches:
         ):
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.FAILED
-        assert controller._commissioning_state.error == "bus offline"
+        assert controller.commissioning_state.status == CommissioningStatus.FAILED
+        assert controller.commissioning_state.error == "bus offline"
         # Neither phase started, so _apply_commissioning_results not called and devices untouched.
         controller._apply_commissioning_results.assert_not_awaited()
         # Bus device lists are untouched.
@@ -716,11 +717,11 @@ class TestCommissioningTaskTerminalBranches:
             mock_cls.side_effect = _make_commissioning
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.FAILED
-        assert controller._commissioning_state.error == "DALI-2 phase failed"
-        assert controller._commissioning_state.finished_at is not None
+        assert controller.commissioning_state.status == CommissioningStatus.FAILED
+        assert controller.commissioning_state.error == "DALI-2 phase failed"
+        assert controller.commissioning_state.finished_at is not None
         # devices summary on FAILED reflects the untouched device list.
-        assert controller._commissioning_state.devices == [dali1_device]
+        assert controller.commissioning_state.devices == [dali1_device]
         # Atomic: a sub-scan failure aborts before any result (including the
         # successful DALI1 scan) is applied.
         controller._apply_commissioning_results.assert_not_awaited()
@@ -757,9 +758,9 @@ class TestCommissioningTaskTerminalBranches:
             mock_cls.side_effect = _make_commissioning
             await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.COMPLETED
-        assert controller._commissioning_state.progress == 100
-        assert controller._commissioning_state.error is None
+        assert controller.commissioning_state.status == CommissioningStatus.COMPLETED
+        assert controller.commissioning_state.progress == 100
+        assert controller.commissioning_state.error is None
         controller._apply_commissioning_results.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -808,11 +809,11 @@ class TestCommissioningTaskTerminalBranches:
             with pytest.raises(asyncio.CancelledError):
                 await controller._commissioning_task()
 
-        assert controller._commissioning_state.status == CommissioningStatus.CANCELLED
-        assert controller._commissioning_state.finished_at is not None
+        assert controller.commissioning_state.status == CommissioningStatus.CANCELLED
+        assert controller.commissioning_state.finished_at is not None
         # CANCELLED semantics: devices=None (published as null), no apply,
         # and bus device lists are left untouched.
-        assert not controller._commissioning_state.devices
+        assert not controller.commissioning_state.devices
         controller._apply_commissioning_results.assert_not_awaited()
         assert controller.dali_devices == original_dali
         assert controller.dali2_devices == original_dali2
@@ -1507,8 +1508,8 @@ async def test_polling_loop_command_stream_does_not_starve_polling():
 async def test_start_rolls_back_on_publisher_bringup_failure():
     """A bringup failure after the driver is up must leave a clean slate.
 
-    The controller is built with its normal constructor (no I/O) but with the
-    driver and publisher classes patched to mocks. The failure is injected at the
+    The controller is built with its normal constructor (no I/O) but with
+    a mock driver and the publisher class patched to a mock. The failure is injected at the
     virtual-device publication step (register_control_handler) — the dangerous
     case where the publisher is already initialized and has registered device
     state/subscriptions. start() must roll back symmetrically: clean up the
@@ -1518,10 +1519,8 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
     awaited, and a subsequent start() succeeds — only possible if the controller
     fell back to UNINITIALIZED, since start() rejects any other state.
     """
-    with patch("wb.mqtt_dali.application_controller.WBDALIDriver") as driver_cls, patch(
-        "wb.mqtt_dali.application_controller.DevicePublisher"
-    ) as publisher_cls:
-        driver = driver_cls.return_value
+    with patch("wb.mqtt_dali.application_controller.DevicePublisher") as publisher_cls:
+        driver = MagicMock(config=WBDALIConfig(device_name="gw", bus=1), logger=logging.getLogger("gw_bus_1"))
         driver.initialize = AsyncMock()
         driver.deinitialize = AsyncMock()
         publisher = publisher_cls.return_value
@@ -1530,13 +1529,10 @@ async def test_start_rolls_back_on_publisher_bringup_failure():
         publisher.register_control_handler = AsyncMock(side_effect=[RuntimeError("broker down"), None])
         publisher.cleanup = AsyncMock()
 
-        config = ApplicationControllerConfig(
-            gateway_mqtt_device_id="gw",
-            bus=1,
-            dali_devices=[],
-            dali2_devices=[],
+        config = ApplicationControllerConfig(dali_devices=[], dali2_devices=[])
+        controller = ApplicationController(
+            config, MagicMock(), driver, MagicMock(), load_common_schema(), MagicMock()
         )
-        controller = ApplicationController(config, MagicMock(), MagicMock(), MagicMock())
 
         with pytest.raises(RuntimeError, match="broker down"):
             await controller.start()
@@ -1561,13 +1557,10 @@ async def _acking_dispatcher():
 
 
 def _bus_with_device(device, on_polling_failure, dispatcher: MQTTDispatcher) -> ApplicationController:
-    config = ApplicationControllerConfig(
-        gateway_mqtt_device_id="gw",
-        bus=1,
-        dali_devices=[device],
-        dali2_devices=[],
+    config = ApplicationControllerConfig(dali_devices=[device], dali2_devices=[])
+    return ApplicationController(
+        config, dispatcher, FakeWBDALIDriver(), MagicMock(), load_common_schema(), on_polling_failure
     )
-    return ApplicationController(config, dispatcher, MagicMock(), on_polling_failure)
 
 
 def _uninitialized_device(initialize: AsyncMock) -> MagicMock:
@@ -1596,13 +1589,10 @@ async def test_dali2_short_address_change_moves_instance_types_to_new_address(ac
         device.address = DaliDeviceAddress(9, 123)
 
     device.apply_parameters = AsyncMock(side_effect=change_short_address)
-    config = ApplicationControllerConfig(
-        gateway_mqtt_device_id="gw",
-        bus=1,
-        dali_devices=[],
-        dali2_devices=[device],
+    config = ApplicationControllerConfig(dali_devices=[], dali2_devices=[device])
+    bus = ApplicationController(
+        config, acking_dispatcher, FakeWBDALIDriver(), MagicMock(), load_common_schema(), MagicMock()
     )
-    bus = ApplicationController(config, acking_dispatcher, MagicMock(), MagicMock())
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=0, instance_type=1)
     bus.driver.dev_inst_map.add_type(short_address=5, instance_number=1, instance_type=3)
 
@@ -1704,7 +1694,7 @@ class _LogCapture:
         logger.setLevel(self._prev_level)
 
 
-def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[ApplicationController, MagicMock]:
+def _monitor_bus(*, monitor: bool, syslog: bool) -> tuple[ApplicationController, MagicMock]:
     """Build a real controller wired for the bus-monitor path.
 
     Returns the controller and its MQTT dispatcher mock. The publish is an
@@ -1713,11 +1703,11 @@ def _monitor_bus(*, monitor: bool, syslog: bool, uid_bus: int = 1) -> tuple[Appl
     dispatcher = MagicMock()
     dispatcher.publish = AsyncMock()
     bus = bus_from_json(
-        "gw1",
-        uid_bus,
         {"devices": [], "bus_monitor_enabled": monitor, "bus_monitor_syslog_enabled": syslog},
         dispatcher,
+        FakeWBDALIDriver(),
         MagicMock(),
+        load_common_schema(),
         MagicMock(),
     )
     return bus, dispatcher

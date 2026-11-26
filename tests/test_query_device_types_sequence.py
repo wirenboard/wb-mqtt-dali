@@ -16,6 +16,10 @@ import pytest
 from dali.address import GearShort
 
 from wb.mqtt_dali.dali_device import query_device_types_sequence
+from wb.mqtt_dali.wbdali_error_response import (
+    GatewayWriteSkipped,
+    NoResponseFromGateway,
+)
 from wb.mqtt_dali.wbdali_utils import NoAnswerError
 
 
@@ -108,6 +112,28 @@ def test_framing_error_after_types_raises_without_retry():
     with pytest.raises(RuntimeError, match="Framing error") as exc_info:
         gen.send(framing_error)
     assert not isinstance(exc_info.value, NoAnswerError)
+
+
+def test_transmission_error_after_types_raises_without_retry():
+    """A gateway error on QueryNextDeviceType fails the chain at once: the gear may have advanced."""
+    gen = query_device_types_sequence(GearShort(0), logging.getLogger("test"))
+    gen.send(None)
+    gen.send(_resp(255))
+    gen.send(_resp(6))
+    with pytest.raises(RuntimeError, match="Transmission error") as exc_info:
+        gen.send(NoResponseFromGateway())
+    assert not isinstance(exc_info.value, NoAnswerError)
+
+
+def test_skipped_write_is_retried_and_keeps_chain():
+    """A write wb-mqtt-serial dropped before the port never reached the gear: it is retried."""
+    gen = query_device_types_sequence(GearShort(0), logging.getLogger("test"))
+    gen.send(None)
+    for response in [_resp(255), _resp(6), GatewayWriteSkipped(), _resp(50)]:
+        gen.send(response)
+    with pytest.raises(StopIteration) as stop:
+        gen.send(_resp(254))
+    assert stop.value.value == [6, 50]
 
 
 def test_silence_then_answer_continues_chain():

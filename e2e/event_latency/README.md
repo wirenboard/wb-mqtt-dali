@@ -63,7 +63,7 @@ DALI 2 ShortPress-кадра в шину (через шлюз-инжектор) 
 3. `systemctl restart wb-mqtt-dali` и ждёт через `Editor/GetList`, пока
    DUT снова появится в списке (`READY_TIMEOUT_S = 30 с`).
 4. Дожидается, пока wb-mqtt-dali закончит первичный `_initialize_device`
-   для DALI 2 input-device на DUT, без чего `_dev_inst_map` пуст и
+   для DALI 2 input-device на DUT, без чего `dev_inst_map` драйвера пуст и
    входящие event-кадры не декодируются как `_Event`. Детект —
    через подписку на `/devices/<dali2_mqtt_id>/meta` и ожидание
    первой non-retained-публикации.

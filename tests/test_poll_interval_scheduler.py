@@ -5,11 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from wb.mqtt_dali.application_controller import PollScheduler
-from wb.mqtt_dali.common_dali_device import (
-    DaliDeviceAddress,
-    DaliDeviceBase,
-    MqttControlBase,
-)
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, MqttControlBase
 from wb.mqtt_dali.dali_controls import ErrorStatusControl
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_type8_parameters import ColourType, Type8Parameters
@@ -21,11 +17,8 @@ from wb.mqtt_dali.dali_type51_parameters import Type51Parameters
 from wb.mqtt_dali.device_publisher import ControlInfo
 from wb.mqtt_dali.wbmqtt import ControlMeta, ControlState
 
+from ._common_schema import load_common_schema
 from ._control_stubs import ReadableControl
-
-# Avoid filesystem reads in DaliDeviceBase.__init__.
-# pylint: disable-next=protected-access
-DaliDeviceBase._common_schema = {"title": "test-schema"}
 
 
 def _readable_control(control_id: str, poll_interval=5.0) -> MqttControlBase:
@@ -43,6 +36,7 @@ def _make_dali_device(
         DaliDeviceAddress(short=short, random=0),
         "bus1",
         MagicMock(),
+        load_common_schema(),
         mqtt_id,
         None,
     )

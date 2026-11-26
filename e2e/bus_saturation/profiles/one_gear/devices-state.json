@@ -1,0 +1,17 @@
+{
+    "1": {
+        "gear": {
+            "0": {"model": "default_gear"}
+        }
+    },
+    "2": {
+        "gear": {
+            "0": {"model": "default_gear"}
+        }
+    },
+    "3": {
+        "gear": {
+            "0": {"model": "default_gear"}
+        }
+    }
+}

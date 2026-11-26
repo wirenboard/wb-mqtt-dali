@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import random
 import uuid
@@ -7,7 +6,6 @@ from abc import abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import (
     Any,
     Awaitable,
@@ -16,6 +14,7 @@ from typing import (
     NamedTuple,
     Optional,
     Protocol,
+    Sequence,
     Union,
     runtime_checkable,
 )
@@ -39,11 +38,12 @@ from .utils import merge_json_schemas
 from .wbdali import FramePriority, WBDALIDriver
 from .wbdali_utils import (
     check_query_response,
+    has_transmission_error,
     is_transmission_error_response,
     query_response,
     send_commands_with_retry,
 )
-from .wbmqtt import ControlError, ControlMeta, is_alarm, value_is_retained
+from .wbmqtt import ControlMeta, is_alarm, value_is_retained
 
 
 class NotifyResult(Enum):
@@ -176,6 +176,14 @@ class MqttControlBase(EventPollSchedule):
     def is_dirty(self) -> bool:
         return self.value_to_set is not None
 
+    def apply_command_result(self, value_to_set: str, responses: list[Response]) -> None:
+        """Hold a write error unless every frame of the command went out."""
+        del value_to_set
+        if has_transmission_error(responses):
+            self.control_info.state.set_write_error()
+        else:
+            self.control_info.state.clear_write_error()
+
     # --- Private ---
 
     def _apply_quantity_read(
@@ -188,10 +196,10 @@ class MqttControlBase(EventPollSchedule):
         if not isinstance(event, quantity_event):
             return NotifyResult.NOTHING_TO_PUBLISH
         if event.failed:
-            self.control_info.state.error = ControlError.READ
+            self.control_info.state.set_read_error()
             return NotifyResult.PUBLISH_STATE
         self.control_info.state.value = format_value(event.response)
-        self.control_info.state.error = ControlError.NONE
+        self.control_info.state.clear_errors()
         return NotifyResult.PUBLISH_STATE
 
 
@@ -355,11 +363,16 @@ class DaliDeviceAddress:
     random: int
 
 
-def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
+MemoryValueClass = type[location.MemoryValue]
+
+
+def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches, too-many-statements
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ):
+    """Read ``value_classes`` of the bank, or all of its values when ``value_classes`` is None."""
     for i in range(3):
         try:
             last_address = yield from bank.LastAddress.read(short_address)
@@ -373,10 +386,16 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
                 raise
     # Reading the last address also sets DTR1 appropriately
 
-    # Bank 0 has a useful value at address 0x02; all other banks
-    # use this for the lock/latch byte
-    start_address = 0x02 if bank.address == 0 else 0x03
-    commands_count = last_address - start_address + 1
+    if value_classes is None:
+        # Bank 0 has a useful value at address 0x02; all other banks
+        # use this for the lock/latch byte
+        start_address = 0x02 if bank.address == 0 else 0x03
+        end_address = last_address
+    else:
+        addresses = [loc.address for value in value_classes for loc in value.locations]
+        start_address = min(addresses)
+        end_address = min(max(addresses), last_address)
+    commands_count = end_address - start_address + 1
     raw_data = [None] * start_address
 
     first_unread_index = 0
@@ -419,7 +438,7 @@ def read_memory_bank(  # pylint: disable=too-many-locals, too-many-branches
         )
 
     result = {}
-    for memory_value in bank.values:
+    for memory_value in bank.values if value_classes is None else value_classes:
         try:
             r = memory_value.from_list(raw_data)
         except MemoryLocationNotImplemented:
@@ -436,6 +455,7 @@ async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-pos
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
     error_label: Optional[str],
     logger: logging.Logger,
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ) -> dict[str, Any]:
     """Read memory bank and return ``{value.name: parsed}`` with FlagValue entries skipped.
 
@@ -445,7 +465,7 @@ async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-pos
     """
     try:
         data = await driver.run_sequence(
-            read_memory_bank(bank, short_address, compat), FramePriority.CONFIGURATION, logger
+            read_memory_bank(bank, short_address, compat, value_classes), FramePriority.CONFIGURATION, logger
         )
     except (MemoryLocationNotImplemented, ResponseError) as e:
         label = error_label or f"memory bank {bank.address}"
@@ -453,12 +473,13 @@ async def read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-pos
     return {mv.name: parsed for mv, parsed in data.items() if not isinstance(parsed, FlagValue)}
 
 
-async def try_read_bank_as_dict(
+async def try_read_bank_as_dict(  # pylint: disable=too-many-arguments, too-many-positional-arguments
     driver: WBDALIDriver,
     bank: info.MemoryBank,
     short_address: Address,
     compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
     logger: logging.Logger,
+    value_classes: Optional[Sequence[MemoryValueClass]] = None,
 ) -> Optional[dict[str, Any]]:
     """Like ``read_bank_as_dict`` but returns ``None`` instead of raising on bank failure.
 
@@ -466,7 +487,7 @@ async def try_read_bank_as_dict(
     can proceed without it.
     """
     try:
-        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger)
+        return await read_bank_as_dict(driver, bank, short_address, compat, None, logger, value_classes)
     except RuntimeError:
         return None
 
@@ -651,7 +672,12 @@ class GeneralMemoryParams(SettingsParamBase):
             self._update_info(
                 res,
                 await driver.run_sequence(
-                    read_memory_bank(bank0, short_address, self._compat),
+                    read_memory_bank(
+                        bank0,
+                        short_address,
+                        self._compat,
+                        [v for v in self.memory_fields_to_json_params if v.bank is bank0],
+                    ),
                     FramePriority.CONFIGURATION,
                     logger,
                 ),
@@ -663,7 +689,12 @@ class GeneralMemoryParams(SettingsParamBase):
             self._update_info(
                 res,
                 await driver.run_sequence(
-                    read_memory_bank(oem.BANK_1, short_address, self._compat),
+                    read_memory_bank(
+                        oem.BANK_1,
+                        short_address,
+                        self._compat,
+                        [v for v in self.memory_fields_to_json_params if v.bank is oem.BANK_1],
+                    ),
                     FramePriority.CONFIGURATION,
                     logger,
                 ),
@@ -749,7 +780,6 @@ def notify_controls(
 
 
 class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-public-methods, R0917
-    _common_schema = {}
     # Device logger name under the bus logger, followed by the short address, for a default mqtt_id.
     logger_name_prefix: str = ""
 
@@ -761,6 +791,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
         default_mqtt_id_part: str,
         compat: Union[DaliCommandsCompatibilityLayer, Dali2CommandsCompatibilityLayer],
         gtin_db: DaliDatabase,
+        common_schema: dict,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
@@ -793,11 +824,7 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         self._compat = compat
 
-        if not self._common_schema:
-            schema_path = Path("/usr/share/wb-mqtt-dali/schemas/common_device.schema.json")
-            with open(schema_path, "r", encoding="utf-8") as f:
-                self._common_schema = json.load(f)
-
+        self._common_schema = common_schema
         self._gtin_db = gtin_db
 
         self._initialize_lock = asyncio.Lock()
@@ -982,11 +1009,12 @@ class DaliDeviceBase:  # pylint: disable=too-many-instance-attributes, too-many-
 
         control = self._controls.get(control_id)
         if control is not None and control.is_writable():
-            await send_commands_with_retry(
+            responses = await send_commands_with_retry(
                 driver,
                 control.get_setup_commands(self._compat.getAddress(self.address.short), value),
                 self.logger,
             )
+            control.apply_command_result(value, responses)
 
     def poll_controls(
         self,

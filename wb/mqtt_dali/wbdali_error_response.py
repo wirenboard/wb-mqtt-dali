@@ -59,6 +59,36 @@ class TransmissionCancelled(WbGatewayTransmissionError):
         return "transmission cancelled"
 
 
+class GatewayWriteFailed(WbGatewayTransmissionError):
+    """wb-mqtt-serial reported an error or no ack: the write may or may not have reached the gateway."""
+
+    @property
+    def raw_value(self):
+        raise RuntimeError("Gateway write failed")
+
+    @property
+    def value(self):
+        raise RuntimeError("Gateway write failed")
+
+    def __str__(self) -> str:
+        return "gateway write failed"
+
+
+class GatewayWriteSkipped(WbGatewayTransmissionError):
+    """wb-mqtt-serial dropped the write by its total_timeout before it reached the port."""
+
+    @property
+    def raw_value(self):
+        raise RuntimeError("Gateway write skipped: serial port busy")
+
+    @property
+    def value(self):
+        raise RuntimeError("Gateway write skipped: serial port busy")
+
+    def __str__(self) -> str:
+        return "gateway write skipped: serial port busy"
+
+
 class TransmissionFailed(WbGatewayTransmissionError):
     @property
     def raw_value(self):

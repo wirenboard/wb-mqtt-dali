@@ -1,14 +1,16 @@
 import asyncio
 import logging
 import sys
+from copy import deepcopy
 from enum import IntEnum
-from timeit import default_timer
-from typing import Optional
+from typing import Generator, Optional
 
 from dali.address import Address, GearShort
+from dali.command import Command, Response
 from dali.gear.general import (
     IdentifyDevice,
     Initialise,
+    QueryControlGearPresent,
     QueryDeviceType,
     QueryNextDeviceType,
     RecallMaxLevel,
@@ -17,6 +19,7 @@ from dali.gear.general import (
 )
 
 from .common_dali_device import (
+    ApplyResult,
     DaliDeviceAddress,
     DaliDeviceBase,
     InitializationResult,
@@ -66,7 +69,9 @@ from .on_off_control import OnOffConfig, OnOffControl, OnOffSettingsParam
 from .settings import SettingsParamBase
 from .settle_clock import SettleBasis, SettleClock
 from .wbdali import FramePriority, WBDALIDriver
+from .wbdali_error_response import GatewayWriteSkipped, NoPowerOnBus, Overheat
 from .wbdali_utils import (
+    FramingError,
     NoAnswerError,
     check_query_response,
     is_transmission_error_response,
@@ -97,9 +102,23 @@ class DaliDeviceType(IntEnum):
     MEMORY_BANK_1_EXTENSION = 50
     ENERGY_REPORTING_DEVICE = 51
     DIAGNOSTICS_AND_MAINTENANCE = 52
+    # Outside the byte gear reports: answers QUERY CONTROL GEAR but not QUERY DEVICE TYPE.
+    HELVAR_DIGIDIM = 0x100
 
 
-def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
+class HelvarDigidimError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__(
+            "answers QUERY CONTROL GEAR but not QUERY DEVICE TYPE: "
+            "looks like it does not support DALI commands"
+        )
+
+
+# The gateway reports these before the frame goes to the bus.
+UNSENT_ERRORS = (GatewayWriteSkipped, NoPowerOnBus, Overheat)
+
+
+def request_with_retry_sequence(cmd, retry_unsent_only: bool = False):
     """Helper function to perform a sequence with retries on failure"""
     last_error = "unknown error"
     all_silent = True
@@ -110,9 +129,14 @@ def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
             return result
         except NoAnswerError as e:
             last_error = str(e)
-        except RuntimeError as e:
-            if not retry_framing_error and not is_transmission_error_response(result):
+        except FramingError as e:
+            if retry_unsent_only:
                 raise RuntimeError(f"Framing error in answer to {cmd}") from e
+            last_error = str(e)
+            all_silent = False
+        except RuntimeError as e:
+            if retry_unsent_only and not isinstance(result, UNSENT_ERRORS):
+                raise RuntimeError(f"Transmission error in answer to {cmd}: {e}") from e
             last_error = str(e)
             all_silent = False
     message = f"No response to {cmd} after 3 attempts; last error: {last_error}"
@@ -121,9 +145,16 @@ def request_with_retry_sequence(cmd, retry_framing_error: bool = True):
     raise RuntimeError(message)
 
 
-def query_device_types_sequence(addr: Address, logger: logging.Logger):
+def query_device_types_sequence(
+    addr: Address, logger: logging.Logger
+) -> Generator[Command, Response, list[int]]:
     """Obtain a list of part 2xx device types supported by control gear"""
-    r = yield from request_with_retry_sequence(QueryDeviceType(addr))
+    try:
+        r = yield from request_with_retry_sequence(QueryDeviceType(addr))
+    except NoAnswerError:
+        if (yield from is_helvar_digidim_sequence(addr)):
+            return [DaliDeviceType.HELVAR_DIGIDIM]
+        raise
     if r.raw_value.as_integer < 254:
         return [r.raw_value.as_integer]
     if r.raw_value.as_integer == 254:
@@ -136,8 +167,7 @@ def query_device_types_sequence(addr: Address, logger: logging.Logger):
     result = []
     while True:
         try:
-            # A garbled answer still advances the gear to the next type: a retry would skip one.
-            r = yield from request_with_retry_sequence(QueryNextDeviceType(addr), retry_framing_error=False)
+            r = yield from request_with_retry_sequence(QueryNextDeviceType(addr), retry_unsent_only=True)
         except NoAnswerError:
             if len(result) == 0:
                 raise
@@ -159,6 +189,14 @@ def query_device_types_sequence(addr: Address, logger: logging.Logger):
         last_seen = r.raw_value.as_integer
 
 
+def is_helvar_digidim_sequence(addr: Address) -> Generator[Command, Response, bool]:
+    for _ in range(3):
+        response = yield QueryControlGearPresent(addr)
+        if not is_transmission_error_response(response) and response is not None and response.value:
+            return True
+    return False
+
+
 def _pollable_name(pollable: Pollable) -> str:
     if isinstance(pollable, MqttControlBase):
         return pollable.control_info.id
@@ -173,14 +211,24 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         address: DaliDeviceAddress,
         bus_id: str,
         gtin_db: DaliDatabase,
+        common_schema: dict,
         mqtt_id: Optional[str] = None,
         name: Optional[str] = None,
         on_off: Optional[OnOffConfig] = None,
     ) -> None:
         super().__init__(
-            address, bus_id, "DALI", "", DaliCommandsCompatibilityLayer(), gtin_db, mqtt_id, name
+            address,
+            bus_id,
+            "DALI",
+            "",
+            DaliCommandsCompatibilityLayer(),
+            gtin_db,
+            common_schema,
+            mqtt_id,
+            name,
         )
         self.types: list[int] = []
+        self.is_helvar = False
 
         self._type8_handler: Optional[Type8Parameters] = None
         self._type_handlers: list[TypeParameters] = []
@@ -218,8 +266,19 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
             await legacy_identify_sequence(driver, address, setup_rgb, self.logger)
 
     async def load_info(self, driver: WBDALIDriver, force_reload: bool = False) -> None:
+        if not self.is_initialized:
+            if self.is_helvar:
+                self._load_reduced_info()
+                return
         await super().load_info(driver, force_reload)
         self.params["types"] = self.types
+
+    async def apply_parameters(self, driver: WBDALIDriver, new_values: dict) -> ApplyResult:
+        if not self.is_initialized and self.is_helvar:
+            self.name = new_values.get("name", self.name)
+            self._load_reduced_info()
+            return ApplyResult()
+        return await super().apply_parameters(driver, new_values)
 
     @property
     def groups(self) -> set[int]:
@@ -295,18 +354,28 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         readable_controls = [c for c in mqtt_controls if isinstance(c, Pollable)]
         return [*readable_controls, *self._standalone_pollables]
 
-    async def _initialize_impl(  # pylint: disable=too-many-branches
+    async def _initialize_impl(  # pylint: disable=too-many-branches, too-many-locals, too-many-statements
         self, driver: WBDALIDriver
     ) -> InitializationResult:
         address = GearShort(self.address.short)
+        was_helvar = self.is_helvar
+        self.is_helvar = False
 
-        types = await driver.run_sequence(
-            query_device_types_sequence(address, self.logger), FramePriority.USER_ACTION, self.logger
-        )
+        try:
+            types = await driver.run_sequence(
+                query_device_types_sequence(address, self.logger), FramePriority.USER_ACTION, self.logger
+            )
+        except NoAnswerError as e:
+            raise RuntimeError("does not respond: check power and bus connection") from e
         if types is None:
             raise RuntimeError(
                 f"Device at short address {self.address.short} did not respond to QueryDeviceTypes"
             )
+        if DaliDeviceType.HELVAR_DIGIDIM in types:
+            self.is_helvar = True
+            if not was_helvar:
+                self.logger.warning("Device %s %s", self.name, HelvarDigidimError())
+            raise HelvarDigidimError()
         self.types = types
 
         gear_type_params = {
@@ -405,11 +474,28 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
 
     # --- Private ---
 
+    def _load_reduced_info(self) -> None:
+        """The form of a device that ignores DALI commands: its name and its addresses read-only."""
+        params = {
+            "short_address": self.address.short,
+            "random_address": hex(self.address.random),
+            "name": self.name,
+        }
+        schema = deepcopy(self._common_schema)
+        properties = schema.get("properties", {})
+        properties.pop("mqtt_id", None)
+        if "short_address" in properties:
+            properties["short_address"].setdefault("options", {}).setdefault("wb", {})["read_only"] = True
+        if "required" in schema:
+            schema["required"] = [key for key in schema["required"] if key != "mqtt_id"]
+        self.params = params
+        self.schema = schema
+
     async def _read_initial_control_state(
         self, driver: WBDALIDriver, mqtt_controls: list[MqttControlBase]
     ) -> None:
         """Read current state into the controls just built, before they are installed; never fatal."""
-        now = default_timer()
+        now = asyncio.get_running_loop().time()
         address = self._compat.getAddress(self.address.short)
         events: list[BusEvent] = []
 
@@ -450,7 +536,9 @@ class DaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attribute
         """
         if self._fade_parameter.fade_time == 0:
             return None
-        return default_timer() + SettleClock().settle_for(SettleBasis.FADE, self._fade_parameter.fade_time)
+        return asyncio.get_running_loop().time() + SettleClock().settle_for(
+            SettleBasis.FADE, self._fade_parameter.fade_time
+        )
 
     def _scene_level_source(self) -> Optional[SceneLevelSource]:
         # DT8 keeps scene levels on its colour scenes; other gear on ScenesParam.

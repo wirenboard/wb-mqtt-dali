@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import NamedTuple
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -43,12 +44,10 @@ from wb.mqtt_dali.gear.thermal_lamp_protection import (
 from wb.mqtt_dali.wbdali import FramePriority
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState
 
+from ._common_schema import load_common_schema
 from ._control_stubs import ReadableControl
 
 # pylint: disable=invalid-name
-
-# Prevent file system access in __init__ by providing a non-empty common schema
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 
 @pytest.mark.asyncio
@@ -62,6 +61,7 @@ def test_default_mqtt_id_when_no_custom():
         default_mqtt_id_part="dev",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     # default mqtt id is composed from bus_id, default_mqtt_id_part and short address
     assert d.default_mqtt_id == "bus1_dev5"
@@ -79,6 +79,7 @@ def test_custom_mqtt_id_at_init_and_flag():
         default_mqtt_id_part="p",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         mqtt_id="custom_id",
     )
     assert d.mqtt_id == "custom_id"
@@ -96,6 +97,7 @@ def test_mqtt_id_setter_changes_internal_state():
         default_mqtt_id_part="x",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     default = d.default_mqtt_id
     # set to a custom value
@@ -118,6 +120,7 @@ def test_default_name_when_no_custom():
         default_mqtt_id_part="dev",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     assert d.default_name == "Lamp 3"
     assert d.name == "Lamp 3"
@@ -134,6 +137,7 @@ def test_custom_name_at_init_and_flag():
         default_mqtt_id_part="p",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         name="My Custom Name",
     )
     assert d.name == "My Custom Name"
@@ -151,6 +155,7 @@ def test_name_equal_to_default_at_init_is_not_custom():
         default_mqtt_id_part="p",
         compat=object(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         name=default_name,
     )
     assert d.name == default_name
@@ -167,6 +172,7 @@ def test_name_setter_changes_internal_state():
         default_mqtt_id_part="l",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     default = d.default_name
     assert d.name == default
@@ -194,6 +200,7 @@ def test_name_setter_empty_string_is_custom():
         default_mqtt_id_part="d",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
     )
     # Empty string is falsy but should still be treated as custom if different from default
     d.name = ""
@@ -215,12 +222,11 @@ def test_name_none_at_init_uses_default():
         default_mqtt_id_part="s",
         compat=DaliCommandsCompatibilityLayer(),
         gtin_db=object(),
+        common_schema=load_common_schema(),
         name=None,
     )
     assert d.name == "Sensor 9"
     assert d.has_custom_name is False
-    # Prevent file system access in __init__ by providing a non-empty common schema
-    DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}
 
 
 class ConcreteDaliDevice(DaliDeviceBase):  # pylint: disable=too-many-instance-attributes
@@ -242,6 +248,7 @@ def _make_device(**kwargs):
         "default_mqtt_id_part": "d",
         "compat": DaliCommandsCompatibilityLayer(),
         "gtin_db": MagicMock(),
+        "common_schema": load_common_schema(),
     }
     defaults.update(kwargs)
     return ConcreteDaliDevice(**defaults)
@@ -282,7 +289,7 @@ async def test_load_info_populates_params_and_schema():
     assert d.params["name"] == d.name
     assert d.params["mqtt_id"] == d.mqtt_id
     assert d.params.get("gtin") == 123
-    assert d.schema is not None
+    assert {"name", "mqtt_id", "short_address"} <= d.schema["properties"].keys()
 
 
 @pytest.mark.asyncio
@@ -406,21 +413,33 @@ async def test_load_info_stores_parameter_handlers():
 
 
 @pytest.mark.asyncio
-async def test_load_info_schema_is_deepcopy_of_common():
-    # pylint: disable=protected-access
-    d = _make_device()
+async def test_devices_sharing_one_common_schema_get_independent_schemas():
+    """Two devices built from one schema object, with a handler schema merged in by load_info:
+    the passed object stays intact and an edit to one device's schema does not reach the other."""
+    common_schema = load_common_schema()
+    pristine_schema = deepcopy(common_schema)
+    extra_schema = {"properties": {"extra_prop": {"type": "string"}}}
+    first = _make_device(
+        common_schema=common_schema,
+        extra_param_handlers=[_make_mock_param_handler(schema_return=extra_schema)],
+    )
+    second = _make_device(
+        address=DaliDeviceAddress(short=2, random=0x00),
+        common_schema=common_schema,
+        extra_param_handlers=[_make_mock_param_handler(schema_return=extra_schema)],
+    )
     driver = AsyncMock()
+    driver.send = AsyncMock(return_value=None)
+    driver.run_sequence = AsyncMock(return_value={})
+    for device in (first, second):
+        await device.initialize(driver)
+        await device.load_info(driver)
 
-    with patch("wb.mqtt_dali.common_dali_device.GeneralMemoryParams") as MockGMP:
-        mock_gmp_instance = _make_mock_param_handler()
-        MockGMP.return_value = mock_gmp_instance
+    first.schema["properties"]["name"]["title"] = "Edited"
 
-        await d.initialize(driver)
-        await d.load_info(driver)
-
-    # schema should not be the same object as _common_schema
-    assert d.schema is not DaliDeviceBase._common_schema
-    assert d.schema["title"] == "test-schema"
+    assert common_schema == pristine_schema
+    assert "extra_prop" in first.schema["properties"]
+    assert second.schema["properties"]["name"] == pristine_schema["properties"]["name"]
 
 
 @pytest.mark.asyncio
@@ -624,6 +643,7 @@ class _QuantityDevice(ConcreteDaliDevice):
             default_mqtt_id_part="d",
             compat=DaliCommandsCompatibilityLayer(),
             gtin_db=MagicMock(),
+            common_schema=load_common_schema(),
         )
         self.rebuild_mqtt_controls()
 
@@ -778,8 +798,7 @@ async def test_apply_parameters_does_not_call_load_info_when_params_present():
     d._apply_common_parameters = AsyncMock()
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, {"mqtt_id": "abc"})
+    await d.apply_parameters(driver, {"mqtt_id": "abc"})
 
     d.load_info.assert_not_awaited()
     d._apply_common_parameters.assert_awaited_once_with(driver, {"mqtt_id": "abc"})
@@ -929,8 +948,7 @@ async def test_apply_parameters_calls_write_for_each_handler_and_updates_params(
     driver = AsyncMock()
     new_values = {"any": "value"}
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, new_values)
+    await d.apply_parameters(driver, new_values)
 
     h1.write.assert_awaited_once_with(driver, GearShort(33), new_values, d.logger)
     h2.write.assert_awaited_once_with(driver, GearShort(33), new_values, d.logger)
@@ -986,8 +1004,7 @@ async def test_apply_parameters_full_instance_value_keeps_other_instances():
     new_values = {k: dict(v) for k, v in full_params.items()}
     new_values["instance0"]["event_priority"] = 5
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, new_values)
+    await d.apply_parameters(driver, new_values)
 
     assert d.params["instance0"]["event_priority"] == 5
     # Unmentioned field of instance0 survives (the handler returned the full value).
@@ -1009,8 +1026,7 @@ async def test_apply_parameters_calls_apply_common_even_with_no_handlers():
     driver = AsyncMock()
     new_values = {"short_address": 2}
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        await d.apply_parameters(driver, new_values)
+    await d.apply_parameters(driver, new_values)
 
     d._apply_common_parameters.assert_awaited_once_with(driver, new_values)
 
@@ -1056,9 +1072,8 @@ async def test_apply_parameters_propagates_write_error_and_does_not_apply_common
     d._apply_common_parameters = AsyncMock()
     driver = AsyncMock()
 
-    with patch("wb.mqtt_dali.common_dali_device.jsonschema.validate"):
-        with pytest.raises(RuntimeError, match="write failed"):
-            await d.apply_parameters(driver, {"name": "n"})
+    with pytest.raises(RuntimeError, match="write failed"):
+        await d.apply_parameters(driver, {"name": "n"})
 
     h1.write.assert_awaited_once()
     h2.write.assert_not_awaited()

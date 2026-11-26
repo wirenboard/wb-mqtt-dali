@@ -1,6 +1,7 @@
 """Exit codes of the service: a rejected login, an early stop, a broken broker URL."""
 
 import asyncio
+import json
 import logging
 import signal
 import unittest
@@ -11,7 +12,13 @@ import aiomqtt
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 
-from wb.mqtt_dali.main import EXIT_INVALIDARGUMENT, EXIT_SUCCESS, default_service, main
+from wb.mqtt_dali.main import (
+    EXIT_INVALIDARGUMENT,
+    EXIT_NOTCONFIGURED,
+    EXIT_SUCCESS,
+    default_service,
+    main,
+)
 from wb.mqtt_dali.wbmqtt import BrokerAddress, parse_broker_url
 
 from .test_main_reconnect import (
@@ -51,6 +58,7 @@ class TestDefaultServiceExitCodes(unittest.IsolatedAsyncioTestCase):
         self.patches = [
             patch("wb.mqtt_dali.main.load_config", return_value={}),
             patch("wb.mqtt_dali.main.DaliDatabase", return_value=object()),
+            patch("wb.mqtt_dali.main.load_common_device_schema", return_value={}),
             patch("wb.mqtt_dali.main.MQTTDispatcher", return_value=self.dispatcher),
             patch("wb.mqtt_dali.main.RECONNECT_DELAY_S", 0.001),
             self.signals.patch_loop(),
@@ -91,6 +99,17 @@ class TestDefaultServiceExitCodes(unittest.IsolatedAsyncioTestCase):
             level=logging.ERROR
         ):
             self.assertEqual(await self._run_service(client), EXIT_SUCCESS)
+
+    async def test_unreadable_common_schema_exits_with_6(self):
+        """A missing or broken common device schema file: one error line and 6, so systemd does not
+        restart the service."""
+        for error in (FileNotFoundError("no file"), json.JSONDecodeError("bad", "", 0)):
+            with self.subTest(error=type(error).__name__), patch(
+                "wb.mqtt_dali.main.load_common_device_schema", side_effect=error
+            ), self.assertLogs(level=logging.ERROR) as logs:
+                self.assertEqual(await self._run_service(_FakeClient()), EXIT_NOTCONFIGURED)
+
+            self.assertTrue(any("Failed to load common device schema" in line for line in logs.output))
 
     async def test_stop_during_an_outage_logs_that_the_topics_stay(self):
         """After a session was up, a stop with the link down cannot remove the retained topics: one

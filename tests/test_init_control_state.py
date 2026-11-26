@@ -5,8 +5,9 @@ seed, what a rebuild carries over, how a group takes its state from a member —
 reconfirm the read schedules (``docs/startup_reconfirm_fade_plan.md``).
 """
 
+import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from timeit import default_timer
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
@@ -21,7 +22,6 @@ from wb.mqtt_dali.common_dali_device import (
     PERIODIC_STATUS_POLL_INTERVAL,
     ControlsPollRequestResult,
     DaliDeviceAddress,
-    DaliDeviceBase,
     EventPollSchedule,
     MqttControl,
     MqttControlBase,
@@ -51,9 +51,7 @@ from wb.mqtt_dali.events import BusEvent, ColourChanged, EventSource
 from wb.mqtt_dali.wbmqtt import ControlError, ControlMeta, ControlState, TranslatedTitle
 
 from ._app_controller_helpers import make_group_controller
-
-# Prevent file-system access in DaliDeviceBase.__init__ (repo-wide test hack).
-DaliDeviceBase._common_schema = {"title": "test-schema", "properties": {}}  # pylint: disable=protected-access
+from ._common_schema import load_common_schema
 
 _LOGGER = logging.getLogger("test.init_control_state")
 
@@ -88,6 +86,7 @@ def _make_stub_device(controls_factory, short=1, extra_pollables=()):
         address=DaliDeviceAddress(short=short, random=0x00),
         bus_id="bus",
         gtin_db=MagicMock(),
+        common_schema=load_common_schema(),
     )
 
 
@@ -100,6 +99,7 @@ class _StubRead(BusEvent):
     value: Optional[str] = None
     title: Optional[TranslatedTitle] = None
     failed: bool = False
+    source: EventSource = field(default=EventSource.READ, kw_only=True)
 
 
 def _apply_stub_read(control: MqttControlBase, event: BusEvent) -> NotifyResult:
@@ -197,7 +197,7 @@ def _tc_controls():
 
 def _tc_read(mirek, failed=False):
     """One colour read cycle's outcome, the event the DT8 handler emits."""
-    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, EventSource.READ, failed=failed)
+    return ColourChanged({ColourComponent.COLOUR_TEMPERATURE: mirek}, source=EventSource.READ, failed=failed)
 
 
 class _ChunkedPollable(EventPollSchedule):
@@ -538,7 +538,7 @@ async def test_initial_read_counts_as_the_first_poll_of_each_control():
         device, _make_driver(), publisher, DeviceInitScheduler(), MagicMock(), _LOGGER, 0.0
     )
 
-    assert device.get_mqtt_control("illuminance").time_until_next_poll(default_timer()) > 0
+    assert device.get_mqtt_control("illuminance").time_until_next_poll(asyncio.get_running_loop().time()) > 0
 
 
 @pytest.mark.asyncio
@@ -982,7 +982,7 @@ async def test_group_publishes_member_current_state_on_create():
 
     await ctrl._refresh_group_virtual_devices()
 
-    group = ctrl._group_devices_by_number[1]
+    group = ctrl.group_devices[1]
     assert group.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
     assert _published_controls(ctrl._device_publisher)[ACTUAL_LEVEL] == "50.000"
     assert _published_errors(ctrl._device_publisher)[ACTUAL_LEVEL] == ControlError.NONE
@@ -1015,7 +1015,7 @@ async def test_group_prefers_a_known_candidate_over_an_errored_one():
 
     await ctrl._refresh_group_virtual_devices()
 
-    group = ctrl._group_devices_by_number[1]
+    group = ctrl.group_devices[1]
     assert group.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "42.000"
     assert _published_controls(ctrl._device_publisher)[ACTUAL_LEVEL] == "42.000"
     assert _published_errors(ctrl._device_publisher)[ACTUAL_LEVEL] == ControlError.NONE
@@ -1032,16 +1032,14 @@ async def test_group_rebuild_preserves_current_state():
     known_member = _make_member(uid="uid-2", mqtt_id="d2", short=2, level_value="50.000")
     ctrl = _make_group_controller([valueless_member, known_member])
     await ctrl._refresh_group_virtual_devices()
-    assert (
-        ctrl._group_devices_by_number[1].get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
-    )
+    assert ctrl.group_devices[1].get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
 
     # Force a rebuild: a capability change (dimming curve) replaces the group device.
     valueless_member.dimming_curve_type = DimmingCurveType.LINEAR
     known_member.dimming_curve_type = DimmingCurveType.LINEAR
     await ctrl._refresh_group_virtual_devices()
 
-    rebuilt = ctrl._group_devices_by_number[1]
+    rebuilt = ctrl.group_devices[1]
     assert rebuilt.capabilities.dimming_curve_type == DimmingCurveType.LINEAR
     assert rebuilt.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value == "50.000"
 
@@ -1061,7 +1059,7 @@ async def test_group_setpoints_seeded_from_the_state_source_member():
 
     await ctrl._refresh_group_virtual_devices()
 
-    group = ctrl._group_devices_by_number[1]
+    group = ctrl.group_devices[1]
     assert group.get_mqtt_control(WANTED_LEVEL).control_info.state.value == "50"
     assert _published_controls(ctrl._device_publisher)[WANTED_LEVEL] == "50"
 
@@ -1076,7 +1074,7 @@ async def test_group_setpoint_without_a_member_value_keeps_default():
 
     await ctrl._refresh_group_virtual_devices()
 
-    setpoint = ctrl._group_devices_by_number[1].get_mqtt_control(WANTED_LEVEL)
+    setpoint = ctrl.group_devices[1].get_mqtt_control(WANTED_LEVEL)
     assert setpoint.control_info.state.value == "0"
     assert setpoint.control_info.state.error == ControlError.NONE
     assert _published_errors(ctrl._device_publisher)[WANTED_LEVEL] == ControlError.NONE
@@ -1126,7 +1124,7 @@ async def _initialize(device, driver):
     await try_initialize_device(
         device, driver, _make_publisher(), DeviceInitScheduler(), MagicMock(), _LOGGER, 0.0
     )
-    return default_timer()
+    return asyncio.get_running_loop().time()
 
 
 def _level_device():

@@ -206,7 +206,6 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                     ControlMeta(
                         "pushbutton", TranslatedTitle("X Coordinate Step Up", "Координата X шаг вверх")
                     ),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [XCoordinateStepUp(short_address)],
@@ -218,7 +217,6 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                     ControlMeta(
                         "pushbutton", TranslatedTitle("X Coordinate Step Down", "Координата X шаг вниз")
                     ),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [XCoordinateStepDown(short_address)],
@@ -230,7 +228,6 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                     ControlMeta(
                         "pushbutton", TranslatedTitle("Y Coordinate Step Up", "Координата Y шаг вверх")
                     ),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepUp(short_address)],
@@ -242,7 +239,6 @@ def get_mqtt_controls() -> list[MqttControlBase]:
                     ControlMeta(
                         "pushbutton", TranslatedTitle("Y Coordinate Step Down", "Координата Y шаг вниз")
                     ),
-                    "0",
                 ),
             ),
             commands_builder=lambda short_address, _: [YCoordinateStepDown(short_address)],

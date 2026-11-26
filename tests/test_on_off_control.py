@@ -8,6 +8,7 @@ mirroring inheritance, the group-edit state recovery, invalid MQTT payloads
 and the on_off carry-over through ResetDeviceSettings.
 """
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -20,15 +21,15 @@ from dali.gear.general import (
     GoToScene,
     Off,
     SetFadeTime,
-    Up,
 )
 
-from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, DaliDeviceBase, Pollable
+from wb.mqtt_dali.common_dali_device import DaliDeviceAddress, Pollable
 from wb.mqtt_dali.control_ids import ACTUAL_LEVEL, ON_OFF
 from wb.mqtt_dali.dali_common_parameters import FadeTimeFadeRateParam
 from wb.mqtt_dali.dali_device import DaliDevice
 from wb.mqtt_dali.dali_dimming_curve import DimmingCurveState, DimmingCurveType
 from wb.mqtt_dali.device_registry import DeviceRegistry
+from wb.mqtt_dali.events import EventSource, LevelChanged
 from wb.mqtt_dali.on_off_control import (
     OffAction,
     OffActionMode,
@@ -41,15 +42,28 @@ from wb.mqtt_dali.on_off_control import (
     on_off_config_to_json,
 )
 from wb.mqtt_dali.virtual_devices import GroupVirtualDevice
+from wb.mqtt_dali.wbdali_error_response import WbGatewayTransmissionError
 from wb.mqtt_dali.wbmqtt import ControlError
 
-from ._on_off_helpers import BusScript, ScriptedBus, frames, group_settings
+from ._bus_doubles import (
+    INIT_S,
+    SETTLE_S,
+    FakeWBDALIDriver,
+    control_values,
+    frames,
+    group_settings,
+    is_published,
+    payloads,
+    running_bus,
+    write,
+)
+from ._common_schema import load_common_schema
 from ._virtual_time import VirtualTimeTestCase
-
-DaliDeviceBase._common_schema = {"title": "test-schema"}  # pylint: disable=protected-access
 
 ADDR = GearShort(5)
 GROUP_ADDR = GearGroup(3)
+# Virtual time for a scan of a bus no gear answers on to finish.
+COMMISSIONING_S = 30.0
 
 SCENE_CONFIG = OnOffConfig(
     on_action=OnAction(OnActionMode.SCENE, scene=7),
@@ -96,7 +110,9 @@ def _names(commands) -> list:
 
 
 def _make_dali_device(on_off=None) -> DaliDevice:
-    device = DaliDevice(DaliDeviceAddress(5, 0x123456), "gw_bus_1", MagicMock(), on_off=on_off)
+    device = DaliDevice(
+        DaliDeviceAddress(5, 0x123456), "gw_bus_1", MagicMock(), load_common_schema(), on_off=on_off
+    )
     device.rebuild_mqtt_controls()
     return device
 
@@ -105,7 +121,13 @@ class _MemberDevice(DaliDevice):
     """Gear member of a group: real gear, so dispatch and the group mirror work as they ship."""
 
     def __init__(self, short=5, groups=(3,), on_off=None, fade_code=None):
-        super().__init__(DaliDeviceAddress(short=short, random=0), "gw_bus_1", MagicMock(), on_off=on_off)
+        super().__init__(
+            DaliDeviceAddress(short=short, random=0),
+            "gw_bus_1",
+            MagicMock(),
+            load_common_schema(),
+            on_off=on_off,
+        )
         self.mqtt_id = f"dev-{short}"
         self.name = f"member {short}"
         self._test_groups = set(groups)
@@ -280,40 +302,37 @@ class OnOffGroupTest(VirtualTimeTestCase):
     async def test_configured_group_published_without_members(self):
         """A bus loaded with a groups entry publishes that group at start, before any ballast
         has answered: the group device carries the on_off switch and no mirrored level."""
-        async with ScriptedBus() as harness:
-            bus = await harness.start_bus({"devices": [], "groups": [_group_entry(SCENE_CONFIG)]})
-
+        bus_data = {"devices": [], "groups": [_group_entry(SCENE_CONFIG)]}
+        async with running_bus(bus_data, FakeWBDALIDriver()) as (bus, client):
             group = bus.group_devices[3]
             self.assertIsInstance(group.get_mqtt_control(ON_OFF), OnOffControl)
             self.assertIsNone(group.get_mqtt_control(ACTUAL_LEVEL))
-            self.assertIn(ON_OFF, harness.published_controls(group.mqtt_id))
+            self.assertTrue(is_published(client, f"/devices/{group.mqtt_id}/controls/{ON_OFF}/meta"))
 
     async def test_configured_group_survives_a_start_with_no_gear_known(self):
         """With no gear known at all, a scan that finds none refutes nothing: the configured
         group keeps its settings and its published device."""
-        async with ScriptedBus(BusScript(present_shorts=frozenset())) as harness:
-            bus = await harness.start_bus({"devices": [], "groups": [_group_entry(SCENE_CONFIG)]})
+        bus_data = {"devices": [], "groups": [_group_entry(SCENE_CONFIG)]}
+        async with running_bus(bus_data, FakeWBDALIDriver(empty_bus=True)) as (bus, client):
             group_mqtt_id = bus.group_devices[3].mqtt_id
 
             await bus.start_commissioning()
-            await harness.wait_until(lambda: not bus.commissioning_state.is_running(), timeout=30)
+            await asyncio.sleep(COMMISSIONING_S)
 
+            self.assertFalse(bus.commissioning_state.is_running())
             self.assertEqual(group_settings(bus), {3: SCENE_CONFIG})
             self.assertIn(3, bus.group_devices)
-            self.assertIn(group_mqtt_id, harness.published_devices())
+            self.assertTrue(is_published(client, f"/devices/{group_mqtt_id}/meta"))
 
     async def test_group_gains_member_controls_after_init(self):
         """The group device published without members is rebuilt with the member's
         controls once it initialises, and keeps the on_off setting."""
-        async with ScriptedBus(BusScript(groups={5: {3}})) as harness:
-            bus = await harness.start_bus(
-                {"devices": [_device_entry()], "groups": [_group_entry(SCENE_CONFIG)]}
-            )
+        bus_data = {"devices": [_device_entry()], "groups": [_group_entry(SCENE_CONFIG)]}
+        async with running_bus(bus_data, FakeWBDALIDriver(groups={5: {3}})) as (bus, _client):
             without_members = bus.group_devices[3]
             self.assertIsNone(without_members.get_mqtt_control(ACTUAL_LEVEL))
 
-            await harness.wait_until(lambda: bus.dali_devices[0].is_initialized)
-            await harness.settle()
+            await asyncio.sleep(INIT_S)
 
             rebuilt = bus.group_devices[3]
             self.assertIsNot(rebuilt, without_members)
@@ -371,34 +390,27 @@ class OnOffGroupTest(VirtualTimeTestCase):
 
 class OnOffStateTest(VirtualTimeTestCase):
 
-    async def test_state_reflects_zero_level(self):
-        """The level the device reports drives the switch: the initial read of 0 publishes "0",
-        an observed DAPC to 150 publishes "1"."""
-        async with ScriptedBus() as harness:
-            bus = await harness.start_bus({"devices": [_device_entry(_dapc_config())]})
-            device = bus.dali_devices[0]
-            await harness.wait_until(lambda: device.is_initialized)
-            await harness.settle()
+    def test_state_reflects_zero_level(self):
+        """The level the device reports drives the switch: a read of 0 shows "0", an observed
+        DAPC to 150 shows "1"."""
+        control = _control(_dapc_config())
+        control.notify(LevelChanged(0, source=EventSource.READ))
+        self.assertEqual(control.control_info.state.value, "0")
+        self.assertEqual(control.control_info.state.error, ControlError.NONE)
 
-            self.assertEqual(harness.values(device.mqtt_id)[ON_OFF], "0")
+        control.notify(LevelChanged(150, source=EventSource.OBSERVED))
+        self.assertEqual(control.control_info.state.value, "1")
 
-            await bus.send_command_batch([DAPC(ADDR, 150)])
-            await harness.settle()
+    def test_on_off_shows_the_read_error_when_the_level_is_unknown(self):
+        """A level read that brings no answer puts both actual_level and on_off in read error:
+        the switch never claims to be off on an unread level."""
+        device = _make_dali_device(on_off=_dapc_config())
+        device.notify_all(LevelChanged(0, source=EventSource.READ))
 
-            self.assertEqual(harness.values(device.mqtt_id)[ON_OFF], "1")
+        device.notify_all(LevelChanged(None, source=EventSource.READ, failed=True))
 
-    async def test_on_off_shows_the_read_error_when_the_level_is_unknown(self):
-        """Gear that leaves QueryActualLevel unanswered puts both actual_level and on_off in
-        read error: the switch never claims to be off on an unread level."""
-        script = BusScript(unanswered=frozenset({"QueryActualLevel"}))
-        async with ScriptedBus(script) as harness:
-            bus = await harness.start_bus({"devices": [_device_entry(_dapc_config())]})
-            device = bus.dali_devices[0]
-            await harness.wait_until(lambda: device.is_initialized)
-            await harness.settle()
-
-            self.assertEqual(harness.control_error(device.mqtt_id, ACTUAL_LEVEL), "r")
-            self.assertEqual(harness.control_error(device.mqtt_id, ON_OFF), "r")
+        for control_id in (ACTUAL_LEVEL, ON_OFF):
+            self.assertEqual(device.get_mqtt_control(control_id).control_info.state.error, ControlError.READ)
 
     def test_on_off_adds_no_bus_queries(self):
         """The control is not pollable, so only the existing actual_level read feeds it and it
@@ -421,70 +433,75 @@ class OnOffStateTest(VirtualTimeTestCase):
         control = _control(SCENE_CONFIG, fade_code=4)
         self.assertEqual(frames(control.get_setup_commands(ADDR, "0")), frames([Off(ADDR)]))
 
+    def test_recall_of_the_last_active_level_shows_on(self):
+        """A recall of the last active level brings no level event: a failed one leaves "0", a
+        successful one shows "1", so a "0" right after it goes out."""
+        control = _control(_last_active_config())
+        control.update_from_percent("0.000")
+        control.apply_command_result("1", [WbGatewayTransmissionError()])
+        self.assertEqual(control.control_info.state.value, "0")
+
+        control.apply_command_result("1", [None])
+        self.assertEqual(control.control_info.state.value, "1")
+        self.assertEqual(frames(control.get_setup_commands(ADDR, "0")), frames([Off(ADDR)]))
+
+    def test_write_error_holds_on_a_prediction_and_clears_on_a_read(self):
+        """``on_off`` holding ``w`` takes an observed level and keeps ``w``; the next read clears it."""
+        control = _control(SCENE_CONFIG)
+        control.update_from_percent("0.000")
+        control.control_info.state.set_write_error()
+
+        control.notify(LevelChanged(200, source=EventSource.OBSERVED))
+        self.assertEqual(control.control_info.state.value, "1")
+        self.assertEqual(control.control_info.state.error, ControlError.WRITE)
+
+        control.notify(LevelChanged(200, source=EventSource.READ))
+        self.assertEqual(control.control_info.state.error, ControlError.NONE)
+
     async def test_write_leaves_the_publish_to_the_observed_command(self):
         """A switch write puts its action on the bus and publishes no value of its own; the
         level the confirming read finds afterwards is what sets the state."""
-        script = BusScript(answers={"QueryActualLevel": 0})
-        async with ScriptedBus(script) as harness:
-            bus = await harness.start_bus({"devices": [_device_entry(_last_active_config())]})
-            device = bus.dali_devices[0]
-            await harness.wait_until(lambda: device.is_initialized)
-            await harness.settle()
-            self.assertEqual(harness.values(device.mqtt_id)[ON_OFF], "0")
-            harness.drain()
+        driver = FakeWBDALIDriver(answers={"QueryActualLevel": 0})
+        async with running_bus({"devices": [_device_entry(_last_active_config())]}, driver) as (bus, client):
+            device_id = bus.dali_devices[0].mqtt_id
+            await asyncio.sleep(INIT_S)
+            self.assertEqual(control_values(client, device_id, ON_OFF)[-1:], ["0"])
+            client.clear()
+            driver.sent.clear()
 
-            await harness.write(device.mqtt_id, ON_OFF, "1")
+            write(client, device_id, ON_OFF, "1")
+            await asyncio.sleep(SETTLE_S)
 
-            self.assertEqual(_names(harness.sent), ["GoToLastActiveLevel"])
-            self.assertEqual(harness.value_publishes(device.mqtt_id, ON_OFF), [])
+            self.assertEqual(_names(driver.sent), ["GoToLastActiveLevel"])
+            self.assertEqual(control_values(client, device_id, ON_OFF), [])
 
-            script.answers["QueryActualLevel"] = 100  # the gear did come on
-            await harness.wait_until(lambda: harness.value_publishes(device.mqtt_id, ON_OFF) != [])
-            self.assertEqual(harness.value_publishes(device.mqtt_id, ON_OFF), ["1"])
+            driver.answers["QueryActualLevel"] = 100  # the gear did come on
+            await asyncio.sleep(INIT_S)
+            self.assertEqual(control_values(client, device_id, ON_OFF), ["1"])
 
-    async def test_group_state_mirrors_member_candidates(self):
-        """The group's on_off follows the group state mirroring: the member's read level drives
-        it through the poll path and an observed DAPC through the event path."""
-        script = BusScript(groups={5: {3}}, answers={"QueryActualLevel": 200})
-        async with ScriptedBus(script) as harness:
-            bus = await harness.start_bus(
-                {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
-            )
-            member = bus.dali_devices[0]
-            await harness.wait_until(lambda: member.is_initialized)
-            await harness.settle()
-            group = bus.group_devices[3]
-            self.assertIsNone(member.get_mqtt_control(ON_OFF))
-            self.assertEqual(harness.values(group.mqtt_id)[ON_OFF], "1")
+    def test_group_state_mirrors_member_candidates(self):
+        """The group's on_off follows the member's level: a read and an observed level alike."""
+        member = _MemberDevice()
+        group = _group_device(member, on_off=_dapc_config())
+        self.assertIsNone(member.get_mqtt_control(ON_OFF))
 
-            # Up is not predictable, so the level comes from the member's confirming read.
-            harness.drain()
-            script.answers["QueryActualLevel"] = 0
-            await bus.send_command_batch([Up(ADDR)])
-            await harness.wait_until(lambda: harness.value_publishes(group.mqtt_id, ON_OFF) != [])
-            self.assertEqual(harness.value_publishes(group.mqtt_id, ON_OFF), ["0"])
-
-            harness.drain()
-            await bus.send_command_batch([DAPC(ADDR, 150)])
-            await harness.settle()
-
-            self.assertEqual(harness.value_publishes(group.mqtt_id, ON_OFF), ["1"])
+        for level, source, shown in (
+            (200, EventSource.READ, "1"),
+            (0, EventSource.READ, "0"),
+            (150, EventSource.OBSERVED, "1"),
+        ):
+            group.notify_all(LevelChanged(level, source=source), member)
+            self.assertEqual(group.get_mqtt_control(ON_OFF).control_info.state.value, shown)
 
     async def test_on_off_invalid_mqtt_payload_sends_nothing(self):
-        """Garbage written to the on_off control topic sends no bus commands and
-        surfaces a write error on the control."""
-        async with ScriptedBus() as harness:
-            bus = await harness.start_bus({"devices": [_device_entry(_dapc_config())]})
-            device = bus.dali_devices[0]
-            await harness.wait_until(lambda: device.is_initialized)
-            await harness.settle()
-            harness.drain()
+        """Garbage written to on_off is rejected before any bus command goes out."""
+        device = _make_dali_device(on_off=_dapc_config())
+        device.is_initialized = True
+        driver = FakeWBDALIDriver()
 
-            await harness.write(device.mqtt_id, ON_OFF, "banana")
-
-            self.assertEqual(harness.sent, [])
-            self.assertEqual(harness.control_error(device.mqtt_id, ON_OFF), ControlError.WRITE.to_mqtt())
-            self.assertEqual(harness.value_publishes(device.mqtt_id, ON_OFF), [])
+        with self.assertRaises(ValueError):
+            await device.execute_control(driver, ON_OFF, "banana")
+        self.assertEqual(driver.sent, [])
 
 
 class OnOffDeviceEditStateTest(VirtualTimeTestCase):
@@ -492,31 +509,31 @@ class OnOffDeviceEditStateTest(VirtualTimeTestCase):
     async def test_device_on_off_strategy_edit_stays_off_the_bus(self):
         """A strategy-only edit of a published switch: no frames, no republished device and the
         same control object, whose next write already carries the new action."""
-        script = BusScript(answers={"QueryActualLevel": 0})
-        async with ScriptedBus(script) as harness:
-            bus = await harness.start_bus({"devices": [_device_entry(SCENE_CONFIG)]})
+        driver = FakeWBDALIDriver(answers={"QueryActualLevel": 0})
+        async with running_bus({"devices": [_device_entry(SCENE_CONFIG)]}, driver) as (bus, client):
             device = bus.dali_devices[0]
-            await harness.wait_until(lambda: device.is_initialized)
+            await asyncio.sleep(INIT_S)
             await bus.load_device_info(device)
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
             control = device.get_mqtt_control(ON_OFF)
             level_due_at = device.get_mqtt_control(ACTUAL_LEVEL).next_due_at
-            harness.drain()
+            client.clear()
+            driver.sent.clear()
 
             # The editor echoes the whole config back, as SetDevice does.
             new_config = {**device.params, "on_off": on_off_config_to_editor_json(_dapc_config())}
             await bus.apply_parameters(device, new_config)
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
 
-            self.assertEqual(harness.sent, [])
-            self.assertEqual(harness.device_publishes(device.mqtt_id), [])
+            self.assertEqual(driver.sent, [])
+            self.assertEqual(payloads(client, f"/devices/{device.mqtt_id}/meta"), [])
             self.assertIs(device.get_mqtt_control(ON_OFF), control)
             # A rebuilt control set would come back due, and the whole device be re-read.
             self.assertEqual(device.get_mqtt_control(ACTUAL_LEVEL).next_due_at, level_due_at)
-            harness.drain()
 
-            await harness.write(device.mqtt_id, ON_OFF, "1")
-            self.assertEqual(frames(harness.sent), frames([DAPC(ADDR, 200)]))
+            write(client, device.mqtt_id, ON_OFF, "1")
+            await asyncio.sleep(SETTLE_S)
+            self.assertEqual(frames(driver.sent), frames([DAPC(ADDR, 200)]))
 
 
 class OnOffGroupEditStateTest(VirtualTimeTestCase):
@@ -524,26 +541,22 @@ class OnOffGroupEditStateTest(VirtualTimeTestCase):
     async def test_group_on_off_edit_keeps_known_state(self):
         """A strategy-only edit keeps the group device: the mirrored level and the switch value
         derived from it are never lost, and the group is not republished."""
-        script = BusScript(groups={5: {3}}, answers={"QueryActualLevel": 100})
-        async with ScriptedBus(script) as harness:
-            bus = await harness.start_bus(
-                {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
-            )
-            member = bus.dali_devices[0]
-            await harness.wait_until(lambda: member.is_initialized)
-            await harness.settle()
+        driver = FakeWBDALIDriver(groups={5: {3}}, answers={"QueryActualLevel": 100})
+        bus_data = {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
+        async with running_bus(bus_data, driver) as (bus, client):
+            await asyncio.sleep(INIT_S)
             group = bus.group_devices[3]
-            known_level = member.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value
+            known_level = bus.dali_devices[0].get_mqtt_control(ACTUAL_LEVEL).control_info.state.value
             self.assertTrue(known_level)
             self.assertEqual(group.get_mqtt_control(ON_OFF).control_info.state.value, "1")
+            client.clear()
 
             new_config = _dapc_config(fade_time=5)
-            harness.drain()
             await bus.apply_group_parameters(3, {"on_off": on_off_config_to_editor_json(new_config)})
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
 
             self.assertIs(bus.group_devices[3], group)
-            self.assertEqual(harness.device_publishes(group.mqtt_id), [])
+            self.assertEqual(payloads(client, f"/devices/{group.mqtt_id}/meta"), [])
             self.assertEqual(group_settings(bus), {3: new_config})
             self.assertEqual(group.get_mqtt_control(ACTUAL_LEVEL).control_info.state.value, known_level)
             self.assertEqual(group.get_mqtt_control(ON_OFF).control_info.state.value, "1")
@@ -551,58 +564,54 @@ class OnOffGroupEditStateTest(VirtualTimeTestCase):
     async def test_group_on_off_enable_rebuilds_group_with_the_switch(self):
         """Enabling on_off on a group that had none rebuilds its device and republishes it,
         now carrying the switch."""
-        async with ScriptedBus(BusScript(groups={5: {3}})) as harness:
-            bus = await harness.start_bus({"devices": [_device_entry()]})
-            await harness.wait_until(lambda: bus.dali_devices[0].is_initialized)
-            await harness.settle()
+        async with running_bus({"devices": [_device_entry()]}, FakeWBDALIDriver(groups={5: {3}})) as (
+            bus,
+            client,
+        ):
+            await asyncio.sleep(INIT_S)
             group = bus.group_devices[3]
             self.assertIsNone(group.get_mqtt_control(ON_OFF))
-            harness.drain()
+            client.clear()
 
             await bus.apply_group_parameters(3, {"on_off": on_off_config_to_editor_json(_dapc_config())})
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
 
             rebuilt = bus.group_devices[3]
             self.assertIsNot(rebuilt, group)
             self.assertIsInstance(rebuilt.get_mqtt_control(ON_OFF), OnOffControl)
             # The old device goes off MQTT (payload None) before the new one is published.
             self.assertEqual(
-                [payload is None for payload in harness.device_publishes(group.mqtt_id)],
+                [payload is None for payload in payloads(client, f"/devices/{group.mqtt_id}/meta")],
                 [True, False],
             )
-            self.assertIn(ON_OFF, harness.published_controls(rebuilt.mqtt_id))
+            self.assertTrue(is_published(client, f"/devices/{rebuilt.mqtt_id}/controls/{ON_OFF}/meta"))
 
     async def test_group_on_off_disable_deletes_a_memberless_group(self):
         """Removing the settings of a group no gear reports takes the group away: the setting
         was all that kept it, and its virtual device goes off MQTT."""
-        async with ScriptedBus(BusScript(present_shorts=frozenset())) as harness:
-            bus = await harness.start_bus(
-                {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
-            )
-            await harness.settle()
+        bus_data = {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
+        async with running_bus(bus_data, FakeWBDALIDriver(empty_bus=True)) as (bus, client):
+            await asyncio.sleep(SETTLE_S)
             self.assertFalse(bus.dali_devices[0].is_initialized)
             group_mqtt_id = bus.group_devices[3].mqtt_id
 
             await bus.apply_group_parameters(3, {"on_off": {"enabled": False}})
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
 
             self.assertNotIn(3, bus.group_devices)
             self.assertEqual(group_settings(bus), {})
-            self.assertNotIn(group_mqtt_id, harness.published_devices())
+            self.assertFalse(is_published(client, f"/devices/{group_mqtt_id}/meta"))
 
     async def test_group_on_off_disable_rebuilds_group_without_the_switch(self):
         """Disabling on_off rebuilds the group device without the switch; the group itself stays
         because a member still reports it."""
-        async with ScriptedBus(BusScript(groups={5: {3}})) as harness:
-            bus = await harness.start_bus(
-                {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
-            )
-            await harness.wait_until(lambda: bus.dali_devices[0].is_initialized)
-            await harness.settle()
+        bus_data = {"devices": [_device_entry()], "groups": [_group_entry(_dapc_config())]}
+        async with running_bus(bus_data, FakeWBDALIDriver(groups={5: {3}})) as (bus, _client):
+            await asyncio.sleep(INIT_S)
             group = bus.group_devices[3]
 
             await bus.apply_group_parameters(3, {"on_off": {"enabled": False}})
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
 
             rebuilt = bus.group_devices[3]
             self.assertIsNot(rebuilt, group)
@@ -615,21 +624,22 @@ class OnOffResetDeviceSettingsTest(VirtualTimeTestCase):
     async def test_device_on_off_survives_reset_device_settings(self):
         """ResetDeviceSettings recreates the device object; the service-side on_off
         config is carried over and the recreated device publishes the control again."""
-        async with ScriptedBus() as harness:
-            bus = await harness.start_bus({"devices": [_device_entry(SCENE_CONFIG)]})
+        async with running_bus({"devices": [_device_entry(SCENE_CONFIG)]}, FakeWBDALIDriver()) as (
+            bus,
+            client,
+        ):
             device = bus.dali_devices[0]
-            await harness.wait_until(lambda: device.is_initialized)
-            await harness.settle()
+            await asyncio.sleep(INIT_S)
 
             await bus.reset_device_settings(device)
-            await harness.settle()
+            await asyncio.sleep(SETTLE_S)
 
             new_device = bus.dali_devices[0]
             self.assertIsNot(new_device, device)
             self.assertEqual(new_device.uid, device.uid)
             self.assertEqual(new_device.on_off_config, SCENE_CONFIG)
             self.assertIsInstance(new_device.get_mqtt_control(ON_OFF), OnOffControl)
-            self.assertIn(ON_OFF, harness.published_controls(new_device.mqtt_id))
+            self.assertTrue(is_published(client, f"/devices/{new_device.mqtt_id}/controls/{ON_OFF}/meta"))
 
 
 if __name__ == "__main__":

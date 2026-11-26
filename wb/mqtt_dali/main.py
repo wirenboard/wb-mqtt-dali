@@ -33,6 +33,7 @@ CONFIG_FILEPATH = "/etc/wb-mqtt-dali.conf"
 WB_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-confed/schemas/wb-mqtt-dali.schema.json"
 DEV_SCHEMA_FILEPATH = "./wb-mqtt-dali.schema.json"
 GTIN_DB_FILEPATH = "/usr/share/wb-mqtt-dali/products.csv"
+COMMON_DEVICE_SCHEMA_FILEPATH = "/usr/share/wb-mqtt-dali/schemas/common_device.schema.json"
 
 
 EXIT_SUCCESS = 0
@@ -117,6 +118,11 @@ def load_config(config_filepath: str) -> dict:
         )
     validate_config(config)
     return config
+
+
+def load_common_device_schema() -> dict:
+    with open(COMMON_DEVICE_SCHEMA_FILEPATH, "r", encoding="utf-8") as schema_file:
+        return json.load(schema_file)
 
 
 async def _cancel_tasks(tasks: Iterable[asyncio.Task]) -> None:
@@ -208,11 +214,11 @@ class BrokerSessions:
                 self._mqtt_dispatcher.connection_lost()
                 raise
             except BusPollingError:
-                await _cancel_tasks(session_tasks)
                 await self._stop_gateway()
+                await _cancel_tasks(session_tasks)
                 raise
-            await _cancel_tasks(session_tasks)
             await self._stop_gateway()
+            await _cancel_tasks(session_tasks)
 
     async def _wait_for_session_end(
         self,
@@ -267,11 +273,16 @@ async def default_service(args, client_factory=make_mqtt_client, gateway_factory
         logging.getLogger("mqtt_client").setLevel(logging.INFO)
 
     gtin_db = DaliDatabase(GTIN_DB_FILEPATH)
+    try:
+        common_schema = load_common_device_schema()
+    except (OSError, ValueError) as e:
+        logging.error("Failed to load common device schema: %s", e)
+        return EXIT_NOTCONFIGURED
 
     client = client_factory(args.broker_url)
 
     mqtt_dispatcher = MQTTDispatcher(client)
-    gateway = gateway_factory(config, mqtt_dispatcher, args.config, gtin_db)
+    gateway = gateway_factory(config, mqtt_dispatcher, args.config, gtin_db, common_schema)
     return await BrokerSessions(client, mqtt_dispatcher, gateway, stop_requested).run()
 
 

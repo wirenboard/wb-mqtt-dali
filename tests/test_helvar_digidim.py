@@ -1149,6 +1149,34 @@ class HelvarSettingsTest(_EditorTestCase):
 
             self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("80040d1f0000"))
 
+    async def test_set_device_accepts_address_event_without_hidden_fields(self):
+        """The editor sends an address event without the fields hidden for it: SetDevice writes it
+        with empty Responds to Groups."""
+        sensor = _Sensor(e2=_image(e2_36=bytes.fromhex("80 04 85 1f 00 04")))
+        driver = _HelvarBusDriver(sensor)
+        async with running_bus(_bus_data(_sensor_entry()), driver) as (bus, _client):
+            gateway = _make_gateway(bus, self.config_path)
+            device_id = bus.dali_devices[0].uid
+            form = (await gateway.get_device_rpc_handler({"deviceId": device_id}))["config"]
+
+            await gateway.set_device_rpc_handler(
+                {
+                    "deviceId": device_id,
+                    "config": {
+                        **form,
+                        "presence_on_event": {
+                            "target": "address",
+                            "address": 6,
+                            "command": "scene",
+                            "scene": 15,
+                            "fade_time": 4,
+                        },
+                    },
+                }
+            )
+
+            self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("80040d1f0000"))
+
     async def test_set_device_keeps_out_of_range_bytes_of_unchanged_fields(self):
         """On time 0 (shown 60 s) and scene store delay 64 (shown 25 s): SetDevice changing Exit delay
         and Lock writes those, 0x21 stays 0 and the delay bits of 0x0B stay 64."""

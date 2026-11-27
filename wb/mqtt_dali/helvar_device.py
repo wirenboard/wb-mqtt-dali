@@ -523,7 +523,7 @@ class _EventField(_SettingField):
             target = e2.Group(form_value["group"])
         else:
             target = e2.Broadcast()
-        responds_to_groups = _responds_to_groups(target) if form_value["follows_group"] else 0
+        responds_to_groups = _responds_to_groups(target) if form_value.get("follows_group") else 0
         image[self.memory] = e2.Event(target, _action_from_form(form_value), responds_to_groups)
 
     def form_property(self, order: int, image: DigidimImage) -> dict:
@@ -763,7 +763,7 @@ def _event_property(title: str, order: int, commands: list[EventCommand]) -> dic
         "title": title,
         "format": "card",
         "propertyOrder": order,
-        "required": ["target", "follows_group", "command"],
+        "required": ["target", "command"],
         "properties": {
             "target": _enum_property(
                 "Target",

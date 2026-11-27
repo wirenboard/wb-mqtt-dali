@@ -851,8 +851,8 @@ class HelvarSettingsTest(_EditorTestCase):
             )
 
     async def test_set_device_writes_only_changed_bytes(self):
-        """SetDevice changing On time, Exit delay (0x21, 0x22) and Lock (0x0B): DTR and Extended DTR MSB
-        per run, Enable Write E2 + Write E2 per byte; nothing else of E2 changes, nothing is read."""
+        """SetDevice changing On time, Exit delay (0x21, 0x22) and Lock (0x0B) between turning the presence
+        sensor off and on (0x26): DTR and Extended DTR MSB per run, Enable Write E2 + Write E2 per byte."""
         sensor = _Sensor(e2=_image())
         driver = _HelvarBusDriver(sensor)
         async with running_bus(_bus_data(_sensor_entry()), driver) as (bus, _client):
@@ -871,6 +871,10 @@ class HelvarSettingsTest(_EditorTestCase):
             self.assertEqual(
                 _sensor_frames(driver),
                 [
+                    _dtr_frame(0x26),
+                    IDENTIFICATION_FRAMES[3],
+                    ENABLE_WRITE_E2_FRAME,
+                    _write_frame(0xFD),
                     _dtr_frame(0x0B),
                     IDENTIFICATION_FRAMES[3],
                     ENABLE_WRITE_E2_FRAME,
@@ -881,10 +885,40 @@ class HelvarSettingsTest(_EditorTestCase):
                     _write_frame(15),
                     ENABLE_WRITE_E2_FRAME,
                     _write_frame(255),
+                    _dtr_frame(0x26),
+                    IDENTIFICATION_FRAMES[3],
+                    ENABLE_WRITE_E2_FRAME,
+                    _write_frame(0xF9),
                 ],
             )
             self.assertEqual(sensor.e2, _image(e2_0b=b"\x8a", e2_21=bytes((15, 255))))
             self.assertEqual((reply["on_time_s"], reply["exit_delay_s"], reply["lock"]), (300, 5100, True))
+
+    async def test_set_device_with_presence_sensor_off_writes_0x26_only_to_turn_it_on(self):
+        """Presence sensor off in E2: SetDevice of On time leaves 0x26 alone; turning the sensor on as well
+        writes 0x26 once, after On time."""
+        for presence_sensor, dtr_frames in ((False, [0x21]), (True, [0x21, 0x26])):
+            with self.subTest(presence_sensor=presence_sensor):
+                sensor = _Sensor(e2=_image(e2_26=b"\xfd"))
+                driver = _HelvarBusDriver(sensor)
+                async with running_bus(_bus_data(_sensor_entry()), driver) as (bus, _client):
+                    gateway = _make_gateway(bus, self.config_path)
+                    device_id = bus.dali_devices[0].uid
+                    form = (await gateway.get_device_rpc_handler({"deviceId": device_id}))["config"]
+                    driver.sent.clear()
+
+                    await gateway.set_device_rpc_handler(
+                        {
+                            "deviceId": device_id,
+                            "config": {**form, "on_time_s": 300, "presence_sensor": presence_sensor},
+                        }
+                    )
+
+                    self.assertEqual(
+                        [frame for frame in _sensor_frames(driver) if frame[0] == 16],
+                        [_dtr_frame(e2_address) for e2_address in dtr_frames],
+                    )
+                    self.assertEqual(sensor.e2[0x26], 0xF9 if presence_sensor else 0xFD)
 
     async def test_set_device_rounds_duration_to_nearest_step(self):
         """SetDevice with On time 129 s and Exit delay 130 s: 120 and 140 s are written, the reply
@@ -1081,7 +1115,12 @@ class HelvarSettingsTest(_EditorTestCase):
             self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("8004851f0004"))
             self.assertEqual(
                 [frame for frame in _sensor_frames(driver) if frame[0] == 16],
-                [_dtr_frame(PRESENCE_ON + 2), _dtr_frame(PRESENCE_ON + 5)],
+                [
+                    _dtr_frame(0x26),
+                    _dtr_frame(PRESENCE_ON + 2),
+                    _dtr_frame(PRESENCE_ON + 5),
+                    _dtr_frame(0x26),
+                ],
             )
 
     async def test_get_device_shows_group_event_not_following_the_group(self):
@@ -1122,7 +1161,8 @@ class HelvarSettingsTest(_EditorTestCase):
 
             self.assertEqual(sensor.e2[PRESENCE_ON : PRESENCE_ON + 6], bytes.fromhex("8004851f0000"))
             self.assertEqual(
-                [frame for frame in _sensor_frames(driver) if frame[0] == 16], [_dtr_frame(PRESENCE_ON + 5)]
+                [frame for frame in _sensor_frames(driver) if frame[0] == 16],
+                [_dtr_frame(0x26), _dtr_frame(PRESENCE_ON + 5), _dtr_frame(0x26)],
             )
 
     async def test_set_device_clears_responds_to_groups_of_address_target(self):

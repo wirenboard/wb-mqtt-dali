@@ -585,10 +585,28 @@ class DigidimImage:
         self._changes = {}
 
     async def write(self, driver: WBDALIDriver, address: GearShort, logger: logging.Logger) -> None:
-        """Write the changed bytes run by run; on a failure the changes not yet written are dropped."""
+        """Write the changed bytes with the presence sensor off; on a failure the rest is dropped."""
         changes, self._changes = self._changes, {}
         if not changes:
             return
+        presence_sensor = DigidimE2.PRESENCE_SENSOR.value
+        dip = changes.pop(presence_sensor.address, self._data[presence_sensor.address])
+        if self[DigidimE2.PRESENCE_SENSOR]:
+            await self._write_bytes(
+                driver, address, {presence_sensor.address: dip | presence_sensor.mask}, logger
+            )
+        try:
+            await self._write_bytes(driver, address, changes, logger)
+        finally:
+            # Writing 0x26 restarts the presence logic of the sensor.
+            if dip != self._data[presence_sensor.address]:
+                await self._write_bytes(driver, address, {presence_sensor.address: dip}, logger)
+
+    # --- Private ---
+
+    async def _write_bytes(
+        self, driver: WBDALIDriver, address: GearShort, changes: dict[int, int], logger: logging.Logger
+    ) -> None:
         for run in _runs(changes):
             commands: list[Command] = [DTR0(run[0]), ExtendedDtrMsb(0)]
             for e2_address in run:
@@ -598,8 +616,6 @@ class DigidimImage:
                 driver, commands, len(commands), logger, priority=FramePriority.CONFIGURATION
             )
             self._data[run[0] : run[-1] + 1] = bytes(changes[e2_address] for e2_address in run)
-
-    # --- Private ---
 
     def _take_run(self, run: range, commands: list[Command], responses: list) -> Optional[RuntimeError]:
         """Take the bytes up to the first failed frame; after it the E2 address of the rest is unknown."""

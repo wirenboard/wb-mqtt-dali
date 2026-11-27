@@ -175,11 +175,9 @@ _FADE_TIME_HINT = TranslatedTitle(
 _FOLLOWS_GROUP_TITLE = TranslatedTitle("Follow commands to the group", "Следить за командами в группу")
 _FOLLOWS_GROUP_HINT = TranslatedTitle(
     "The sensor reacts to commands other devices send to this group, such as presence signals from "
-    "neighbouring sensors. With several sensors of one group set so, their traffic can take up the "
-    "whole bus",
+    "neighbouring sensors",
     "Датчик реагирует на команды, которые другие устройства отправляют в эту группу, например на сигналы "
-    "присутствия от соседних датчиков. Если так настроить несколько датчиков одной группы, их обмен "
-    "может занять всю шину",
+    "присутствия от соседних датчиков",
 )
 _TARGET_TITLES = {
     EventTarget.ADDRESS: TranslatedTitle("short address", "короткий адрес"),

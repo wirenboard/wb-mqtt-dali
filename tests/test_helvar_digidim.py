@@ -695,7 +695,7 @@ class HelvarSensorEditorTest(_EditorTestCase):
             self.assertTrue(is_published(client, f"/devices/{BUS_UID}_{NEW_SENSOR}/meta"))
 
 
-class HelvarSettingsTest(_EditorTestCase):
+class HelvarSettingsTest(_EditorTestCase):  # pylint: disable=too-many-public-methods
     async def test_get_device_of_311_reads_and_decodes_its_settings(self):
         """GetDevice of a 311 6.08 with the dumped E2: past the identity only the form bytes are read,
         a DTR per run; 20-s steps, inverted DIP bits, IR bytes, presence, touch and IR remote events."""
